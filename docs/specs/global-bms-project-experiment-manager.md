@@ -1,12 +1,49 @@
 # Global BMS Project and Experiment Manager Specification
 
-**Status:** Approved implementation-controlling design
+**Status:** Approved implementation-controlling design; implementation and Development acceptance INCOMPLETE at the 2026-08-20 assessment baseline
 **Scope owner:** Global BMS manager and Protein In Silico experiment layer
 **Specification worktree baseline:** `8112bed622740b890e25b69c2bcf29ebebeaf3d6`
 **Specification baseline tree:** `32bad99d697aa221a2b75e0e824bd86bfdd3d23a`
 **Latest local `origin/test` observed during final design:** `edf34d9`
 **Target product:** BioModStack
 **Document type:** Product, architecture, persistence, API, UI, migration, and delivery specification
+
+## 0. Current implementation status and gap assessment
+
+This section records current evidence. It does not narrow the controlling requirements or transfer acceptance from one domain vertical to another.
+
+**Assessment baseline:** Development `test`, `origin/test`, canonical source, and live API at commit `e53e670db3baede36ec69d8257502964ce43d0c3`, tree `d27142e54de0c9102b421c0d63822143ac801b5b`, with a clean canonical checkout. The managed Development API, frontend, and workflow adapter owned ports `18002`, `18082`, and `18001`. Production was not changed.
+
+**Program verdict:** INCOMPLETE. The implemented organizer provides substantial Slice A hierarchy and presentation behavior. Slice A acceptance, Slice B execution closure, and the complete Definition of Done remain open.
+
+### 0.1 Browser-verified PASS at the assessment baseline
+
+- The Projects index rendered create, search, lifecycle filter, archive filter, recent ordering, direct reopen, active-experiment counts, and unresolved-failure counts.
+- A new Development Project was created through the browser, reopened at its exact path, edited to immutable revision 2, and retained the server-derived owner and generation.
+- A Global Experiment was created through the browser. Tree, relationship-map selection, inspector selection, validated `focus`/`selected` URL state, browser back, and browser forward stayed synchronized.
+- Global Experiment archive and restore completed through explicit UI confirmations. Archival remained non-destructive and the restored identity was unchanged.
+- A Project-level decision was appended through the browser and persisted as an immutable research record.
+- After a managed API/frontend restart, the Project, Global Experiment, Project revision, exact selection URL, and decision row reopened from the Development stores.
+- The retained BFX6NB Project rendered the Project tree, relationship map, selected-node inspector, bounded workflows, external receipt nodes, three run rows, attempt provenance, and accessible relationship list.
+- An exact molecular reference link reopened Mol Bio Toolkit with the same Project, Global Experiment, Domain Experiment, local state revision, molecular sequence ID, and immutable molecular revision ID.
+
+### 0.2 PARTIAL or MISSING gates
+
+- **Slice A complete operator path: MISSING.** Protein In Silico Domain Experiment creation is explicitly closed in the Project Manager until accepted capabilities and producer-native receipt selectors are advertised. The required two-domain Slice A scenario cannot run.
+- **Required scientific metadata controls: PARTIAL.** The current create/edit dialog exposes Project name/objective and Global Experiment name/objective/scientific question. It does not expose the complete controlling Project and Global Experiment metadata sets, including contributors, tags, dates, hypothesis, priority, success criteria, review summary, and conclusion.
+- **NGS/MolBio Domain creation: FAILED.** The browser returned `installed source authority digest mismatch: platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx`. No Domain Experiment was created.
+- **ELN-lite visibility: PARTIAL.** Browser append persisted the Project decision, but no Project-level Notes or Decisions virtual folder, map node, activity item, or inspector section rendered it. The record was available only through the API.
+- **Receipt freshness and canonical reopening: PARTIAL.** The retained BFX6NB map rendered 19 sample/reference receipts as `Stale` because persisted verification had no bounded freshness or re-verification receipt.
+- **Run lifecycle and reconciliation: PARTIAL.** Three BFX6NB Workflow Runs rendered `Dispatch Pending` with one attempt each and no binding, runtime, or terminal authority.
+- **Operational closure: MISSING.** The live global store had zero validation-artifact rows, zero bounded attempt-log rows, no retained shared-global-package acceptance receipt, no retained payload-ownership audit, and no verified Project export receipt. The latest verified backup/restore receipt was from 2026-08-14 and bound to an older source revision.
+- **Worker/connector convergence: PARTIAL.** One worker owned the Development lease, but health reported `failure_count=1`, three NGS/MolBio outbox conflicts, and two deferred inbox generation gaps.
+- **Complete native attachment coverage: PARTIAL.** Generic Project attachment and exact adapter infrastructure exists, but the required producer-native `Add to Project` action is not exposed and accepted across every scientific surface in the controlling denominator.
+- **Complete Slice B and all-capability Protein coverage: MISSING.** Current browser evidence cannot establish planning, preparation, typed-launcher handoff, dispatch, terminal reconciliation, retry/resubmit/clone semantics, or every installed Protein/MD capability through one accepted Project path.
+- **Independent exact-tree review and complete Development acceptance: MISSING** for the assessed tree.
+
+### 0.3 Gate result
+
+The weakest required gate controls the verdict. Current hierarchy and presentation work is implemented and useful, but the Global BMS Project and Experiment Manager is not complete under sections 18 through 21. The next implementation tranche must first restore exact installed-source authority, then close Protein Domain creation, required metadata controls, native attachment exposure, Project-level ELN rendering, receipt re-verification, dispatcher/connector convergence, operational receipts, and the retained full browser scenarios.
 
 ## 1. Purpose
 

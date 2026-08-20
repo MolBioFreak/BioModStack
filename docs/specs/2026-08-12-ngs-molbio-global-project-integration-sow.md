@@ -1,6 +1,6 @@
 # Statement of Work: Full NGS and Mol Bio Toolkit Integration with Global Project and Experiment Management
 
-**Status:** Implementation-ready scope specification
+**Status:** Implementation-controlling scope; implementation and Development acceptance INCOMPLETE at the 2026-08-20 assessment baseline
 
 **Date:** 2026-08-12
 
@@ -9,6 +9,44 @@
 **Controlling parent specification:** `docs/specs/global-bms-project-experiment-manager.md`
 
 **Implementation authority:** This document specifies work. Source edits, test execution, live runs, deployment, and Production promotion require separate authorization.
+
+## 0. Current implementation status and phase gap assessment
+
+This ledger records evidence from Development commit `e53e670db3baede36ec69d8257502964ce43d0c3`, tree `d27142e54de0c9102b421c0d63822143ac801b5b`. At assessment time `test`, `origin/test`, canonical Development, and the live API matched that commit. Browser testing used isolated Development records and retained Project-layer fixtures. Production was unchanged.
+
+**SOW verdict:** INCOMPLETE. The NGS/MolBio Project layer has working hierarchy, a merged Project/Domain workspace, exact state navigation, Dataset/history readers, and exact molecular reopening. Current authority drift blocks new Domain, Dataset, and Plan creation. Required active sample/reference controls, connector convergence, shared-package acceptance, payload-ownership audit, operational records, and the full N6 scenario remain open.
+
+| Phase | Current status | Assessment evidence |
+|---|---|---|
+| N0 contract/source freeze | **FAILED current-tree gate** | The installed source pin rejects `platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx`. The Project-layer authority denominator is stale relative to installed source. |
+| N1 additive migrations and binding | **PARTIAL** | Existing retained local state and binding readers reopen, but a new Project Manager NGS/MolBio Domain could not be created because the source-authority check failed before persistence. |
+| N2 connector and convergence | **PARTIAL** | One managed worker owns the lease. Health reports three outbox conflicts and two deferred inbox gaps; therefore convergence and ordered-delivery closure are not accepted. |
+| N3 adapters and lineage | **PARTIAL** | Retained sample and reference receipts render in the Project map, but 19 BFX6NB receipts are stale and lack bounded freshness/re-verification authority. Required producer-native `Add to Project` exposure is incomplete across samples, molecular revisions, primers/PCR, references, panels, instrument observations, Jobs, manifests, analyses, alignments, and evidence. Exact negative and restart acceptance for every receipt family is unsealed. |
+| N4 active toolkits and launch context | **PARTIAL** | All 11 Domain workspace sections render. One exact pBR322 revision reopens in Mol Bio Toolkit with complete hierarchy and revision query identity. Samples have no create/revise controls. Managed Reference Create/Import/Archive controls remain disabled. Plan creation and preparation are disabled by the source-authority failure. Complete deterministic pagination and response-bound browser closure for each Domain collection is unaccepted. |
+| N5 Dataset, ELN, operations, shared package | **PARTIAL/MISSING** | A retained immutable Dataset revision and exact history render. Current Dataset create is disabled by the source-authority failure. A Project decision persists but has no visible tree/map/inspector reopen path. Validation artifacts and bounded attempt logs have zero rows. No shared-package acceptance receipt, payload-ownership audit, or verified current Project export receipt was found. |
+| N6 current-tree verification and Development acceptance | **FAILED** | The browser could not complete the required create → bind → state → Dataset → plan → prepare → launch → result → restart path on the assessed tree. Independent exact-tree review is also open. |
+
+### 0.1 Browser-verified critical behavior
+
+- The NGS and Mol Bio routes render one merged NGS/MolBio Project plus Domain Experiment window rather than two sibling management windows.
+- The merged window exposes the selected local Project, Domain Experiment, exact local state revision, all Domain section selectors, and the compact optional broader-Project exposure control.
+- Mol Bio Toolkit expands to 865 CSS pixels in a 993-pixel browser viewport and is no longer capped at 48 rem.
+- Overview, Samples, Molecular Inputs, References, PCR, Instrument Runs, Datasets, Plans & Runs, Analyses, Evidence, and History all route through validated `section` query state without browser alerts, except the authority-blocked Dataset and Plans & Runs mutation surfaces.
+- Molecular Inputs renders all four entry modes and the attached exact pBR322 authority. The exact reopen action preserves `workspace_id`, `global_experiment_id`, `domain_experiment_id`, `state_revision_id`, `molbio_sequence_id`, and `molbio_revision_id` and loads Mol Bio Toolkit.
+- Restart reopening preserves the browser-created Project, Global Experiment, immutable Project revision, selected URL state, and persisted decision row.
+
+### 0.2 Current release blockers
+
+1. Reconcile and version the installed source pin/runtime authority for the current Mol Bio Toolkit bytes; retain fail-closed verification.
+2. Enable and browser-accept owner-authorized sample create/revise and managed-reference create/import/revise/archive flows.
+3. Expose and accept receipt-backed `Add to Project` on every required native NGS/MolBio surface.
+4. Close current Dataset and Workflow Plan mutation authority after the source pin is repaired; then prove prepare creates no Job and explicit launch creates one idempotent path.
+5. Resolve or formally disposition the three outbox conflicts and two deferred generation gaps without regressing heads.
+6. Add bounded receipt freshness/re-verification for the stale BFX6NB sample/reference receipts.
+7. Close deterministic pagination and response bounds for each Domain collection and its UI accumulation path.
+8. Render Project/Experiment ELN records in the tree, map, inspector, or bounded activity surface after append and restart.
+9. Produce real global validation-artifact and bounded attempt-log records, current verified backup/export receipts, the retained payload-ownership audit, and one complete shared-package acceptance receipt.
+10. Run the full N6 browser scenario and independent exact-tree review on one final deployed commit/tree.
 
 ## 1. Outcome
 
