@@ -697,19 +697,79 @@ def test_contract_09_partitioned_waveform_uses_digest_bound_route(tmp_path: Path
     index = outputs / f"{fingerprint}.blow5.idx"
     blow5.write_bytes(b"blow5")
     index.write_bytes(b"index")
+    (outputs / ("b" * 64 + ".blow5")).write_bytes(b"blow5-b")
+    (outputs / ("b" * 64 + ".blow5.idx")).write_bytes(b"index-b")
     routing = final / "routing.json"
     routing.write_text(json.dumps({"groups": {fingerprint: {"blow5": blow5.name, "index": index.name}}, "read_to_group": {"read-1": fingerprint}}), encoding="utf-8")
+    artifacts = [
+        ont_raw_signal._file_artifact(blow5, "blow5-a", kind="blow5"),
+        ont_raw_signal._file_artifact(
+            outputs / ("b" * 64 + ".blow5"), "blow5-b", kind="blow5"
+        ),
+        ont_raw_signal._file_artifact(index, "index-a", kind="blow5_index"),
+        ont_raw_signal._file_artifact(
+            outputs / ("b" * 64 + ".blow5.idx"), "index-b", kind="blow5_index"
+        ),
+        ont_raw_signal._file_artifact(routing, "routing", kind="read_routing"),
+    ]
+    for item in artifacts:
+        if item["path"].endswith(f"{fingerprint}.blow5"):
+            item["partition_fingerprint"] = fingerprint
+        elif item["path"].endswith(f"{'b' * 64}.blow5"):
+            item["partition_fingerprint"] = "b" * 64
+        elif item["path"].endswith(f"{fingerprint}.blow5.idx"):
+            item["partition_fingerprint"] = fingerprint
+        elif item["path"].endswith(f"{'b' * 64}.blow5.idx"):
+            item["partition_fingerprint"] = "b" * 64
     representation = OntRawSignalRepresentation(
         format="blow5", state="ready", validation_receipts={"adjacent_index": True},
-        artifact_manifest={"artifacts": [
-            {"kind": "blow5", "path": str(blow5)},
-            {"kind": "blow5", "path": str(outputs / ("b" * 64 + ".blow5"))},
-            {"kind": "blow5_index", "path": str(index)},
-            {"kind": "blow5_index", "path": str(outputs / ("b" * 64 + ".blow5.idx"))},
-            {"kind": "read_routing", "path": str(routing)},
-        ]},
+        artifact_manifest={"artifacts": artifacts},
     )
     assert ont_raw_signal._validated_blow5_paths(representation, "read-1") == (blow5, index)
+
+
+def test_partitioned_waveform_rejects_replaced_routing_root_symlink(tmp_path: Path) -> None:
+    final = tmp_path / "governed" / "job"
+    outputs = final / "outputs"
+    outputs.mkdir(parents=True)
+    fingerprint = "a" * 64
+    blow5 = outputs / f"{fingerprint}.blow5"
+    index = outputs / f"{fingerprint}.blow5.idx"
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    other_fingerprint = "b" * 64
+    other_blow5 = outputs / f"{other_fingerprint}.blow5"
+    other_index = outputs / f"{other_fingerprint}.blow5.idx"
+    other_blow5.write_bytes(b"other-blow5")
+    other_index.write_bytes(b"other-index")
+    routing = final / "routing.json"
+    routing.write_text(json.dumps({
+        "groups": {fingerprint: {"blow5": blow5.name, "index": index.name}},
+        "read_to_group": {"read-1": fingerprint},
+    }), encoding="utf-8")
+    artifacts = [
+        ont_raw_signal._file_artifact(blow5, "blow5", kind="blow5"),
+        ont_raw_signal._file_artifact(index, "index", kind="blow5_index"),
+        ont_raw_signal._file_artifact(other_blow5, "other-blow5", kind="blow5"),
+        ont_raw_signal._file_artifact(other_index, "other-index", kind="blow5_index"),
+        ont_raw_signal._file_artifact(routing, "routing", kind="read_routing"),
+    ]
+    artifacts[0]["partition_fingerprint"] = fingerprint
+    artifacts[1]["partition_fingerprint"] = fingerprint
+    artifacts[2]["partition_fingerprint"] = other_fingerprint
+    artifacts[3]["partition_fingerprint"] = other_fingerprint
+    representation = OntRawSignalRepresentation(
+        format="blow5",
+        state="ready",
+        validation_receipts={"adjacent_index": True},
+        artifact_manifest={"artifacts": artifacts},
+    )
+    escaped = tmp_path / "escaped-job"
+    final.rename(escaped)
+    final.symlink_to(escaped, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="routing.*governed|symbolic"):
+        ont_raw_signal._validated_blow5_paths(representation, "read-1")
 
 
 class _Session:

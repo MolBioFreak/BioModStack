@@ -366,6 +366,247 @@ class OntRawSignalLookup(Base):
     completed_at = Column(LenientSQLiteDateTime, nullable=True)
 
 
+class OntMoveTableSource(Base):
+    """Immutable, fully validated move-tag BAM authority for one run generation."""
+
+    __tablename__ = "ont_move_table_sources"
+    __table_args__ = (
+        UniqueConstraint("run_id", "observed_generation", "artifact_sha256", name="uq_ont_move_source_artifact"),
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_move_source_molecule"),
+        CheckConstraint("validation_state IN ('requested','running','ready','failed')", name="ck_ont_move_source_state"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    input_file_id = Column(String(36), ForeignKey("input_files.id", ondelete="RESTRICT"), nullable=False)
+    source_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    external_registration_receipt_id = Column(String(128), nullable=True)
+    artifact_sha256 = Column(String(64), nullable=False)
+    artifact_size_bytes = Column(Integer, nullable=False)
+    bam_header_sha256 = Column(String(64), nullable=True)
+    record_count = Column(Integer, nullable=True)
+    unique_read_count = Column(Integer, nullable=True)
+    mv_tag_count = Column(Integer, nullable=True)
+    ts_tag_count = Column(Integer, nullable=True)
+    ns_tag_count = Column(Integer, nullable=True)
+    basecall_model_id = Column(String(255), nullable=True)
+    molecule_type = Column(String(16), nullable=False)
+    source_runtime_identity = Column(JSON, nullable=False, default=dict)
+    read_inventory_sha256 = Column(String(64), nullable=True)
+    validation_state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="move_source_validation_requested")
+    validation_receipt = Column(JSON, nullable=False, default=dict)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    validated_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalCalibrationArtifact(Base):
+    __tablename__ = "ont_signal_calibration_artifacts"
+
+    id = Column(String(96), primary_key=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    basecall_model_id = Column(String(255), nullable=False)
+    sample_selection = Column(JSON, nullable=False)
+    recommended_kmer_length = Column(Integer, nullable=False)
+    recommended_signal_move_offset = Column(Integer, nullable=False)
+    score_evidence = Column(JSON, nullable=False)
+    runtime_identity = Column(JSON, nullable=False)
+    parent_sha256s = Column(JSON, nullable=False)
+    artifact_sha256 = Column(String(64), nullable=False, unique=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalCalibrationJob(Base):
+    """Leased deterministic calibration request for one exact signal/move authority."""
+
+    __tablename__ = "ont_signal_calibration_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", name="uq_ont_signal_calibration_request"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_calibration_state"),
+        CheckConstraint("sample_count >= 1 AND sample_count <= 100", name="ck_ont_signal_calibration_sample_count"),
+        CheckConstraint("failure_message IS NULL OR length(failure_message) <= 4000", name="ck_ont_signal_calibration_failure_message"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="calibration_requested")
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True, index=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    calibration_artifact_id = Column(String(96), ForeignKey("ont_signal_calibration_artifacts.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalMappingProfile(Base):
+    """Operator-approved, model-exact reform and alignment policy."""
+
+    __tablename__ = "ont_signal_mapping_profiles"
+    __table_args__ = (
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_signal_profile_molecule"),
+        CheckConstraint("parameter_source = 'approved_calibration'", name="ck_ont_signal_profile_calibrated_only"),
+        CheckConstraint("calibration_artifact_id IS NOT NULL", name="ck_ont_signal_profile_calibration_required"),
+        CheckConstraint("primary_alignment_policy = 'primary_only'", name="ck_ont_signal_profile_primary_only"),
+        CheckConstraint("minimum_mapq = 0", name="ck_ont_signal_profile_mapq_zero"),
+        CheckConstraint("include_supplementary = 0", name="ck_ont_signal_profile_no_supplementary"),
+        CheckConstraint("read_set_selection = 'immutable_full_set'", name="ck_ont_signal_profile_full_set"),
+        UniqueConstraint(
+            "basecall_model_id", "molecule_type", "kmer_length", "signal_move_offset",
+            "calibration_artifact_id", "minimum_mapq", "read_set_selection",
+            name="uq_ont_signal_profile_calibration",
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    name = Column(String(255), nullable=False)
+    molecule_type = Column(String(16), nullable=False)
+    basecall_model_id = Column(String(255), nullable=False)
+    kmer_length = Column(Integer, nullable=False)
+    signal_move_offset = Column(Integer, nullable=False)
+    parameter_source = Column(String(32), nullable=False)
+    calibration_artifact_id = Column(String(96), ForeignKey("ont_signal_calibration_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    primary_alignment_policy = Column(String(32), nullable=False, default="primary_only")
+    minimum_mapq = Column(Integer, nullable=False, default=0)
+    include_supplementary = Column(Boolean, nullable=False, default=False)
+    read_set_selection = Column(String(32), nullable=False, default="immutable_full_set")
+    approval_receipt = Column(JSON, nullable=False)
+    approved_at = Column(LenientSQLiteDateTime, nullable=False)
+    approved_by = Column(String(255), nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalMappingJob(Base):
+    """Leased reusable reform/realign derivation with exact governed parents."""
+
+    __tablename__ = "ont_signal_mapping_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", name="uq_ont_signal_mapping_request"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_mapping_state"),
+        CheckConstraint("mode IN ('signal_to_read','signal_to_reference')", name="ck_ont_signal_mapping_mode"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    mode = Column(String(32), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    mapping_profile_id = Column(String(96), ForeignKey("ont_signal_mapping_profiles.id", ondelete="RESTRICT"), nullable=False)
+    reference_revision_id = Column(String(128), nullable=True)
+    alignment_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    alignment_session_id = Column(String(96), nullable=True)
+    parent_mapping_job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=True)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalMappingEvent(Base):
+    __tablename__ = "ont_signal_mapping_events"
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalMappingArtifact(Base):
+    __tablename__ = "ont_signal_mapping_artifacts"
+
+    id = Column(String(96), primary_key=True)
+    mapping_job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    managed_relative_path = Column(Text, nullable=False, unique=True)
+    media_type = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    parent_identities = Column(JSON, nullable=False)
+    runtime_identity = Column(JSON, nullable=False)
+    validation_receipt = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSquigualiserViewJob(Base):
+    __tablename__ = "ont_squigualiser_view_jobs"
+
+    id = Column(String(96), primary_key=True)
+    mapping_artifact_id = Column(String(96), ForeignKey("ont_signal_mapping_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    mode = Column(String(32), nullable=False)
+    read_id = Column(String(128), nullable=True)
+    reference_contig = Column(String(255), nullable=True)
+    reference_start = Column(Integer, nullable=True)
+    reference_end = Column(Integer, nullable=True)
+    render_params = Column(JSON, nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    output_manifest = Column(JSON, nullable=False, default=dict)
+    render_receipt = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalViewerSession(Base):
+    __tablename__ = "ont_signal_viewer_sessions"
+
+    id = Column(String(96), primary_key=True)
+    dataset_id = Column(String(128), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False)
+    alignment_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    alignment_session_id = Column(String(96), nullable=True)
+    reference_revision_id = Column(String(128), nullable=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=True)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=True)
+    mapping_profile_id = Column(String(96), ForeignKey("ont_signal_mapping_profiles.id", ondelete="RESTRICT"), nullable=True)
+    contig = Column(String(255), nullable=True)
+    locus_start = Column(Integer, nullable=True)
+    locus_end = Column(Integer, nullable=True)
+    selected_read_id = Column(String(128), nullable=True)
+    igv_state = Column(JSON, nullable=False, default=dict)
+    signal_state = Column(JSON, nullable=False, default=dict)
+    revision = Column(Integer, nullable=False, default=1)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class OntProtocolOptionReceipt(Base):
     """Expiring server-owned receipt for one normalized MinKNOW protocol option."""
 

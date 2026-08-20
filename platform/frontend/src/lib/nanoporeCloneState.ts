@@ -87,6 +87,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         singleRefSplitMinSegmentBp: p.single_ref_split_min_segment_bp ?? 250,
         singleRefSplitMaxQueryGapBp: p.single_ref_split_max_query_gap_bp ?? 500,
         emitSummary: p.emit_summary !== false,
+        emitMoves: p.emit_moves !== false,
         batchSize: p.dorado_batch_size ?? null,
         minQscore: p.min_qscore ?? 10,
         modkitFilterThreshold: p.modkit_filter_threshold ?? null,
