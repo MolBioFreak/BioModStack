@@ -45,6 +45,40 @@ This section records current evidence. It does not narrow the controlling requir
 
 The weakest required gate controls the verdict. Current hierarchy and presentation work is implemented and useful, but the Global BMS Project and Experiment Manager is not complete under sections 18 through 21. The next implementation tranche must first restore exact installed-source authority, then close Protein Domain creation, required metadata controls, native attachment exposure, Project-level ELN rendering, receipt re-verification, dispatcher/connector convergence, operational receipts, and the retained full browser scenarios.
 
+### 0.4 Operator-reported presentation gaps
+
+The 2026-08-20 structural merge and Toolkit height correction are implemented. Their visual acceptance is **REOPENED / PENDING** because Christian reported that the Project layer had consumed about half of the usable page, duplicated content, and presented incongruent Project/Domain controls above Mol Bio Toolkit. DOM nesting and a larger Toolkit height do not close this gate.
+
+The pending presentation correction must satisfy all of these conditions:
+
+- the Project and Domain Experiment controls read as one management surface, with one outer container and one primary identity/action band;
+- the initial compact state contains exactly one operator-facing Project selector/summary, one Global Experiment context, and one Domain Experiment context; local NGS/MolBio Project identity and optional broader-Project associations must be labeled distinctly rather than repeated as equivalent Project controls;
+- objective, status, owner, selected revision, and management actions must not be repeated in separate top and bottom cards unless one is an explicitly opened detail/history view;
+- secondary metadata, association management, provenance, and advanced controls remain available behind intentional disclosure controls and are collapsed by default;
+- at 1366×768, 1920×1080, and 2560×1440, the compact Project/Domain band must use no more than 35% of the application content viewport before Mol Bio Toolkit; the Toolkit must begin in the first viewport and receive at least 60% of the content viewport unless the operator expands Project details;
+- Mol Bio Toolkit keeps its responsive normal-mode height contract and internal scrolling. Parent menus or management panels must not impose a second fixed cap or create nested page-sized blank regions;
+- headings, spacing, terminology, selected IDs, disabled-state reasons, and return/deep-link context must agree across the Project tree, map, inspector, Domain workspace, and Toolkit;
+- acceptance requires fresh screenshots and DOM geometry from the exact managed Development route at all three viewports, plus Christian’s visual confirmation. Automated height and component-count checks are supporting evidence only.
+
+### 0.5 Ordered pending-fix packages
+
+Each package is pending until its named acceptance evidence exists. Later packages may depend on earlier authority or data-plane work; passing one package does not close another.
+
+| Package | Pending correction | Acceptance boundary |
+|---|---|---|
+| PM-01 visual coherence and viewport | Remove repeated Project/Domain summaries and action clusters, preserve one hierarchy owner, compact default metadata, distinguish local versus broader Project associations, and enforce the section 0.4 geometry contract. | Three-viewport browser geometry, duplicate-control inventory, exact deep-link/reload behavior, and Christian visual acceptance. |
+| PM-02 source and exposure authority | Reconcile every installed source pin and runtime denominator; make capability and Dataset exposure derive from accepted runtime evidence without rewriting unverified rows to accepted/plannable. | Exact source/tree seal, negative drift test, truthful unavailable state, and matching API/UI exposure. |
+| PM-03 complete hierarchy authoring | Add the missing Project and Global Experiment metadata controls. Enable Protein Domain creation only with accepted capability and producer-native receipt authorities. Remove the current source/test contradiction. | Browser create/edit/revision/archive/restore for Project, Global Experiment, Protein Domain, and NGS/MolBio Domain with exact typed readback. |
+| PM-04 native attachment and context | Expose receipt-backed `Add to Project` across every required native surface. Add literal consumers for every deep-link key and server-verified opaque Project/Domain context for deterministic Mol Bio operations. | Producer/consumer key matrix, cross-Project negative checks, exact native reopen/return, and no copied scientific payloads. |
+| PM-05 active domain authoring | Mount owner-authorized sample create/revise, managed-reference create/import/revise/archive, evidence attach/assess, Dataset, and Plan/preparation controls. | Full browser mutation/revision/reopen path with generation conflicts and unauthorized paths failing visibly. |
+| PM-06 read model and ELN integrity | Add the required scoped summary/map/results/lineage contracts or update the controlling contract explicitly; use opaque authority-bound cursors; cover all envelope authorities in provenance; project persisted adapter versions; expose ELN replacement and Project-level record reopening; represent actual replica relations. | Bounded multi-page API/UI closure, exact provenance digest closure, visible note/decision replacement history, and real replica projection. |
+| PM-07 receipt and lineage reconciliation | Implement bounded receipt freshness and re-verification so available receipts can transition from stale to current/bound. Preserve immutable successor receipts and Domain-scoped lineage. | Fresh/stale/missing/tampered/reverified browser and API matrix across every receipt family, including restart. |
+| PM-08 execution and Protein closure | Generalize Plan, preparation, launch, retry, resubmit, cancel, Dataset comparison, and result review beyond the NGS-specific path to all installed Protein/MD capabilities. | Complete Project-governed native launch chain for every installed Protein/MD capability plus cross-run Dataset comparison. |
+| PM-09 artifacts, logs, and result surfaces | Add the global artifact/blob writer and bounded log production for all global activities, then expose exact terminal artifacts and canonical result surfaces. | Persisted artifact/log rows, digest verification, bounded browser display, and direct canonical reopen. |
+| PM-10 worker, connector, and operations | Resolve connector conflicts and deferred gaps; complete worker recovery and run reconciliation; expose full migration, lag, adapter, verification, backup, and export health. | Single-owner health with zero unresolved conflicts/gaps, restart recovery, current verified backup/restore/export, and no active orphan execution. |
+| PM-11 retained release evidence | Produce a retained payload-ownership audit, shared-package acceptance receipt, validation artifacts, bounded attempt logs, and exact deployment receipts. | All evidence resolves by immutable ID and digest to the same candidate commit/tree and managed Development lane. |
+| PM-12 final acceptance | Run Slice A, full Slice B, NGS/MolBio N6, independent exact-tree review, restart durability, and final browser acceptance without workarounds. | One final commit/tree passes every controlling scenario; Production promotion remains a separate owner decision. |
+
 ## 1. Purpose
 
 BioModStack requires one durable project and experiment manager above its scientific modules. This manager must organize related computational research, molecular records, sequencing work, and later instrument activities without replacing the systems that own those records.

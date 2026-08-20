@@ -48,6 +48,42 @@ This ledger records evidence from Development commit `e53e670db3baede36ec69d8257
 9. Produce real global validation-artifact and bounded attempt-log records, current verified backup/export receipts, the retained payload-ownership audit, and one complete shared-package acceptance receipt.
 10. Run the full N6 browser scenario and independent exact-tree review on one final deployed commit/tree.
 
+### 0.3 Reopened visual and congruence gate
+
+The merged component hierarchy and `clamp(36rem, calc(100vh - 8rem), 96rem)` Toolkit rule are implemented. They remain **PENDING visual acceptance**. Christian’s report that the Project layer consumed about half of the page, duplicated content, and visually separated controls is controlling evidence that the prior automated DOM/height pass did not close usability.
+
+Pending fix `PM-01` from the parent specification must:
+
+1. render the NGS/MolBio Project hub and Domain Experiment workspace as one compact management band rather than two visually stacked management sections;
+2. remove duplicate Project identity, objective, status, selection, and action content while retaining one explicit local-Project authority and clearly labeled optional broader-Project associations;
+3. collapse optional association, metadata, provenance, and advanced management controls by default without removing their functions;
+4. keep the compact management band at or below 35% of the content viewport at 1366×768, 1920×1080, and 2560×1440;
+5. place Mol Bio Toolkit in the first viewport with at least 60% of content-viewport height in the default compact state, while preserving full expansion when Project details are intentionally opened;
+6. prevent nested fixed-height parents, duplicate scrolling regions, clipped Toolkit controls, and blank vertical gaps;
+7. use congruent headings, labels, spacing, selection state, disabled-state reasons, and exact context across `/ngs` and `/designer`;
+8. finish with exact-route screenshots, DOM geometry, zero duplicate-control counts, first-use interaction readback, and Christian visual confirmation.
+
+### 0.4 NGS/MolBio pending-fix readiness map
+
+The parent packages are ready as bounded implementation tranches. NGS/MolBio-specific work is assigned as follows:
+
+| Parent package | NGS/MolBio correction ready for implementation |
+|---|---|
+| PM-01 | Compact and deduplicate `NgsMolBioProjectHub` plus `DomainExperimentWorkspace`; preserve one selected hierarchy and the Toolkit viewport contract. |
+| PM-02 | Reconcile `source_pin_v1.json`, the successor runtime denominator, capability exposure, and Dataset exposure with the final changed bytes; keep unverified rows unavailable. |
+| PM-03 | Complete typed NGS/MolBio Domain creation after authority repair and ensure local Project creation remains optional with respect to broader Projects. |
+| PM-04 | Mount receipt-backed attachment actions for samples, molecular revisions, primers/PCR, references, panels, ONT observations, Jobs, manifests, QC, analyses, alignments, and evidence. Add literal `manifest_identity` and comparison-panel version consumers. Bind Mol Bio mutations to server-verified opaque Project/Domain context. |
+| PM-05 | Mount sample create/revise, evidence attach/assess, managed-reference lifecycle, Dataset create/revise, and Plan/preparation UI using existing typed clients and immutable revision contracts. |
+| PM-06 | Replace the integer Plan-revision cursor with an opaque Project/Domain/limit-bound keyset cursor. Add UI page accumulation and exact-history reopening for every Domain collection. Render Project/Experiment ELN records and replacement history. |
+| PM-07 | Add bounded re-verification and successor-receipt handling for the 19 stale BFX6NB receipts and every accepted adapter family. |
+| PM-08 | Prove prepare creates no Job, explicit launch creates one idempotent authority path, and retry/resubmit/cancel preserve immutable preparation and selected Dataset/reference context. |
+| PM-09 | Materialize global validation artifacts and bounded attempt logs from real NGS/MolBio terminal execution; expose exact result and evidence reopening. |
+| PM-10 | Resolve three outbox conflicts and two deferred inbox gaps, then prove ordered convergence and restart recovery without regressing stream heads. |
+| PM-11 | Produce current verified backup/restore/export receipts, a retained payload-ownership audit, and one aggregate shared-package acceptance receipt for the final candidate. |
+| PM-12 | Execute the full N6 browser scenario, independent exact-tree review, managed Development deployment proof, restart/reopen, and final visual acceptance. |
+
+No package is marked implemented by this readiness map. Implementation, code tests, live scientific runs, and Production promotion require their own authority and evidence.
+
 ## 1. Outcome
 
 Deliver one complete NGS/MolBio domain vertical under the existing hierarchy:
