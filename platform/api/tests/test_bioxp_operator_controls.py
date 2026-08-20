@@ -632,6 +632,130 @@ def make_client(monkeypatch, *, mutations=True):
     return TestClient(app), runtime
 
 
+def test_queued_successive_move_receipt_parses():
+    queued = receipt(action_id="oem.x.move_steps", command_id="operator-x-queued-1")
+    queued.update({
+        "status": "queued",
+        "queued_at": 1787188152.83,
+        "dispatched_at": 1787188162.54,
+        "finished_at": None,
+        "controller_acknowledged": False,
+        "controller_terminal_state_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": None,
+        "observation_receipt_id": None,
+        "observes_command_id": None,
+    })
+
+    parsed = OperatorActionReceipt.model_validate(queued)
+
+    assert parsed.status == "queued"
+    assert parsed.queued_at == 1787188152.83
+    assert parsed.dispatched_at == 1787188162.54
+    assert parsed.finished_at is None
+
+
+def test_completed_successive_move_receipt_preserves_queue_timestamps():
+    completed = receipt(action_id="oem.x.move_steps", command_id="operator-x-queued-2")
+    completed.update({
+        "status": "completed",
+        "queued_at": 1787188152.83,
+        "dispatched_at": 1787188153.41,
+        "response": {"http_status": 200, "body": {"ok": True, "axis": "x", "intent": "move_steps"}},
+        "authority_receipt_id": "operator-x-queued-2",
+        "authority_receipt_status": "completed",
+        "authority_fingerprint": None,
+        "observation_receipt_id": None,
+        "observes_command_id": None,
+    })
+
+    parsed = OperatorActionReceipt.model_validate(completed)
+
+    assert parsed.status == "completed"
+    assert parsed.queued_at == 1787188152.83
+    assert parsed.dispatched_at == 1787188153.41
+
+
+def test_cleared_successive_move_receipt_parses():
+    cleared = receipt(action_id="oem.x.move_steps", command_id="operator-x-cleared-1")
+    cleared.update({
+        "status": "cleared",
+        "queued_at": 1787188152.83,
+        "cleared_at": 1787188154.2,
+        "started_at": "1787188152.83",
+        "finished_at": "1787188154.2",
+        "duration_ms": 1370.0,
+        "controller_acknowledged": False,
+        "controller_terminal_state_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": None,
+        "observation_receipt_id": None,
+        "observes_command_id": None,
+    })
+
+    parsed = OperatorActionReceipt.model_validate(cleared)
+
+    assert parsed.status == "cleared"
+    assert parsed.queued_at == 1787188152.83
+    assert parsed.cleared_at == 1787188154.2
+
+
+def test_dashboard_relays_successive_move_queue(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    payload = catalog()["dashboard"]
+    payload["successive_move_queue"] = {
+        "x": {
+            "active_command_id": "operator_x_1787188152000_abc",
+            "depth": 1,
+            "head_action_id": "oem.x.move_steps",
+            "state": "queued",
+        }
+    }
+    runtime.connection.client.responses["operator_dashboard"] = payload
+
+    response = client.get("/api/bioxp/operator-controls/dashboard")
+
+    assert response.status_code == 200
+    queue = response.json()["successive_move_queue"]
+    assert queue["x"]["depth"] == 1
+    assert queue["x"]["head_action_id"] == "oem.x.move_steps"
+    assert queue["x"]["state"] == "queued"
+
+
+def test_invoke_relays_queued_successive_move_receipt(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    queued = receipt(action_id="oem.x.move_steps", command_id="operator-x-relay-queued")
+    queued.update({
+        "status": "queued",
+        "queued_at": 1787188152.83,
+        "dispatched_at": None,
+        "controller_acknowledged": False,
+        "controller_terminal_state_verified": False,
+        "authority_receipt_id": None,
+        "authority_receipt_status": None,
+        "authority_fingerprint": None,
+        "observation_receipt_id": None,
+        "observes_command_id": None,
+    })
+    runtime.connection.client.responses["invoke_operator_action"] = queued
+
+    response = client.post(
+        "/api/bioxp/operator-controls/actions/oem.x.move_steps",
+        json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "idempotency_key": "invoke-12345678",
+            "inputs": {"steps": 100},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["queued_at"] == 1787188152.83
+
+
 def test_robot_409_translation_preserves_structured_detail():
     detail = {"error": "action_unavailable", "reason": {"key": "z_switch_masks_clear", "met": False}}
     translated = _translate_robot_error(RobotResponseError(409, detail))

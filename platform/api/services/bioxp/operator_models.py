@@ -14,6 +14,7 @@ ActionStatus = Literal[
     "acknowledged",
     "admission_pending",
     "queued",
+    "cleared",
     "completed",
     "failed",
     "blocked",
@@ -3618,6 +3619,14 @@ class PipetteApplicationPlanResponse(BaseModel):
         return self
 
 
+class OperatorDashboardQueueAxis(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    active_command_id: str | None = Field(default=None, max_length=160)
+    depth: StrictInt = Field(ge=0)
+    head_action_id: str | None = Field(default=None, max_length=128)
+    state: Literal["running", "queued", "idle"]
+
+
 class OperatorDashboard(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_dashboard.v1"]
@@ -3632,6 +3641,9 @@ class OperatorDashboard(BaseModel):
     temperatures: list[OperatorDashboardTemperature] = Field(max_length=32)
     pipettes: OperatorDashboardPipettes
     snapshot: dict[str, Any]
+    successive_move_queue: dict[str, OperatorDashboardQueueAxis] = Field(
+        default_factory=dict, max_length=8
+    )
 
 
 class OperatorActionSpec(BaseModel):
@@ -3752,6 +3764,9 @@ class OperatorActionReceipt(BaseModel):
     request_received_at: StrictFloat | None = Field(default=None, ge=0)
     lock_acquired_at: StrictFloat | None = Field(default=None, ge=0)
     admission_completed_at: StrictFloat | None = Field(default=None, ge=0)
+    queued_at: StrictFloat | None = Field(default=None, ge=0)
+    dispatched_at: StrictFloat | None = Field(default=None, ge=0)
+    cleared_at: StrictFloat | None = Field(default=None, ge=0)
     provider_entry_at: StrictFloat | None = Field(default=None, ge=0)
     provider_returned_at: StrictFloat | None = Field(default=None, ge=0)
     receipt_persist_started_at: StrictFloat | None = Field(default=None, ge=0)
