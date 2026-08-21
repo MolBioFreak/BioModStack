@@ -647,7 +647,7 @@ export interface ProjectSummaryOptions {
     signal?: AbortSignal;
 }
 
-export interface ProjectCreateRequest {
+export interface ProjectV1CreateRequest {
     schema: 'bms.project.v1';
     name: string;
     description?: string;
@@ -662,6 +662,24 @@ export interface ProjectCreateRequest {
     change_summary?: string;
     project_scope?: 'global' | 'ngs_molbio_local';
 }
+
+export interface ProjectV2CreateRequest {
+    schema: 'bms.project.v2';
+    project_scope: 'global' | 'ngs_molbio_local';
+    name: string;
+    description?: string;
+    research_objective?: string;
+    owner?: string | null;
+    contributors?: string[];
+    tags?: string[];
+    status?: 'draft' | 'active' | 'on_hold' | 'completed' | 'archived';
+    start_date?: string | null;
+    target_end_date?: string | null;
+    created_by?: string | null;
+    change_summary?: string;
+}
+
+export type ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest;
 
 export interface NgsMolBioProjectLink {
     schema: 'bms.ngs-molbio-project-link.v1';
@@ -686,7 +704,7 @@ export interface NgsMolBioShareableResult {
     created_at: string;
 }
 
-export interface GlobalExperimentCreateRequest {
+export interface GlobalExperimentV1CreateRequest {
     schema: 'bms.global-experiment.v1';
     name: string;
     objective?: string;
@@ -700,7 +718,25 @@ export interface GlobalExperimentCreateRequest {
     change_summary?: string;
 }
 
-export interface DomainExperimentCreateRequest {
+export interface GlobalExperimentV2CreateRequest {
+    schema: 'bms.global-experiment.v2';
+    name: string;
+    objective?: string;
+    scientific_question?: string;
+    hypothesis?: string | null;
+    description?: string;
+    status?: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived';
+    priority?: 'low' | 'normal' | 'high' | 'critical';
+    tags?: string[];
+    success_criteria?: string[];
+    review_summary?: string | null;
+    conclusion?: string | null;
+    change_summary?: string;
+}
+
+export type GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest;
+
+export interface DomainExperimentV2CreateRequest {
     schema: 'bms.domain-experiment.v2';
     domain_kind: 'protein_in_silico' | 'ngs_molbio';
     domain_contract_version: '2';
@@ -713,6 +749,22 @@ export interface DomainExperimentCreateRequest {
     change_summary: string;
     domain_payload: JsonObject;
 }
+
+export interface DomainExperimentV4CreateRequest {
+    schema: 'bms.domain-experiment.v4';
+    domain_kind: 'protein_in_silico' | 'ngs_molbio';
+    domain_contract_version: '3';
+    name: string;
+    objective: string;
+    status: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked';
+    tags: string[];
+    source_receipt_ids: string[];
+    dataset_revision_ids: string[];
+    change_summary: string;
+    domain_payload: JsonObject;
+}
+
+export type DomainExperimentCreateRequest = DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest;
 
 export interface HierarchyMutationResult {
     id: string;

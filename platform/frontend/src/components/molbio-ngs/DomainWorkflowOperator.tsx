@@ -1540,7 +1540,10 @@ export default function DomainWorkflowOperator({
             setSelectedPlanId('');
             return;
         }
-        if (!plans.some((plan) => plan.plan_id === selectedPlanId)) setSelectedPlanId(plans[0].plan_id);
+        if (!plans.some((plan) => plan.plan_id === selectedPlanId)) {
+            const preferred = plans.find((plan) => Boolean(plan.current_revision_id) || (plan.draft_generation ?? 0) > 0) ?? plans[0];
+            setSelectedPlanId(preferred.plan_id);
+        }
     }, [plansQuery.data?.items, selectedPlanId]);
 
     useEffect(() => {

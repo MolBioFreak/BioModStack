@@ -70,7 +70,7 @@ class ExternalReference(StrictRequestModel):
     label: str = ""
 
 
-class ProjectCreateRequest(StrictRequestModel):
+class ProjectV1CreateRequest(StrictRequestModel):
     schema_: Literal["bms.project.v1"] = Field(default="bms.project.v1", alias="schema")
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
@@ -87,9 +87,29 @@ class ProjectCreateRequest(StrictRequestModel):
     project_scope: Literal["global", "ngs_molbio_local"] = "global"
 
 
+class ProjectV2CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.project.v2"] = Field(alias="schema")
+    project_scope: Literal["global", "ngs_molbio_local"]
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=8192)
+    research_objective: str = Field(default="", max_length=8192)
+    owner: str | None = None
+    contributors: list[str] = Field(default_factory=list, max_length=128)
+    tags: list[str] = Field(default_factory=list, max_length=64)
+    status: Literal["draft", "active", "on_hold", "completed", "archived"] = "draft"
+    start_date: date | None = None
+    target_end_date: date | None = None
+    external_references: list[ExternalReference] = Field(default_factory=list, max_length=128)
+    created_by: str | None = None
+    change_summary: str = Field(default="created", min_length=1, max_length=1024)
+
+
+ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest
+
+
 class ProjectPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.project.v1"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.project.v1", "bms.project.v2"] | None = Field(default=None, alias="schema")
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     research_objective: str | None = None
@@ -115,7 +135,7 @@ class NgsMolBioProjectLinkRequest(StrictRequestModel):
     )
 
 
-class GlobalExperimentCreateRequest(StrictRequestModel):
+class GlobalExperimentV1CreateRequest(StrictRequestModel):
     schema_: Literal["bms.global-experiment.v1"] = Field(default="bms.global-experiment.v1", alias="schema")
     name: str = Field(min_length=1, max_length=255)
     objective: str = ""
@@ -135,9 +155,32 @@ class GlobalExperimentCreateRequest(StrictRequestModel):
     change_summary: str = "created"
 
 
+class GlobalExperimentV2CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.global-experiment.v2"] = Field(alias="schema")
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(default="", max_length=8192)
+    scientific_question: str = Field(default="", max_length=8192)
+    hypothesis: str | None = Field(default=None, max_length=8192)
+    description: str = Field(default="", max_length=8192)
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"] = "draft"
+    priority: Literal["low", "normal", "high", "critical"] = "normal"
+    tags: list[str] = Field(default_factory=list, max_length=64)
+    shared_source_receipt_ids: list[str] = Field(default_factory=list, max_length=256)
+    shared_dataset_ids: list[str] = Field(default_factory=list, max_length=128)
+    comparison_plan: str | None = Field(default=None, max_length=8192)
+    success_criteria: list[str] = Field(default_factory=list, max_length=128)
+    review_summary: str | None = Field(default=None, max_length=8192)
+    conclusion: str | None = Field(default=None, max_length=8192)
+    created_by: str | None = None
+    change_summary: str = Field(default="created", min_length=1, max_length=1024)
+
+
+GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest
+
+
 class GlobalExperimentPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.global-experiment.v1"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.global-experiment.v1", "bms.global-experiment.v2"] | None = Field(default=None, alias="schema")
     name: str | None = Field(default=None, min_length=1, max_length=255)
     objective: str | None = None
     scientific_question: str | None = None

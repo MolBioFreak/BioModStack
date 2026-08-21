@@ -1157,24 +1157,39 @@ async def save_workflow_draft(
 def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValidationFailure("aggregate payload must be an object")
-    expected_schema = {
-        "workspace": "bms.project.v1",
-        "experiment": "bms.global-experiment.v1",
-        "domain_experiment": payload.get("schema"),
+    expected_schemas = {
+        "workspace": {"bms.project.v1", "bms.project.v2"},
+        "experiment": {"bms.global-experiment.v1", "bms.global-experiment.v2"},
+        "domain_experiment": {payload.get("schema")},
     }[aggregate_kind]
-    if payload.get("schema") != expected_schema:
-        raise ValidationFailure(f"{aggregate_kind} payload schema must be {expected_schema}")
+    if payload.get("schema") not in expected_schemas:
+        raise ValidationFailure(f"{aggregate_kind} payload schema is unsupported")
     required = {
         "workspace": {"name", "description", "research_objective", "status", "needs_metadata_review"},
         "experiment": {"name", "objective", "scientific_question", "description", "status", "priority", "success_criteria", "needs_metadata_review"},
         "domain_experiment": {"domain_kind", "domain_contract_version", "name", "objective", "status", "domain_payload"},
     }[aggregate_kind]
+    if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+        required |= {
+            "schema", "project_scope", "owner", "contributors", "tags", "start_date",
+            "target_end_date", "external_references", "created_by", "change_summary",
+        }
+    if aggregate_kind == "experiment" and payload.get("schema") == "bms.global-experiment.v2":
+        required |= {
+            "schema", "hypothesis", "tags", "shared_source_receipt_ids", "shared_dataset_ids",
+            "comparison_plan", "review_summary", "conclusion", "created_by", "change_summary",
+        }
     missing = sorted(field for field in required if field not in payload)
     if missing:
         raise ValidationFailure(f"{aggregate_kind} payload missing required fields: {', '.join(missing)}")
     statuses = PROJECT_STATUSES if aggregate_kind == "workspace" else EXPERIMENT_STATUSES
     if payload.get("status") not in statuses:
         raise ValidationFailure(f"invalid {aggregate_kind} lifecycle status")
+    if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+        if payload.get("project_scope") not in {"global", "ngs_molbio_local"}:
+            raise ValidationFailure("Project v2 project_scope is invalid")
+        if not isinstance(payload.get("needs_metadata_review"), bool):
+            raise ValidationFailure("Project v2 needs_metadata_review must be boolean")
     if aggregate_kind == "experiment":
         if payload.get("status") == "active":
             criteria = payload.get("success_criteria")
@@ -1273,7 +1288,7 @@ def _hierarchy_reference_ids(
         target.extend((role, value) for value in values)
 
     schema = payload.get("schema")
-    if schema == "bms.global-experiment.v1":
+    if schema in {"bms.global-experiment.v1", "bms.global-experiment.v2"}:
         collect(
             "shared_source_receipt_ids",
             role="shared_source_receipt",
@@ -1317,7 +1332,13 @@ async def _resolve_hierarchy_references(
 ) -> list[dict[str, str | int]]:
     receipt_references, dataset_references, dataset_revision_references = _hierarchy_reference_ids(payload)
     bindings: list[dict[str, str | int]] = []
-    exact_v2_authority = payload.get("schema") in {"bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}
+    exact_v2_authority = payload.get("schema") in {
+        "bms.project.v2",
+        "bms.global-experiment.v2",
+        "bms.domain-experiment.v2",
+        "bms.domain-experiment.v3",
+        "bms.domain-experiment.v4",
+    }
     allowed_authority_ids = {workspace_id, aggregate_id}
     if parent_id is not None:
         allowed_authority_ids.add(parent_id)
@@ -1607,6 +1628,8 @@ async def _save_revision(
                     if aggregate_kind == "workflow"
                     else str(payload.get("domain_contract_version") or "1")
                     if aggregate_kind == "domain_experiment"
+                    else "2"
+                    if str(payload.get("schema") or "").endswith(".v2")
                     else "1"
                 ),
                 canonical_payload=payload_json,

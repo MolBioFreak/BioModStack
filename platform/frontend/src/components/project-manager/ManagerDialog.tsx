@@ -26,6 +26,31 @@ import { globalExperimentForNode, selectedDomainContext } from './projectManager
 
 export type ManagerDialogMode = 'create_project' | 'create_global' | 'create_domain' | 'edit' | 'archive' | 'restore' | 'record';
 
+function completeNgsDomainPayload(objective: string, experimentMode: string): JsonObject {
+    return {
+        schema: 'bms.ngs-molbio-experiment.v2',
+        experiment_mode: experimentMode,
+        scientific_objective: objective,
+        planned_capability_ids: ['ngs.ont.fastq_qc'],
+        grouping_intent: [],
+        acceptance_criteria: [{
+            criterion_id: 'ngs-result-manifest-present',
+            schema_id: 'bms.scientific-criterion.artifact-presence.v1',
+            schema_sha256: '3f03a62f9bc39f61c4bdfa938cca5453da91e68ef16b30effdd0f4195cc2bdc6',
+            subject_role: 'result',
+            payload: { artifact_role: 'ngs_result_manifest', minimum_count: 1 },
+        }],
+        evidence_plan: [{
+            requirement_id: 'ngs-result-manifest-receipt',
+            schema_id: 'bms.evidence-requirement.native-receipt.v1',
+            schema_sha256: '4f1ea5545016d8d49739c2d1f1a94bc64f321667d2eb98205d0f727088da5d10',
+            subject_role: 'result',
+            required: true,
+            payload: { receipt_kind: 'ngs_result_manifest', minimum_count: 1 },
+        }],
+    };
+}
+
 interface ManagerDialogProps {
     mode: ManagerDialogMode | null;
     projectId?: string;
@@ -82,11 +107,11 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const mutation = useMutation({
         mutationFn: async () => {
             if (mode === 'create_project') {
-                return createProject({ schema: 'bms.project.v1', name, research_objective: objective, status: 'active', change_summary: 'Created in Project Manager' });
+                return createProject({ schema: 'bms.project.v2', project_scope: 'global', name, research_objective: objective, status: 'active', change_summary: 'Created in Project Manager' });
             }
             if (!projectId || !summary) throw new Error('A Project context is required.');
             if (mode === 'create_global') {
-                return createGlobalExperiment(projectId, { schema: 'bms.global-experiment.v1', name, objective, scientific_question: question, status: 'planned', change_summary: 'Created in Project Manager' });
+                return createGlobalExperiment(projectId, { schema: 'bms.global-experiment.v2', name, objective, scientific_question: question, status: 'planned', change_summary: 'Created in Project Manager' });
             }
             if (mode === 'create_domain') {
                 const globalId = selection?.node_type === 'global_experiment' ? selectionId : selectedGlobalId;
@@ -94,19 +119,11 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                 if (domainKind === 'protein_in_silico') {
                     throw new Error('Protein Domain creation requires exact producer-native receipt selection. This selector remains closed until accepted Protein capabilities are installed.');
                 }
-                const domainPayload: JsonObject = {
-                    schema: 'bms.ngs-molbio-experiment.v2',
-                    experiment_mode: ngsExperimentMode,
-                    scientific_objective: objective,
-                    planned_capability_ids: [],
-                    grouping_intent: [],
-                    acceptance_criteria: [],
-                    evidence_plan: [],
-                };
+                const domainPayload = completeNgsDomainPayload(objective, ngsExperimentMode);
                 return createDomainExperiment(projectId, globalId, {
-                    schema: 'bms.domain-experiment.v2',
+                    schema: 'bms.domain-experiment.v4',
                     domain_kind: 'ngs_molbio',
-                    domain_contract_version: '2',
+                    domain_contract_version: '3',
                     name,
                     objective,
                     status: 'planned',

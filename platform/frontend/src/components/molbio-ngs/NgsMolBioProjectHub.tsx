@@ -30,12 +30,25 @@ interface LocalHierarchy {
 function ngsDomainPayload(objective: string): JsonObject {
     return {
         schema: 'bms.ngs-molbio-experiment.v2',
-        experiment_mode: 'analysis',
+        experiment_mode: 'quality_control',
         scientific_objective: objective,
-        planned_capability_ids: [],
+        planned_capability_ids: ['ngs.ont.fastq_qc'],
         grouping_intent: [],
-        acceptance_criteria: [],
-        evidence_plan: [],
+        acceptance_criteria: [{
+            criterion_id: 'ngs-result-manifest-present',
+            schema_id: 'bms.scientific-criterion.artifact-presence.v1',
+            schema_sha256: '3f03a62f9bc39f61c4bdfa938cca5453da91e68ef16b30effdd0f4195cc2bdc6',
+            subject_role: 'result',
+            payload: { artifact_role: 'ngs_result_manifest', minimum_count: 1 },
+        }],
+        evidence_plan: [{
+            requirement_id: 'ngs-result-manifest-receipt',
+            schema_id: 'bms.evidence-requirement.native-receipt.v1',
+            schema_sha256: '4f1ea5545016d8d49739c2d1f1a94bc64f321667d2eb98205d0f727088da5d10',
+            subject_role: 'result',
+            required: true,
+            payload: { receipt_kind: 'ngs_result_manifest', minimum_count: 1 },
+        }],
     };
 }
 
@@ -135,7 +148,7 @@ export default function NgsMolBioProjectHub() {
             let projectId = mode === 'local-existing' ? selectedLocalProjectId : targetGlobalProjectId;
             if (mode === 'local-new') {
                 const project = await createProject({
-                    schema: 'bms.project.v1',
+                    schema: 'bms.project.v2',
                     name: projectName,
                     description: projectDescription.trim() || undefined,
                     research_objective: objective,
@@ -152,7 +165,7 @@ export default function NgsMolBioProjectHub() {
             }
             if (!projectId) throw new Error('Select a broader Project for a global NGS/MolBio Experiment.');
             const experiment = await createGlobalExperiment(projectId, {
-                schema: 'bms.global-experiment.v1',
+                schema: 'bms.global-experiment.v2',
                 name: experimentName,
                 objective,
                 scientific_question: scientificQuestion.trim() || objective,
@@ -165,9 +178,9 @@ export default function NgsMolBioProjectHub() {
                 change_summary: mode === 'global' ? 'Created inside broader BMS Project' : 'Created inside local NGS/MolBio Project',
             });
             const domain = await createDomainExperiment(projectId, experiment.id, {
-                schema: 'bms.domain-experiment.v2',
+                schema: 'bms.domain-experiment.v4',
                 domain_kind: 'ngs_molbio',
-                domain_contract_version: '2',
+                domain_contract_version: '3',
                 name: experimentName,
                 objective,
                 status: 'planned',
