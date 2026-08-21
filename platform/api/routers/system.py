@@ -106,7 +106,7 @@ class InstallFeaturesPayload(BaseModel):
 
 
 DEV_INSTALL_FEATURES: dict[str, bool] = {
-    "bioxp": False,
+    "bioxp": os.getenv("BMS_FEATURE_BIOXP", "0").strip().lower() in {"1", "true", "yes", "on"},
 }
 
 

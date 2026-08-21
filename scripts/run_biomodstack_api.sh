@@ -44,6 +44,9 @@ if [ "${BMS_RUNTIME_MODE,,}" = "dev" ]; then
     export BMS_CORE_RUNTIME_MODE=0
     export BMS_WORKFLOW_ADAPTER_LANE=development
     export BMS_WORKFLOW_ADAPTER_URL=http://127.0.0.1:18001
+    export BMS_FEATURE_BIOXP="${BMS_FEATURE_BIOXP:-1}"
+    # Report/status routes stay available. Physical-capable BioXP mutations remain closed.
+    export BMS_BIOXP_MUTATIONS_ENABLED=0
 fi
 
 # Native Development shares the pinned pLannotate micromamba environment with
