@@ -3352,6 +3352,8 @@ class PipetteReceipt(BaseModel):
     ownership_epoch: StrictInt
     source_identity: PipetteReceiptSourceIdentity
     deployment_identity: PipetteReceiptDeploymentIdentity
+    response: dict[str, JsonValue] | None = None
+    stage_receipts: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=256)
 
 
 class OperatorDashboardPipetteChannel(BaseModel):
@@ -3644,6 +3646,7 @@ class OperatorDashboard(BaseModel):
     successive_move_queue: dict[str, OperatorDashboardQueueAxis] = Field(
         default_factory=dict, max_length=8
     )
+    command_queue: dict[str, Any] = Field(default_factory=dict)
 
 
 class OperatorActionSpec(BaseModel):
@@ -3696,7 +3699,7 @@ class OperatorControlCatalog(BaseModel):
     evidence_lock_sha256: str = Field(pattern=r"^(?:[0-9a-f]{64}|unavailable)$")
     source_authority_verified: StrictBool
     dashboard: OperatorDashboard
-    actions: list[OperatorActionSpec] = Field(max_length=256)
+    actions: list[OperatorActionSpec] = Field(max_length=512)
 
     @field_validator("actions")
     @classmethod
@@ -3967,7 +3970,7 @@ class OperatorActionReceipt(BaseModel):
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
-    receipts: list[OperatorActionReceipt] = Field(max_length=500)
+    receipts: list[OperatorActionReceipt | PipetteReceipt] = Field(max_length=500)
 
 
 # Serial-206 operator wire contracts. Keep these separate from the strict v1
