@@ -5,11 +5,11 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "73942dc6b3428df9c5545e952df5c541b82e36939cf7032f0f506bc27130a424",
+  "content_sha256": "3b2af6220b7faecbe68cfb18dfb0cc44cadb7bde9546cc913be8dbc31642805e",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
-  "n0_package_fingerprint": "7a9f25658be7d870c2df96479a147aabd965da38e9b30524f907b4a329bce218",
-  "n0_receipt_content_sha256": "8e7f78147c69a8ce54da49c7c39a08f67a461d3333df226c83e44f34d2367117",
+  "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
+  "n0_receipt_content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
   "payload_scanner_runtime_state": "implemented_unverified",
   "phases": [
     {
@@ -79,8 +79,8 @@
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
-      "sha256": "205ed2bf618fc925b32a1407c7da4f5ad25b7bc2128483d49d399a1adcbc47fb",
-      "size_bytes": 18861
+      "sha256": "ad76f673c06b0667ba715d2936ecce6b0bafde0d1136e5507214cae7e785f73e",
+      "size_bytes": 18964
     },
     {
       "path": "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
@@ -564,7 +564,7 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
-      "sha256": "1ccf8e7ff388dff7cbe4d2be928644e6dc67572a0373259743e1f2c544366926",
+      "sha256": "6ff9b688dddbf873c9e68988826291c8679d42c198b46fa49ff91460fbab4582",
       "size_bytes": 4091
     },
     {
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "4fd55906ee8f598db12e67812d07cb35b17f5255",
-  "successor_source_tree": "df84a0e3438d950b5c0339b9236850b2c3a4888c",
+  "successor_source_commit": "2db6cd61779d7dacedb1702cd51c9c6b9e9891c5",
+  "successor_source_tree": "34ab0411bdfea5a3fe136a6a32d3095f87e765c5",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
