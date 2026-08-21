@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "b8a10aa3b7315347099f831eabaca7dec2fc6e108b7d61a59a2fea557c47dee9",
+  "content_sha256": "b1f1a5bf11d0adbb6bed68185ec2641bcddea4c8af9514e0e03ee58a2b0371de",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
@@ -159,8 +159,8 @@
     },
     {
       "path": "platform/api/migrations/runner.py",
-      "sha256": "fa33ffc0a41c50d6072774f31e51526f65c37775fc901f0009913b822ec887ee",
-      "size_bytes": 13223
+      "sha256": "0eaea296d489296bf211a1c9d3da15a10533a25860dfcf446e5e4dad0c83bafb",
+      "size_bytes": 13437
     },
     {
       "path": "platform/api/migrations/sqlite_sha256.py",
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "53cace70de5679bbf219e6a43b606a5d1618351b",
-  "successor_source_tree": "6a39790d4d238973f2df57ac448f602833d16e55",
+  "successor_source_commit": "9b4f549af3a87c3c658d18e6837e08386d32271d",
+  "successor_source_tree": "a86ec6e7b9c38468384c9eb4aee319ee45006778",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
