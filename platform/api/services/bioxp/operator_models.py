@@ -4931,13 +4931,21 @@ class OperatorReportAuditHealthV1(BaseModel):
     status: Literal["ok"]
     store: OperatorReportSnapshotV1
     database_bytes: StrictInt = Field(ge=0)
+    database_file_bytes: StrictInt = Field(ge=0)
     wal_bytes: StrictInt = Field(ge=0)
+    shm_bytes: StrictInt = Field(ge=0)
+    backup_units: list[str]
+    backup_bytes: StrictInt = Field(ge=0)
+    evidence_bytes: StrictInt = Field(ge=0)
+    free_bytes: StrictInt = Field(ge=0)
+    storage_capacity_status: Literal["ok", "fail"]
     commands: StrictInt = Field(ge=0)
     pipette_operations: StrictInt = Field(ge=0)
     retained_evidence: StrictInt = Field(ge=0)
     pending_expiry_evidence: StrictInt = Field(ge=0)
     integrity_failures: StrictInt = Field(ge=0)
     migration_receipts: StrictInt = Field(ge=0)
+    migration_retirements: StrictInt = Field(ge=0)
     exports: StrictInt = Field(ge=0)
 
 
