@@ -34,6 +34,7 @@ class RobotClientProtocol(Protocol):
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
+        timeout_override: float | None = None,
     ) -> dict[str, Any]: ...
 
     async def request_bytes(
@@ -438,13 +439,14 @@ class BioXpConnectionService:
             require_fresh=True,
         ) as client:
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(15.0):
                     async with self._v2_query_lock:
                         return await self._request_client(
                             client,
                             route_name,
                             params=params,
                             path_params=path_params,
+                            timeout_override=12.0,
                         )
             except TimeoutError as exc:
                 raise RobotTimeoutError(
@@ -555,6 +557,7 @@ class BioXpConnectionService:
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
+        timeout_override: float | None = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
         if json_data is not None:
@@ -563,6 +566,8 @@ class BioXpConnectionService:
             kwargs["params"] = params
         if path_params is not None:
             kwargs["path_params"] = path_params
+        if timeout_override is not None:
+            kwargs["timeout_override"] = timeout_override
         return await client.request(route_name, **kwargs)
 
     @asynccontextmanager
