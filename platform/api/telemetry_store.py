@@ -307,11 +307,26 @@ class TelemetryStore:
                 (timestamp_ms, cpu, ram, _encoded(gpu_util), _encoded(gpu_memory), _encoded(gpu_names), relative, locator),
             )
 
-    def _sample_for_row(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _sample_for_row(self, row: sqlite3.Row, connection: sqlite3.Connection | None = None) -> dict[str, Any]:
         if row["staging_relative_path"]:
             path = _safe_staging_path(self.artifact_root, str(row["staging_relative_path"]))
-            lines = path.read_text(encoding="utf-8").splitlines()
-            return json.loads(lines[int(row["staging_row_locator"])])
+            if path.exists():
+                lines = path.read_text(encoding="utf-8").splitlines()
+                return json.loads(lines[int(row["staging_row_locator"])])
+            lookup = connection or open_read_only(self.path)
+            try:
+                reference_row = lookup.execute(
+                    "SELECT artifact_ref FROM telemetry_sample_artifact_refs WHERE timestamp_ms = ?",
+                    (int(row["timestamp_ms"]),),
+                ).fetchone()
+            finally:
+                if connection is None:
+                    lookup.close()
+            if reference_row is not None:
+                resolved = resolve_json_value(json.loads(reference_row["artifact_ref"]), root=self.artifact_root)
+                if isinstance(resolved, dict):
+                    return resolved
+            raise FileNotFoundError(f"telemetry sample staging and artifact reference are unavailable: {row['timestamp_ms']}")
         value = json.loads(row["payload_json"])
         resolved = resolve_json_value(value, root=self.artifact_root)
         if isinstance(resolved, dict):
@@ -344,7 +359,7 @@ class TelemetryStore:
                     "SELECT * FROM raw_samples WHERE timestamp_ms >= ? AND timestamp_ms < ? ORDER BY timestamp_ms",
                     (bucket, bucket + 60_000),
                 ).fetchall()
-                samples = [self._sample_for_row(row) for row in rows]
+                samples = [self._sample_for_row(row, connection=connection) for row in rows]
                 if not samples:
                     continue
                 artifact_rows = []
