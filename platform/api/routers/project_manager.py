@@ -1721,8 +1721,6 @@ async def clone_domain_run_intent(
         ):
             raise ValidationFailure("source attempt has no exact immutable Plan authority")
         source_authority, source_contract = await _stored_plan_authority(session, source_plan)
-        if source_authority.expected_domain_revision_id != payload.expected_domain_revision_id:
-            raise RevisionConflict("source Plan belongs to another Domain revision")
         source_payload = json.loads(source_revision.canonical_payload)
         validate_workflow_payload_for_plan(source_payload, source_contract)
         requested_settings = source_payload.get("parameters")
