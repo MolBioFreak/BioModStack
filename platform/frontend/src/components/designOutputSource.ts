@@ -600,6 +600,11 @@ const inferJobAnalysisLens = (job: AnalysisLensJob | null | undefined): Analysis
     const validator = String(params.structure_validator || '').toLowerCase();
     const boltzgenMode = String(params.boltzgen_mode || mode || '').toLowerCase();
     const isProteinLocalRedesign = modelId === 'protein_local_redesign' || mode === 'local_redesign' || rfdMode === 'protein_local_redesign';
+    const isValidatedProteinLocalRedesign = modelId === 'protein_modification_experimental' && mode === 'region_redesign';
+
+    if (isValidatedProteinLocalRedesign) {
+        return 'validation';
+    }
 
     if (isProteinLocalRedesign && stage === 'post_rfantibody') {
         return null;

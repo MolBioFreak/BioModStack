@@ -7,7 +7,21 @@ import {
     getOutputSourceLabel,
     inferDesignOutputSource,
     inferJobOutputSource,
+    inferPreferredAnalysisLens,
 } from '../src/components/designOutputSource.js';
+
+test('routes validated protein local redesign jobs to the validation analytics lens', () => {
+    assert.equal(
+        inferPreferredAnalysisLens({
+            name: 'ACCEPT PLR validator suite 1UBQ',
+            model_id: 'protein_modification_experimental',
+            mode: 'region_redesign',
+            current_stage: 'Complete',
+            params: {},
+        }),
+        'validation',
+    );
+});
 
 test('classifies imported boltz2 rows as imported data instead of validation', () => {
     const importedDesign = {
