@@ -481,7 +481,7 @@ def _validate_statistics_inputs(
         "pdb_coordinates": "pdb_self_identity_v1",
         "mmcif_atom_site": "mmcif_atom_site_v1",
         "producer_manifest": "producer_manifest_v1",
-        "cm_complex_snapshot": "cm_complex_snapshot_v1",
+        "cm_complex_snapshot": "producer_manifest_v1",
     }[request["identity_authority"]]
     if structure_map["identity_authority"] != expected_map_authority:
         raise ContractValidationError("request/structure-map identity authority binding mismatch")

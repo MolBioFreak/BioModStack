@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -61,7 +62,8 @@ def _identity(
 
 
 def _structure_map(
-    residues: list[dict[str, object]], *, include_exclusions: bool = False
+    residues: list[dict[str, object]], *, include_exclusions: bool = False,
+    identity_authority: str = "mmcif_atom_site_v1",
 ) -> dict[str, object]:
     rows = []
     for residue in residues:
@@ -129,7 +131,7 @@ def _structure_map(
         "source_format": "mmcif",
         "source_sha256": "1" * 64,
         "source_bytes": 100,
-        "identity_authority": "mmcif_atom_site_v1",
+        "identity_authority": identity_authority,
         "identity_domain": "source_authoritative",
         "authority_artifact_sha256": "1" * 64,
         "normalized_pdb_sha256": "3" * 64,
@@ -145,7 +147,11 @@ def _structure_map(
     }
 
 
-def _fixture(*, include_exclusions: bool = False) -> dict[str, object]:
+def _fixture(
+    *, include_exclusions: bool = False,
+    request_identity_authority: str = "mmcif_atom_site",
+    map_identity_authority: str = "mmcif_atom_site_v1",
+) -> dict[str, object]:
     residues = [
         _identity(
             entity="entity-1",
@@ -188,7 +194,11 @@ def _fixture(*, include_exclusions: bool = False) -> dict[str, object]:
             model_position=0,
         ),
     ]
-    structure_map = _structure_map(residues, include_exclusions=include_exclusions)
+    structure_map = _structure_map(
+        residues,
+        include_exclusions=include_exclusions,
+        identity_authority=map_identity_authority,
+    )
     map_sha256 = canonical_sha256(structure_map)
     requested = FrustraMPNNRequestedSettings(
         classification_policy=FrustraMPNNClassificationPolicy(
@@ -355,7 +365,7 @@ def _fixture(*, include_exclusions: bool = False) -> dict[str, object]:
             "artifact_id": None,
         },
         "requiredness": "required",
-        "identity_authority": "mmcif_atom_site",
+        "identity_authority": request_identity_authority,
         "settings_value_origin": requested.settings_value_origin,
         "requested_settings": requested.model_dump(mode="json"),
         "requested_settings_sha256": effective.settings_sha256,
@@ -376,6 +386,15 @@ def _fixture(*, include_exclusions: bool = False) -> dict[str, object]:
             "execution_receipt",
         ],
     }
+    if request_identity_authority == "cm_complex_snapshot":
+        authority_payload = b"{}"
+        request["identity_authority_artifact"] = {
+            "relative_path": "authority_artifact_v1.json",
+            "media_type": "application/json",
+            "sha256": hashlib.sha256(authority_payload).hexdigest(),
+            "canonical_json_base64": base64.b64encode(authority_payload).decode("ascii"),
+            "cm_complex_snapshot_sha256": "6" * 64,
+        }
     capability_bytes = CAPABILITY_PATH.read_bytes()
     capability_inventory = json.loads(capability_bytes)
     return {
@@ -398,6 +417,17 @@ def _build(fixture: dict[str, object] | None = None) -> dict[str, object]:
         capability_inventory=data["capability_inventory"],
         capability_inventory_bytes=data["capability_inventory_bytes"],
     )
+
+
+def test_statistics_accepts_cm_snapshot_bound_to_neutral_producer_manifest() -> None:
+    receipt = _build(
+        _fixture(
+            request_identity_authority="cm_complex_snapshot",
+            map_identity_authority="producer_manifest_v1",
+        )
+    )
+    assert receipt["schema_name"] == "frustrampnn_statistics"
+    analytics.validate_statistics_receipt(receipt)
 
 
 def _assert_closed_objects(node: object, path: str = "$") -> None:
