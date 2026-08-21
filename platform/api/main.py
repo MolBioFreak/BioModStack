@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import os
 import logging
+import re
 
 from database import async_session, current_launch_context_id, init_db
 from experiment_database import experiment_session_factory, get_experiment_db_path, init_experiment_db
@@ -20,7 +21,7 @@ from molbio_ngs_database import molbio_ngs_session_factory
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -29,6 +30,7 @@ from services.external_imports.worker import ExternalImportWorker
 from services.gpu_orchestrator import GPUOrchestrator
 from services.md.reconcile import MdReconcilerWorker
 from services.ont_raw_signal_worker import OntRawSignalWorker
+from services.ont_signal_worker import OntSignalWorker
 from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
@@ -49,6 +51,7 @@ _boltz_api_job_worker: BoltzApiJobWorker | None = None
 _md_reconciler: MdReconcilerWorker | None = None
 _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
+_ont_signal_worker: OntSignalWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -100,6 +103,7 @@ async def lifespan(app: FastAPI):
     global _md_reconciler
     global _global_experiment_worker
     global _ont_raw_signal_worker
+    global _ont_signal_worker
     bioxp_runtime = None
     
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
@@ -166,6 +170,16 @@ async def lifespan(app: FastAPI):
         _ont_raw_signal_worker = None
         logger.info("[STARTUP] ONT raw-signal worker disabled: pinned runtime identity absent")
 
+    try:
+        OntSignalWorker._runtime_identity()
+    except (OSError, RuntimeError):
+        _ont_signal_worker = None
+        logger.info("[STARTUP] ONT signal-workbench worker disabled: approved Squigualiser runtime policy absent or mismatched")
+    else:
+        _ont_signal_worker = OntSignalWorker(async_session, molbio_ngs_session_factory, poll_interval=5.0)
+        await _ont_signal_worker.start()
+        logger.info("[STARTUP] governed ONT signal-workbench worker started")
+
     _analysis_worker = AnalysisWorker(
         db_session_factory=async_session,
         poll_interval=2.0,
@@ -226,6 +240,9 @@ async def lifespan(app: FastAPI):
     if _ont_raw_signal_worker:
         await _ont_raw_signal_worker.stop()
         logger.info("[SHUTDOWN] ONT raw-signal lease-recovery worker stopped")
+    if _ont_signal_worker:
+        await _ont_signal_worker.stop()
+        logger.info("[SHUTDOWN] ONT signal-workbench worker stopped")
 
 
 app = FastAPI(
@@ -328,6 +345,7 @@ app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequenc
 app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
 app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
+app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])
 app.include_router(ont_runs.barcode_router, prefix="/api/jobs", tags=["ont-barcode-units"])
 app.include_router(mobile_apk_updates.router, prefix="/api")
 app.include_router(mobile_ui_updates.router, prefix="/api")

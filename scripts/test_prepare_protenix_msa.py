@@ -291,3 +291,108 @@ def test_write_msa_report_records_local_runtime_contract(tmp_path: Path) -> None
         "effective_gpu_server_mode": "off",
         "selected_gpu_id": 2,
     }
+
+
+def _write_cache_a3m(cache_root: Path, sequence: str, text: str) -> Path:
+    full_hash = prepare_protenix_msa.hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+    dest = cache_root / full_hash[:2] / f"{full_hash}.a3m.gz"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    import gzip
+
+    with gzip.open(dest, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    return dest
+
+
+def _single_chain_payload(sequence: str) -> list[dict]:
+    return [
+        {
+            "name": "task-1",
+            "sequences": [{"proteinChain": {"id": ["A"], "sequence": sequence, "count": 1}}],
+        }
+    ]
+
+
+def test_hydrate_chains_from_shared_cache_materializes_cached_a3m(tmp_path: Path) -> None:
+    sequence = "ABCDEFGH"
+    _write_cache_a3m(tmp_path / "cache", sequence, ">query\nABCDEFGH\n>hit1\nAB-DEFGH\n")
+    payload = _single_chain_payload(sequence)
+
+    hydrated = prepare_protenix_msa.hydrate_chains_from_shared_cache(
+        payload, tmp_path / "out", str(tmp_path / "cache")
+    )
+
+    assert hydrated == 1
+    chain = payload[0]["sequences"][0]["proteinChain"]
+    non_pairing = prepare_protenix_msa.Path(chain["unpairedMsaPath"])
+    pairing = prepare_protenix_msa.Path(chain["pairedMsaPath"])
+    assert non_pairing.exists() and pairing.exists()
+    assert non_pairing.read_text(encoding="utf-8").splitlines() == [
+        ">query",
+        "ABCDEFGH",
+        ">hit1",
+        "AB-DEFGH",
+    ]
+    assert pairing.read_text(encoding="utf-8") == f">query\n{sequence}\n"
+
+
+def test_full_cache_hit_short_circuits_colabfold_api_backend(tmp_path: Path, monkeypatch) -> None:
+    sequence = "ABCDEFGH"
+    cache_root = tmp_path / "cache"
+    _write_cache_a3m(cache_root, sequence, ">query\nABCDEFGH\n>hit1\nABcDEFGH\n")
+    input_json = tmp_path / "input.json"
+    output_json = tmp_path / "output.json"
+    report_json = tmp_path / "msa_report.json"
+    input_json.write_text(json.dumps(_single_chain_payload(sequence)), encoding="utf-8")
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("colabfold API must not be called when the shared cache covers every chain")
+
+    monkeypatch.setattr(prepare_protenix_msa, "prepare_with_colabfold_api", _explode)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_protenix_msa.py",
+            "--input_json",
+            str(input_json),
+            "--output_json",
+            str(output_json),
+            "--out_dir",
+            str(tmp_path / "out"),
+            "--backend",
+            "colabfold_api",
+            "--cache-dir",
+            str(cache_root),
+            "--report_json",
+            str(report_json),
+        ],
+    )
+
+    prepare_protenix_msa.main()
+
+    prepared = json.loads(output_json.read_text(encoding="utf-8"))
+    chain = prepared[0]["sequences"][0]["proteinChain"]
+    assert chain["unpairedMsaPath"].endswith("non_pairing.a3m")
+    assert json.loads(report_json.read_text(encoding="utf-8"))["backend"] == "cache"
+
+
+def test_cache_colabfold_results_persists_api_a3m_and_never_overwrites(tmp_path: Path) -> None:
+    sequence = "ABCDEFGH"
+    cache_root = tmp_path / "cache"
+    fetched = tmp_path / "fetched_non_pairing.a3m"
+    fetched.write_text(">query\nABCDEFGH\n>hit1\nABcDEFGH\n", encoding="utf-8")
+    payload = _single_chain_payload(sequence)
+    payload[0]["sequences"][0]["proteinChain"]["unpairedMsaPath"] = str(fetched)
+
+    persisted = prepare_protenix_msa.cache_colabfold_results(payload, str(cache_root))
+
+    assert persisted == 1
+    full_hash = prepare_protenix_msa.hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+    dest = cache_root / full_hash[:2] / f"{full_hash}.a3m.gz"
+    import gzip
+
+    with gzip.open(dest, "rt", encoding="utf-8") as handle:
+        assert handle.read() == ">query\nABCDEFGH\n>hit1\nABcDEFGH\n"
+    dest.write_text("PROTECTED", encoding="utf-8")  # simulate a concurrent/older write
+    assert prepare_protenix_msa.cache_colabfold_results(payload, str(cache_root)) == 0
+    assert dest.read_text(encoding="utf-8") == "PROTECTED"

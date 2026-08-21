@@ -11,13 +11,12 @@ import hashlib
 import json
 import os
 import secrets
-import signal
 import shutil
 import stat
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import event, select, text, update
@@ -36,6 +35,7 @@ from database import (
     OntRawSignalLookup,
     OntRawSignalRepresentation,
 )
+from services.file_lease_signals import register_lease_break_listener
 
 
 RepresentationPreference = Literal["auto", "pod5", "blow5"]
@@ -57,12 +57,12 @@ BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 _SOURCE_LEASE_BREAK = threading.Event()
 
 
-def _record_source_lease_break(_signum: int, _frame: Any) -> None:
+def _record_source_lease_break() -> None:
     _SOURCE_LEASE_BREAK.set()
 
 
 if threading.current_thread() is threading.main_thread():
-    signal.signal(signal.SIGIO, _record_source_lease_break)
+    register_lease_break_listener(_record_source_lease_break)
 
 
 def source_lease_break_requested() -> bool:
@@ -126,6 +126,106 @@ def stable_live_pod5_paths(
     previous = previous if isinstance(previous, dict) else {}
     current = current if isinstance(current, dict) else {}
     return [Path(path) for path in sorted(current) if previous.get(path) == current[path]]
+
+
+def _live_output_roots(run: OntInstrumentRun) -> tuple[Path, ...]:
+    configured = run.output_directories if isinstance(run.output_directories, dict) else {}
+    roots: list[Path] = []
+    for key in ("output", "reads"):
+        raw = str(configured.get(key) or "").strip()
+        if not raw or len(raw) > 2048 or not os.path.isabs(raw):
+            continue
+        if any(component in {".", ".."} for component in raw.split(os.sep)):
+            continue
+        root = Path(os.path.abspath(raw))
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+def _open_absolute_directory_nofollow(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    current_fd = os.open(os.sep, flags)
+    try:
+        for component in path.parts[1:]:
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _open_live_pod5_candidate(
+    path: Path,
+    approved_roots: tuple[Path, ...],
+    expected: dict[str, int],
+    artifact_id: str,
+) -> tuple[dict[str, Any], int]:
+    """Open and read-lease one live chunk beneath an approved root descriptor."""
+    candidate = Path(os.path.abspath(str(path)))
+    for root in approved_roots:
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts or candidate.suffix.lower() != ".pod5":
+            continue
+        root_fd = -1
+        current_fd = -1
+        file_fd = -1
+        try:
+            root_fd = _open_absolute_directory_nofollow(root)
+            current_fd = os.dup(root_fd)
+            for component in relative.parts[:-1]:
+                next_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=current_fd,
+                )
+                os.close(current_fd)
+                current_fd = next_fd
+            file_fd = os.open(
+                relative.parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=current_fd,
+            )
+            info = os.fstat(file_fd)
+            observed = tuple(
+                getattr(info, attribute)
+                for attribute in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            )
+            required = tuple(
+                int(expected[field])
+                for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")
+            )
+            if not stat.S_ISREG(info.st_mode) or observed != required:
+                raise ValueError("live POD5 identity changed before registration")
+            try:
+                fcntl.fcntl(file_fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+            except OSError as exc:
+                raise RuntimeError("live POD5 is still open for writing") from exc
+            artifact = _file_artifact(
+                candidate,
+                artifact_id,
+                kind="pod5",
+                opened_fd=file_fd,
+                governed_root_path=root,
+                governed_root_fd=root_fd,
+                governed_relative_path=relative.as_posix(),
+            )
+            return artifact, file_fd
+        except BaseException:
+            if file_fd >= 0:
+                os.close(file_fd)
+            raise
+        finally:
+            if current_fd >= 0:
+                os.close(current_fd)
+            if root_fd >= 0:
+                os.close(root_fd)
+    raise ValueError("live POD5 is outside configured MinKNOW output roots")
 
 
 def _external_pod5_root() -> Path:
@@ -489,24 +589,48 @@ async def register_live_pod5_chunks(
             )
         )
     ).scalars().all()
-    seen_identities = {
-        tuple(item.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
+    prior_by_identity = {
+        tuple(item.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")): representation
         for representation in prior
         for item in (representation.artifact_manifest or {}).get("artifacts", [])
         if isinstance(item, dict)
     }
     registered: list[dict[str, Any]] = []
     policy = raw_signal_retention_policy()
+    approved_roots = _live_output_roots(run)
     for position, path in enumerate(stable_paths):
         expected = identity_snapshot.get(str(path))
         if not isinstance(expected, dict):
             continue
-        artifact = _file_artifact(path, f"live-pod5-{observed_generation}-{position}", kind="pod5")
+        try:
+            artifact, file_fd = _open_live_pod5_candidate(
+                path,
+                approved_roots,
+                expected,
+                f"live-pod5-{observed_generation}-{position}",
+            )
+        except (OSError, RuntimeError, ValueError):
+            continue
         if any(artifact.get(field) != expected.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns")):
+            os.close(file_fd)
             continue
         identity = tuple(artifact.get(field) for field in ("device", "inode", "bytes", "mtime_ns", "ctime_ns"))
-        if identity in seen_identities:
+        existing_representation = prior_by_identity.get(identity)
+        if existing_representation is not None:
+            try:
+                await request_blow5_derivation(
+                    session,
+                    run_id=run_id,
+                    observed_generation=existing_representation.observed_generation,
+                    source_representation_id=existing_representation.id,
+                    consumer_id="ont-live-minknow-conversion",
+                    preference="auto",
+                    automatic=True,
+                )
+            finally:
+                os.close(file_fd)
             continue
+        _hold_source_descriptors_through_transaction(session, [file_fd])
         manifest = {
             "schema": "bms.ont.raw-signal-live-chunk.v1",
             "run_id": run_id,
@@ -552,7 +676,7 @@ async def register_live_pod5_chunks(
             preference="auto",
             automatic=True,
         )
-        seen_identities.add(identity)
+        prior_by_identity[identity] = representation
         registered.append(_public_representation(representation))
     return registered
 
@@ -565,7 +689,16 @@ def _resolve_input_file(record: InputFile, expected_format: str) -> Path:
     return candidate
 
 
-def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | None = None) -> dict[str, Any]:
+def _file_artifact(
+    path: Path,
+    artifact_id: str,
+    *,
+    kind: str,
+    opened_fd: int | None = None,
+    governed_root_path: Path | None = None,
+    governed_root_fd: int | None = None,
+    governed_relative_path: str | None = None,
+) -> dict[str, Any]:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     fd = os.open(path, flags) if opened_fd is None else opened_fd
     close_fd = opened_fd is None
@@ -582,15 +715,22 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | 
         after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
         if before_identity != after_identity:
             raise ValueError("raw-signal source changed while it was being registered")
-        visible = path.lstat()
-        visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
-        if visible_identity != after_identity:
-            raise ValueError("raw-signal source path changed while it was being registered")
-        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            parent_info = os.fstat(parent_fd)
-        finally:
-            os.close(parent_fd)
+        if governed_root_path is not None and governed_root_fd is not None and governed_relative_path is not None:
+            parent_info = os.fstat(governed_root_fd)
+            root_path = governed_root_path
+            relative_path = governed_relative_path
+        else:
+            visible = path.lstat()
+            visible_identity = (visible.st_dev, visible.st_ino, visible.st_size, visible.st_mtime_ns, visible.st_ctime_ns)
+            if visible_identity != after_identity:
+                raise ValueError("raw-signal source path changed while it was being registered")
+            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                parent_info = os.fstat(parent_fd)
+            finally:
+                os.close(parent_fd)
+            root_path = path.parent
+            relative_path = path.name
         return {
             "artifact_id": artifact_id,
             "kind": kind,
@@ -601,10 +741,10 @@ def _file_artifact(path: Path, artifact_id: str, *, kind: str, opened_fd: int | 
             "inode": info.st_ino,
             "mtime_ns": info.st_mtime_ns,
             "ctime_ns": info.st_ctime_ns,
-            "governed_root_path": str(path.parent),
+            "governed_root_path": str(root_path),
             "governed_root_device": parent_info.st_dev,
             "governed_root_inode": parent_info.st_ino,
-            "governed_relative_path": path.name,
+            "governed_relative_path": relative_path,
         }
     finally:
         if close_fd:
@@ -1244,6 +1384,18 @@ async def capabilities(session: AsyncSession, *, run_id: str, observed_generatio
         _mode(_PREPARABLE, "pod5_identity_validation_required", any_pod5["representation_id"]) if any_pod5 else _mode(_UNAVAILABLE, "no_pod5_representation")
     )
     selected = ready_pod5 if preference in {"auto", "pod5"} and ready_pod5 else ready_blow5 if preference in {"auto", "blow5"} else None
+    from services.ont_signal_workbench import workbench_capabilities
+
+    signal_capabilities = await workbench_capabilities(
+        session, run_id=run_id, observed_generation=observed_generation
+    )
+    signal_modes = {
+        name: {
+            **signal_capabilities["modes"][name],
+            "representation_id": ready_blow5["representation_id"] if ready_blow5 else None,
+        }
+        for name in ("signal_to_read", "signal_to_reference", "signal_pileup")
+    }
     selection_reason = "ready_source_preferred" if selected and selected["role"] == "source" else "ready_requested_representation" if selected else "requested_representation_not_ready"
     return {
         "run_id": run_id,
@@ -1256,9 +1408,7 @@ async def capabilities(session: AsyncSession, *, run_id: str, observed_generatio
             "pod5_direct": pod5_state,
             "blow5_indexed": blow5_state,
             "raw_waveform": _mode(_READY, "indexed_blow5_lookup_ready", ready_blow5["representation_id"]) if ready_blow5 else blow5_state,
-            "signal_to_read": _mode(_UNAVAILABLE, "qualified_move_table_mapping_absent"),
-            "signal_to_reference": _mode(_UNAVAILABLE, "qualified_reference_signal_mapping_absent"),
-            "signal_pileup": _mode(_UNAVAILABLE, "qualified_reference_signal_mapping_absent"),
+            **signal_modes,
             "igv": _mode(_UNAVAILABLE, "alignment_readiness_is_independent_and_reported_by_alignment_session"),
         },
         "representations": reps,
@@ -1513,15 +1663,12 @@ def pin_conversion_source_descriptors(commands: dict[str, Any]) -> list[int]:
     """Open exact governed root/source descriptors for the full conversion."""
     if threading.current_thread() is not threading.main_thread():
         raise RuntimeError("raw-signal source leases require the main service thread")
-    signal.signal(signal.SIGIO, _record_source_lease_break)
+    register_lease_break_listener(_record_source_lease_break)
     _SOURCE_LEASE_BREAK.clear()
     pinned: list[int] = []
     try:
         for authority in commands.get("source_authorities", []):
-            root_fd = os.open(
-                str(authority["root_path"]),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
+            root_fd = _open_absolute_directory_nofollow(Path(str(authority["root_path"])))
             pinned.append(root_fd)
             root_info = os.fstat(root_fd)
             if (root_info.st_dev, root_info.st_ino) != (
@@ -1785,6 +1932,69 @@ async def cancel_derivation(session: AsyncSession, job_id: str) -> dict[str, Any
     return {"job_id": job.id, "state": job.state, "reason_code": job.reason_code, "cancel_requested": True}
 
 
+def _open_descriptor_confined_artifact(
+    artifact: Mapping[str, Any], *, authority: str
+) -> tuple[Path, int]:
+    root_raw = artifact.get("governed_root_path")
+    relative_raw = artifact.get("governed_relative_path")
+    if not isinstance(root_raw, str) or not os.path.isabs(root_raw):
+        raise ValueError(f"{authority} lacks governed descriptor authority")
+    if not isinstance(relative_raw, str):
+        raise ValueError(f"{authority} lacks governed relative authority")
+    relative = Path(relative_raw)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise ValueError(f"{authority} lacks governed relative authority")
+    root = Path(os.path.abspath(root_raw))
+    root_fd = current_fd = file_fd = -1
+    try:
+        root_fd = _open_absolute_directory_nofollow(root)
+        root_info = os.fstat(root_fd)
+        if (
+            root_info.st_dev != artifact.get("governed_root_device")
+            or root_info.st_ino != artifact.get("governed_root_inode")
+        ):
+            raise ValueError(f"{authority} governed root identity diverged")
+        current_fd = os.dup(root_fd)
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        for component in relative.parts[:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        file_fd = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=current_fd,
+        )
+        info = os.fstat(file_fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_dev != artifact.get("device")
+            or info.st_ino != artifact.get("inode")
+            or info.st_size != artifact.get("bytes")
+            or info.st_mtime_ns != artifact.get("mtime_ns")
+            or info.st_ctime_ns != artifact.get("ctime_ns")
+        ):
+            raise ValueError(f"{authority} descriptor identity diverged")
+        expected_path = root.joinpath(*relative.parts)
+        if artifact.get("path") != str(expected_path):
+            raise ValueError(f"{authority} path diverged from governed descriptor")
+        result_fd = file_fd
+        file_fd = -1
+        return expected_path, result_fd
+    except OSError as exc:
+        raise ValueError(
+            f"{authority} left governed descriptor boundary or used symbolic links"
+        ) from exc
+    finally:
+        for descriptor in (file_fd, current_fd, root_fd):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
 def _validated_blow5_paths(
     representation: OntRawSignalRepresentation,
     read_id: str | None = None,
@@ -1811,8 +2021,20 @@ def _validated_blow5_paths(
         )
         if routing_artifact is None:
             raise ValueError("partitioned BLOW5 representation lacks a routing artifact")
-        routing_path = Path(str(routing_artifact["path"])).expanduser().resolve(strict=True)
-        routing = json.loads(routing_path.read_text(encoding="utf-8"))
+        routing_path, routing_fd = _open_descriptor_confined_artifact(
+            routing_artifact, authority="routing artifact"
+        )
+        try:
+            if int(routing_artifact.get("bytes", 0)) > 16 * 1024 * 1024:
+                raise ValueError("routing artifact exceeds bounded policy")
+            routing_bytes = b""
+            while chunk := os.read(routing_fd, 1024 * 1024):
+                routing_bytes += chunk
+            if hashlib.sha256(routing_bytes).hexdigest() != routing_artifact.get("sha256"):
+                raise ValueError("routing artifact digest diverged")
+            routing = json.loads(routing_bytes.decode("utf-8"))
+        finally:
+            os.close(routing_fd)
         fingerprint = (routing.get("read_to_group") or {}).get(read_id)
         group = (routing.get("groups") or {}).get(fingerprint) if isinstance(fingerprint, str) else None
         if (
@@ -1822,8 +2044,32 @@ def _validated_blow5_paths(
             or group.get("index") != f"{fingerprint}.blow5.idx"
         ):
             raise KeyError(read_id)
-        blow5 = routing_path.parent / "outputs" / f"{fingerprint}.blow5"
-        index = routing_path.parent / "outputs" / f"{fingerprint}.blow5.idx"
+        blow5_artifact = next(
+            (
+                item
+                for item in blow5_artifacts
+                if item.get("partition_fingerprint") == fingerprint
+            ),
+            None,
+        )
+        index_artifact = next(
+            (
+                item
+                for item in index_artifacts
+                if item.get("partition_fingerprint") == fingerprint
+            ),
+            None,
+        )
+        if blow5_artifact is None or index_artifact is None:
+            raise ValueError("routing selection is not confined to published partition descriptors")
+        blow5, blow5_fd = _open_descriptor_confined_artifact(
+            blow5_artifact, authority="partition BLOW5 artifact"
+        )
+        index, index_fd = _open_descriptor_confined_artifact(
+            index_artifact, authority="partition index artifact"
+        )
+        os.close(blow5_fd)
+        os.close(index_fd)
     if blow5 is None or index is None or index != Path(f"{blow5}.idx"):
         raise ValueError("raw waveform representation lacks an adjacent index")
     if not blow5.is_file() or not index.is_file():

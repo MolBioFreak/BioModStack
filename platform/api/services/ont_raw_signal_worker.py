@@ -61,10 +61,6 @@ class OntRawSignalWorker:
 
     async def stop(self) -> None:
         self._stop.set()
-        child = self._child
-        if child is not None and child.returncode is None:
-            child.terminate()
-            await child.wait()
         task = self._task
         monitor_task = self._monitor_task
         self._task = None
@@ -77,6 +73,11 @@ class OntRawSignalWorker:
                 await running_task
             except asyncio.CancelledError:
                 pass
+        child = self._child
+        if child is not None and child.returncode is None:
+            child.terminate()
+            await child.wait()
+        self._child = None
 
     async def _reconcile_live_runs_once(self) -> int:
         from services.ont_run_control import reconcile_instrument_run
@@ -173,6 +174,7 @@ class OntRawSignalWorker:
 
             descriptor_thread = threading.Thread(target=send_descriptors, daemon=True)
             descriptor_thread.start()
+        communication: asyncio.Task[tuple[bytes, bytes]] | None = None
         try:
             self._child = await asyncio.create_subprocess_exec(
                 *command,
@@ -215,6 +217,19 @@ class OntRawSignalWorker:
                         self._child = None
                         raise
             stdout, stderr = await communication
+        except asyncio.CancelledError:
+            child = self._child
+            if child is not None and child.returncode is None:
+                child.terminate()
+                await child.wait()
+            if communication is not None and not communication.done():
+                communication.cancel()
+                try:
+                    await communication
+                except asyncio.CancelledError:
+                    pass
+            self._child = None
+            raise
         finally:
             if descriptor_server is not None:
                 descriptor_server.close()
