@@ -1,7 +1,7 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "6e7134a32d2b13e6e24548056c92ddf48576997494bfc921013d19fab003782d",
+  "content_sha256": "43d56e3fa8981d89e9df7b937e3c7522809ed15acbce599704fb7b40b9481ddc",
   "environment": {
     "git": "not invoked during deterministic reseal",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
@@ -27,7 +27,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "44f581098c87c0554e1148e95000ad11f10e7ba77e9ea7152d8c164e0f4471d3",
+      "sha256": "8b889cac93882e3e73c57170b08bfade5dbee610c5d980945c8c6a131b3d38b2",
       "size_bytes": 100169
     },
     {
@@ -52,8 +52,8 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "569ec27a31b29a57a5849dbfa863de4dbe45debd9bdf68b2f95326c28c9dba48",
-      "size_bytes": 24901
+      "sha256": "daa577503d128b0ad24a01e6274122fec4ead39435c179376dafa8a721874da1",
+      "size_bytes": 26539
     },
     {
       "path": "platform/api/config/ngs_molbio/source_pin_v1.json",
@@ -62,8 +62,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "fab7919498670201e76a28d67ba7d026dbf89d94aad836acf3352c5897f54122",
-      "size_bytes": 39875
+      "sha256": "f50cfd835e7ca0a535448acb6eb40da63abcb6d303af9a38ea41cb8f58586b63",
+      "size_bytes": 40473
     },
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -137,8 +137,8 @@
     },
     {
       "path": "schemas/ngs_molbio/domain-experiment-v4.schema.json",
-      "sha256": "b743f6819b601741d7b632f0b34aa722bd6e53d45d145fce83c607fd6e6f7be9",
-      "size_bytes": 5915
+      "sha256": "d23b14f740cbdba948d9c8d11f3c251fedd7d2eecb413a729411a38fb540a401",
+      "size_bytes": 5638
     },
     {
       "path": "schemas/ngs_molbio/domain-state-initialized-v1.schema.json",
@@ -456,7 +456,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
+  "payload_fingerprint_sha256": "2658b25c7b1fb22354a44d2f97838c3b4665fe7c3e1037ce4111e60f092e57eb",
   "result": {
     "adapters": 27,
     "capabilities": 21,
