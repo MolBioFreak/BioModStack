@@ -447,7 +447,10 @@ class BioXpConnectionService:
                             path_params=path_params,
                         )
             except TimeoutError as exc:
-                raise RobotTimeoutError("BioXP v2 query lane timed out before a robot response was received") from exc
+                raise RobotTimeoutError(
+                    "BioXP v2 query lane timed out before a robot response was received",
+                    dispatched=False,
+                ) from exc
 
     @asynccontextmanager
     async def active_query_lease(
