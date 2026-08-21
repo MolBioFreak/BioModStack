@@ -232,6 +232,120 @@ export interface BioXpOperatorDashboard {
     successive_move_queue: Record<string, BioXpOperatorSuccessiveMoveQueueAxis>;
 }
 
+export type BioXpOperatorReceiptV2Status =
+    | 'queued'
+    | 'dispatched'
+    | 'issued_pending'
+    | 'interrupting'
+    | 'completed'
+    | 'failed'
+    | 'cleared'
+    | 'interrupted'
+    | 'ambiguous'
+    | 'rejected';
+
+export interface BioXpOperatorReceiptV2 {
+    schema_version: 'bioxp.operator_action_receipt.v2';
+    command_id: string;
+    action_id: string;
+    status: BioXpOperatorReceiptV2Status;
+    terminal: boolean;
+    sequence: number;
+    method_id: string | null;
+    ownership_generation: number;
+    expected_board_epoch_by_board: Record<string, number>;
+    state_version: number;
+    status_path: string;
+    accepted_at: number;
+    queued_at: number;
+    dispatched_at: number | null;
+    finished_at: number | null;
+    terminal_receipt_id: string | null;
+    completion_class: string | null;
+    physical_effect_verified: boolean;
+    error: { code: string; message: string; retryable: boolean } | null;
+}
+
+export interface BioXpYAxisV2 {
+    axis: 'y';
+    board_id: 4;
+    motor_id: 0;
+    ownership_generation: number;
+    prior_board_epoch: number | null;
+    active_board_epoch: number | null;
+    prepared_board_epoch: number | null;
+    lifecycle_state: string;
+    reference_state: string;
+    position_steps: number | null;
+    position_reply_valid: boolean;
+    position_status_code: number | null;
+    speed_steps_s: number | null;
+    speed_reply_valid: boolean;
+    speed_status_code: number | null;
+    left_switch_raw: number | null;
+    left_switch_reply_valid: boolean;
+    home_effective: boolean | null;
+    profile_fingerprint: string | null;
+    profile_readback_valid: boolean;
+    profile_mismatches: string[];
+    active_command: BioXpOperatorReceiptV2 | null;
+    interrupt_epoch: number;
+    latest_compact_receipt: BioXpOperatorReceiptV2 | null;
+    last_discrepancy_steps: number | null;
+    state_version: number;
+    updated_at: number;
+    physical_position_verified: boolean;
+}
+
+export interface BioXpBoard4AuthorityV2 {
+    state: string;
+    prior_board_epoch: number | null;
+    active_board_epoch: number | null;
+    transition_phase: string;
+    transition_evidence: Record<string, unknown>;
+    member_motors: Record<string, number>;
+    state_version: number;
+    updated_at: number;
+}
+
+export interface BioXpOperatorQueueItemV2 {
+    command_id: string;
+    sequence: number;
+    status: Extract<BioXpOperatorReceiptV2Status, 'queued' | 'dispatched' | 'issued_pending' | 'interrupting'>;
+    method_id: string | null;
+    resource_keys: string[];
+    accepted_at: number;
+}
+
+export interface BioXpOperatorCommandQueueV2 {
+    schema_version: 'bioxp.oem_command_queue.v1';
+    generated_at: number;
+    items: BioXpOperatorQueueItemV2[];
+}
+
+export interface BioXpOperatorDashboardV2 {
+    schema_version: 'bioxp.operator_dashboard.v2';
+    generated_at: number;
+    ownership_generation: number;
+    board4: BioXpBoard4AuthorityV2;
+    y_axis: BioXpYAxisV2;
+    active_commands: BioXpOperatorReceiptV2[];
+    command_queue: BioXpOperatorCommandQueueV2;
+    latest_receipts: BioXpOperatorReceiptV2[];
+}
+
+export interface BioXpOperatorControlCatalogV2 {
+    schema_version: 'bioxp.operator_control_catalog.v2';
+    dashboard: BioXpOperatorDashboardV2;
+    actions: Array<{
+        action_id: string;
+        request_schema_version: string;
+        response_schema_version: string;
+        interrupt: boolean;
+        enabled: boolean;
+        disabled_reason: string | null;
+    }>;
+}
 export interface BioXpPipetteHardwareEvidence {
     ok: boolean;
     hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
@@ -657,6 +771,8 @@ const fullLifecycleContractKey = ['bioxp', 'oem-full-lifecycle', 'contract'] as 
 const operatorCatalogKey = ['bioxp', 'operator-controls', 'catalog'] as const;
 const operatorDashboardKey = ['bioxp', 'operator-controls', 'dashboard'] as const;
 const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
+const operatorV2DashboardKey = ['bioxp', 'operator-controls', 'v2', 'dashboard'] as const;
+const operatorV2CatalogKey = ['bioxp', 'operator-controls', 'v2', 'catalog'] as const;
 
 function cameraImageFromResponse(response: {
     data: Blob;
@@ -766,6 +882,73 @@ export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled 
     retry: false,
 });
 
+export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorV2DashboardKey, connectionGeneration, enabled],
+    queryFn: async () => (await api.get<BioXpOperatorDashboardV2>('/api/bioxp/operator-controls/v2/dashboard')).data,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
+    refetchIntervalInBackground: false,
+});
+
+export const useBioXpOperatorControlCatalogV2 = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled],
+    queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
+    enabled: enabled && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+    refetchIntervalInBackground: false,
+});
+
+export interface BioXpOperatorActionV2Request {
+    expected_connection_generation: number;
+    expected_ownership_generation: number;
+    idempotency_key: string;
+    inputs: Record<string, unknown>;
+}
+
+export const useInvokeBioXpOperatorActionV2 = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ actionId, request }: { actionId: string; request: BioXpOperatorActionV2Request }) => (
+            await api.post<BioXpOperatorReceiptV2>(
+                `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`,
+                request,
+            )
+        ).data,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
+        },
+    });
+};
+
+export const BIOXP_V2_PENDING_COMPLETION_CLASS = 'issued_pending' as const;
+
+export const bioXpReceiptV2IsNonTerminal = (receipt: BioXpOperatorReceiptV2 | null | undefined): boolean =>
+    receipt !== null && receipt !== undefined && receipt.terminal !== true;
+
+export const useBioXpOperatorReceiptV2 = (
+    commandId: string | null,
+    connectionGeneration: number,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
+    queryFn: async () => (
+        await api.get<BioXpOperatorReceiptV2>(
+            `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
+        )
+    ).data,
+    enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+    refetchInterval: (query) => {
+        if (!query.state.data) return 500;
+        return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
+    },
+    refetchIntervalInBackground: false,
+});
 export const useReadBioXpPipetteReadback = () => useMutation({
     mutationFn: async (request: BioXpPipetteReadbackRequest) => (
         await api.post<BioXpPipetteReadback>(

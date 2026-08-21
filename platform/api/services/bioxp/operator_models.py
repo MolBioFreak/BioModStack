@@ -3968,3 +3968,246 @@ class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
     receipts: list[OperatorActionReceipt] = Field(max_length=500)
+
+
+# Serial-206 operator wire contracts. Keep these separate from the strict v1
+# models above. The robot and BMS cut over together; v1 callers never receive
+# a widened model.
+CommandStatusV2 = Literal[
+    "queued",
+    "dispatched",
+    "issued_pending",
+    "interrupting",
+    "completed",
+    "failed",
+    "cleared",
+    "interrupted",
+    "ambiguous",
+    "rejected",
+]
+_NONTERMINAL_V2 = frozenset({"queued", "dispatched", "issued_pending", "interrupting"})
+
+
+class OperatorReceiptErrorV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    code: str = Field(min_length=1, max_length=160)
+    message: str = Field(min_length=1, max_length=1000)
+    retryable: StrictBool
+
+
+class OperatorActionReceiptV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.operator_action_receipt.v2"]
+    command_id: str = Field(min_length=1, max_length=160)
+    action_id: str = Field(min_length=1, max_length=160)
+    status: CommandStatusV2
+    terminal: StrictBool
+    sequence: StrictInt = Field(ge=1)
+    method_id: str | None
+    ownership_generation: StrictInt = Field(ge=0)
+    expected_board_epoch_by_board: dict[str, StrictInt]
+    state_version: StrictInt = Field(ge=1)
+    status_path: str = Field(min_length=1, max_length=400)
+    accepted_at: StrictFloat
+    queued_at: StrictFloat
+    dispatched_at: StrictFloat | None
+    finished_at: StrictFloat | None
+    terminal_receipt_id: str | None
+    completion_class: str | None
+    physical_effect_verified: StrictBool
+    error: OperatorReceiptErrorV2 | None
+
+    @field_validator("accepted_at", "queued_at", "dispatched_at", "finished_at")
+    @classmethod
+    def finite_times(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("receipt times must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def bind_terminality(self):
+        expected = self.status not in _NONTERMINAL_V2
+        if self.terminal is not expected:
+            raise ValueError("receipt terminal flag does not match its closed status")
+        return self
+
+
+class OperatorTransportArtifactV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    path: str = Field(min_length=1, max_length=1000)
+    bytes: StrictInt = Field(ge=0)
+
+
+class OperatorTransitionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    transition_id: str = Field(min_length=1, max_length=160)
+    from_status: str | None
+    to_status: CommandStatusV2
+    at: StrictFloat
+    reason: str | None
+
+    @field_validator("at")
+    @classmethod
+    def finite_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("transition time must be finite")
+        return value
+
+
+class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
+    canonical_inputs: dict[str, JsonValue]
+    requested_values: dict[str, JsonValue]
+    effective_values: dict[str, JsonValue]
+    observed_values: dict[str, JsonValue]
+    raw_return_layers: dict[str, JsonValue]
+    controller_evidence: dict[str, JsonValue]
+    transport_artifacts: list[OperatorTransportArtifactV2]
+    child_receipts: list[OperatorActionReceiptV2]
+    transitions: list[OperatorTransitionV2]
+
+
+class OperatorQueueItemV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    command_id: str = Field(min_length=1, max_length=160)
+    sequence: StrictInt = Field(ge=1)
+    status: Literal["queued", "dispatched", "issued_pending", "interrupting"]
+    method_id: str | None
+    resource_keys: list[str]
+    accepted_at: StrictFloat
+
+    @field_validator("accepted_at")
+    @classmethod
+    def finite_accepted_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("queue time must be finite")
+        return value
+
+
+class OperatorQueueV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.oem_command_queue.v1"]
+    generated_at: StrictFloat
+    items: list[OperatorQueueItemV1]
+
+    @field_validator("generated_at")
+    @classmethod
+    def finite_generated_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("queue time must be finite")
+        return value
+
+
+class OperatorBoard4AuthorityV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    state: str = Field(min_length=1, max_length=80)
+    prior_board_epoch: StrictInt | None
+    active_board_epoch: StrictInt | None
+    transition_phase: str = Field(min_length=1, max_length=80)
+    transition_evidence: dict[str, JsonValue]
+    member_motors: dict[str, StrictInt]
+    state_version: StrictInt = Field(ge=1)
+    updated_at: StrictFloat
+
+    @field_validator("updated_at")
+    @classmethod
+    def finite_updated_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("authority time must be finite")
+        return value
+
+
+class OperatorYAxisAuthorityV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    axis: Literal["y"]
+    board_id: Literal[4]
+    motor_id: Literal[0]
+    ownership_generation: StrictInt = Field(ge=0)
+    prior_board_epoch: StrictInt | None
+    active_board_epoch: StrictInt | None
+    prepared_board_epoch: StrictInt | None
+    lifecycle_state: str = Field(min_length=1, max_length=80)
+    reference_state: str = Field(min_length=1, max_length=80)
+    position_steps: StrictInt | None
+    position_reply_valid: StrictBool
+    position_status_code: StrictInt | None
+    speed_steps_s: StrictInt | None
+    speed_reply_valid: StrictBool
+    speed_status_code: StrictInt | None
+    left_switch_raw: StrictInt | None
+    left_switch_reply_valid: StrictBool
+    left_switch_status_code: StrictInt | None
+    home_effective: StrictBool | None
+    profile_fingerprint: str | None
+    profile_readback_valid: StrictBool
+    profile_mismatches: list[str]
+    active_command: OperatorActionReceiptV2 | None
+    interrupt_epoch: StrictInt = Field(ge=0)
+    latest_compact_receipt: OperatorActionReceiptV2 | None
+    last_discrepancy_steps: StrictInt | None
+    state_version: StrictInt = Field(ge=1)
+    updated_at: StrictFloat
+    physical_position_verified: StrictBool
+
+    @field_validator("updated_at")
+    @classmethod
+    def finite_y_updated_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("Y authority time must be finite")
+        return value
+
+
+class OperatorDashboardV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.operator_dashboard.v2"]
+    generated_at: StrictFloat
+    ownership_generation: StrictInt = Field(ge=0)
+    board4: OperatorBoard4AuthorityV2
+    y_axis: OperatorYAxisAuthorityV2
+    active_commands: list[OperatorActionReceiptV2]
+    command_queue: OperatorQueueV1
+    latest_receipts: list[OperatorActionReceiptV2]
+
+    @field_validator("generated_at")
+    @classmethod
+    def finite_dashboard_time(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("dashboard time must be finite")
+        return value
+
+
+class OperatorActionSpecV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action_id: str = Field(min_length=1, max_length=160)
+    request_schema_version: str = Field(min_length=1, max_length=160)
+    response_schema_version: str = Field(min_length=1, max_length=160)
+    interrupt: StrictBool
+    enabled: StrictBool
+    disabled_reason: str | None
+
+
+class OperatorControlCatalogV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.operator_control_catalog.v2"]
+    dashboard: OperatorDashboardV2
+    actions: list[OperatorActionSpecV2]
+
+
+class OperatorActionHistoryV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.operator_action_history.v2"]
+    items: list[OperatorActionReceiptV2]
+    next_cursor: str | None
+    limit: StrictInt = Field(ge=1, le=200)

@@ -387,7 +387,7 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
         disconnect_task = asyncio.create_task(service.disconnect())
         await asyncio.sleep(0)
         assert disconnect_task.done() is False
-        assert service.snapshot().generation == connected.generation
+        assert service.snapshot().generation > connected.generation
 
         robot.request_release.set()
         response = await request_task
@@ -395,6 +395,39 @@ def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) ->
         disconnected = await disconnect_task
         assert disconnected.generation == connected.generation + 1
         assert disconnected.active is False
+
+    asyncio.run(exercise())
+
+
+def test_rebind_drains_old_lease_without_closing_it_before_request_returns(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        old = clients[0]
+        old.request_started = asyncio.Event()
+        old.request_release = asyncio.Event()
+
+        request_task = asyncio.create_task(service.request_active(
+            "plan_oem_full_lifecycle",
+            expected_generation=connected.generation,
+            json_data={"expected_generation": connected.generation},
+        ))
+        await old.request_started.wait()
+        reconnect_task = asyncio.create_task(service.connect())
+        await asyncio.sleep(0)
+        assert old.closed is False
+        assert len(clients) == 2
+        assert service.snapshot().generation > connected.generation
+        old.request_release.set()
+        await request_task
+        reconnected = await reconnect_task
+        assert reconnected.generation > connected.generation
+        assert len(clients) == 2
+        assert old.closed is True
 
     asyncio.run(exercise())
 
