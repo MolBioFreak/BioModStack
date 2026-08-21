@@ -19,7 +19,12 @@ if str(API_ROOT) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from services.nextflow import build_nextflow_command, normalize_plr_input_pdb_path, normalize_plr_structure_validators
+from services.nextflow import (
+    build_nextflow_command,
+    normalize_plr_input_pdb_path,
+    normalize_plr_structure_validators,
+    resolve_nextflow_executable,
+)
 from services import rfd3_local_redesign as rfd3_service
 from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
@@ -990,3 +995,22 @@ def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() 
     assert '"native_producer_input"' in ingester_source
     assert "RFD3 local-redesign native producer input path is invalid" in ingester_source
     assert "not source.is_relative_to(data_root)" in ingester_source
+
+
+def test_plr_gpu_validators_serialize_on_the_scheduler_assigned_gpu() -> None:
+    rendered = subprocess.run(
+        [
+            resolve_nextflow_executable(),
+            "config",
+            "-profile",
+            "protein_local_redesign,workstation_ryzen7960x",
+            "-flat",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert "process.'withName:ESMFold2FromPdb'.maxForks = 1" in rendered
+    assert "process.'withName:ProtenixFromComplex'.maxForks = 1" in rendered
