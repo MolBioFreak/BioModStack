@@ -4946,6 +4946,7 @@ class OperatorReportAuditHealthV1(BaseModel):
     integrity_failures: StrictInt = Field(ge=0)
     migration_receipts: StrictInt = Field(ge=0)
     migration_retirements: StrictInt = Field(ge=0)
+    migration_evidence: StrictInt = Field(ge=0)
     exports: StrictInt = Field(ge=0)
 
 
