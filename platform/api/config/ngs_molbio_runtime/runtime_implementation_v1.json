@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "1532e13736c7d06c1080c610e9756c57fa7c8a1a2f1d3c836279fea2019986a1",
+  "content_sha256": "cffa955f98f1d36b5aa9f27769839d6c2c0558c53955432879e98448094bc30d",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
@@ -79,7 +79,7 @@
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
-      "sha256": "2009478cbad8151fa87a9a6aea8b7b740cae773f71364c94145033a9e7b836ff",
+      "sha256": "48b2975755ec7b8cf615bd5a548f8b77e653f76731a84d9ed92a25a669680ba0",
       "size_bytes": 18861
     },
     {
@@ -99,7 +99,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "8b889cac93882e3e73c57170b08bfade5dbee610c5d980945c8c6a131b3d38b2",
+      "sha256": "cf31febd8936549ca91cb4efc8c2c6853888cdc3665c81c96478793e2919ba04",
       "size_bytes": 100169
     },
     {
@@ -109,7 +109,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "daa577503d128b0ad24a01e6274122fec4ead39435c179376dafa8a721874da1",
+      "sha256": "c51f58078dc62b2532f99f66e8115a7027141a726887296fe300e3d35c76e120",
       "size_bytes": 26539
     },
     {
@@ -359,8 +359,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_connector.py",
-      "sha256": "949238d89cad1d996699f3b59c14f40217d265791707fdda910fd5cefdd9f8d2",
-      "size_bytes": 97021
+      "sha256": "035516269bd9a4b6be3306d1adad33b9683b5fe69ab905dc69c826be9ec283f0",
+      "size_bytes": 97397
     },
     {
       "path": "platform/api/services/ngs_molbio_n5.py",
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "1b606ed5dd715ae65e9126f77d95a13f5c89113a",
-  "successor_source_tree": "cfe3c4e522ce26b07402f691d041544f112b8ccb",
+  "successor_source_commit": "0eb05b34b17001764058254d7e6fad8c78236042",
+  "successor_source_tree": "83fc17be241b2b7823537e81a9378a432cbb62cf",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
