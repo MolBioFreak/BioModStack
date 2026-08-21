@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "f4661ecf960a282555a50ece638277c752398c29fbd1a079fe0af7e1b144c7bd",
+  "content_sha256": "9d391be2cc043baab45fb4e0135ea265ff61a3992646168142fab17ff277d84a",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
@@ -144,8 +144,8 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "d5b41b070ca30f43f7ec01c1530e490d5a6fa5771f1ea47ba4c2ffd58a160007",
-      "size_bytes": 263206
+      "sha256": "d059d991b04786df5fe639514bdcfb7572d93088d2ffbac0a3002953fc4ce8e7",
+      "size_bytes": 263671
     },
     {
       "path": "platform/api/main.py",
@@ -354,8 +354,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "f50cfd835e7ca0a535448acb6eb40da63abcb6d303af9a38ea41cb8f58586b63",
-      "size_bytes": 40473
+      "sha256": "64bbbe0a3e3f9a07b15027f8f937d9233031c48b92709159a0a24d2d7adaae2b",
+      "size_bytes": 40628
     },
     {
       "path": "platform/api/services/ngs_molbio_connector.py",
@@ -514,8 +514,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
-      "sha256": "5a287b559deb7e4d2bcc84c9f9d707c38aeafda13a2e4776741aa7beb437ed9b",
-      "size_bytes": 20375
+      "sha256": "64c82b862b04b1919566e1c22cc52623c848ee498de1c6ee0f96e026a8566565",
+      "size_bytes": 27826
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "d242c4dfaf21301eb95e3cafcda4ea55bfc50492",
-  "successor_source_tree": "74c355b917a64992c78fff9f3989da87e18074f5",
+  "successor_source_commit": "7c6a856951f9258a97cb39edd66bcb0a7cd4b52b",
+  "successor_source_tree": "fe2f626b272548d0f39c390315e9b8cc600bbdad",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
