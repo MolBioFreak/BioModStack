@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTransportError
@@ -25,6 +26,23 @@ from services.bioxp.operator_models import (
     PipetteApplicationPlanRequest,
     PipetteApplicationPlanResponse,
     PipetteApplicationStatus,
+    OperatorReportSummaryV1,
+    OperatorReportCommandPageV1,
+    OperatorReportCommandDetailV1,
+    OperatorReportTransitionsV1,
+    OperatorReportPipettePageV1,
+    OperatorReportPipetteDetailV1,
+    OperatorReportPipetteChannelsV1,
+    OperatorReportPipetteExchangesV1,
+    OperatorReportEventsV1,
+    OperatorReportEventV1,
+    OperatorReportPressureStreamsV1,
+    OperatorReportPressureDetailV1,
+    OperatorReportPressureSamplesV1,
+    OperatorReportExportV1,
+    OperatorReportAuditHealthV1,
+    OperatorReportExportRequestV1,
+    OperatorReportExportMetadataV1,
 )
 from services.bioxp.operator_semantic_quarantine import (
     OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID,
@@ -42,11 +60,30 @@ def _report_params(
     status: str | None = None,
     operation: str | None = None,
     action: str | None = None,
-    channel: int | None = None,
+    channel: int | None = Query(default=None, ge=0, le=3),
+    entrypoint: str | None = None,
+    caller_class: str | None = None,
+    control_class: str | None = None,
+    protocol_job_id: str | None = None,
+    protocol_action_id: str | None = None,
+    lifecycle_stage_id: str | None = None,
+    outcome: str | None = None,
+    event_source: str | None = None,
+    pressure_stream_id: str | None = None,
+    delivery_verified: bool | None = None,
+    controller_acknowledged: bool | None = None,
+    completion_verified: bool | None = None,
+    hardware_postcondition_verified: bool | None = None,
+    physical_effect_verified: bool | None = None,
+    evidence_state: str | None = None,
+    command_id: str | None = None,
+    pipette_operation_id: str | None = None,
+    connection_generation: int | None = Query(default=None, ge=0),
+    ownership_generation: int | None = Query(default=None, ge=0),
     event_kind: str | None = None,
     start: float | None = None,
     end: float | None = None,
-    limit: int | None = None,
+    limit: int | None = Query(default=100, ge=1, le=1000),
     cursor: str | None = None,
 ) -> dict[str, Any]:
     values = {
@@ -54,6 +91,25 @@ def _report_params(
         "operation": operation,
         "action": action,
         "channel": channel,
+        "entrypoint": entrypoint,
+        "caller_class": caller_class,
+        "control_class": control_class,
+        "protocol_job_id": protocol_job_id,
+        "protocol_action_id": protocol_action_id,
+        "lifecycle_stage_id": lifecycle_stage_id,
+        "outcome": outcome,
+        "event_source": event_source,
+        "pressure_stream_id": pressure_stream_id,
+        "delivery_verified": delivery_verified,
+        "controller_acknowledged": controller_acknowledged,
+        "completion_verified": completion_verified,
+        "hardware_postcondition_verified": hardware_postcondition_verified,
+        "physical_effect_verified": physical_effect_verified,
+        "evidence_state": evidence_state,
+        "command_id": command_id,
+        "pipette_operation_id": pipette_operation_id,
+        "connection_generation": connection_generation,
+        "ownership_generation": ownership_generation,
         "event_kind": event_kind,
         "start": start,
         "end": end,
@@ -84,6 +140,21 @@ async def _proxy_operator_report(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=502, detail="BioXP robot returned an invalid report contract")
     return payload
+
+
+async def _proxy_operator_report_model(
+    runtime: BioXpRuntime,
+    route_name: str,
+    model: type[Any],
+    *,
+    params: dict[str, Any] | None = None,
+    path_params: dict[str, str] | None = None,
+) -> Any:
+    return _validate(model, await _proxy_operator_report(runtime, route_name, params=params, path_params=path_params))
+
+
+def _bms_export_download(model: Any, export_id: str) -> Any:
+    return model.model_copy(update={"download": f"/api/bioxp/operator-controls/reports/exports/{export_id}/download"})
 
 
 def _quarantine_catalog_payload(payload: Any) -> Any:
@@ -508,154 +579,161 @@ async def assess_operator_action(
     return receipt
 
 
-@router.get("/operator-controls/reports/summary")
+@router.get("/operator-controls/reports/summary", response_model=OperatorReportSummaryV1)
 async def operator_report_summary(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    status: str | None = None,
-    operation: str | None = None,
-    action: str | None = None,
-    channel: int | None = Query(default=None, ge=0, le=3),
-    start: float | None = None,
-    end: float | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportSummaryV1:
+    return await _proxy_operator_report_model(
         runtime,
         "operator_report_summary",
-        params=_report_params(status=status, operation=operation, action=action, channel=channel, start=start, end=end),
+        OperatorReportSummaryV1,
+        params=report_filters,
     )
 
 
-@router.get("/operator-controls/reports/commands")
+@router.get("/operator-controls/reports/commands", response_model=OperatorReportCommandPageV1)
 async def operator_report_commands(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    status: str | None = None,
-    operation: str | None = None,
-    action: str | None = None,
-    channel: int | None = Query(default=None, ge=0, le=3),
-    start: float | None = None,
-    end: float | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportCommandPageV1:
+    return await _proxy_operator_report_model(
         runtime,
         "operator_report_commands",
-        params=_report_params(status=status, operation=operation, action=action, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+        OperatorReportCommandPageV1,
+        params=report_filters,
     )
 
 
-@router.get("/operator-controls/reports/commands/{command_id}")
-async def operator_report_command_detail(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_command_detail", path_params={"command_id": command_id})
+@router.get("/operator-controls/reports/commands/{command_id}", response_model=OperatorReportCommandDetailV1)
+async def operator_report_command_detail(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportCommandDetailV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_command_detail", OperatorReportCommandDetailV1, path_params={"command_id": command_id})
 
 
-@router.get("/operator-controls/reports/commands/{command_id}/transitions")
-async def operator_report_command_transitions(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_command_transitions", path_params={"command_id": command_id})
+@router.get("/operator-controls/reports/commands/{command_id}/transitions", response_model=OperatorReportTransitionsV1)
+async def operator_report_command_transitions(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportTransitionsV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_command_transitions", OperatorReportTransitionsV1, path_params={"command_id": command_id})
 
 
-@router.get("/operator-controls/reports/pipette")
+@router.get("/operator-controls/reports/pipette", response_model=OperatorReportPipettePageV1)
 async def operator_report_pipette(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    status: str | None = None,
-    operation: str | None = None,
-    channel: int | None = Query(default=None, ge=0, le=3),
-    start: float | None = None,
-    end: float | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportPipettePageV1:
+    return await _proxy_operator_report_model(
         runtime,
         "operator_report_pipette",
-        params=_report_params(status=status, operation=operation, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+        OperatorReportPipettePageV1,
+        params=report_filters,
     )
 
 
-@router.get("/operator-controls/reports/pipette/{pipette_operation_id}")
-async def operator_report_pipette_detail(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pipette_detail", path_params={"pipette_operation_id": pipette_operation_id})
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}", response_model=OperatorReportPipetteDetailV1)
+async def operator_report_pipette_detail(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteDetailV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pipette_detail", OperatorReportPipetteDetailV1, path_params={"pipette_operation_id": pipette_operation_id})
 
 
-@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/channels")
-async def operator_report_pipette_channels(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pipette_channels", path_params={"pipette_operation_id": pipette_operation_id})
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/channels", response_model=OperatorReportPipetteChannelsV1)
+async def operator_report_pipette_channels(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteChannelsV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pipette_channels", OperatorReportPipetteChannelsV1, path_params={"pipette_operation_id": pipette_operation_id})
 
 
-@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/exchanges")
-async def operator_report_pipette_exchanges(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pipette_exchanges", path_params={"pipette_operation_id": pipette_operation_id})
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/exchanges", response_model=OperatorReportPipetteExchangesV1)
+async def operator_report_pipette_exchanges(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteExchangesV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pipette_exchanges", OperatorReportPipetteExchangesV1, path_params={"pipette_operation_id": pipette_operation_id})
 
 
-@router.get("/operator-controls/reports/events")
+@router.get("/operator-controls/reports/events", response_model=OperatorReportEventsV1)
 async def operator_report_events(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    event_kind: str | None = None,
-    channel: int | None = Query(default=None, ge=0, le=3),
-    start: float | None = None,
-    end: float | None = None,
-    limit: int = Query(default=100, ge=1, le=1000),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportEventsV1:
+    return await _proxy_operator_report_model(
         runtime,
         "operator_report_events",
-        params=_report_params(event_kind=event_kind, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+        OperatorReportEventsV1,
+        params=report_filters,
     )
 
 
-@router.get("/operator-controls/reports/events/{event_id}")
-async def operator_report_event_detail(event_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_event_detail", path_params={"event_id": event_id})
+@router.get("/operator-controls/reports/events/{event_id}", response_model=OperatorReportEventV1)
+async def operator_report_event_detail(event_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportEventV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_event_detail", OperatorReportEventV1, path_params={"event_id": event_id})
 
 
-@router.get("/operator-controls/reports/pressure-streams")
+@router.get("/operator-controls/reports/pressure-streams", response_model=OperatorReportPressureStreamsV1)
 async def operator_report_pressure_streams(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    channel: int | None = Query(default=None, ge=0, le=3),
-    limit: int = Query(default=100, ge=1, le=1000),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pressure_streams", params=_report_params(channel=channel, limit=limit, cursor=cursor))
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportPressureStreamsV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pressure_streams", OperatorReportPressureStreamsV1, params=report_filters)
 
 
-@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}")
-async def operator_report_pressure_detail(stream_session_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pressure_detail", path_params={"stream_session_id": stream_session_id})
+@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}", response_model=OperatorReportPressureDetailV1)
+async def operator_report_pressure_detail(stream_session_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPressureDetailV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pressure_detail", OperatorReportPressureDetailV1, path_params={"stream_session_id": stream_session_id})
 
 
-@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}/samples")
+@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}/samples", response_model=OperatorReportPressureSamplesV1)
 async def operator_report_pressure_samples(
     stream_session_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-    limit: int = Query(default=100, ge=1, le=1000),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_pressure_samples", params=_report_params(limit=limit, cursor=cursor), path_params={"stream_session_id": stream_session_id})
+    report_filters: dict[str, Any] = Depends(_report_params),
+) -> OperatorReportPressureSamplesV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_pressure_samples", OperatorReportPressureSamplesV1, params=report_filters, path_params={"stream_session_id": stream_session_id})
 
 
-@router.get("/operator-controls/audit-health")
-async def operator_report_audit_health(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_audit_health")
+@router.get("/operator-controls/audit-health", response_model=OperatorReportAuditHealthV1)
+async def operator_report_audit_health(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportAuditHealthV1:
+    return await _proxy_operator_report_model(runtime, "operator_report_audit_health", OperatorReportAuditHealthV1)
 
 
-@router.post("/operator-controls/reports/exports")
-async def operator_report_export_create(body: dict[str, Any] = Body(default_factory=dict), runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+@router.post("/operator-controls/reports/exports", response_model=OperatorReportExportV1)
+async def operator_report_export_create(
+    body: OperatorReportExportRequestV1,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> OperatorReportExportV1:
     try:
         snapshot = runtime.connection.snapshot()
         payload = await runtime.connection.request_active(
             "operator_report_export_create",
             expected_generation=snapshot.generation,
             require_fresh=True,
-            json_data=body,
+            json_data=body.model_dump(exclude_none=True),
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid export contract")
-    return payload
+    receipt = _validate(OperatorReportExportV1, payload)
+    return _bms_export_download(receipt, receipt.export_id)
 
 
-@router.get("/operator-controls/reports/exports/{export_id}")
-async def operator_report_export_detail(export_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
-    return await _proxy_operator_report(runtime, "operator_report_export_detail", path_params={"export_id": export_id})
+@router.get("/operator-controls/reports/exports/{export_id}", response_model=OperatorReportExportMetadataV1)
+async def operator_report_export_detail(export_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportExportMetadataV1:
+    metadata = await _proxy_operator_report_model(runtime, "operator_report_export_detail", OperatorReportExportMetadataV1, path_params={"export_id": export_id})
+    return _bms_export_download(metadata, export_id)
+
+
+@router.get("/operator-controls/reports/exports/{export_id}/download", response_model=None)
+async def operator_report_export_download(export_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> Response:
+    snapshot = runtime.connection.snapshot()
+    try:
+        artifact = await runtime.connection.request_active_bytes(
+            "operator_report_export_download",
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+            path_params={"export_id": export_id},
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    content_type = artifact.content_type.split(";", 1)[0].strip()
+    if not content_type or any(ord(char) < 32 for char in content_type):
+        content_type = "application/octet-stream"
+    return Response(
+        content=artifact.content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="bioxp-report-{export_id}"',
+            "X-Content-SHA256": artifact.sha256,
+        },
+    )
+

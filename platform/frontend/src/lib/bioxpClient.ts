@@ -774,25 +774,151 @@ const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
 const operatorV2DashboardKey = ['bioxp', 'operator-controls', 'v2', 'dashboard'] as const;
 const operatorV2CatalogKey = ['bioxp', 'operator-controls', 'v2', 'catalog'] as const;
 
+export interface BioXpOperatorReportFilters {
+    status?: string;
+    operation?: string;
+    action?: string;
+    event_kind?: string;
+    channel?: number;
+    entrypoint?: string;
+    caller_class?: string;
+    control_class?: string;
+    protocol_job_id?: string;
+    protocol_action_id?: string;
+    lifecycle_stage_id?: string;
+    outcome?: string;
+    event_source?: string;
+    pressure_stream_id?: string;
+    delivery_verified?: boolean;
+    controller_acknowledged?: boolean;
+    completion_verified?: boolean;
+    hardware_postcondition_verified?: boolean;
+    physical_effect_verified?: boolean;
+    evidence_state?: string;
+    command_id?: string;
+    pipette_operation_id?: string;
+    connection_generation?: number;
+    ownership_generation?: number;
+    start?: number;
+    end?: number;
+}
+
+export interface BioXpOperatorReportSnapshot {
+    database_identity?: string;
+    schema_version?: number;
+    identity_version?: number | null;
+    database_path_exposed?: boolean;
+    high_water_sequence?: number;
+    high_water_rowid?: number;
+}
+
 export interface BioXpOperatorReportSummary {
-    schema_version?: string;
-    filters?: Record<string, unknown>;
+    scope?: string;
+    filters?: BioXpOperatorReportFilters;
+    snapshot?: BioXpOperatorReportSnapshot;
     commands?: { total?: number; by_status?: Record<string, number> };
     pipette_operations?: { total?: number; by_status?: Record<string, number> };
     runtime_events?: { total?: number; by_kind?: Record<string, number> };
-    [key: string]: unknown;
+    pressure?: { streams?: number; chunks?: number };
+    rates?: { delivery_rate?: number; ack_rate?: number; completion_rate?: number; postcondition_rate?: number; physical_effect_rate?: number; failure_rate?: number };
+    latency?: { average_ms?: number; maximum_ms?: number };
+    errors?: { by_code?: Record<string, number> };
+}
+
+export interface BioXpOperatorReportCommandRow {
+    sequence?: number;
+    command_id?: string;
+    idempotency_key?: string;
+    operation?: string;
+    command_kind?: string;
+    entrypoint_id?: string;
+    caller_class?: string;
+    control_class?: string;
+    action_id?: string;
+    status?: string;
+    outcome?: string | null;
+    failure_code?: string | null;
+    started_at?: number | string | null;
+    finished_at?: number | string | null;
+    duration_ms?: number | null;
+    delivery_verified?: boolean;
+    controller_acknowledged?: boolean;
+    completion_verified?: boolean;
+    physical_effect_verified?: boolean;
+    evidence_state?: string | null;
 }
 
 export interface BioXpOperatorReportCommands {
-    rows?: Array<Record<string, unknown>>;
-    commands?: Array<Record<string, unknown>>;
+    filters?: BioXpOperatorReportFilters;
+    snapshot?: BioXpOperatorReportSnapshot;
+    returned_count?: number;
+    filtered_total?: number;
+    commands?: BioXpOperatorReportCommandRow[];
     has_more?: boolean;
     next_cursor?: string | null;
-    [key: string]: unknown;
+}
+
+export interface BioXpOperatorReportTransition {
+    transition_id?: number;
+    state?: string;
+    observed_at?: number | string | null;
+    detail?: unknown;
+}
+
+export interface BioXpOperatorReportPipette {
+    pipette_operation_id?: string;
+    command_id?: string;
+    operation?: string;
+    status?: string;
+    outcome?: string | null;
+    failure_code?: string | null;
+    delivery_verified?: boolean;
+    controller_acknowledged?: boolean;
+    completion_verified?: boolean;
+    physical_effect_verified?: boolean;
+    evidence_state?: string | null;
+    channels?: Array<Record<string, unknown>>;
+    exchanges?: Array<Record<string, unknown>>;
+    events?: Array<Record<string, unknown>>;
+    pressure_streams?: Array<Record<string, unknown>>;
+}
+
+export interface BioXpOperatorReportCommandDetail extends BioXpOperatorReportCommandRow {
+    requested_inputs?: unknown;
+    effective_inputs?: unknown;
+    source_identity?: unknown;
+    transitions?: BioXpOperatorReportTransition[];
+    evidence?: Array<Record<string, unknown>>;
+    pipette?: BioXpOperatorReportPipette | null;
+}
+
+export interface BioXpOperatorReportEvents {
+    returned_count?: number;
+    events?: Array<Record<string, unknown>>;
+}
+
+export interface BioXpOperatorReportPressureStreams {
+    returned_count?: number;
+    pressure_streams?: Array<Record<string, unknown>>;
+}
+
+export interface BioXpOperatorReportExport {
+    export_id: string;
+    status: string;
+    format: 'json' | 'csv';
+    row_count: number;
+    sha256: string;
+    byte_count: number;
+    download: string;
 }
 
 const operatorReportSummaryKey = ['bioxp', 'operator-reports', 'summary'] as const;
 const operatorReportCommandsKey = ['bioxp', 'operator-reports', 'commands'] as const;
+const operatorReportParams = (filters?: BioXpOperatorReportFilters, limit?: number, cursor?: string | null) => ({
+    ...(filters ?? {}),
+    ...(limit === undefined ? {} : { limit }),
+    ...(cursor ? { cursor } : {}),
+});
 
 function cameraImageFromResponse(response: {
     data: Blob;
@@ -1042,22 +1168,82 @@ export const useBioXpOperatorActionHistory = (
     refetchInterval: (query) => bioXpReceiptIsNonTerminal(query.state.data?.receipts?.[0] ?? null) ? 400 : false,
 });
 
-export const useBioXpOperatorReportSummary = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorReportSummaryKey, connectionGeneration, enabled],
-    queryFn: async () => (await api.get<BioXpOperatorReportSummary>('/api/bioxp/operator-controls/reports/summary')).data,
+export const useBioXpOperatorReportSummary = (
+    connectionGeneration: number,
+    enabled = true,
+    filters?: BioXpOperatorReportFilters,
+) => useQuery({
+    queryKey: [...operatorReportSummaryKey, connectionGeneration, enabled, filters ?? null],
+    queryFn: async () => (await api.get<BioXpOperatorReportSummary>('/api/bioxp/operator-controls/reports/summary', {
+        params: operatorReportParams(filters),
+    })).data,
     enabled: enabled && connectionGeneration > 0,
     retry: false,
     refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
 });
 
-export const useBioXpOperatorReportCommands = (connectionGeneration: number, enabled = true, limit = 25) => useQuery({
-    queryKey: [...operatorReportCommandsKey, connectionGeneration, enabled, limit],
+export const useBioXpOperatorReportCommands = (
+    connectionGeneration: number,
+    enabled = true,
+    limit = 25,
+    cursor: string | null = null,
+    filters?: BioXpOperatorReportFilters,
+) => useQuery({
+    queryKey: [...operatorReportCommandsKey, connectionGeneration, enabled, limit, cursor, filters ?? null],
     queryFn: async () => (await api.get<BioXpOperatorReportCommands>('/api/bioxp/operator-controls/reports/commands', {
-        params: { limit },
+        params: operatorReportParams(filters, limit, cursor),
     })).data,
     enabled: enabled && connectionGeneration > 0,
     retry: false,
     refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+});
+
+export const useBioXpOperatorReportCommandDetail = (commandId: string | null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'command-detail', commandId],
+    queryFn: async () => (await api.get<BioXpOperatorReportCommandDetail>(
+        `/api/bioxp/operator-controls/reports/commands/${encodeURIComponent(commandId ?? '')}`,
+    )).data,
+    enabled: enabled && Boolean(commandId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportEvents = (
+    connectionGeneration: number,
+    enabled = true,
+    filters?: BioXpOperatorReportFilters,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'events', connectionGeneration, filters ?? null],
+    queryFn: async () => (await api.get<BioXpOperatorReportEvents>('/api/bioxp/operator-controls/reports/events', {
+        params: operatorReportParams(filters, 20),
+    })).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+});
+
+export const useBioXpOperatorReportPressureStreams = (
+    connectionGeneration: number,
+    enabled = true,
+    filters?: BioXpOperatorReportFilters,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pressure', connectionGeneration, filters ?? null],
+    queryFn: async () => (await api.get<BioXpOperatorReportPressureStreams>('/api/bioxp/operator-controls/reports/pressure-streams', {
+        params: operatorReportParams(filters, 20),
+    })).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
+});
+
+export const useCreateBioXpOperatorReportExport = () => useMutation({
+    mutationFn: async ({ format, filters, limit = 1000 }: {
+        format: 'json' | 'csv';
+        filters?: BioXpOperatorReportFilters;
+        limit?: number;
+    }) => (await api.post<BioXpOperatorReportExport>('/api/bioxp/operator-controls/reports/exports', {
+        format,
+        limit,
+        ...(filters ?? {}),
+    })).data,
 });
 
 export const useBioXpCameraStatus = (

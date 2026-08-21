@@ -132,6 +132,14 @@ class _CameraStatusResponse(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class RobotBytesResponse:
+    content: bytes
+    content_type: str
+    content_disposition: str | None
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
 class CameraImage:
     content: bytes
     content_type: str
@@ -400,6 +408,57 @@ class BioXpRobotClient:
             raise RobotTransportError("BioXP camera transport is unreachable or timed out") from exc
         except httpx.HTTPError as exc:
             raise RobotTransportError("BioXP camera returned an invalid transport response") from exc
+
+    async def request_bytes(
+        self,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse:
+        try:
+            method, path_template, timeout = self.routes[route_name]
+        except KeyError as exc:
+            raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
+        path = _render_route_path(path_template, path_params)
+        try:
+            response = await self._client.request(
+                method,
+                path,
+                json=json_data,
+                params=params,
+                timeout=_bounded_timeout(timeout),
+            )
+            if 300 <= response.status_code < 400:
+                raise RobotTransportError("BioXP target redirects are forbidden")
+            if response.is_error:
+                try:
+                    detail: object = response.json()
+                except ValueError:
+                    detail = response.text[:1000]
+                raise RobotResponseError(response.status_code, detail)
+            _required_bounded_content_length(response, limit=max_bytes, label="report export")
+            content = await _read_limited_body(response, limit=max_bytes, overflow_message="BioXP report export exceeded the size limit")
+            digest = sha256(content).hexdigest()
+            upstream_hash = response.headers.get("x-content-sha256")
+            if upstream_hash is not None and (not _SHA256_RE.fullmatch(upstream_hash) or upstream_hash != digest):
+                raise RobotTransportError("BioXP report export content hash did not match its body")
+            return RobotBytesResponse(
+                content=content,
+                content_type=response.headers.get("content-type", "application/octet-stream"),
+                content_disposition=response.headers.get("content-disposition"),
+                sha256=digest,
+            )
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP robot transport is unreachable or timed out") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RobotTransportError("BioXP robot returned an invalid export response") from exc
 
     async def request(
         self,

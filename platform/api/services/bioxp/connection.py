@@ -18,7 +18,7 @@ from .models import (
     BioXpSnapshot,
 )
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient, CameraImage
+from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -35,6 +35,16 @@ class RobotClientProtocol(Protocol):
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]: ...
+
+    async def request_bytes(
+        self,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse: ...
 
     async def camera_status(self) -> dict[str, Any]: ...
 
@@ -250,6 +260,29 @@ class BioXpConnectionService:
             if path_params is not None:
                 kwargs["path_params"] = path_params
             return await client.request(route_name, **kwargs)
+
+    async def request_active_bytes(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        require_fresh: bool = True,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse:
+        async with self.active_request_lease(
+            expected_generation=expected_generation,
+            require_fresh=require_fresh,
+        ) as client:
+            return await client.request_bytes(
+                route_name,
+                json_data=json_data,
+                params=params,
+                path_params=path_params,
+                max_bytes=max_bytes,
+            )
 
     async def request_active_query(
         self,

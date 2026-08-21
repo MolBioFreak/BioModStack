@@ -4211,3 +4211,471 @@ class OperatorActionHistoryV2(BaseModel):
     items: list[OperatorActionReceiptV2]
     next_cursor: str | None
     limit: StrictInt = Field(ge=1, le=200)
+
+
+class OperatorReportSnapshotV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    database_identity: Literal["robot_authoritative_sqlite"]
+    schema_version: StrictInt = Field(ge=1)
+    database_path_exposed: StrictBool
+    identity_version: StrictInt | None
+    high_water_sequence: StrictInt | None = Field(default=None, ge=0)
+    high_water_rowid: StrictInt | None = Field(default=None, ge=0)
+    high_water_event_id: StrictInt | None = Field(default=None, ge=0)
+    high_water_pressure_stream_id: str | None = Field(default=None, max_length=160)
+    high_water_pressure_chunk_sequence: StrictInt | None = Field(default=None, ge=0)
+
+
+class OperatorReportFiltersV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    start: StrictFloat | StrictInt | None = None
+    end: StrictFloat | StrictInt | None = None
+    status: str | None = None
+    operation: str | None = None
+    action: str | None = None
+    event_kind: str | None = None
+    channel: StrictInt | None = Field(default=None, ge=0, le=3)
+    entrypoint: str | None = None
+    caller_class: str | None = None
+    control_class: str | None = None
+    protocol_job_id: str | None = None
+    protocol_action_id: str | None = None
+    lifecycle_stage_id: str | None = None
+    outcome: str | None = None
+    event_source: str | None = None
+    pressure_stream_id: str | None = None
+    delivery_verified: StrictBool | None = None
+    controller_acknowledged: StrictBool | None = None
+    completion_verified: StrictBool | None = None
+    hardware_postcondition_verified: StrictBool | None = None
+    physical_effect_verified: StrictBool | None = None
+    evidence_state: str | None = None
+    command_id: str | None = None
+    pipette_operation_id: str | None = None
+    connection_generation: StrictInt | None = Field(default=None, ge=0)
+    ownership_generation: StrictInt | None = Field(default=None, ge=0)
+    limit: StrictInt = Field(ge=1, le=100000)
+
+
+class OperatorReportCommandCountsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    total: StrictInt = Field(ge=0)
+    by_status: dict[str, StrictInt]
+
+
+class OperatorReportPipetteCountsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    total: StrictInt = Field(ge=0)
+    by_status: dict[str, StrictInt] = {}
+
+
+class OperatorReportEventCountsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    total: StrictInt = Field(ge=0)
+    by_kind: dict[str, StrictInt] = {}
+
+
+class OperatorReportPressureCountsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    streams: StrictInt = Field(ge=0)
+    chunks: StrictInt = Field(ge=0)
+
+
+class OperatorReportRatesV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    delivery_rate: StrictFloat = Field(ge=0, le=1)
+    ack_rate: StrictFloat = Field(ge=0, le=1)
+    completion_rate: StrictFloat = Field(ge=0, le=1)
+    postcondition_rate: StrictFloat = Field(ge=0, le=1)
+    physical_effect_rate: StrictFloat = Field(ge=0, le=1)
+    failure_rate: StrictFloat = Field(ge=0, le=1)
+
+
+class OperatorReportLatencyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    average_ms: StrictFloat = Field(ge=0)
+    maximum_ms: StrictFloat = Field(ge=0)
+
+
+class OperatorReportErrorCountsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    by_code: dict[str, StrictInt]
+
+
+class OperatorReportSummaryV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    scope: Literal["window", "filtered"]
+    filters: OperatorReportFiltersV1
+    snapshot: OperatorReportSnapshotV1
+    commands: OperatorReportCommandCountsV1
+    pipette_operations: OperatorReportPipetteCountsV1
+    runtime_events: OperatorReportEventCountsV1
+    pressure: OperatorReportPressureCountsV1
+    rates: OperatorReportRatesV1
+    latency: OperatorReportLatencyV1
+    errors: OperatorReportErrorCountsV1
+
+
+class OperatorReportCommandRowV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    sequence: StrictInt = Field(ge=1)
+    command_id: str = Field(min_length=1, max_length=160)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    operation: str = Field(min_length=1, max_length=120)
+    command_kind: str = Field(min_length=1, max_length=80)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=120)
+    control_class: str = Field(min_length=1, max_length=120)
+    action_id: str | None = Field(default=None, max_length=160)
+    status: str = Field(min_length=1, max_length=80)
+    outcome: str | None = Field(default=None, max_length=2000)
+    failure_code: str | None = Field(default=None, max_length=2000)
+    ownership_generation: StrictInt | None = Field(default=None, ge=0)
+    connection_generation: StrictInt | None = Field(default=None, ge=0)
+    started_at: StrictFloat | StrictInt | str | None = None
+    admitted_at: StrictFloat | StrictInt | str | None = None
+    dispatched_at: StrictFloat | StrictInt | str | None = None
+    finished_at: StrictFloat | StrictInt | str | None = None
+    duration_ms: StrictFloat | StrictInt | None = Field(default=None, ge=0)
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    physical_effect_verified: StrictBool
+    evidence_state: str | None = Field(default=None, max_length=80)
+
+
+class OperatorReportTransitionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    transition_id: StrictInt = Field(ge=1)
+    state: str = Field(min_length=1, max_length=80)
+    observed_at: StrictFloat | StrictInt | str
+    detail: dict[str, JsonValue]
+
+
+class OperatorReportEvidenceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    evidence_artifact_id: str = Field(min_length=1, max_length=160)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: StrictInt = Field(ge=0)
+    created_at: StrictFloat | StrictInt | str
+    retention_deadline: StrictFloat | StrictInt | str | None
+    legal_hold: StrictBool
+    expiry_state: str = Field(min_length=1, max_length=80)
+    expiry_receipt_id: str | None = Field(default=None, max_length=160)
+
+
+class OperatorReportPipetteRowV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    command_id: str = Field(min_length=1, max_length=160)
+    operation: str = Field(min_length=1, max_length=120)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=120)
+    control_class: str = Field(min_length=1, max_length=120)
+    action_id: str | None = Field(default=None, max_length=160)
+    status: str = Field(min_length=1, max_length=80)
+    outcome: str | None = Field(default=None, max_length=2000)
+    failure_code: str | None = Field(default=None, max_length=2000)
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    physical_effect_verified: StrictBool
+    evidence_state: str | None = Field(default=None, max_length=80)
+
+
+class OperatorReportChannelV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    observation_id: str = Field(min_length=1, max_length=160)
+    command_id: str = Field(min_length=1, max_length=160)
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    channel: StrictInt = Field(ge=0, le=3)
+    phase: str = Field(min_length=1, max_length=80)
+    observed_at: StrictFloat | StrictInt | str
+    semantic_validity: str = Field(min_length=1, max_length=80)
+    truth_source: str = Field(min_length=1, max_length=120)
+    tip_loaded: StrictBool | None
+    pressure: StrictFloat | StrictInt | None
+    pressure_units: str | None = Field(default=None, max_length=40)
+    status: str | None = Field(default=None, max_length=80)
+    error_code: StrictInt | None
+    firmware_class: str | None = Field(default=None, max_length=120)
+    detail: dict[str, JsonValue]
+
+
+class OperatorReportExchangeV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    exchange_id: str = Field(min_length=1, max_length=160)
+    transaction_id: str | None = Field(default=None, max_length=160)
+    channel: StrictInt | None = Field(default=None, ge=0, le=3)
+    transaction_phase: str = Field(min_length=1, max_length=80)
+    command_family: StrictInt | None
+    matcher_name: str | None = Field(default=None, max_length=120)
+    tx_id: StrictInt | None
+    expected_rx_id: StrictInt | None
+    observed_rx_id: StrictInt | None
+    tx_bytes: list[JsonValue]
+    rx_bytes: list[JsonValue]
+    delivery_verified: StrictBool
+    semantic_match: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    completion_before_ack: StrictBool
+    sent_at: StrictFloat | StrictInt | str | None
+    received_at: StrictFloat | StrictInt | str | None
+    ack_at: StrictFloat | StrictInt | str | None
+    completion_at: StrictFloat | StrictInt | str | None
+
+
+class OperatorReportPipetteEventV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: StrictInt = Field(ge=1)
+    event_source: str = Field(min_length=1, max_length=120)
+    event_kind: str = Field(min_length=1, max_length=120)
+    observed_at: StrictFloat | StrictInt | str
+    event: dict[str, JsonValue]
+
+
+class OperatorReportPressureStreamChildV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    stream_session_id: str = Field(min_length=1, max_length=160)
+    channels: list[JsonValue]
+    sample_period_ms: StrictInt | None = Field(default=None, ge=0)
+    started_at: StrictFloat | StrictInt | str
+    stopped_at: StrictFloat | StrictInt | str | None
+    source_generation: StrictInt | None = Field(default=None, ge=0)
+    reader_generation: StrictInt | None = Field(default=None, ge=0)
+    offset_identity: str | None = Field(default=None, max_length=160)
+    terminal_state: str = Field(min_length=1, max_length=80)
+    loss_count: StrictInt = Field(ge=0)
+
+
+class OperatorReportPipetteDetailV1(OperatorReportPipetteRowV1):
+    channels: list[OperatorReportChannelV1]
+    exchanges: list[OperatorReportExchangeV1]
+    events: list[OperatorReportPipetteEventV1]
+    pressure_streams: list[OperatorReportPressureStreamChildV1]
+
+
+class OperatorReportCommandPageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    filters: OperatorReportFiltersV1
+    snapshot: OperatorReportSnapshotV1
+    returned_count: StrictInt = Field(ge=0)
+    filtered_total: StrictInt = Field(ge=0)
+    has_more: StrictBool
+    next_cursor: str | None
+    commands: list[OperatorReportCommandRowV1]
+
+
+class OperatorReportCommandDetailV1(OperatorReportCommandRowV1):
+    requested_inputs: JsonValue
+    effective_inputs: JsonValue
+    source_identity: JsonValue
+    transitions: list[OperatorReportTransitionV1]
+    evidence: list[OperatorReportEvidenceV1]
+    pipette: OperatorReportPipetteDetailV1 | None
+
+
+class OperatorReportTransitionsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    command_id: str = Field(min_length=1, max_length=160)
+    transitions: list[OperatorReportTransitionV1]
+
+
+class OperatorReportPipettePageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    filters: OperatorReportFiltersV1
+    snapshot: OperatorReportSnapshotV1
+    returned_count: StrictInt = Field(ge=0)
+    filtered_total: StrictInt = Field(ge=0)
+    has_more: StrictBool
+    next_cursor: str | None
+    pipette: list[OperatorReportPipetteRowV1]
+
+
+class OperatorReportPipetteChannelsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    channels: list[OperatorReportChannelV1]
+
+
+class OperatorReportPipetteExchangesV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    exchanges: list[OperatorReportExchangeV1]
+
+
+class OperatorReportEventV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: StrictInt = Field(ge=1)
+    command_id: str | None = Field(default=None, max_length=160)
+    pipette_operation_id: str | None = Field(default=None, max_length=160)
+    event_source: str = Field(min_length=1, max_length=120)
+    event_kind: str = Field(min_length=1, max_length=120)
+    observed_at: StrictFloat | StrictInt | str
+    event: dict[str, JsonValue]
+
+
+class OperatorReportEventsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_kind: str | None
+    filters: OperatorReportFiltersV1 | None = None
+    snapshot: OperatorReportSnapshotV1 | None = None
+    returned_count: StrictInt = Field(ge=0)
+    has_more: StrictBool = False
+    next_cursor: str | None = None
+    events: list[OperatorReportEventV1]
+
+
+class OperatorReportPressureStreamRowV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    stream_session_id: str = Field(min_length=1, max_length=160)
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    channels: list[JsonValue]
+    sample_period_ms: StrictInt | None = Field(default=None, ge=0)
+    started_at: StrictFloat | StrictInt | str
+    stopped_at: StrictFloat | StrictInt | str | None
+    source_generation: StrictInt | None = Field(default=None, ge=0)
+    reader_generation: StrictInt | None = Field(default=None, ge=0)
+    offset_identity: str | None = Field(default=None, max_length=160)
+    terminal_state: str = Field(min_length=1, max_length=80)
+    loss_count: StrictInt = Field(ge=0)
+
+
+class OperatorReportPressureStreamsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    filters: OperatorReportFiltersV1 | None = None
+    snapshot: OperatorReportSnapshotV1 | None = None
+    returned_count: StrictInt = Field(ge=0)
+    has_more: StrictBool = False
+    next_cursor: str | None = None
+    pressure_streams: list[OperatorReportPressureStreamRowV1]
+
+
+class OperatorReportPressureChunkV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    chunk_id: str = Field(min_length=1, max_length=160)
+    channel: StrictInt = Field(ge=0, le=3)
+    chunk_sequence: StrictInt = Field(ge=0)
+    sample_count: StrictInt = Field(ge=0)
+    lost_sample_count: StrictInt = Field(ge=0)
+    units: str = Field(min_length=1, max_length=40)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: StrictInt = Field(ge=0)
+    evidence_artifact_id: str | None = Field(default=None, max_length=160)
+    summary: dict[str, JsonValue] = {}
+
+
+class OperatorReportPressureDetailV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    stream_session_id: str = Field(min_length=1, max_length=160)
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    channels: list[JsonValue]
+    sample_period_ms: StrictInt | None = Field(default=None, ge=0)
+    started_at: StrictFloat | StrictInt | str
+    stopped_at: StrictFloat | StrictInt | str | None
+    terminal_state: str = Field(min_length=1, max_length=80)
+    loss_count: StrictInt = Field(ge=0)
+    chunks: list[OperatorReportPressureChunkV1]
+
+
+class OperatorReportPressureSamplesV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    stream_session_id: str = Field(min_length=1, max_length=160)
+    filters: OperatorReportFiltersV1 | None = None
+    snapshot: OperatorReportSnapshotV1 | None = None
+    returned_count: StrictInt = Field(ge=0)
+    has_more: StrictBool = False
+    next_cursor: str | None = None
+    samples: list[OperatorReportPressureChunkV1]
+
+
+class OperatorReportExportV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    export_id: str = Field(min_length=1, max_length=160)
+    status: Literal["completed", "failed", "pending"]
+    format: Literal["json", "csv"]
+    row_count: StrictInt = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: StrictInt = Field(ge=0)
+    download: str = Field(min_length=1, max_length=512)
+
+
+class OperatorReportAuditHealthV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    status: Literal["ok"]
+    store: OperatorReportSnapshotV1
+    database_bytes: StrictInt = Field(ge=0)
+    wal_bytes: StrictInt = Field(ge=0)
+    commands: StrictInt = Field(ge=0)
+    pipette_operations: StrictInt = Field(ge=0)
+    retained_evidence: StrictInt = Field(ge=0)
+    pending_expiry_evidence: StrictInt = Field(ge=0)
+    integrity_failures: StrictInt = Field(ge=0)
+    migration_receipts: StrictInt = Field(ge=0)
+    exports: StrictInt = Field(ge=0)
+
+
+class OperatorReportExportRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    format: Literal["json", "csv"] = "json"
+    start: StrictFloat | StrictInt | None = None
+    end: StrictFloat | StrictInt | None = None
+    status: str | None = None
+    operation: str | None = None
+    action: str | None = None
+    channel: StrictInt | None = Field(default=None, ge=0, le=3)
+    limit: StrictInt = Field(default=1000, ge=1, le=100000)
+
+
+class OperatorReportExportMetadataV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    export_id: str = Field(min_length=1, max_length=160)
+    format: Literal["json", "csv"]
+    filter: JsonValue
+    filter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    snapshot: OperatorReportSnapshotV1
+    row_count: StrictInt = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: StrictInt = Field(ge=0)
+    status: Literal["completed", "failed", "pending"]
+    created_at: StrictFloat | StrictInt | str
+    completed_at: StrictFloat | StrictInt | str | None
+    download: str = Field(min_length=1, max_length=512)
