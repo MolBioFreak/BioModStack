@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 import asyncio
 import json
 from datetime import datetime
@@ -17,6 +17,44 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 from services import result_contracts
+from services.result_ingester import _job_stage_context
+
+
+def test_region_redesign_job_gets_structure_viewer_contract() -> None:
+    from types import SimpleNamespace
+
+    job = SimpleNamespace(
+        id="job-1",
+        model_id="protein_modification_experimental",
+        mode="region_redesign",
+        params={},
+        stage_family=None,
+        stage_mode=None,
+        source_stage_job_id=None,
+        source_stage_family=None,
+        source_stage_mode=None,
+        source_selection_count=None,
+        parent_job_id=None,
+    )
+    context = _job_stage_context(cast(Any, job))
+
+    assert context["stage_family"] == "protein_local_redesign_validation"
+    assert context["stage_mode"] == "region_redesign"
+    assert context["artifact_class"] == "validated_local_redesign_structure"
+    assert context["review_profile_id"] == "protein_local_redesign_validation_v1"
+    contract = result_contracts.resolve_result_contract(
+        review_profile_id=context["review_profile_id"]
+    )
+    assert "structure_viewer" in contract.viewer_capabilities
+    assert "structure_summary" in contract.supported_analyzers
+
+
+def test_experimental_model_identity_alone_cannot_grant_region_redesign_review() -> None:
+    contract = result_contracts.resolve_result_contract(
+        model_type="protein_modification_experimental"
+    )
+    assert contract.analysis_contract_id is None
+    assert contract.viewer_capabilities == []
 
 
 def test_unknown_result_set_fails_closed_instead_of_falling_through_to_broad_family() -> None:

@@ -1137,6 +1137,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
             stage_family = "fampnn"
         elif "antibody" in model_id or "antibody" in mode:
             stage_family = "antibody"
+        elif model_id == "protein_modification_experimental" and mode == "region_redesign":
+            stage_family = "protein_local_redesign_validation"
+            stage_mode = "region_redesign"
         elif mode == "shape_blueprint":
             stage_family = "shape_blueprint"
             stage_mode = stage_mode or "shape_blueprint"
@@ -1239,6 +1242,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         infer_antibody_artifact_class_from_stage(stage_family, stage_mode)
     )
     artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION if artifact_class else None
+    if stage_family == "protein_local_redesign_validation" and stage_mode == "region_redesign":
+        artifact_class = "validated_local_redesign_structure"
+        artifact_schema_version = REVIEW_CONTRACT_VERSION
 
     inferred_review_contract = resolve_result_contract(
         model_type=getattr(job, "model_id", None),

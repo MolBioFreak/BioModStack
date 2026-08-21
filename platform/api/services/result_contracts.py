@@ -107,6 +107,27 @@ _RESULT_CONTRACT_DEFINITIONS: List[ResultContractDefinition] = [
         notes="PPIFlow local maturation/refinement outputs; paper-rank fields are completeness-gated.",
     ),
     ResultContractDefinition(
+        contract_id="protein_local_redesign_validation_v1",
+        # protein_modification_experimental owns several modes. Grant review
+        # authority only through the exact server-owned region-redesign stage.
+        model_ids=[],
+        stage_families=["protein_local_redesign_validation"],
+        stage_modes=["region_redesign"],
+        artifact_classes=["validated_local_redesign_structure"],
+        result_sets=["protein_local_redesign_outputs"],
+        supported_analyzers=[*_STRUCTURE_ANALYZERS, *_CONFIDENCE_ANALYZERS],
+        viewer_capabilities=[
+            "result_filter",
+            "structure_viewer",
+            "structure_confidence_metrics",
+            "sequence_design_metrics",
+            "content_addressed_download",
+        ],
+        required_fields=["artifact_class"],
+        required_artifacts=["structure"],
+        notes="RFD3/FA-MPNN local-redesign structures and peer-validator refolds.",
+    ),
+    ResultContractDefinition(
         contract_id="rfd3_local_redesign_v1",
         model_ids=["protein_local_redesign"],
         stage_families=["protein_local_redesign"],
