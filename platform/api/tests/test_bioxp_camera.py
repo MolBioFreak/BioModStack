@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -46,6 +47,84 @@ class FakeCameraClient:
     async def camera_snapshot(self):
         self.calls.append("snapshot")
         return FakeImage(content=b"snapshot-jpeg")
+
+    async def camera_stream_start(self):
+        self.calls.append("stream_start")
+        return {
+            "schema_version": "bioxp.camera_stream.v1",
+            "state": "live",
+            "active": True,
+            "stream_id": "stream-1",
+            "camera_ownership_epoch": 9,
+            "device": "/dev/video0",
+            "fps": 8,
+            "quality": 7,
+            "width": 640,
+            "height": 480,
+            "frames_emitted": 0,
+            "dropped_frames": 0,
+            "latest_frame_at": None,
+            "last_error": None,
+        }
+
+    async def camera_stream_state(self):
+        self.calls.append("stream_state")
+        return {
+            "schema_version": "bioxp.camera_stream.v1",
+            "state": "live",
+            "active": True,
+            "stream_id": "stream-1",
+            "camera_ownership_epoch": 9,
+            "device": "/dev/video0",
+            "fps": 8,
+            "quality": 7,
+            "width": 640,
+            "height": 480,
+            "frames_emitted": 4,
+            "dropped_frames": 1,
+            "latest_frame_at": "2026-07-27T12:00:01Z",
+            "last_error": None,
+        }
+
+    async def camera_stream_stop(self):
+        self.calls.append("stream_stop")
+        return {
+            "schema_version": "bioxp.camera_stream.v1",
+            "state": "off",
+            "active": False,
+            "stream_id": "stream-1",
+            "camera_ownership_epoch": 10,
+            "device": None,
+            "fps": None,
+            "quality": None,
+            "width": None,
+            "height": None,
+            "frames_emitted": 0,
+            "dropped_frames": 0,
+            "latest_frame_at": None,
+            "last_error": None,
+        }
+
+    @asynccontextmanager
+    async def camera_mjpeg_stream(self):
+        self.calls.append("mjpeg_open")
+        jpeg = b"\xff\xd8test-pixels\xff\xd9"
+        part = (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n"
+            + f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii")
+            + jpeg
+            + b"\r\n"
+        )
+
+        async def chunks():
+            yield part[:17]
+            yield part[17:]
+
+        try:
+            yield chunks()
+        finally:
+            self.calls.append("mjpeg_close")
 
 
 class FakeConnection:
@@ -179,7 +258,81 @@ def test_camera_surface_rejects_raw_camera_parameters_and_has_finite_allowlist(m
         "/api/bioxp/camera/status",
         "/api/bioxp/camera/frame/latest",
         "/api/bioxp/camera/snapshot",
+        "/api/bioxp/camera/stream/start",
+        "/api/bioxp/camera/stream/state",
+        "/api/bioxp/camera/mjpeg",
+        "/api/bioxp/camera/stream/stop",
     }
     camera_schema = str({path: schema["paths"][path] for path in camera_paths}).lower()
     for forbidden in ("device", "cid", "xu", "output_path", "robot_url", "calibration", "inspect", "oem/check"):
         assert forbidden not in camera_schema
+
+
+def test_camera_stream_control_is_generation_bound_and_fixed(monkeypatch):
+    client, connection = make_client(monkeypatch)
+
+    started = client.post("/api/bioxp/camera/stream/start", json={"expected_generation": 77})
+    state = client.get("/api/bioxp/camera/stream/state", params={"expected_generation": 77})
+    stopped = client.post("/api/bioxp/camera/stream/stop", json={"expected_generation": 77})
+
+    assert started.status_code == 200
+    assert started.json()["state"] == "live"
+    assert "device" not in started.json()
+    assert "mjpeg_url" not in started.json()
+    assert state.status_code == 200
+    assert state.json()["camera_ownership_epoch"] == 9
+    assert stopped.status_code == 200
+    assert stopped.json()["state"] == "off"
+    assert connection.client.calls == ["stream_start", "stream_state", "stream_stop"]
+    assert connection.lease_entries == [(77, False), (77, False), (77, False)]
+
+
+def test_camera_stream_rejects_caller_selected_device_and_tuning(monkeypatch):
+    client, connection = make_client(monkeypatch)
+
+    for path, method, body, params in (
+        ("/api/bioxp/camera/stream/start", "post", {"expected_generation": 77, "device": "/dev/video9"}, None),
+        ("/api/bioxp/camera/stream/start", "post", {"expected_generation": 77}, {"fps": 30}),
+        ("/api/bioxp/camera/stream/state", "get", None, {"expected_generation": 77, "fps": 30}),
+        ("/api/bioxp/camera/mjpeg", "get", None, {"expected_generation": 77, "width": 1920}),
+        ("/api/bioxp/camera/stream/stop", "post", {"expected_generation": 77, "quality": 2}, None),
+        ("/api/bioxp/camera/stream/stop", "post", {"expected_generation": 77}, {"quality": 2}),
+    ):
+        response = (
+            client.get(path, params=params)
+            if method == "get"
+            else client.post(path, json=body, params=params)
+        )
+        assert response.status_code == 422, (path, response.text)
+
+    assert connection.client.calls == []
+
+
+def test_camera_mjpeg_relay_validates_parts_and_holds_generation_lease(monkeypatch):
+    client, connection = make_client(monkeypatch)
+
+    response = client.get("/api/bioxp/camera/mjpeg", params={"expected_generation": 77})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
+    assert response.headers["x-bioxp-connection-generation"] == "77"
+    assert response.content.startswith(b"--frame\r\n")
+    assert b"test-pixels" in response.content
+    assert "/dev/video0" not in response.text
+    assert connection.client.calls == ["mjpeg_open", "mjpeg_close"]
+    assert connection.lease_entries == [(77, False)]
+
+
+def test_camera_mjpeg_relay_rejects_malformed_jpeg_parts():
+    from routers.bioxp.camera import _iter_validated_mjpeg
+
+    async def malformed_chunks():
+        yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 4\r\n\r\nnope\r\n"
+
+    async def consume():
+        return [part async for part in _iter_validated_mjpeg(malformed_chunks())]
+
+    with pytest.raises(Exception, match="invalid JPEG framing"):
+        import asyncio
+
+        asyncio.run(consume())

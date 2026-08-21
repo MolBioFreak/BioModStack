@@ -104,10 +104,32 @@ export interface BioXpCameraImage {
     connectionGeneration: number;
 }
 
+export interface BioXpCameraStream {
+    schema_version: 'bioxp.camera_stream.v1';
+    state: 'off' | 'starting' | 'live' | 'error';
+    active: boolean;
+    stream_id: string | null;
+    camera_ownership_epoch: number;
+    fps: number | null;
+    quality: number | null;
+    width: number | null;
+    height: number | null;
+    frames_emitted: number;
+    dropped_frames: number;
+    latest_frame_at: string | null;
+    last_error: string | null;
+    idempotent: boolean | null;
+    connection_generation: number;
+}
+
 export const BIOXP_CAMERA_ENDPOINTS = Object.freeze({
     status: '/api/bioxp/camera/status',
     latest: '/api/bioxp/camera/frame/latest',
     snapshot: '/api/bioxp/camera/snapshot',
+    streamStart: '/api/bioxp/camera/stream/start',
+    streamState: '/api/bioxp/camera/stream/state',
+    mjpeg: '/api/bioxp/camera/mjpeg',
+    streamStop: '/api/bioxp/camera/stream/stop',
 });
 
 
@@ -1512,6 +1534,38 @@ export const useBioXpCameraStatus = (
     enabled: enabled && connectionGeneration !== null,
     retry: false,
 });
+
+export const useBioXpCameraStreamState = (
+    connectionGeneration: number | null,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'camera', 'stream', connectionGeneration],
+    queryFn: async () => {
+        if (connectionGeneration === null) throw new Error('An active BioXP connection generation is required');
+        return (await api.get<BioXpCameraStream>(BIOXP_CAMERA_ENDPOINTS.streamState, {
+            params: { expected_generation: connectionGeneration },
+        })).data;
+    },
+    enabled: enabled && connectionGeneration !== null,
+    refetchInterval: enabled && connectionGeneration !== null ? 2_000 : false,
+    retry: false,
+});
+
+export async function startBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {
+    return (await api.post<BioXpCameraStream>(BIOXP_CAMERA_ENDPOINTS.streamStart, {
+        expected_generation: connectionGeneration,
+    })).data;
+}
+
+export async function stopBioXpCameraStream(connectionGeneration: number): Promise<BioXpCameraStream> {
+    return (await api.post<BioXpCameraStream>(BIOXP_CAMERA_ENDPOINTS.streamStop, {
+        expected_generation: connectionGeneration,
+    })).data;
+}
+
+export function buildBioXpCameraMjpegUrl(connectionGeneration: number): string {
+    return `${BIOXP_CAMERA_ENDPOINTS.mjpeg}?expected_generation=${encodeURIComponent(String(connectionGeneration))}`;
+}
 
 export async function fetchBioXpCameraFrame(connectionGeneration: number): Promise<BioXpCameraImage> {
     const response = await api.get<Blob>(BIOXP_CAMERA_ENDPOINTS.latest, {
