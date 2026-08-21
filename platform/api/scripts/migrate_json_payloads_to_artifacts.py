@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -222,31 +223,24 @@ def install_receipt(
     artifact: InstalledArtifact,
     source_info: Mapping[str, Any],
 ) -> None:
+    columns = [
+        "artifact_id", "owner_kind", "owner_id", "role", "schema_id", "artifact_schema_version",
+        "content_sha256", "size_bytes", "row_count", "column_schema_sha256", "storage_root",
+        "relative_path", "media_type", "availability", "source_receipts_json", "created_at",
+    ]
+    values: list[Any] = [
+        artifact.artifact_id, artifact.owner_kind, artifact.owner_id, artifact.role, artifact.schema_id,
+        artifact.schema_version, artifact.content_sha256, artifact.size_bytes, artifact.row_count,
+        artifact.column_schema_sha256, "scientific_artifact_root", artifact.relative_path,
+        artifact.media_type, "available", json_text(dict(source_info)), datetime.now(timezone.utc).isoformat(),
+    ]
+    existing_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_artifact_receipts)")}
+    if "schema_version" in existing_columns:
+        columns.insert(6, "schema_version")
+        values.insert(6, artifact.schema_version)
     connection.execute(
-        """
-        INSERT OR IGNORE INTO scientific_artifact_receipts(
-            artifact_id, owner_kind, owner_id, role, schema_id,
-            artifact_schema_version, content_sha256, size_bytes, row_count,
-            column_schema_sha256, storage_root, relative_path, media_type,
-            availability, source_receipts_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, datetime('now'))
-        """,
-        (
-            artifact.artifact_id,
-            artifact.owner_kind,
-            artifact.owner_id,
-            artifact.role,
-            artifact.schema_id,
-            artifact.schema_version,
-            artifact.content_sha256,
-            artifact.size_bytes,
-            artifact.row_count,
-            artifact.column_schema_sha256,
-            "scientific_artifact_root",
-            artifact.relative_path,
-            artifact.media_type,
-            json_text(dict(source_info)),
-        ),
+        f"INSERT OR IGNORE INTO scientific_artifact_receipts({', '.join(columns)}) VALUES ({', '.join('?' for _ in values)})",
+        values,
     )
     row = connection.execute(
         "SELECT artifact_id, content_sha256, size_bytes, row_count, relative_path "
