@@ -76,8 +76,9 @@ CREATE TABLE IF NOT EXISTS scientific_artifact_receipts (
     owner_id TEXT NOT NULL,
     role TEXT NOT NULL,
     schema_id TEXT NOT NULL,
-    schema_version INTEGER NOT NULL,
-    relative_path TEXT NOT NULL UNIQUE,
+    artifact_schema_version INTEGER NOT NULL,
+    storage_root TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
     content_sha256 TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     row_count INTEGER NOT NULL,
@@ -201,6 +202,7 @@ def _receipt_values(artifact: Any, source: dict[str, Any]) -> tuple[Any, ...]:
         artifact.role,
         artifact.schema_id,
         artifact.schema_version,
+        "scientific_artifact_root",
         artifact.relative_path,
         artifact.content_sha256,
         artifact.size_bytes,
@@ -225,6 +227,19 @@ class TelemetryStore:
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         with _connect(self.path) as connection:
             connection.executescript(_SCHEMA)
+            receipt_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_artifact_receipts)")}
+            if "artifact_schema_version" not in receipt_columns:
+                connection.execute(
+                    "ALTER TABLE scientific_artifact_receipts ADD COLUMN artifact_schema_version INTEGER NOT NULL DEFAULT 1"
+                )
+                if "schema_version" in receipt_columns:
+                    connection.execute(
+                        "UPDATE scientific_artifact_receipts SET artifact_schema_version = schema_version"
+                    )
+            if "storage_root" not in receipt_columns:
+                connection.execute(
+                    "ALTER TABLE scientific_artifact_receipts ADD COLUMN storage_root TEXT NOT NULL DEFAULT 'scientific_artifact_root'"
+                )
             for table in ("raw_samples", "minute_aggregates"):
                 existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
                 additions = {
@@ -301,10 +316,10 @@ class TelemetryStore:
     def _insert_receipt(self, connection: sqlite3.Connection, artifact: Any, source: dict[str, Any]) -> None:
         connection.execute(
             """INSERT OR IGNORE INTO scientific_artifact_receipts(
-                artifact_id, owner_kind, owner_id, role, schema_id, schema_version,
-                relative_path, content_sha256, size_bytes, row_count,
+                artifact_id, owner_kind, owner_id, role, schema_id, artifact_schema_version,
+                storage_root, relative_path, content_sha256, size_bytes, row_count,
                 column_schema_sha256, media_type, availability, source_receipts_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             _receipt_values(artifact, source),
         )
 
