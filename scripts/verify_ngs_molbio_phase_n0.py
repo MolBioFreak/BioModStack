@@ -28,7 +28,7 @@ SCRIPT = Path(__file__).resolve()
 EXPECTED_COUNTS = {
     "capabilities": 21,
     "plannable": 0,
-    "schemas": 70,
+    "schemas": 77,
     "adapters": 27,
     "events": 12,
     "datasets": 16,

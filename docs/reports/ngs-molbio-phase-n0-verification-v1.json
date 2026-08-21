@@ -1,14 +1,14 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "8e7f78147c69a8ce54da49c7c39a08f67a461d3333df226c83e44f34d2367117",
+  "content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
   "environment": {
-    "git": "not invoked during deterministic reseal",
+    "git": "git version 2.34.1",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
     "python": "3.12.13",
-    "uv": "project environment used for deterministic reseal only"
+    "uv": "uv 0.11.26 (x86_64-unknown-linux-gnu)"
   },
-  "executed_at": "2026-08-13T21:03:36.667136Z",
+  "executed_at": "2026-08-22T02:41:14.447281Z",
   "payload_files": [
     {
       "path": "docs/reports/ngs-molbio-phase-n0-contract-freeze.md",
@@ -452,11 +452,11 @@
     },
     {
       "path": "scripts/verify_ngs_molbio_phase_n0.py",
-      "sha256": "c36d78c139975796213b39593e629edc365a66b2693f3f22341f4b2f5b085d91",
+      "sha256": "92a3f92a405accb14573002cc3ffc8682de8d6f1ae2497b8b3c87e4d1974f703",
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "7a9f25658be7d870c2df96479a147aabd965da38e9b30524f907b4a329bce218",
+  "payload_fingerprint_sha256": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
   "result": {
     "adapters": 27,
     "capabilities": 21,
@@ -464,7 +464,10 @@
     "events": 12,
     "n0_status": "static_contract_freeze_complete",
     "negative_cases": [
-      "not_run_after_owner_denominator_harmonization"
+      "binding_adapter_identity",
+      "ngs_dataset_wrong_domain",
+      "protein_requires_target",
+      "unavailable_dataset_enabled"
     ],
     "open_contract_gates": [
       "n1_binding_persistence",
@@ -475,11 +478,16 @@
       "n6_runtime_release_acceptance"
     ],
     "plannable": 0,
-    "schemas": 70,
+    "schemas": 77,
     "verification": "not_run_by_operator_instruction"
   },
   "schema": "bms.ngs-molbio.phase-n0-verification-receipt.v1",
   "verification_command": [
-    "not run after harmonization by operator instruction"
+    "uv",
+    "run",
+    "--project",
+    "platform/api",
+    "python",
+    "scripts/verify_ngs_molbio_phase_n0.py"
   ]
 }
