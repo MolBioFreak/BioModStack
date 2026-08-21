@@ -11,11 +11,19 @@ Backends:
   generate pairing/non_pairing A3Ms.
 - local: use BioModStack local MSA generation and attach per-chain unpaired
   MSAs plus query-only pairing placeholders.
+
+Cache policy: every protein chain is checked against the shared MSA cache
+(sequence SHA-256 key) before backend selection. A full cache hit skips MSA
+generation entirely and makes the requested backend irrelevant (reported as
+backend "cache"). API-fetched MSAs are persisted into the shared cache so
+later identical runs short-circuit; existing cache entries are never
+overwritten.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -194,7 +202,10 @@ def _iter_a3m_records(path: Path) -> List[Tuple[str, str]]:
     records: List[Tuple[str, str]] = []
     header: str | None = None
     seq_lines: List[str] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    open_func = gzip.open if str(path).endswith(".gz") else open
+    with open_func(path, "rt", encoding="utf-8") as handle:
+        raw_lines = handle.read().splitlines()
+    for raw_line in raw_lines:
         line = raw_line.strip()
         if not line:
             continue
@@ -208,6 +219,115 @@ def _iter_a3m_records(path: Path) -> List[Tuple[str, str]]:
     if header is not None:
         records.append((header, "".join(seq_lines)))
     return records
+
+
+def _cached_a3m_path(cache_root: str | Path | None, sequence: str) -> Path | None:
+    if not cache_root or not sequence:
+        return None
+    full_hash = hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+    candidate = Path(cache_root) / full_hash[:2] / f"{full_hash}.a3m.gz"
+    if candidate.is_file():
+        return candidate
+    return None
+
+
+def hydrate_chains_from_shared_cache(
+    payload: List[Dict[str, Any]],
+    out_dir: Path,
+    cache_dir: str,
+    binder_chain_ids: Sequence[str] | None = None,
+    binder_max_unpaired_rows: int | None = None,
+    binder_min_residue_coverage_fraction: float = 0.0,
+) -> int:
+    """Attach cached A3Ms to protein chains whose exact sequence is already in
+    the shared MSA cache. Runs before backend selection so a full cache hit
+    makes the requested backend irrelevant. Returns the number of chains
+    satisfied from the cache."""
+    if not cache_dir:
+        return 0
+    cache_root = Path(cache_dir)
+    if not cache_root.is_dir():
+        return 0
+    binder_chain_id_set = {token.strip() for token in (binder_chain_ids or []) if str(token).strip()}
+    hydrated = 0
+    seq_role_to_msa_dir: Dict[Tuple[str, str], Path] = {}
+    for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
+        _hydrate_old_precomputed_dir(chain)
+        paired_path, unpaired_path = _existing_msa_paths(chain)
+        if (paired_path and paired_path.exists()) or (unpaired_path and unpaired_path.exists()):
+            continue
+        sequence = str(chain.get("sequence", "") or "").strip()
+        if not sequence:
+            continue
+        cached = _cached_a3m_path(cache_root, sequence)
+        if cached is None:
+            continue
+        is_binder = bool(set(_chain_ids(chain)) & binder_chain_id_set)
+        role_key = "binder" if is_binder else "default"
+        profile_key = (sequence, role_key)
+        msa_dir = seq_role_to_msa_dir.get(profile_key)
+        if msa_dir is None:
+            full_hash = hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+            role_suffix = "_binder" if is_binder else ""
+            msa_dir = out_dir / "local_msa_cache" / f"{full_hash}{role_suffix}"
+            msa_dir.mkdir(parents=True, exist_ok=True)
+            non_pairing = msa_dir / "non_pairing.a3m"
+            kept_records = _write_sanitized_a3m(
+                cached,
+                non_pairing,
+                query_sequence=sequence,
+                max_rows=binder_max_unpaired_rows if is_binder else None,
+                min_residue_coverage_fraction=(
+                    binder_min_residue_coverage_fraction if is_binder else 0.0
+                ),
+            )
+            if is_binder and kept_records <= 8 and binder_min_residue_coverage_fraction > 0:
+                kept_records = _write_sanitized_a3m(
+                    cached,
+                    non_pairing,
+                    query_sequence=sequence,
+                    max_rows=binder_max_unpaired_rows,
+                    min_residue_coverage_fraction=0.0,
+                )
+                print(
+                    f"[prepare_protenix_msa] Cached binder MSA for sequence {full_hash[:16]} was too sparse "
+                    f"after coverage pruning; reused capped hits without coverage filtering ({kept_records} rows).",
+                    flush=True,
+                )
+            (msa_dir / "pairing.a3m").write_text(f">query\n{sequence}\n", encoding="utf-8")
+            seq_role_to_msa_dir[profile_key] = msa_dir
+        chain["pairedMsaPath"] = str((msa_dir / "pairing.a3m").resolve())
+        chain["unpairedMsaPath"] = str((msa_dir / "non_pairing.a3m").resolve())
+        hydrated += 1
+    return hydrated
+
+
+def cache_colabfold_results(payload: List[Dict[str, Any]], cache_dir: str) -> int:
+    """Persist API-fetched chain A3Ms into the shared cache so later runs skip
+    the remote service. Existing cache entries are never overwritten."""
+    if not cache_dir:
+        return 0
+    cache_root = Path(cache_dir)
+    cache_root.mkdir(parents=True, exist_ok=True)
+    persisted = 0
+    for _task_idx, _seq_idx, chain in iter_protein_chains(payload):
+        sequence = str(chain.get("sequence", "") or "").strip()
+        if not sequence:
+            continue
+        _hydrate_old_precomputed_dir(chain)
+        paired_path, unpaired_path = _existing_msa_paths(chain)
+        source = unpaired_path or paired_path
+        if source is None or not source.exists() or not source.is_file():
+            continue
+        full_hash = hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+        dest = cache_root / full_hash[:2] / f"{full_hash}.a3m.gz"
+        if dest.exists():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(dest, "wt", encoding="utf-8") as handle:
+            handle.write(source.read_text(encoding="utf-8"))
+        persisted += 1
+    return persisted
 
 
 def _aligned_a3m_length(sequence: str) -> int:
@@ -620,10 +740,27 @@ def main() -> None:
         print(str(output_json), flush=True)
         return
 
+    hydrated_from_cache = 0
+    if args.cache_dir:
+        hydrated_from_cache = hydrate_chains_from_shared_cache(
+            payload,
+            out_dir,
+            args.cache_dir,
+            binder_chain_ids=[token.strip() for token in str(args.binder_chain_ids or "").split(",") if token.strip()],
+            binder_max_unpaired_rows=(int(args.binder_max_unpaired_msa_rows) if int(args.binder_max_unpaired_msa_rows) > 0 else None),
+            binder_min_residue_coverage_fraction=float(args.binder_min_residue_coverage),
+        )
+        if hydrated_from_cache:
+            print(
+                f"[prepare_protenix_msa] Shared-cache hydration: {hydrated_from_cache}/{stats['protein_chains']} protein chains",
+                flush=True,
+            )
+
     if all_protein_chains_have_msa(payload):
         dump_json(output_json, payload)
+        backend_label = "cache" if hydrated_from_cache else "precomputed"
         if args.report_json:
-            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, "precomputed", stats)
+            write_msa_report(Path(args.report_json).expanduser().resolve(), payload, backend_label, stats)
         print(f"[prepare_protenix_msa] Existing MSA paths detected; reusing input via {output_json}", flush=True)
         print(str(output_json), flush=True)
         return
@@ -645,6 +782,13 @@ def main() -> None:
             work_dir=out_dir,
             host=args.colabfold_api_host,
         )
+        if args.cache_dir:
+            persisted = cache_colabfold_results(load_json(Path(prepared)), args.cache_dir)
+            if persisted:
+                print(
+                    f"[prepare_protenix_msa] Persisted {persisted} API-fetched MSAs into shared cache",
+                    flush=True,
+                )
     else:
         if not args.db_path:
             raise ValueError("Local Protenix MSA preparation requires --db-path")
