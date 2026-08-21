@@ -239,7 +239,7 @@ export function BioXpCockpit() {
         ? dashboardMotion.enabled ? 'Enabled — Z provider ready; each command verifies live controller state' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
         : 'Unavailable';
     const recentCommands = useMemo(
-        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).slice(0, historyLimit),
+        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter((record) => typeof record.status === 'string' && typeof record.action_id === 'string').slice(0, historyLimit),
         [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
     );
     useEffect(() => {

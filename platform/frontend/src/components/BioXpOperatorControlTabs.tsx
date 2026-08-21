@@ -219,8 +219,8 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const awaitingXObservationReceiptId = xLifecycle?.state === 'awaiting_operator_observation'
         ? xLifecycle.awaiting_observation_receipt_id ?? null
         : null;
-    const latestUsesProviderObservation = latestReceipt?.action_id.startsWith('oem.x.') === true
-        || latestReceipt?.action_id.startsWith('oem.xy.') === true;
+    const latestUsesProviderObservation = typeof latestReceipt?.action_id === 'string'
+        && (latestReceipt.action_id.startsWith('oem.x.') || latestReceipt.action_id.startsWith('oem.xy.'));
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
     const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true || isSafetyInterrupt;
