@@ -845,6 +845,13 @@ def _verify_ngs_molbio_domain_semantics(value: dict[str, Any]) -> None:
     if value.get("domain_kind") != "ngs_molbio":
         return
     payload = value["domain_payload"]
+    if value.get("status") in {"planned", "active"}:
+        for field in ("planned_capability_ids", "acceptance_criteria", "evidence_plan"):
+            items = payload.get(field)
+            if not isinstance(items, list) or not items:
+                raise NgsMolBioCapabilityError(
+                    f"{value['status']} NGS/MolBio Domains require non-empty {field}"
+                )
     _assert_unique_values(
         (row["group_id"] for row in payload["grouping_intent"]),
         label="group ID",
