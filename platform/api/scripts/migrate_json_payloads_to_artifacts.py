@@ -535,38 +535,44 @@ def telemetry_rows(
     source.row_factory = sqlite3.Row
     root = source_artifact_root.resolve() if source_artifact_root else None
     result: list[dict[str, Any]] = []
+    artifact_cache: dict[int, dict[int, str]] = {}
+    receipt_columns = {row[1] for row in source.execute("PRAGMA table_info(scientific_artifact_receipts)")}
+
+    def raw_artifact_payloads(bucket: int) -> dict[int, str]:
+        if root is None or bucket in artifact_cache:
+            return artifact_cache.get(bucket, {})
+        receipt = source.execute(
+            "SELECT * FROM scientific_artifact_receipts WHERE owner_kind = 'telemetry_bucket' AND owner_id = ? AND role = 'raw_history'",
+            (f"raw:{bucket}",),
+        ).fetchone()
+        if receipt is None:
+            return {}
+        version_key = "artifact_schema_version" if "artifact_schema_version" in receipt_columns else "schema_version"
+        artifact = InstalledArtifact(
+            artifact_id=str(receipt["artifact_id"]), owner_kind=str(receipt["owner_kind"]), owner_id=str(receipt["owner_id"]), role=str(receipt["role"]), schema_id=str(receipt["schema_id"]), schema_version=int(receipt[version_key]), relative_path=str(receipt["relative_path"]), storage_path=(root / str(receipt["relative_path"])).resolve(), content_sha256=str(receipt["content_sha256"]), size_bytes=int(receipt["size_bytes"]), row_count=int(receipt["row_count"]), column_schema_sha256=str(receipt["column_schema_sha256"]), media_type=str(receipt["media_type"])
+        )
+        artifact_cache[bucket] = {int(item["timestamp_ms"]): str(item["payload_json"]) for item in read_rows(artifact, root=root)}
+        return artifact_cache[bucket]
+
     key = "timestamp_ms" if table == "raw_samples" else "bucket_ms"
     for index, row in enumerate(source.execute(f'SELECT * FROM "{table}" ORDER BY {key}')):
         raw_payload = str(row["payload_json"])
         if table == "raw_samples" and raw_payload == "{}" and row["staging_relative_path"] and root:
             staging = (root / str(row["staging_relative_path"])).resolve()
             staging.relative_to(root)
-            lines = staging.read_text(encoding="utf-8").splitlines()
-            raw_payload = lines[int(row["staging_row_locator"])]
+            try:
+                raw_payload = staging.read_text(encoding="utf-8").splitlines()[int(row["staging_row_locator"])]
+            except FileNotFoundError:
+                raw_payload = raw_artifact_payloads((int(row["timestamp_ms"]) // 60_000) * 60_000).get(int(row["timestamp_ms"]), raw_payload)
+                if raw_payload == "{}":
+                    raise FileNotFoundError(f"missing telemetry staging and raw artifact for {row['timestamp_ms']}")
         payload_value = json_value(raw_payload)
-        if isinstance(payload_value, dict) and payload_value.get("schema") in {
-            "bms.scientific-artifact-reference.v1",
-            "bms.scientific-artifact-row-reference.v1",
-        }:
+        if isinstance(payload_value, dict) and payload_value.get("schema") in {"bms.scientific-artifact-reference.v1", "bms.scientific-artifact-row-reference.v1"}:
             payload_value = resolve_json_value(payload_value, root=root)
             raw_payload = json_text(payload_value)
         payload = payload_value if isinstance(payload_value, dict) else {}
         gpus = payload.get("gpus") if isinstance(payload.get("gpus"), list) else []
-        result.append(
-            {
-                "row_index": index,
-                "timestamp_ms": int(payload.get("timestamp_ms", row[key] if table == "raw_samples" else 0)),
-                "bucket_ms": int(row["bucket_ms"] if table == "minute_aggregates" else 0),
-                "sample_count": int(row["sample_count"] if table == "minute_aggregates" else 1),
-                "timestamp": str(payload.get("timestamp", "")),
-                "payload_json": raw_payload,
-                "cpu_utilization": float((payload.get("cpu") or {}).get("utilization", 0.0) or 0.0),
-                "ram_utilization": float((payload.get("ram") or {}).get("utilization", 0.0) or 0.0),
-                "gpu_utilization": [float((gpu or {}).get("utilization", 0.0) or 0.0) for gpu in gpus],
-                "gpu_memory_used_mb": [float((gpu or {}).get("memory_used_mb", 0.0) or 0.0) for gpu in gpus],
-                "gpu_names": [str((gpu or {}).get("name", "")) for gpu in gpus],
-            }
-        )
+        result.append({"row_index": index, "timestamp_ms": int(payload.get("timestamp_ms", row[key] if table == "raw_samples" else 0)), "bucket_ms": int(row["bucket_ms"] if table == "minute_aggregates" else 0), "sample_count": int(row["sample_count"] if table == "minute_aggregates" else 1), "timestamp": str(payload.get("timestamp", "")), "payload_json": raw_payload, "cpu_utilization": float((payload.get("cpu") or {}).get("utilization", 0.0) or 0.0), "ram_utilization": float((payload.get("ram") or {}).get("utilization", 0.0) or 0.0), "gpu_utilization": [float((gpu or {}).get("utilization", 0.0) or 0.0) for gpu in gpus], "gpu_memory_used_mb": [float((gpu or {}).get("memory_used_mb", 0.0) or 0.0) for gpu in gpus], "gpu_names": [str((gpu or {}).get("name", "")) for gpu in gpus]})
     return result
 
 
