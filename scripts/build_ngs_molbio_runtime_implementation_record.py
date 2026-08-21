@@ -20,7 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
 DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
 DENOMINATOR = ROOT / DENOMINATOR_RELATIVE
+N0_RECEIPT = ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 PHASES = (
     ("N1", "Additive global/domain persistence and immutable binding source are implemented."),
@@ -142,6 +144,26 @@ def _load_source_denominator() -> dict[str, object]:
     return value
 
 
+def _load_n0_receipt_authority() -> tuple[str, str]:
+    try:
+        value = json.loads(N0_RECEIPT.read_text(encoding="utf-8"), object_pairs_hook=_pairs)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("N0 verification receipt authority is unreadable") from exc
+    if type(value) is not dict:
+        raise RuntimeError("N0 verification receipt authority must be an object")
+    content_sha256 = value.get("content_sha256")
+    package_fingerprint = value.get("payload_fingerprint_sha256")
+    if (
+        type(content_sha256) is not str
+        or _SHA256_RE.fullmatch(content_sha256) is None
+        or content_sha256 != _content_sha256(value)
+        or type(package_fingerprint) is not str
+        or _SHA256_RE.fullmatch(package_fingerprint) is None
+    ):
+        raise RuntimeError("N0 verification receipt authority is invalid or digest-divergent")
+    return content_sha256, package_fingerprint
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -169,6 +191,7 @@ def main() -> int:
         arguments.successor_commit_object,
     )
     denominator = _load_source_denominator()
+    n0_receipt_content_sha256, n0_package_fingerprint = _load_n0_receipt_authority()
     source_paths = denominator["paths"]
     assert isinstance(source_paths, list)
     authorities: list[dict[str, object]] = []
@@ -189,8 +212,8 @@ def main() -> int:
         "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
         "successor_source_commit": arguments.successor_source_commit,
         "successor_source_tree": arguments.successor_source_tree,
-        "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
-        "n0_receipt_content_sha256": "6e7134a32d2b13e6e24548056c92ddf48576997494bfc921013d19fab003782d",
+        "n0_package_fingerprint": n0_package_fingerprint,
+        "n0_receipt_content_sha256": n0_receipt_content_sha256,
         "implementation_state": "implemented_unverified",
         "release_acceptance_state": "open",
         "verification_state": "source_audit_only",
