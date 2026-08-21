@@ -1313,12 +1313,20 @@ def _hierarchy_reference_ids(
             if isinstance(targets, list):
                 for target_index, target_payload in enumerate(targets):
                     if isinstance(target_payload, dict):
-                        collect(
-                            "entity_receipt_ids",
-                            role=f"target_entity_receipt:{target_index}",
-                            target=receipt_references,
-                            source=target_payload,
-                        )
+                        if domain_payload.get("schema") == "bms.protein-in-silico-experiment.v3":
+                            collect(
+                                "source_receipt_ids",
+                                role=f"target_source_receipt:{target_index}",
+                                target=receipt_references,
+                                source=target_payload,
+                            )
+                        else:
+                            collect(
+                                "entity_receipt_ids",
+                                role=f"target_entity_receipt:{target_index}",
+                                target=receipt_references,
+                                source=target_payload,
+                            )
     return receipt_references, dataset_references, dataset_revision_references
 
 

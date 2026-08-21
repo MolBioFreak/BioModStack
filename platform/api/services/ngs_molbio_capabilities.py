@@ -886,6 +886,8 @@ def _verify_protein_domain_semantics(value: dict[str, Any]) -> None:
         raise NgsMolBioCapabilityError(
             "Protein constraints are unavailable because the closed payload registry is empty"
         )
+    targets = value["domain_payload"].get("targets", [])
+    _assert_unique_values((target["target_id"] for target in targets), label="protein target ID")
 
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:

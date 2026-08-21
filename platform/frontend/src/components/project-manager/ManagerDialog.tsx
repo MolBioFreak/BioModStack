@@ -19,6 +19,7 @@ import {
     updateGlobalExperiment,
     updateProject,
     type JsonObject,
+    type JsonValue,
     type ProjectManagerReadModel,
     type RecordKind,
 } from '../../lib/projectManager';
@@ -51,6 +52,52 @@ function completeNgsDomainPayload(objective: string, experimentMode: string): Js
     };
 }
 
+function completeProteinDomainPayload(
+    objective: string,
+    targetId: string,
+    targetLabel: string,
+    targetRole: string,
+    sourceReceiptIdsText: string,
+    datasetMemberRefsText: string,
+    entityMapReferenceText: string,
+    expectedContentSha256: string,
+): JsonObject {
+    const sourceReceiptIds = sourceReceiptIdsText.split(',').map((value) => value.trim()).filter(Boolean);
+    let datasetMemberRefs: JsonValue[] = [];
+    let entityMapReference: JsonValue;
+    try {
+        const parsed = JSON.parse(datasetMemberRefsText || '[]');
+        if (!Array.isArray(parsed)) throw new Error('Dataset member references must be a JSON array.');
+        datasetMemberRefs = parsed;
+        entityMapReference = JSON.parse(entityMapReferenceText);
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : 'Protein authority JSON is invalid.');
+    }
+    if (!targetId.trim() || !targetLabel.trim() || !sourceReceiptIds.length || !expectedContentSha256.trim()) {
+        throw new Error('Protein Domains require target identity, at least one source receipt, and an expected content SHA-256.');
+    }
+    return {
+        schema: 'bms.protein-in-silico-experiment.v3',
+        experiment_mode: 'design',
+        scientific_objective: objective,
+        targets: [{
+            target_id: targetId.trim(),
+            label: targetLabel.trim(),
+            role: targetRole,
+            source_receipt_ids: sourceReceiptIds,
+            dataset_member_refs: datasetMemberRefs,
+            entity_map_reference: entityMapReference,
+            expected_content_sha256: expectedContentSha256.trim().toLowerCase(),
+        }],
+        design_constraints: [],
+        planned_capability_ids: [],
+        comparison_groups: [],
+        validation_capability_ids: [],
+        acceptance_criteria: [],
+        evidence_plan: [],
+    };
+}
+
 interface ManagerDialogProps {
     mode: ManagerDialogMode | null;
     projectId?: string;
@@ -69,6 +116,13 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [question, setQuestion] = useState('');
     const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
     const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
+    const [proteinTargetId, setProteinTargetId] = useState('');
+    const [proteinTargetLabel, setProteinTargetLabel] = useState('');
+    const [proteinTargetRole, setProteinTargetRole] = useState('target');
+    const [proteinSourceReceiptIds, setProteinSourceReceiptIds] = useState('');
+    const [proteinDatasetMemberRefs, setProteinDatasetMemberRefs] = useState('[]');
+    const [proteinEntityMapReference, setProteinEntityMapReference] = useState('{}');
+    const [proteinExpectedContentSha256, setProteinExpectedContentSha256] = useState('');
     const [recordKind, setRecordKind] = useState<RecordKind>('note');
     const [body, setBody] = useState('');
 
@@ -92,6 +146,13 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setQuestion('');
         setDomainKind('protein_in_silico');
         setNgsExperimentMode('analysis');
+        setProteinTargetId('');
+        setProteinTargetLabel('');
+        setProteinTargetRole('target');
+        setProteinSourceReceiptIds('');
+        setProteinDatasetMemberRefs('[]');
+        setProteinEntityMapReference('{}');
+        setProteinExpectedContentSha256('');
         setRecordKind('note');
         setBody('');
     }, [mode]);
@@ -117,7 +178,29 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                 const globalId = selection?.node_type === 'global_experiment' ? selectionId : selectedGlobalId;
                 if (!globalId) throw new Error('Select a Global Experiment before creating a Domain Experiment.');
                 if (domainKind === 'protein_in_silico') {
-                    throw new Error('Protein Domain creation requires exact producer-native receipt selection. This selector remains closed until accepted Protein capabilities are installed.');
+                    const domainPayload = completeProteinDomainPayload(
+                        objective,
+                        proteinTargetId,
+                        proteinTargetLabel,
+                        proteinTargetRole,
+                        proteinSourceReceiptIds,
+                        proteinDatasetMemberRefs,
+                        proteinEntityMapReference,
+                        proteinExpectedContentSha256,
+                    );
+                    return createDomainExperiment(projectId, globalId, {
+                        schema: 'bms.domain-experiment.v4',
+                        domain_kind: 'protein_in_silico',
+                        domain_contract_version: '3',
+                        name,
+                        objective,
+                        status: 'planned',
+                        tags: [],
+                        source_receipt_ids: proteinSourceReceiptIds.split(',').map((value) => value.trim()).filter(Boolean),
+                        dataset_revision_ids: [],
+                        change_summary: 'Created in Project Manager',
+                        domain_payload: domainPayload,
+                    });
                 }
                 const domainPayload = completeNgsDomainPayload(objective, ngsExperimentMode);
                 return createDomainExperiment(projectId, globalId, {
@@ -198,7 +281,12 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
 
     if (!mode) return null;
     const confirmation = mode === 'archive' || mode === 'restore';
-    const domainCreationReady = domainKind === 'ngs_molbio';
+    const domainCreationReady = domainKind === 'ngs_molbio'
+        || (proteinTargetId.trim().length > 0
+            && proteinTargetLabel.trim().length > 0
+            && proteinSourceReceiptIds.trim().length > 0
+            && proteinExpectedContentSha256.trim().length === 64
+            && proteinEntityMapReference.trim().length > 0);
     const canSubmit = confirmation
         ? Boolean(detailQuery.data)
         : mode === 'record'
@@ -248,8 +336,31 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                 </select>
                             </label>}
                             {mode === 'create_domain' && domainKind === 'protein_in_silico' && (
-                                <div className="rounded-xl border border-warning/50 bg-warning/10 p-3 text-xs text-content-secondary">
-                                    Protein Domain creation is closed until the server advertises accepted Protein capabilities and exact producer-native receipt selectors. Project Manager will not invent target or validation contracts.
+                                <div className="space-y-3 rounded-xl border border-border-primary bg-surface p-3">
+                                    <p className="text-xs text-content-secondary">Protein v3 uses producer-native target authority. Enter IDs from existing verified receipts. The server resolves each receipt and checks every digest.</p>
+                                    <label className="block text-xs font-semibold text-content-secondary">Target ID
+                                        <input value={proteinTargetId} onChange={(event) => setProteinTargetId(event.target.value)} placeholder="target identifier" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Target label
+                                        <input value={proteinTargetLabel} onChange={(event) => setProteinTargetLabel(event.target.value)} placeholder="target label" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Target role
+                                        <select value={proteinTargetRole} onChange={(event) => setProteinTargetRole(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-content">
+                                            {['target', 'binder', 'partner', 'template', 'reference', 'control', 'motif', 'ligand_context', 'other'].map((role) => <option key={role} value={role}>{role}</option>)}
+                                        </select>
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Source receipt IDs
+                                        <input value={proteinSourceReceiptIds} onChange={(event) => setProteinSourceReceiptIds(event.target.value)} placeholder="comma-separated receipt IDs" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Dataset member references JSON
+                                        <textarea value={proteinDatasetMemberRefs} onChange={(event) => setProteinDatasetMemberRefs(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Entity-map reference JSON
+                                        <textarea value={proteinEntityMapReference} onChange={(event) => setProteinEntityMapReference(event.target.value)} rows={4} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Expected content SHA-256
+                                        <input value={proteinExpectedContentSha256} onChange={(event) => setProteinExpectedContentSha256(event.target.value)} placeholder="64 lowercase hexadecimal characters" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 font-mono text-xs text-content" />
+                                    </label>
                                 </div>
                             )}
                             {mode === 'create_domain' && domainKind === 'ngs_molbio' && (
