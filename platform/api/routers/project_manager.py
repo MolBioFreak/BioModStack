@@ -1658,7 +1658,7 @@ async def clone_domain_run_intent(
         _project, _experiment, domain = await _domain_hierarchy(
             session, project_id, experiment_id, domain_id
         )
-        key = _idempotency_key(request)
+        key = payload.idempotency_key
         normalized_request = {
             "operation": "run-clone",
             "project_id": project_id,
