@@ -1138,6 +1138,7 @@ const getAuthoritativeDesignLens = (design: Design | null | undefined): Analysis
     if (profileId === 'ppiflow_maturation_v1') return 'ppiflow';
     if (profileId === 'de_novo_generation_v1') return 'boltzgen';
     if (profileId === 'sequence_design_v1') return 'fampnn';
+    if (profileId === 'protein_local_redesign_validation_v1') return 'validation';
     if (profileId === 'structure_prediction_v1') return 'validation';
     return null;
 };
