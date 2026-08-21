@@ -767,9 +767,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('section')]
-            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section).toBeTruthy();
+        const manualControls = section.closest('section') as HTMLElement;
+        expect(manualControls.querySelector('h2')?.textContent).toBe('Exact OEM Manual Controls');
+        expect(manualControls.textContent).toContain('X Axis');
+        expect(manualControls.textContent).toContain('Z Axis');
+        expect(manualControls.textContent).toContain('Gripper');
         const inputs = [...section.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
         expect(inputs[0]?.min).toBe('-102936');
         expect(inputs[0]?.max).toBe('102936');
@@ -803,7 +807,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
                 observed_board_epoch_by_board: { '4': 2 },
             },
         });
-        expect([...container.querySelectorAll('article')].some((node) => node.textContent?.includes('Y Axis'))).toBe(false);
+        const yCards = [...container.querySelectorAll('article')].filter((node) => node.querySelector('h3')?.textContent === 'Y Axis');
+        expect(yCards).toEqual([section]);
     });
 
     it('fails normal Y closed on any authority-version mismatch but keeps STOP independent', async () => {
@@ -812,8 +817,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('section')]
-            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
         expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
@@ -827,8 +831,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('section')]
-            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section.textContent).toContain('Y enqueue failed · HTTP 409 · board_epoch_conflict');
         expect(section.textContent).toContain('Y STOP failed · HTTP 504 · bioxp_robot_timeout');
         const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
@@ -848,8 +851,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('section')]
-            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
         expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
@@ -886,8 +888,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
-        const section = [...container.querySelectorAll('section')]
-            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         expect(section.textContent).toContain('Command cmd-y-detail: completed');
         expect(section.textContent).toContain('class=event_128');
         expect(section.textContent).toContain('terminal position=1100');

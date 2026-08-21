@@ -650,54 +650,6 @@ export function BioXpCockpit() {
                 error={dashboardQuery.error}
             />
 
-            <section data-testid="serial206-y-authority-panel" className="rounded-xl border border-emerald-700/60 bg-emerald-950/20 p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                        <h2 className="text-lg font-semibold">Serial-206 Y authority</h2>
-                        <p className="mt-1 text-sm text-slate-300">Robot-owned Y controls. Controller completion and physical observation stay separate.</p>
-                    </div>
-                    <div className="text-right text-xs text-slate-400">
-                        <div>Board epoch: <span className="font-mono text-slate-100">{yAxisV2?.active_board_epoch ?? '—'}</span></div>
-                        <div>Lifecycle: <span className="font-mono text-slate-100">{yAxisV2?.lifecycle_state ?? '—'}</span></div>
-                    </div>
-                </div>
-                <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Reference</dt><dd className="font-mono">{yAxisV2?.reference_state ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd></div>
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Physical proof</dt><dd className="font-mono text-amber-200">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
-                </dl>
-                <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <label className="text-sm text-slate-300">Step delta<input type="number" min={BIOXP_Y_RELATIVE_MIN_STEPS} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
-                    <label className="text-sm text-slate-300">Absolute target<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} className={actionClass}>Manual-panel Home</button>
-                    {yActionById('oem.y.diagnostic_home') && <button type="button" disabled={yMutationDisabled('oem.y.diagnostic_home')} title={yActionDisabledReason('oem.y.diagnostic_home', 'Y diagnostic home unavailable.')} onClick={() => invokeYHome('oem.y.diagnostic_home')} className="rounded bg-amber-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Diagnostic Home</button>}
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} className={actionClass}>Move +</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} className="rounded bg-indigo-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Absolute</button>
-                    <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">STOP Y</button>
-                </div>
-                <YOperatorError label="Y enqueue" error={invokeYAction.error} />
-                <YOperatorError label="Y STOP" error={interruptYAction.error} />
-                {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
-                {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Command <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
-                {yReceiptQuery.data && (
-                    <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Observed, terminal position/speed, discrepancy</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.observed_values, null, 2)}</pre></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
-                        <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Controller completion evidence</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.controller_evidence, null, 2)}</pre></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
-                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
-                    </div>
-                )}
-                {interruptYAction.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYAction.data, null, 2)}</pre></details>}
-                {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
-                {!v2AuthorityCoherent && <p className="mt-2 text-xs text-amber-200">Fresh, matching v2 catalog and dashboard authority is unavailable. Normal Y controls remain disabled; addressed STOP remains independent.</p>}
-            </section>
-
             <BioXpOperatorReports generation={generation} connected={linkConnected} />
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
@@ -753,6 +705,55 @@ export function BioXpCockpit() {
                     >Show OEM position table</button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                    <article data-testid="serial206-y-authority-panel" className="rounded-lg border border-emerald-700/60 bg-emerald-950/20 p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <h3 className="font-semibold">Y Axis</h3>
+                                <p className="mt-1 text-xs text-slate-300">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
+                            </div>
+                            <div className="text-right text-xs text-slate-400">
+                                <div>Board epoch: <span className="font-mono text-slate-100">{yAxisV2?.active_board_epoch ?? '—'}</span></div>
+                                <div>Lifecycle: <span className="font-mono text-slate-100">{yAxisV2?.lifecycle_state ?? '—'}</span></div>
+                            </div>
+                        </div>
+                        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Reference</dt><dd className="font-mono">{yAxisV2?.reference_state ?? '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Physical proof</dt><dd className="font-mono text-amber-200">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
+                        </dl>
+                        <div className="mt-3 grid gap-2">
+                            <label className="block text-xs text-slate-300">Step delta<input type="number" min={BIOXP_Y_RELATIVE_MIN_STEPS} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                            <label className="block text-xs text-slate-300">Absolute target<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
+                            <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} className={actionClass}>Manual-panel Home</button>
+                            {yActionById('oem.y.diagnostic_home') && <button type="button" disabled={yMutationDisabled('oem.y.diagnostic_home')} title={yActionDisabledReason('oem.y.diagnostic_home', 'Y diagnostic home unavailable.')} onClick={() => invokeYHome('oem.y.diagnostic_home')} className="rounded bg-amber-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Diagnostic Home</button>}
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} className={actionClass}>Move +</button>
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} className="rounded bg-indigo-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Absolute</button>
+                            <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">STOP Y</button>
+                        </div>
+                        <YOperatorError label="Y enqueue" error={invokeYAction.error} />
+                        <YOperatorError label="Y STOP" error={interruptYAction.error} />
+                        {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
+                        {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Command <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
+                        {yReceiptQuery.data && (
+                            <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Observed, terminal position/speed, discrepancy</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.observed_values, null, 2)}</pre></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
+                                <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Controller completion evidence</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.controller_evidence, null, 2)}</pre></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
+                                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
+                            </div>
+                        )}
+                        {interruptYAction.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYAction.data, null, 2)}</pre></details>}
+                        {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
+                        {!v2AuthorityCoherent && <p className="mt-2 text-xs text-amber-200">Fresh, matching v2 catalog and dashboard authority is unavailable. Normal Y controls remain disabled; addressed STOP remains independent.</p>}
+                    </article>
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
                             <div className="flex items-center justify-between gap-2">
