@@ -1,7 +1,7 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "b78d7e6efa65ea08a01549db2ebc7344dc6e447d8d4320a138ed39e7856055dc",
+  "content_sha256": "8e7f78147c69a8ce54da49c7c39a08f67a461d3333df226c83e44f34d2367117",
   "environment": {
     "git": "not invoked during deterministic reseal",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
@@ -62,8 +62,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "64bbbe0a3e3f9a07b15027f8f937d9233031c48b92709159a0a24d2d7adaae2b",
-      "size_bytes": 40628
+      "sha256": "bb5ff3a9780aeb6b7ba2c8cf1ad7d843dea2ee998423f62971a011574f4c8d59",
+      "size_bytes": 41371
     },
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -456,7 +456,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "1a76880104e90071bcd0fb5fd61efbfcd1ce37728a36d0667c6000ae48085049",
+  "payload_fingerprint_sha256": "7a9f25658be7d870c2df96479a147aabd965da38e9b30524f907b4a329bce218",
   "result": {
     "adapters": 27,
     "capabilities": 21,
