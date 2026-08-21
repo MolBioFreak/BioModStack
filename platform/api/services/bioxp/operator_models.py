@@ -3052,6 +3052,7 @@ class OperatorDashboardXLiveStatusSuccess(BaseModel):
     failure: Literal[
         "x_terminal_speed_not_typed_integer_zero",
         "x_terminal_readback_not_verified",
+        "x_oem_profile_or_switch_mask_mismatch",
     ] | None
 
     _normalize_expected_profile_keys = field_validator("expected_profile", mode="before")(
@@ -3071,7 +3072,7 @@ class OperatorDashboardXLiveStatusSuccess(BaseModel):
     def bind_live_status_authority(self):
         if set(self.expected_profile) != {4, 5, 6, 205}:
             raise ValueError("serial-206 X live expected profile keys are incomplete")
-        if self.expected_switch_masks != {12: 1, 13: 0}:
+        if self.expected_switch_masks not in ({12: 1, 13: 0}, {12: 0, 13: 0}):
             raise ValueError("serial-206 X live expected switch masks are invalid")
         if set(self.switch_mask_tuple) != {12, 13}:
             raise ValueError("serial-206 X switch-mask tuple is incomplete")
@@ -3111,7 +3112,7 @@ class OperatorDashboardXSwitchMasks(BaseModel):
 
     @model_validator(mode="after")
     def bind_expected_switch_masks(self):
-        if self.expected != {12: 1, 13: 0}:
+        if self.expected not in ({12: 1, 13: 0}, {12: 0, 13: 0}):
             raise ValueError("serial-206 X switch-mask authority is invalid")
         return self
 
