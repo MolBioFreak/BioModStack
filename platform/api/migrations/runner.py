@@ -65,6 +65,8 @@ from migrations.add_ont_move_source_attempt_lineage import (
     _OLD_COLUMNS as MIGRATION_33_SOURCE_COLUMNS,
     migrate as migrate_ont_move_source_attempt_lineage,
 )
+from migrations.add_scientific_artifact_receipts import migrate as migrate_scientific_artifact_receipts
+from migrations.add_frustrampnn_landscape_index_slimming import migrate as migrate_frustrampnn_landscape_index_slimming
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -118,6 +120,8 @@ MIGRATIONS: List[Migration] = [
     Migration(32, "add_ont_signal_workbench", migrate_ont_signal_workbench),
     Migration(33, "add_ont_external_move_bam_receipts", migrate_ont_external_move_bam_receipts),
     Migration(34, "add_ont_move_source_attempt_lineage", migrate_ont_move_source_attempt_lineage),
+    Migration(35, "add_scientific_artifact_receipts", migrate_scientific_artifact_receipts),
+    Migration(36, "add_frustrampnn_landscape_index_slimming", migrate_frustrampnn_landscape_index_slimming),
 ]
 
 

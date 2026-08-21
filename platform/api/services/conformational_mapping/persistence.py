@@ -33,6 +33,7 @@ from services.frustrampnn.settings import (
     requested_settings_sha256,
     validate_persisted_requested_settings,
 )
+from services.scientific_artifacts import publish_json_payload, resolve_json_value
 
 from .contracts import (
     ContractValidationError,
@@ -405,10 +406,19 @@ async def _replace_record(
         if existing.content_sha256 != digest:
             raise ConformationalPersistenceError("record identity conflicts with previously ingested bytes")
         return
+    artifact_reference = await publish_json_payload(
+        session,
+        owner_kind="conformational_mapping_record",
+        owner_id=f"{request_id}:{record_type}:{record_key}",
+        role="payload",
+        schema_id=f"bms.cm.{record_type}.v1",
+        payload=payload,
+        source_sha256=digest,
+    )
     session.add(
         ConformationalMappingRecord(
             id=str(uuid.uuid4()), request_id=request_id, record_type=record_type,
-            record_key=record_key, content_sha256=digest, payload_json=dict(payload),
+            record_key=record_key, content_sha256=digest, payload_json=artifact_reference,
         )
     )
 
@@ -1256,7 +1266,7 @@ async def paged_landscape(
         )
     )
     if request_record is not None and canonical_reference is not None:
-        reference_payload = canonical_reference.payload_json
+        reference_payload = resolve_json_value(canonical_reference.payload_json)
         reference_rows = reference_payload.get("results") if isinstance(reference_payload, Mapping) else None
         if not isinstance(reference_rows, list) or not reference_rows:
             raise ConformationalPersistenceError(
@@ -1321,7 +1331,7 @@ async def paged_landscape(
                 scoreable=row.scoreable,
                 status=row.status,
                 reason=row.reason,
-                provenance_json=row.provenance_json,
+                provenance_json=resolve_json_value(row.provenance_json),
             )
             for row, canonical_candidate_id in result_rows
         ]
@@ -1345,7 +1355,10 @@ async def paged_landscape(
         ConformationalMappingLandscapeRow.sequence_index,
         ConformationalMappingLandscapeRow.mutation_aa,
     ).offset(offset).limit(limit)
-    return list((await session.execute(statement)).scalars().all())
+    rows = list((await session.execute(statement)).scalars().all())
+    for row in rows:
+        row.provenance_json = resolve_json_value(row.provenance_json)
+    return rows
 
 
 async def rollback_request_records(session: AsyncSession, request_id: str) -> None:

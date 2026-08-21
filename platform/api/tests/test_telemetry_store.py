@@ -41,7 +41,14 @@ def test_store_is_separate_append_only_and_readers_are_query_only(tmp_path: Path
 
     with open_read_only(path) as connection:
         assert connection.execute("PRAGMA query_only").fetchone()[0] == 1
-        assert json.loads(connection.execute("SELECT payload_json FROM raw_samples").fetchone()[0])["cpu"]["utilization"] == 10.0
+        assert json.loads(connection.execute("SELECT payload_json FROM raw_samples").fetchone()[0]) == {}
+        row = connection.execute("SELECT cpu_utilization, ram_utilization, staging_relative_path, staging_row_locator FROM raw_samples").fetchone()
+        assert row[0] == 10.0
+        assert row[1] == 25.0
+        assert row[2].startswith("staging/")
+        assert row[3] == 0
+        staged = path.parent / "scientific_artifacts" / row[2]
+        assert json.loads(staged.read_text().splitlines()[0])["cpu"]["utilization"] == 10.0
         with pytest.raises(sqlite3.OperationalError):
             connection.execute("DELETE FROM raw_samples")
 

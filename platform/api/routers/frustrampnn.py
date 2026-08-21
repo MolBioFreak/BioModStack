@@ -46,6 +46,7 @@ from database import (
     Job,
     get_session,
 )
+from services.scientific_artifacts import resolve_json_value
 from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
 from services.frustrampnn.comparison import (
     ComparisonCompatibilityError,
@@ -2640,6 +2641,7 @@ def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
         else "historical_v1"
     )
     values = {field: getattr(result, field) for field in _PHASE4_FIELDS}
+    values["statistics_json"] = resolve_json_value(values["statistics_json"])
     if authority_version == "historical_v1":
         values = {field: None for field in _PHASE4_FIELDS}
         missing_fields = list(_PHASE4_FIELDS)
@@ -2656,7 +2658,7 @@ def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
 
 
 def _comparison_authority(result: FrustraMPNNResult) -> dict[str, Any]:
-    statistics = result.statistics_json
+    statistics = resolve_json_value(result.statistics_json)
     basis = (
         statistics.get("comparison_compatibility_basis")
         if isinstance(statistics, dict)
@@ -3199,7 +3201,7 @@ async def comparison_rows(
     )).scalars().all()
     return {
         "comparison_id": comparison_id,
-        "items": [dict(row.row_json) for row in rows],
+        "items": [dict(resolve_json_value(row.row_json)) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -3549,7 +3551,7 @@ async def result_landscape(
     ).scalars().all()
     items = []
     for row in rows:
-        stored = dict(row.row_json)
+        stored = dict(resolve_json_value(row.row_json))
         residue = stored.get("residue")
         residue_identity = residue if isinstance(residue, dict) else {}
         items.append({
@@ -3562,7 +3564,7 @@ async def result_landscape(
             "model_position": residue_identity.get("model_position"),
             "class": row.score_class,
             "native": row.mutation_aa == row.wt,
-            "provenance": dict(row.provenance_json),
+            "provenance": dict(resolve_json_value(row.provenance_json)),
             "residue": dict(residue) if isinstance(residue, dict) else None,
         })
     return {

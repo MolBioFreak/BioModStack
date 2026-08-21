@@ -84,6 +84,7 @@ from services.conformational_mapping.rcsb_source import (
     discover_rcsb_contexts,
     resolve_and_materialize_rcsb_selection,
 )
+from services.scientific_artifacts import resolve_json_value
 from services.job_control import cancel_job_lineage
 from services.frustrampnn import runtime as _frustrampnn_runtime
 from services.frustrampnn.settings import (
@@ -2187,7 +2188,7 @@ async def request_failure_receipts(
     return {
         "request_id": request_id,
         "failure_receipts": [
-            {"receipt_id": row.record_key, "sha256": row.content_sha256, "payload": row.payload_json}
+            {"receipt_id": row.record_key, "sha256": row.content_sha256, "payload": resolve_json_value(row.payload_json)}
             for row in rows
         ],
     }
@@ -2214,7 +2215,7 @@ async def compute_analysis(
     session: AsyncSession = Depends(get_session),
 ):
     await _authorized_record(request_id, request, session)
-    analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
+    analysis = resolve_json_value((await _canonical_record(session, request_id, "analysis")).payload_json)
     return {"request_id": request_id, "analysis_id": analysis["analysis_id"], "result_count": len(analysis["results"]), "analysis_sha256": canonical_sha256(analysis)}
 
 
@@ -2224,11 +2225,11 @@ async def prepare_mutagenesis_handoff(
     session: AsyncSession = Depends(get_session),
 ):
     await _authorized_record(request_id, request, session, mutation=True)
-    ensemble = (await _canonical_record(session, request_id, "ensemble", "primary")).payload_json
-    analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
-    structure_map = (
-        await _canonical_record(session, request_id, "structure_map", body.structure_map_key)
-    ).payload_json
+    ensemble = resolve_json_value((await _canonical_record(session, request_id, "ensemble", "primary")).payload_json)
+    analysis = resolve_json_value((await _canonical_record(session, request_id, "analysis")).payload_json)
+    structure_map = resolve_json_value(
+        (await _canonical_record(session, request_id, "structure_map", body.structure_map_key)).payload_json
+    )
     source_record = await get_request(session, request_id)
     job = await session.get(Job, source_record.job_id if source_record else "")
     if job is None:
@@ -2291,7 +2292,7 @@ async def launch_resampling(
     source_record = await _authorized_record(request_id, request, session, mutation=True)
     principal_id = source_record.principal_id
     handoff_row = await _canonical_record(session, request_id, "handoff", body.handoff_key)
-    handoff = handoff_row.payload_json
+    handoff = resolve_json_value(handoff_row.payload_json)
     source_job = await session.get(Job, source_record.job_id)
     if source_job is None or not source_job.output_dir:
         raise HTTPException(status_code=409, detail="canonical source job is missing")
@@ -2871,7 +2872,7 @@ async def request_results(
     return {
         "request_id": request_id, "result_contract_id": record.result_contract_id,
         "records": [
-            {"type": row.record_type, "key": row.record_key, "sha256": row.content_sha256, "payload": row.payload_json}
+            {"type": row.record_type, "key": row.record_key, "sha256": row.content_sha256, "payload": resolve_json_value(row.payload_json)}
             for row in rows
         ],
         "artifacts": [
@@ -3081,7 +3082,7 @@ async def request_lineage(
             ).order_by(ConformationalMappingRecord.record_type, ConformationalMappingRecord.record_key)
         )
     ).scalars().all()
-    return {"request_id": request_id, "lineage": [row.payload_json for row in rows]}
+    return {"request_id": request_id, "lineage": [resolve_json_value(row.payload_json) for row in rows]}
 
 
 def _resolve_artifact_runtime_alias(path: str | Path) -> Path:

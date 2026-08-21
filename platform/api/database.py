@@ -1008,6 +1008,32 @@ def _bind_new_jobs_to_launch_context(session: Session, _flush_context, _instance
             record.provenance = provenance
 
 
+class ScientificArtifactJSON(TypeDecorator):
+    """JSON column that resolves governed Parquet references on ORM reads."""
+
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None or isinstance(value, dict):
+            return value
+        return value
+
+    def process_result_value(self, value, dialect):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        if isinstance(value, dict) and value.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            from services.scientific_artifacts import resolve_json_value
+            return resolve_json_value(value)
+        return value
+
+
 class Design(Base):
     """Individual protein design result."""
     __tablename__ = "designs"
@@ -1038,11 +1064,10 @@ class Design(Base):
     review_profile_id = Column(String(64), nullable=True, index=True)
     review_contract_version = Column(Integer, nullable=True)
     review_contract_source = Column(String(32), nullable=True)
-    review_artifact_manifest = Column(JSON, nullable=True)
-    review_role_map = Column(JSON, nullable=True)
-
+    review_artifact_manifest = Column(ScientificArtifactJSON, nullable=True)
+    review_role_map = Column(ScientificArtifactJSON, nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)
-    provenance = Column(JSON, nullable=True)
+    provenance = Column(ScientificArtifactJSON, nullable=True)
     
     # Structural metrics (predicted structures)
     num_helices = Column(Integer, nullable=True)
@@ -1076,12 +1101,12 @@ class Design(Base):
     protein_iptm = Column(Float, nullable=True)  # Protein-protein interface
     complex_iplddt = Column(Float, nullable=True)  # Interface pLDDT
     complex_ipde = Column(Float, nullable=True)  # Interface PDE
-    chains_ptm = Column(JSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
-    pair_chains_iptm = Column(JSON, nullable=True)  # NxN chain matrix for heatmap
+    chains_ptm = Column(ScientificArtifactJSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
+    pair_chains_iptm = Column(ScientificArtifactJSON, nullable=True)  # NxN chain matrix for heatmap
     disorder = Column(Float, nullable=True)  # Protenix disorder score/probability
     num_recycles = Column(Integer, nullable=True)  # Recycling iterations reported by model
     has_clash = Column(Boolean, nullable=True)  # Steric clash flag from confidence output
-    confidence_metrics = Column(JSON, nullable=True)  # Raw model confidence JSON payload
+    confidence_metrics = Column(ScientificArtifactJSON, nullable=True)  # Raw model confidence JSON payload
     aligned_error_path = Column(String(500), nullable=True)
     aligned_error_format = Column(String(64), nullable=True)
     aligned_error_key = Column(String(128), nullable=True)
@@ -1100,8 +1125,8 @@ class Design(Base):
     
     # Per-residue metrics (stored as JSON arrays)
     # Analytics
-    chain_metrics = Column(JSON, nullable=True)  # {"A": {"type": "protein", ...}}
-    residue_plddt = Column(JSON, nullable=True)  # [85.2, 91.3, ...] per residue
+    chain_metrics = Column(ScientificArtifactJSON, nullable=True)  # {"A": {"type": "protein", ...}}
+    residue_plddt = Column(ScientificArtifactJSON, nullable=True)  # [85.2, 91.3, ...] per residue
     pae_matrix = Column(JSON, nullable=True)     # [[0.2, ...], ...]
     
     # User annotations
@@ -1138,8 +1163,8 @@ class Design(Base):
     screening_reason = Column(String(255), nullable=True)     # RFantibody screening pass/fail summary
     source_stage = Column(String(64), nullable=True, index=True)   # review-stage rows (e.g. post_rfantibody)
     artifact_group = Column(String(64), nullable=True)             # candidate/raw/filtered/final
-    rfa_loop_metrics = Column(JSON, nullable=True)
-    rfa_hotspot_metrics = Column(JSON, nullable=True)
+    rfa_loop_metrics = Column(ScientificArtifactJSON, nullable=True)
+    rfa_hotspot_metrics = Column(ScientificArtifactJSON, nullable=True)
     rfa_hotspot_covered_count = Column(Integer, nullable=True)
     rfa_hotspot_min_distance = Column(Float, nullable=True)
     rfa_hotspot_avg_min_distance = Column(Float, nullable=True)
@@ -1154,8 +1179,8 @@ class Design(Base):
     rfa_plddt_delta = Column(Float, nullable=True)
     rfa_plddt_selected = Column(Float, nullable=True)
     rfa_plddt_nonselected = Column(Float, nullable=True)
-    rfa_design_loops = Column(JSON, nullable=True)
-    rfa_hotspots = Column(JSON, nullable=True)
+    rfa_design_loops = Column(ScientificArtifactJSON, nullable=True)
+    rfa_hotspots = Column(ScientificArtifactJSON, nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS
@@ -1203,7 +1228,7 @@ class Design(Base):
     frustration_high_count = Column(Integer, nullable=True)
     frustration_min_count = Column(Integer, nullable=True)
     frustration_pct_high = Column(Float, nullable=True)        # 0..100 percentage
-    frustration_residues = Column(JSON, nullable=True)         # Historical read-only per-residue projection
+    frustration_residues = Column(ScientificArtifactJSON, nullable=True)         # Historical read-only per-residue projection
     frustration_csv_path = Column(String(500), nullable=True)  # Historical read-only CSV path
     # Canonical manifest-first FrustraMPNN authority fields. The three scalar
     # columns above are deterministic summary projections; these retain the
@@ -1238,11 +1263,11 @@ class Design(Base):
     ppiflow_objective_score = Column(Float, nullable=True)
     ppiflow_filter_passed = Column(Boolean, nullable=True)
     ppiflow_filter_reason = Column(String(255), nullable=True)
-    ppiflow_loop_metrics = Column(JSON, nullable=True)
+    ppiflow_loop_metrics = Column(ScientificArtifactJSON, nullable=True)
 
     # Metric provenance/completeness: explicit source/formula/direction for model and BMS-derived scores.
-    metric_provenance = Column(JSON, nullable=True)
-    metric_completeness = Column(JSON, nullable=True)
+    metric_provenance = Column(ScientificArtifactJSON, nullable=True)
+    metric_completeness = Column(ScientificArtifactJSON, nullable=True)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -1298,6 +1323,122 @@ class AnalysisRun(Base):
     last_accessed_at = Column(DateTime, nullable=True)
 
 
+class ScientificArtifactReceipt(Base):
+    """Receipt for one immutable Parquet artifact in the shared data plane."""
+
+    __tablename__ = "scientific_artifact_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "storage_root", "relative_path", name="uq_scientific_artifact_path"
+        ),
+        UniqueConstraint(
+            "owner_kind", "owner_id", "role", "content_sha256",
+            name="uq_scientific_artifact_content",
+        ),
+        Index("ix_scientific_artifact_owner", "owner_kind", "owner_id", "role"),
+        Index("ix_scientific_artifact_hash", "content_sha256"),
+    )
+
+    artifact_id = Column(String(128), primary_key=True)
+    owner_kind = Column(String(96), nullable=False)
+    owner_id = Column(String(255), nullable=False)
+    role = Column(String(128), nullable=False)
+    schema_id = Column(String(160), nullable=False)
+    artifact_schema_version = Column(Integer, nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    column_schema_sha256 = Column(String(64), nullable=False)
+    storage_root = Column(String(96), nullable=False)
+    relative_path = Column(String(2000), nullable=False)
+    media_type = Column(String(160), nullable=False)
+    availability = Column(String(32), nullable=False, default="available", index=True)
+    source_receipts_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+
+
+_DESIGN_ARTIFACT_FIELDS = (
+    "confidence_metrics", "residue_plddt", "rfa_loop_metrics", "rfa_hotspot_metrics",
+    "provenance", "review_artifact_manifest", "review_role_map", "chain_metrics",
+    "frustration_residues", "rfa_design_loops", "rfa_hotspots", "ppiflow_loop_metrics",
+    "metric_provenance", "metric_completeness", "pair_chains_iptm", "chains_ptm",
+)
+_DESIGN_INLINE_LIMIT = 256 * 1024
+
+
+@event.listens_for(Session, "before_flush")
+def _externalize_large_design_payloads(session, _flush_context, _instances):
+    import hashlib
+    import pyarrow as pa
+    from services.scientific_artifacts import artifact_row_reference, install_parquet_rows, artifact_root
+
+    schema = pa.schema([
+        ("row_index", pa.int64()), ("design_id", pa.string()),
+        ("field_name", pa.string()), ("payload_json", pa.string()),
+    ])
+    for target in tuple(session.new) + tuple(session.dirty):
+        if not isinstance(target, Design):
+            continue
+        for field_name in _DESIGN_ARTIFACT_FIELDS:
+            value = getattr(target, field_name, None)
+            if not isinstance(value, dict) or value.get("schema") in {
+                "bms.scientific-artifact-reference.v1",
+                "bms.scientific-artifact-row-reference.v1",
+            }:
+                continue
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True)
+            if len(encoded.encode("utf-8")) <= _DESIGN_INLINE_LIMIT:
+                continue
+            source_sha = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            row = {"row_index": 0, "design_id": str(target.id), "field_name": field_name, "payload_json": encoded}
+            artifact = install_parquet_rows(
+                root=artifact_root(), owner_kind="design_field", owner_id=f"{target.id}:{field_name}",
+                role="payload", schema_id="bms.design.field.v1", schema_version=1,
+                source_sha256=source_sha, rows=[row], schema=schema,
+            )
+            session.add(ScientificArtifactReceipt(
+                artifact_id=artifact.artifact_id, owner_kind=artifact.owner_kind, owner_id=artifact.owner_id,
+                role=artifact.role, schema_id=artifact.schema_id, artifact_schema_version=artifact.schema_version,
+                content_sha256=artifact.content_sha256, size_bytes=artifact.size_bytes, row_count=artifact.row_count,
+                column_schema_sha256=artifact.column_schema_sha256, storage_root="scientific_artifacts",
+                relative_path=artifact.relative_path, media_type=artifact.media_type, availability="available",
+                source_receipts_json={"source_table": "designs", "source_column": field_name, "source_key": str(target.id)},
+            ))
+            setattr(target, field_name, artifact_row_reference(artifact.reference(), 0, value_field="payload_json"))
+
+class ScientificPayloadMigration(Base):
+    """Idempotent source-to-artifact equivalence ledger."""
+
+    __tablename__ = "scientific_payload_migrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_store", "source_table", "source_column", "source_key", "source_sha256",
+            name="uq_scientific_payload_migration_source",
+        ),
+        Index("ix_scientific_payload_migration_state", "state", "updated_at"),
+        ForeignKeyConstraint(
+            ["artifact_id"], ["scientific_artifact_receipts.artifact_id"],
+        ),
+    )
+
+    migration_id = Column(String(160), primary_key=True)
+    source_store = Column(String(96), nullable=False)
+    source_table = Column(String(160), nullable=False)
+    source_column = Column(String(160), nullable=False)
+    source_key = Column(String(512), nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    artifact_id = Column(String(128), nullable=True)
+    artifact_sha256 = Column(String(64), nullable=True)
+    equivalence_sha256 = Column(String(64), nullable=True)
+    state = Column(String(32), nullable=False, default="planned", index=True)
+    diagnostic = Column(Text, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class FrustraMPNNResult(Base):
     """Immutable manifest-backed authority for one FrustraMPNN invocation."""
 
@@ -1341,7 +1482,7 @@ class FrustraMPNNResult(Base):
     effective_settings_json = Column(JSON, nullable=True)
     capability_inventory_sha256 = Column(String(64), nullable=True)
     statistics_sha256 = Column(String(64), nullable=True)
-    statistics_json = Column(JSON, nullable=True)
+    statistics_json = Column(ScientificArtifactJSON, nullable=True)
     comparison_compatibility_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -1494,9 +1635,9 @@ class FrustraMPNNLandscapeRow(Base):
 
     id = Column(String(96), primary_key=True)
     parent_job_id = Column(String(36), nullable=False, index=True)
-    invocation_id = Column(String(128), nullable=False, index=True)
-    target_id = Column(String(128), nullable=False, index=True)
-    entity_instance_id = Column(String(128), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False)
+    target_id = Column(String(128), nullable=False)
+    entity_instance_id = Column(String(128), nullable=False)
     auth_asym_id = Column(String(128), nullable=False)
     auth_seq_id = Column(String(64), nullable=False)
     insertion_code = Column(String(16), nullable=False, default="")
@@ -1508,8 +1649,8 @@ class FrustraMPNNLandscapeRow(Base):
     scoreable = Column(Boolean, nullable=False)
     status = Column(String(32), nullable=False, index=True)
     reason = Column(Text, nullable=True)
-    row_json = Column(JSON, nullable=False)
-    provenance_json = Column(JSON, nullable=False)
+    row_json = Column(ScientificArtifactJSON, nullable=False)
+    provenance_json = Column(ScientificArtifactJSON, nullable=False)
 
 
 class FrustraMPNNComparison(Base):
@@ -1651,7 +1792,7 @@ class ConformationalMappingRecord(Base):
     record_type = Column(String(64), nullable=False, index=True)
     record_key = Column(String(255), nullable=False)
     content_sha256 = Column(String(64), nullable=False, index=True)
-    payload_json = Column(JSON, nullable=False)
+    payload_json = Column(ScientificArtifactJSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -1713,7 +1854,7 @@ class ConformationalMappingLandscapeRow(Base):
     scoreable = Column(Boolean, nullable=False)
     status = Column(String(32), nullable=False, index=True)
     reason = Column(Text, nullable=True)
-    provenance_json = Column(JSON, nullable=False, default=dict)
+    provenance_json = Column(ScientificArtifactJSON, nullable=False, default=dict)
 
 
 class ConformationalMappingStateLandscapeAnalysisHeader(Base):
