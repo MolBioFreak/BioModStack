@@ -172,12 +172,17 @@ class RunGroupResubmitRequest(StrictRequestModel):
 
 
 class RunCloneRequest(StrictRequestModel):
-    expected_run_group_generation: int = Field(ge=0)
+    schema_id: Literal["bms.run-clone-request.v1"] = Field(
+        default="bms.run-clone-request.v1",
+        alias="schema",
+    )
     source_run_id: str = Field(min_length=1, max_length=128)
     source_attempt_id: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=255)
+    new_workflow_name: str = Field(min_length=1, max_length=255)
     change_summary: str = Field(min_length=1, max_length=1024)
     expected_domain_revision_id: str = Field(min_length=1, max_length=128)
+    expected_run_group_generation: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=16, max_length=128)
 
 
 class RunGroupCancelRequest(StrictRequestModel):
@@ -1661,7 +1666,7 @@ async def clone_domain_run_intent(
             "domain_experiment_id": domain_id,
             "source_run_group_id": run_group_id,
             "created_by": actor,
-            **payload.model_dump(),
+            **payload.model_dump(by_alias=True),
         }
         request_sha256 = hashlib.sha256(
             canonical_json(normalized_request).encode("utf-8")
@@ -1734,7 +1739,7 @@ async def clone_domain_run_intent(
         new_plan = await create_workflow(
             session,
             project_id,
-            payload.name,
+            payload.new_workflow_name,
             source_plan.description,
             experiment_id=domain_id,
         )
