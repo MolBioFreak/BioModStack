@@ -21,7 +21,7 @@ from molbio_ngs_database import molbio_ngs_session_factory
 from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
@@ -323,6 +323,8 @@ app.include_router(projects.router)
 app.include_router(project_manager.router)
 app.include_router(ngs_molbio_n5.router)
 app.include_router(payload_ownership_audit.router)
+if dev_issues.dev_issue_ledger_enabled():
+    app.include_router(dev_issues.router)
 # msa_cache router removed - now using file-based caching
 app.include_router(smiles_converter.router, prefix="/api/smiles", tags=["smiles"])
 app.include_router(queue.router, prefix="/api", tags=["queue"])  # /api/queue/*
