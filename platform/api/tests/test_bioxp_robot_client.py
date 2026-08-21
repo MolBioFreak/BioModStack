@@ -5,6 +5,7 @@ from ipaddress import ip_address
 
 import httpx
 
+from services.bioxp.errors import RobotTimeoutError
 from services.bioxp.robot_client import BioXpRobotClient
 from services.bioxp.target_policy import ValidatedBioXpTarget
 
@@ -20,6 +21,11 @@ class RecordingTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+class TimeoutTransport(httpx.AsyncBaseTransport):
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("deadline expired", request=request)
 
 
 class SnapshotRefreshTransport(httpx.AsyncBaseTransport):
@@ -100,6 +106,27 @@ def test_robot_transport_connects_to_validated_address_without_second_dns_lookup
 
     asyncio.run(client.close())
     assert transport.closed is True
+
+
+def test_robot_read_timeout_is_typed_as_dispatched_and_outcome_ambiguous() -> None:
+    target = ValidatedBioXpTarget(
+        api_url="http://robot:8123",
+        scheme="http",
+        hostname="robot",
+        port=8123,
+        resolved_addresses=(ip_address("100.64.0.10"),),
+    )
+    client = BioXpRobotClient(target, transport=TimeoutTransport())
+
+    try:
+        asyncio.run(client.request("invoke_operator_action_v2", path_params={"action_id": "oem.y.move_steps"}, json_data={}))
+    except RobotTimeoutError as exc:
+        assert exc.dispatched is True
+        assert exc.dispatch_state == "outcome_ambiguous"
+        assert exc.caller_can_retry is False
+    else:  # pragma: no cover - regression assertion
+        raise AssertionError("robot request timeout must remain explicitly ambiguous")
+    asyncio.run(client.close())
 
 
 def test_robot_transport_rejects_unresolved_targets() -> None:

@@ -99,6 +99,45 @@ const state = vi.hoisted(() => ({
         error: null,
     },
     historyCalls: [] as number[],
+    yInvokeCalls: [] as Array<Record<string, unknown>>,
+    yInterruptCalls: [] as Array<Record<string, unknown>>,
+    yInvokeError: null as unknown,
+    yInterruptError: null as unknown,
+    yInvokeData: undefined as Record<string, unknown> | undefined,
+    yInterruptData: undefined as Record<string, unknown> | undefined,
+    yReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
+    v2Dashboard: {
+        data: {
+            schema_version: 'bioxp.operator_dashboard.v2',
+            generated_at: 1,
+            ownership_generation: 1,
+            board4: {
+                state: 'active', prior_board_epoch: 1, active_board_epoch: 2,
+                transition_phase: 'committed', transition_evidence: {},
+                member_motors: { y: 0, z: 1, gripper: 2 }, state_version: 3, updated_at: 1,
+            },
+            y_axis: {
+                axis: 'y', board_id: 4, motor_id: 0, ownership_generation: 1,
+                prior_board_epoch: 1, active_board_epoch: 2, prepared_board_epoch: 2,
+                lifecycle_state: 'referenced_ready', reference_state: 'referenced',
+                position_steps: 100, position_reply_valid: true, position_status_code: 100,
+                speed_steps_s: 0, speed_reply_valid: true, speed_status_code: 100,
+                left_switch_raw: 0, left_switch_reply_valid: true, left_switch_status_code: 100,
+                home_effective: false, profile_fingerprint: 'a'.repeat(64), profile_readback_valid: true,
+                profile_mismatches: [], active_command: null, interrupt_epoch: 0,
+                latest_compact_receipt: null as Record<string, unknown> | null, last_discrepancy_steps: null,
+                state_version: 4, updated_at: 1, physical_position_verified: false,
+            },
+            active_commands: [], command_queue: { schema_version: 'bioxp.oem_command_queue.v1', generated_at: 1, items: [] }, latest_receipts: [],
+        },
+        error: null as unknown,
+        isStale: false,
+    },
+    v2Catalog: {
+        data: undefined as Record<string, unknown> | undefined,
+        error: null as unknown,
+        isStale: false,
+    },
 }));
 
 const dep = (key: string, met: boolean, reason: string | null = null) => ({ key, met, reason });
@@ -211,6 +250,10 @@ const xHomeAction = () => ({
 });
 
 vi.mock('../../src/lib/bioxpClient', () => ({
+    BIOXP_Y_RELATIVE_MIN_STEPS: -102_936,
+    BIOXP_Y_RELATIVE_MAX_STEPS: 102_936,
+    BIOXP_Y_ABSOLUTE_MIN_STEPS: 0,
+    BIOXP_Y_ABSOLUTE_MAX_STEPS: 102_956,
     useBioXpStatus: () => ({
         data: {
             connection: {
@@ -225,6 +268,9 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: null,
     }),
     useBioXpOperatorDashboard: () => state.dashboard,
+    useBioXpOperatorDashboardV2: () => state.v2Dashboard,
+    useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
+    useBioXpOperatorReceiptV2: () => state.yReceipt,
     useBioXpOperatorActionHistory: (...args: unknown[]) => {
         state.historyCalls.push(args[2] as number);
         return state.history;
@@ -248,17 +294,41 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
         reset: vi.fn(),
     }),
+    useInvokeBioXpOperatorActionV2: () => ({
+        data: state.yInvokeData,
+        error: state.yInvokeError,
+        isPending: false,
+        mutate: (payload: Record<string, unknown>) => state.yInvokeCalls.push(payload),
+        reset: vi.fn(),
+    }),
+    useInterruptBioXpOperatorActionV1: () => ({
+        data: state.yInterruptData,
+        error: state.yInterruptError,
+        isPending: false,
+        mutate: (payload: Record<string, unknown>) => state.yInterruptCalls.push(payload),
+        reset: vi.fn(),
+    }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     useDisconnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     useRecoverBioXpMotion: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn(), reset: vi.fn() }),
     useUpdateBioXpFreshness: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     bioXpErrorText: (error: unknown) => String(error),
+    bioXpErrorPresentation: (error: unknown) => {
+        const response = (error as { response?: { status?: number; data?: unknown } })?.response;
+        const detail = (response?.data as { detail?: { error?: string } } | undefined)?.detail;
+        return {
+            status: response?.status ?? null,
+            summary: detail?.error ?? String(error),
+            rawJson: JSON.stringify(response?.data ?? null, null, 2),
+        };
+    },
 }));
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
 vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null }));
 vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: () => null }));
+vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
 
@@ -313,9 +383,50 @@ const xReceipt = (status: string, index = 0) => ({
 
 beforeEach(() => {
     state.admissionCalls = 0;
+    state.connectionGeneration = 1;
     state.invokeCalls = [];
     state.invokePending = false;
     state.historyCalls = [];
+    state.yInvokeCalls = [];
+    state.yInterruptCalls = [];
+    state.yInvokeError = null;
+    state.yInterruptError = null;
+    state.yInvokeData = undefined;
+    state.yInterruptData = undefined;
+    state.yReceipt.data = undefined;
+    state.v2Dashboard.error = null;
+    state.v2Dashboard.isStale = false;
+    state.v2Dashboard.data.ownership_generation = 1;
+    state.v2Dashboard.data.board4.state_version = 3;
+    state.v2Dashboard.data.y_axis.ownership_generation = 1;
+    state.v2Dashboard.data.y_axis.state_version = 4;
+    state.v2Dashboard.data.y_axis.latest_compact_receipt = null;
+    state.v2Catalog.error = null;
+    state.v2Catalog.isStale = false;
+    state.v2Catalog.data = {
+        schema_version: 'bioxp.operator_control_catalog.v2',
+        dashboard: structuredClone(state.v2Dashboard.data),
+        actions: [
+            'oem.y.move_steps',
+            'oem.y.move_absolute',
+            'oem.y.manual_panel_home',
+            'oem.y.diagnostic_home',
+        ].map((action_id) => ({
+            action_id,
+            request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2',
+            interrupt: false,
+            enabled: true,
+            disabled_reason: null,
+        })).concat([{
+            action_id: 'oem.y.stop',
+            request_schema_version: 'bioxp.operator_interrupt_request.v1',
+            response_schema_version: 'bioxp.operator_interrupt_receipt.v1',
+            interrupt: true,
+            enabled: true,
+            disabled_reason: null,
+        }]),
+    };
     state.history.data.receipts = [];
     state.dashboard.data.x_axis.latest_receipt = null;
     state.dashboard.data.successive_move_queue = {};
@@ -649,5 +760,142 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(movePositive.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
+    });
+
+    it('mounts operational strict Y controls with exact bounds and payloads while generic Y remains absent', async () => {
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        expect(section).toBeTruthy();
+        const inputs = [...section.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
+        expect(inputs[0]?.min).toBe('-102936');
+        expect(inputs[0]?.max).toBe('102936');
+        expect(inputs[1]?.min).toBe('0');
+        expect(inputs[1]?.max).toBe('102956');
+        const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const stop = buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement;
+        expect(movePositive.disabled).toBe(false);
+        expect(stop.disabled).toBe(false);
+        await act(async () => movePositive.click());
+        expect(state.yInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls[0]).toMatchObject({
+            request: {
+                action_id: 'oem.y.move_steps',
+                expected_connection_generation: 1,
+                schema_version: 'bioxp.operator_action_request.v2',
+                expected_ownership_generation: 1,
+                expected_board_epoch_by_board: { '4': 2 },
+                inputs: { steps: 1000 },
+            },
+        });
+        await act(async () => stop.click());
+        expect(state.yInterruptCalls[0]).toEqual({
+            actionId: 'oem.y.stop',
+            request: {
+                expected_connection_generation: 1,
+                schema_version: 'bioxp.operator_interrupt_request.v1',
+                reason: 'BMS operator requested addressed Serial-206 Y STOP',
+                observed_ownership_generation: 1,
+                observed_board_epoch_by_board: { '4': 2 },
+            },
+        });
+        expect([...container.querySelectorAll('article')].some((node) => node.textContent?.includes('Y Axis'))).toBe(false);
+    });
+
+    it('fails normal Y closed on any authority-version mismatch but keeps STOP independent', async () => {
+        (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).y_axis.state_version = 3;
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
+        expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
+        expect(section.textContent).toContain('matching v2 catalog and dashboard authority is unavailable');
+    });
+
+    it('renders bounded structured enqueue and STOP errors adjacent to Y with status and raw evidence', async () => {
+        state.yInvokeError = { response: { status: 409, data: { detail: { error: 'board_epoch_conflict', expected: { '4': 2 }, actual: { '4': 3 } } } } };
+        state.yInterruptError = { response: { status: 504, data: { detail: { error: 'bioxp_robot_timeout', dispatch_state: 'outcome_ambiguous' } } } };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        expect(section.textContent).toContain('Y enqueue failed · HTTP 409 · board_epoch_conflict');
+        expect(section.textContent).toContain('Y STOP failed · HTTP 504 · bioxp_robot_timeout');
+        const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
+        expect(raw).toContain('"expected"');
+        expect(raw).toContain('"actual"');
+        expect(raw).toContain('"dispatch_state"');
+    });
+
+    it.each([
+        ['dashboard error', () => { state.v2Dashboard.error = new Error('dashboard query failed'); }],
+        ['dashboard stale', () => { state.v2Dashboard.isStale = true; }],
+        ['catalog error', () => { state.v2Catalog.error = new Error('catalog query failed'); }],
+        ['catalog stale', () => { state.v2Catalog.isStale = true; }],
+    ])('fails normal Y closed for an isolated %s condition', async (_label, applyFault) => {
+        applyFault();
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
+        expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
+        expect(section.textContent).toContain('matching v2 catalog and dashboard authority is unavailable');
+    });
+
+    it('renders successful detailed Y action and independent STOP receipts', async () => {
+        state.v2Dashboard.data.y_axis.latest_compact_receipt = { command_id: 'cmd-y-detail' };
+        state.yReceipt.data = {
+            command_id: 'cmd-y-detail',
+            status: 'completed',
+            completion_class: 'event_128',
+            requested_values: { steps: 100 },
+            effective_values: { target_steps: 1100 },
+            observed_values: {
+                terminal_position_steps: 1100,
+                terminal_speed_steps_s: 0,
+                discrepancy_steps: 0,
+            },
+            physical_effect_verified: false,
+            controller_evidence: { addressed_event_128: true, speed_zero: true },
+            raw_return_layers: { provider: { ok: true } },
+            transport_artifacts: [{ kind: 'tmcl_reply', status: 100 }],
+        };
+        state.yInterruptData = {
+            schema_version: 'bioxp.operator_interrupt_receipt.v1',
+            interrupt_attempt_id: 'interrupt-attempt-12345678',
+            action_id: 'oem.y.stop',
+            controller_stop_acknowledged: true,
+            persistence_state: 'committed',
+            recovery_hold: false,
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const section = [...container.querySelectorAll('section')]
+            .find((node) => node.querySelector('h2')?.textContent === 'Serial-206 Y authority') as HTMLElement;
+        expect(section.textContent).toContain('Command cmd-y-detail: completed');
+        expect(section.textContent).toContain('class=event_128');
+        expect(section.textContent).toContain('terminal position=1100');
+        expect(section.textContent).toContain('terminal speed=0');
+        expect(section.textContent).toContain('Latest independent Y STOP receipt');
+        expect(section.textContent).toContain('interrupt-attempt-12345678');
+        const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
+        expect(raw).toContain('"addressed_event_128": true');
+        expect(raw).toContain('"status": 100');
     });
 });

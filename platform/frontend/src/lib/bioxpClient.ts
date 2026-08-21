@@ -266,6 +266,26 @@ export interface BioXpOperatorReceiptV2 {
     error: { code: string; message: string; retryable: boolean } | null;
 }
 
+export type BioXpReceiptScalarV2 = number | string | boolean | null;
+
+export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
+    canonical_inputs: Record<string, unknown>;
+    requested_values: Record<string, BioXpReceiptScalarV2>;
+    effective_values: Record<string, BioXpReceiptScalarV2>;
+    observed_values: Record<string, BioXpReceiptScalarV2>;
+    raw_return_layers: Record<string, unknown>;
+    controller_evidence: Record<string, unknown>;
+    transport_artifacts: Array<{ sha256: string; path: string; bytes: number }>;
+    child_receipts: BioXpOperatorReceiptV2[];
+    transitions: Array<{
+        transition_id: string;
+        from_status: BioXpOperatorReceiptV2Status | null;
+        to_status: BioXpOperatorReceiptV2Status;
+        at: number;
+        reason: string | null;
+    }>;
+}
+
 export interface BioXpYAxisV2 {
     axis: 'y';
     board_id: 4;
@@ -274,8 +294,8 @@ export interface BioXpYAxisV2 {
     prior_board_epoch: number | null;
     active_board_epoch: number | null;
     prepared_board_epoch: number | null;
-    lifecycle_state: string;
-    reference_state: string;
+    lifecycle_state: 'unprepared' | 'prepared_unreferenced' | 'referenced_ready' | 'generation_stale' | 'reconciliation_required' | 'faulted';
+    reference_state: 'unreferenced' | 'referenced' | 'generation_stale' | 'reconciliation_required';
     position_steps: number | null;
     position_reply_valid: boolean;
     position_status_code: number | null;
@@ -284,6 +304,7 @@ export interface BioXpYAxisV2 {
     speed_status_code: number | null;
     left_switch_raw: number | null;
     left_switch_reply_valid: boolean;
+    left_switch_status_code: number | null;
     home_effective: boolean | null;
     profile_fingerprint: string | null;
     profile_readback_valid: boolean;
@@ -298,7 +319,7 @@ export interface BioXpYAxisV2 {
 }
 
 export interface BioXpBoard4AuthorityV2 {
-    state: string;
+    state: 'unknown' | 'inactive' | 'transitioning' | 'active' | 'faulted';
     prior_board_epoch: number | null;
     active_board_epoch: number | null;
     transition_phase: string;
@@ -339,13 +360,54 @@ export interface BioXpOperatorControlCatalogV2 {
     dashboard: BioXpOperatorDashboardV2;
     actions: Array<{
         action_id: string;
-        request_schema_version: string;
-        response_schema_version: string;
+        request_schema_version: 'bioxp.operator_action_request.v2' | 'bioxp.operator_interrupt_request.v1';
+        response_schema_version: 'bioxp.operator_action_receipt.v2' | 'bioxp.operator_interrupt_receipt.v1';
         interrupt: boolean;
         enabled: boolean;
         disabled_reason: string | null;
     }>;
 }
+
+export type BioXpOperatorDashboardWire = BioXpOperatorDashboard | BioXpOperatorDashboardV2;
+export type BioXpOperatorControlCatalogWire = BioXpOperatorControlCatalog | BioXpOperatorControlCatalogV2;
+
+export type BioXpOperatorMethodV1Status =
+    | 'queued'
+    | 'active'
+    | 'pause_requested'
+    | 'paused'
+    | 'cancel_requested'
+    | 'stopping'
+    | 'aborting'
+    | 'completed'
+    | 'completed_partial'
+    | 'failed'
+    | 'cleared'
+    | 'interrupted'
+    | 'ambiguous';
+
+export interface BioXpOperatorMethodV1 {
+    schema_version: 'bioxp.operator_method.v1';
+    method_id: string;
+    action_id: 'oem.xy.move_absolute' | 'oem.xy.home';
+    status: BioXpOperatorMethodV1Status;
+    state_version: number;
+    child_receipts: BioXpOperatorReceiptV2[];
+    accepted_at: number;
+    finished_at: number | null;
+}
+
+interface BioXpOperatorMethodV1Envelope {
+    expected_connection_generation: number;
+    schema_version: 'bioxp.operator_method_request.v1';
+    idempotency_key: string;
+    expected_ownership_generation: number;
+    expected_board_epoch_by_board: Record<string, number>;
+}
+
+export type BioXpOperatorMethodV1Request =
+    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.move_absolute'; inputs: { x_steps: number; y_steps: number } })
+    | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.home'; inputs: Record<string, never> });
 export interface BioXpPipetteHardwareEvidence {
     ok: boolean;
     hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
@@ -979,16 +1041,45 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
 }
 
 
-export function bioXpErrorText(error: unknown): string {
-    if (error && typeof error === 'object') {
-        const response = 'response' in error
-            ? (error as { response?: { data?: { detail?: unknown } } }).response
-            : undefined;
-        const detail = nestedOperatorDetail(response?.data?.detail);
-        if (detail) return detail;
-        if ('message' in error && typeof error.message === 'string') return error.message;
+export interface BioXpErrorPresentation {
+    status: number | null;
+    summary: string;
+    rawJson: string;
+}
+
+const OPERATOR_ERROR_BODY_LIMIT = 8_192;
+
+export function bioXpErrorPresentation(error: unknown): BioXpErrorPresentation {
+    const response = error && typeof error === 'object' && 'response' in error
+        ? (error as { response?: { status?: unknown; data?: unknown } }).response
+        : undefined;
+    const status = typeof response?.status === 'number' && Number.isInteger(response.status)
+        ? response.status
+        : null;
+    const summary = nestedOperatorDetail(
+        response?.data && typeof response.data === 'object' && 'detail' in response.data
+            ? (response.data as { detail?: unknown }).detail
+            : response?.data,
+    ) ?? (
+        error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+            ? boundedOperatorText(error.message)
+            : String(error ?? 'Unknown error')
+    );
+    let rawJson: string;
+    try {
+        rawJson = JSON.stringify(response?.data ?? null, null, 2);
+    } catch {
+        rawJson = String(response?.data ?? null);
     }
-    return String(error ?? 'Unknown error');
+    return {
+        status,
+        summary,
+        rawJson: boundedOperatorText(rawJson, OPERATOR_ERROR_BODY_LIMIT),
+    };
+}
+
+export function bioXpErrorText(error: unknown): string {
+    return bioXpErrorPresentation(error).summary;
 }
 
 export const useBioXpStatus = (enabled = true) => useQuery({
@@ -1033,37 +1124,142 @@ export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enable
     queryFn: async () => (await api.get<BioXpOperatorDashboardV2>('/api/bioxp/operator-controls/v2/dashboard')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
+    staleTime: 2_000,
     retry: false,
     refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
     refetchIntervalInBackground: false,
 });
 
-export const useBioXpOperatorControlCatalogV2 = (connectionGeneration: number, enabled = true) => useQuery({
-    queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled],
+export const useBioXpOperatorControlCatalogV2 = (
+    connectionGeneration: number,
+    enabled = true,
+    authorityVersion: string | null = null,
+) => useQuery({
+    queryKey: [...operatorV2CatalogKey, connectionGeneration, enabled, authorityVersion],
     queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
+    staleTime: 2_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
     refetchIntervalInBackground: false,
 });
 
-export interface BioXpOperatorActionV2Request {
+export const BIOXP_Y_RELATIVE_MIN_STEPS = -102_936;
+export const BIOXP_Y_RELATIVE_MAX_STEPS = 102_936;
+export const BIOXP_Y_ABSOLUTE_MIN_STEPS = 0;
+export const BIOXP_Y_ABSOLUTE_MAX_STEPS = 102_956;
+
+function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
+    for (const [key, epoch] of Object.entries(value)) {
+        if (!/^(0|[1-9][0-9]*)$/.test(key) || !Number.isSafeInteger(epoch) || epoch < 0) {
+            throw new Error('Board epoch keys must be canonical nonnegative decimal board IDs');
+        }
+    }
+}
+
+function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
+    assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.y.move_steps'
+        && (!Number.isSafeInteger(request.inputs.steps)
+            || request.inputs.steps < BIOXP_Y_RELATIVE_MIN_STEPS
+            || request.inputs.steps > BIOXP_Y_RELATIVE_MAX_STEPS)) {
+        throw new Error('Y relative steps must be an integer from -102936 through 102936');
+    }
+    if (request.action_id === 'oem.y.move_absolute'
+        && (!Number.isSafeInteger(request.inputs.target_steps)
+            || request.inputs.target_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.target_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
+        throw new Error('Y absolute target must be an integer from 0 through 102956');
+    }
+}
+
+interface BioXpOperatorActionV2Envelope {
     expected_connection_generation: number;
+    schema_version: 'bioxp.operator_action_request.v2';
     expected_ownership_generation: number;
     idempotency_key: string;
-    inputs: Record<string, unknown>;
+    expected_board_epoch_by_board: Record<string, number>;
+}
+
+export type BioXpOperatorActionV2Request =
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home' | 'oem.y.diagnostic_home'; inputs: Record<string, never> });
+
+export interface BioXpOperatorInterruptV1Request {
+    expected_connection_generation: number;
+    schema_version: 'bioxp.operator_interrupt_request.v1';
+    reason: string;
+    observed_ownership_generation: number | null;
+    observed_board_epoch_by_board: Record<string, number>;
+}
+
+export interface BioXpOperatorInterruptReceiptV1 {
+    schema_version: 'bioxp.operator_interrupt_receipt.v1';
+    robot_identity: string;
+    ownership_generation: number;
+    observed_ownership_generation: number | null;
+    observed_board_epoch_by_board: Record<string, number>;
+    interrupt_attempt_id: string;
+    interrupt_id: string;
+    action_id: 'oem.y.stop';
+    scope: 'y';
+    cutoff: number | null;
+    active_command_id: string | null;
+    active_command_ids: string[];
+    global_safety_epoch: number | null;
+    x_safety_epoch: number | null;
+    y_safety_epoch: number | null;
+    z_safety_epoch: number | null;
+    oem_abort_latched: false;
+    controller_stop_attempted: true;
+    controller_stop_acknowledged: boolean;
+    controller_response: unknown;
+    error: string | null;
+    physical_effect_verified: false;
+    persistence_state: 'committed' | 'recovery_required' | 'fsync_fallback';
+    recovery_hold: boolean;
+    transition_sequence: number | null;
+    terminal_transition_sequences: number[];
+    persistence_fallback?: {
+        kind: 'serial206_interrupt_jsonl';
+        reason: string;
+        recorded_at: number;
+    } | null;
 }
 
 export const useInvokeBioXpOperatorActionV2 = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: async ({ actionId, request }: { actionId: string; request: BioXpOperatorActionV2Request }) => (
-            await api.post<BioXpOperatorReceiptV2>(
-                `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`,
-                request,
-            )
-        ).data,
+        mutationFn: async ({ request }: { request: BioXpOperatorActionV2Request }) => {
+            assertBioXpOperatorActionV2Request(request);
+            const { action_id: actionId, ...body } = request;
+            return (
+                await api.post<BioXpOperatorReceiptV2>(
+                    `/api/bioxp/operator-controls/v2/actions/${encodeURIComponent(actionId)}`,
+                    body,
+                )
+            ).data;
+        },
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
+        },
+    });
+};
+
+export const useInterruptBioXpOperatorActionV1 = () => {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: async ({ actionId, request }: { actionId: 'oem.y.stop'; request: BioXpOperatorInterruptV1Request }) => {
+            assertCanonicalBoardEpochMap(request.observed_board_epoch_by_board);
+            return (
+                await api.post<BioXpOperatorInterruptReceiptV1>(
+                    `/api/bioxp/operator-controls/v2/interrupts/${encodeURIComponent(actionId)}`,
+                    request,
+                )
+            ).data;
+        },
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
         },
@@ -1082,8 +1278,9 @@ export const useBioXpOperatorReceiptV2 = (
 ) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'v2', 'receipt', commandId, connectionGeneration],
     queryFn: async () => (
-        await api.get<BioXpOperatorReceiptV2>(
+        await api.get<BioXpOperatorReceiptDetailV2>(
             `/api/bioxp/operator-controls/v2/receipts/${encodeURIComponent(commandId ?? '')}`,
+            { params: { detail: true } },
         )
     ).data,
     enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
@@ -1093,6 +1290,61 @@ export const useBioXpOperatorReceiptV2 = (
         if (!query.state.data) return 500;
         return bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false;
     },
+    refetchIntervalInBackground: false,
+});
+
+export const useSubmitBioXpOperatorMethodV1 = () => useMutation({
+    mutationFn: async (request: BioXpOperatorMethodV1Request) => {
+        assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+        return (
+            await api.post<BioXpOperatorMethodV1>('/api/bioxp/operator-controls/v2/methods', request)
+        ).data;
+    },
+});
+
+const BIOXP_METHOD_V1_TERMINAL = new Set<BioXpOperatorMethodV1Status>([
+    'completed', 'completed_partial', 'failed', 'cleared', 'interrupted', 'ambiguous',
+]);
+
+export const bioXpMethodV1IsTerminal = (
+    method: Pick<BioXpOperatorMethodV1, 'status'> | { status?: unknown } | null | undefined,
+): boolean => typeof method?.status !== 'string'
+    || BIOXP_METHOD_V1_TERMINAL.has(method.status as BioXpOperatorMethodV1Status);
+
+export const useBioXpOperatorMethodV1 = (
+    methodId: string | null,
+    connectionGeneration: number,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
+    queryFn: async () => (
+        await api.get<BioXpOperatorMethodV1>(
+            `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
+        )
+    ).data,
+    enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+    refetchInterval: (query) => bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
+    refetchIntervalInBackground: false,
+});
+
+export const useBioXpOperatorCommandV2 = (
+    commandId: string | null,
+    connectionGeneration: number,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-controls', 'v2', 'command', commandId, connectionGeneration],
+    queryFn: async () => (
+        await api.get<BioXpOperatorReceiptDetailV2>(
+            `/api/bioxp/operator-controls/v2/commands/${encodeURIComponent(commandId ?? '')}`,
+            { params: { detail: true } },
+        )
+    ).data,
+    enabled: enabled && Boolean(commandId) && connectionGeneration > 0,
+    gcTime: 0,
+    retry: false,
+    refetchInterval: (query) => bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false,
     refetchIntervalInBackground: false,
 });
 export const useReadBioXpPipetteReadback = () => useMutation({

@@ -56,6 +56,25 @@ function isCriticalAction(action: BioXpOperatorActionSpec): boolean {
     return criticalGroup(action) !== null;
 }
 
+const retiredGenericYMutationPaths = new Set([
+    '/motion/oem/manual/relative',
+    '/motion/oem/manual/absolute',
+    '/motion/oem/manual/home',
+    '/motion/oem/manual/sethome',
+    '/motion/axis/relative',
+    '/motion/axis/absolute',
+    '/motion/axis/home',
+    '/motion/axis/zero',
+    '/motion/diagnostics/stop',
+    '/motion/reference/mark_referenced',
+]);
+
+function isDedicatedYMutation(action: BioXpOperatorActionSpec): boolean {
+    return action.action_id.startsWith('oem.y.')
+        || action.action_id.startsWith('oem.xy.')
+        || retiredGenericYMutationPaths.has(action.informational_path);
+}
+
 function initialInputs(action: BioXpOperatorActionSpec | undefined): Record<string, unknown> {
     if (!action) return {};
     return Object.fromEntries(action.inputs.flatMap((input) => input.default === null || input.default === undefined
@@ -143,7 +162,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const authoritativeCatalog = !connected || catalogQuery.error ? undefined : catalogQuery.data;
     const authoritativeHistory = !connected || historyQuery.error ? undefined : historyQuery.data;
     const primitiveActions = useMemo(
-        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive'),
+        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive' && !isDedicatedYMutation(action)),
         [authoritativeCatalog?.actions],
     );
     const subsystemOptions = useMemo(
@@ -170,7 +189,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         [browseActions],
     );
     const paneActions = pane === 'meta'
-        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane)
+        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane && !isDedicatedYMutation(action))
         : pane === 'primitive' ? primitiveActions : [];
     const selected = paneActions.find((action) => action.action_id === selectedId) ?? paneActions[0];
     const normalizedForAdmission = useMemo(() => {

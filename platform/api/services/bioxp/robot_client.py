@@ -25,7 +25,7 @@ from pydantic import (
     model_validator,
 )
 
-from .errors import RobotResponseError, RobotTransportError
+from .errors import RobotResponseError, RobotTimeoutError, RobotTransportError
 from .target_policy import ValidatedBioXpTarget
 
 
@@ -47,19 +47,23 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
     "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
-    "operator_control_catalog_v2": ("GET", "/operator/v2/control-catalog", 10.0),
+    "operator_control_catalog_v2": ("GET", "/operator/v2/control-catalog", 5.0),
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
-    "operator_dashboard_v2": ("GET", "/operator/v2/dashboard", 10.0),
+    "operator_dashboard_v2": ("GET", "/operator/v2/dashboard", 5.0),
     "pipette_readback": ("POST", "/liquid/readback", 120.0),
     "pipette_application_status": ("GET", "/liquid/application/status", 10.0),
     "pipette_application_plan": ("POST", "/liquid/application/plan", 10.0),
     "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
     "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
-    "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 30.0),
+    "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 5.0),
+    "interrupt_operator_action_v1": ("POST", "/operator/v2/actions/{action_id}", 10.0),
+    "submit_operator_method_v1": ("POST", "/operator/v2/methods", 5.0),
+    "operator_method_status_v1": ("GET", "/operator/v2/methods/{method_id}", 5.0),
+    "operator_command_status_v2": ("GET", "/operator/v2/commands/{command_id}", 5.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),
-    "operator_action_history_v2": ("GET", "/operator/v2/actions/history", 10.0),
+    "operator_action_history_v2": ("GET", "/operator/v2/actions/history", 5.0),
     "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
-    "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 10.0),
+    "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 5.0),
     "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
     "operator_report_summary": ("GET", "/operator/reports/summary", 10.0),
     "operator_report_commands": ("GET", "/operator/reports/commands", 10.0),
@@ -496,10 +500,17 @@ class BioXpRobotClient:
                 return response.json()
             except RobotResponseError:
                 raise
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
                 if attempt + 1 < attempts:
                     continue
-                raise RobotTransportError("BioXP robot transport is unreachable or timed out") from exc
+                raise RobotTimeoutError(
+                    "BioXP robot request timed out before a response was received",
+                    dispatched=True,
+                ) from exc
+            except httpx.ConnectError as exc:
+                if attempt + 1 < attempts:
+                    continue
+                raise RobotTransportError("BioXP robot transport is unreachable") from exc
             except (httpx.HTTPError, ValueError) as exc:
                 raise RobotTransportError("BioXP robot returned an invalid transport response") from exc
         raise RobotTransportError("BioXP robot transport failed")

@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
+    bioXpErrorPresentation,
     bioXpErrorText,
     bioXpReceiptIsNonTerminal,
+    BIOXP_Y_ABSOLUTE_MAX_STEPS,
+    BIOXP_Y_ABSOLUTE_MIN_STEPS,
+    BIOXP_Y_RELATIVE_MAX_STEPS,
+    BIOXP_Y_RELATIVE_MIN_STEPS,
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
@@ -14,9 +19,12 @@ import {
     useBioXpOperatorDashboardV2,
     useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
+    useInterruptBioXpOperatorActionV1,
     useInvokeBioXpOperatorActionV2,
     useInvokeBioXpOperatorAction,
     useRecoverBioXpMotion,
+    type BioXpOperatorActionV2Request,
+    type BioXpOperatorDashboardV2,
     type BioXpOperatorDashboardXAxis,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
@@ -27,7 +35,7 @@ import { BioXpQuickDashboard } from './BioXpQuickDashboard';
 import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
-type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
+type Axis = 'x' | 'z' | 'g' | 'door';
 type Operation =
     | 'move-negative'
     | 'move-positive'
@@ -52,15 +60,6 @@ const AXES: readonly AxisControls[] = [
     {
         axis: 'x',
         label: 'X Axis',
-        controls: [
-            { label: 'Move −', operation: 'move-negative' },
-            { label: 'Home', operation: 'home' },
-            { label: 'Move +', operation: 'move-positive' },
-        ],
-    },
-    {
-        axis: 'y',
-        label: 'Y Axis',
         controls: [
             { label: 'Move −', operation: 'move-negative' },
             { label: 'Home', operation: 'home' },
@@ -101,6 +100,46 @@ const AXES: readonly AxisControls[] = [
 
 const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35';
 
+function v2AuthorityVersion(dashboard: BioXpOperatorDashboardV2 | undefined): string | null {
+    if (!dashboard) return null;
+    return JSON.stringify({
+        ownership_generation: dashboard.ownership_generation,
+        board4: {
+            state: dashboard.board4.state,
+            prior_board_epoch: dashboard.board4.prior_board_epoch,
+            active_board_epoch: dashboard.board4.active_board_epoch,
+            transition_phase: dashboard.board4.transition_phase,
+            state_version: dashboard.board4.state_version,
+        },
+        y_axis: {
+            ownership_generation: dashboard.y_axis.ownership_generation,
+            prior_board_epoch: dashboard.y_axis.prior_board_epoch,
+            active_board_epoch: dashboard.y_axis.active_board_epoch,
+            prepared_board_epoch: dashboard.y_axis.prepared_board_epoch,
+            lifecycle_state: dashboard.y_axis.lifecycle_state,
+            reference_state: dashboard.y_axis.reference_state,
+            profile_fingerprint: dashboard.y_axis.profile_fingerprint,
+            profile_readback_valid: dashboard.y_axis.profile_readback_valid,
+            profile_mismatches: dashboard.y_axis.profile_mismatches,
+            state_version: dashboard.y_axis.state_version,
+        },
+    });
+}
+
+function YOperatorError({ label, error }: { label: string; error: unknown }) {
+    if (!error) return null;
+    const presentation = bioXpErrorPresentation(error);
+    return (
+        <div role="alert" className="mt-2 rounded border border-red-800/70 bg-red-950/30 p-2 text-xs text-red-200">
+            <p className="font-semibold">{label} failed · {presentation.status == null ? 'HTTP status unavailable' : `HTTP ${presentation.status}`} · {presentation.summary}</p>
+            <details className="mt-1">
+                <summary>Raw bounded robot/BMS response</summary>
+                <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all">{presentation.rawJson}</pre>
+            </details>
+        </div>
+    );
+}
+
 export function BioXpCockpit() {
     const statusQuery = useBioXpStatus(true);
     const status = statusQuery.isError ? undefined : statusQuery.data;
@@ -112,17 +151,33 @@ export function BioXpCockpit() {
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
     const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
     const dashboardV2Query = useBioXpOperatorDashboardV2(generation, linkConnected);
-    const catalogV2Query = useBioXpOperatorControlCatalogV2(generation, linkConnected);
+    const currentDashboardV2 = linkConnected && dashboardV2Query.error == null && !dashboardV2Query.isStale
+        ? dashboardV2Query.data
+        : undefined;
+    const dashboardAuthorityVersion = v2AuthorityVersion(currentDashboardV2);
+    const catalogV2Query = useBioXpOperatorControlCatalogV2(
+        generation,
+        linkConnected,
+        dashboardAuthorityVersion,
+    );
     const [yCommandId, setYCommandId] = useState<string | null>(null);
+    const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
     const [yStepInput, setYStepInput] = useState(1000);
     const [yTargetInput, setYTargetInput] = useState(0);
-    const yAxisV2 = dashboardV2Query.data?.y_axis;
+    const currentCatalogV2 = linkConnected && catalogV2Query.error == null && !catalogV2Query.isStale
+        ? catalogV2Query.data
+        : undefined;
+    const v2AuthorityCoherent = currentDashboardV2 !== undefined
+        && currentCatalogV2 !== undefined
+        && dashboardAuthorityVersion === v2AuthorityVersion(currentCatalogV2.dashboard);
+    const yAxisV2 = v2AuthorityCoherent ? currentDashboardV2?.y_axis : undefined;
     const yReceiptCommandId = yCommandId
         ?? yAxisV2?.active_command?.command_id
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
     const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, linkConnected);
     const invokeYAction = useInvokeBioXpOperatorActionV2();
+    const interruptYAction = useInterruptBioXpOperatorActionV1();
     const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
@@ -139,15 +194,15 @@ export function BioXpCockpit() {
     const resetInvokeOperatorAction = invokeOperatorAction.reset;
     const resetEmergencyAction = emergencyAction.reset;
     const resetRecoverMotion = recoverMotion.reset;
-    const [manualSteps, setManualSteps] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
+    const resetInvokeYAction = invokeYAction.reset;
+    const resetInterruptYAction = interruptYAction.reset;
+    const [manualSteps, setManualSteps] = useState<Record<'x' | 'z' | 'g', number>>({
         x: 10000,
-        y: 10000,
         z: 10000,
         g: 10000,
     });
-    const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'y' | 'z' | 'g', number>>({
+    const [absoluteTargets, setAbsoluteTargets] = useState<Record<'x' | 'z' | 'g', number>>({
         x: 60,
-        y: 0,
         z: 65000,
         g: 0,
     });
@@ -192,6 +247,12 @@ export function BioXpCockpit() {
         resetEmergencyAction();
         resetRecoverMotion();
     }, [generation, linkConnected, resetEmergencyAction, resetInvokeOperatorAction, resetRecoverMotion]);
+    useEffect(() => {
+        setYCommandId(null);
+        setYPendingActionId(null);
+        resetInvokeYAction();
+        resetInterruptYAction();
+    }, [generation, linkConnected, resetInterruptYAction, resetInvokeYAction]);
     const busy = invokeOperatorAction.isPending || emergencyAction.isPending || recoverMotion.isPending || updateFreshness.isPending;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
@@ -204,8 +265,11 @@ export function BioXpCockpit() {
     const operatorActionById = (actionId: string) => (catalog?.actions ?? []).find(
         (action) => action.action_id === actionId,
     );
-    const yActionById = (actionId: string) => (catalogV2Query.data?.actions ?? []).find(
-        (action) => action.action_id === actionId,
+    const yActionById = (actionId: string) => (v2AuthorityCoherent ? currentCatalogV2?.actions ?? [] : []).find(
+        (action) => action.action_id === actionId
+            && action.interrupt === false
+            && action.request_schema_version === 'bioxp.operator_action_request.v2'
+            && action.response_schema_version === 'bioxp.operator_action_receipt.v2',
     );
     const yActionDisabledReason = (actionId: string, fallback: string) =>
         yActionById(actionId)?.disabled_reason ?? fallback;
@@ -400,7 +464,7 @@ export function BioXpCockpit() {
         if (path) invokeOperatorPath(path, {});
     };
 
-    const runAbsolute = (axis: 'x' | 'y' | 'z' | 'g') => {
+    const runAbsolute = (axis: 'x' | 'z' | 'g') => {
         if (axis === 'x') {
             if (!xAbsoluteEnabled) return;
             invokeAction('oem.x.move_absolute', xAbsoluteInputs);
@@ -422,30 +486,72 @@ export function BioXpCockpit() {
     const abortXAggregate = () => invokeAction('oem.abort_all', {}, emergencyAction);
     const abortZ = () => invokeAction('oem.z.abort', {}, emergencyAction);
 
-    const invokeY = (actionId: string, inputs: Record<string, unknown>) => {
-        const ownershipGenerationV2 = dashboardV2Query.data?.ownership_generation
-            ?? catalogV2Query.data?.dashboard.ownership_generation
-            ?? 0;
-        if (!linkConnected || generation <= 0 || ownershipGenerationV2 <= 0 || yActionById(actionId)?.enabled !== true) return;
+    const submitY = (request: BioXpOperatorActionV2Request) => {
+        if (!v2AuthorityCoherent || yActionById(request.action_id)?.enabled !== true) return;
+        setYCommandId(null);
+        setYPendingActionId(request.action_id);
+        invokeYAction.mutate({ request }, {
+            onSuccess: (receipt) => {
+                setYCommandId(receipt.command_id);
+                setYPendingActionId(null);
+            },
+            onError: () => setYPendingActionId(null),
+        });
+    };
+    const yNormalEnvelope = () => {
+        if (!v2AuthorityCoherent || yAxisV2?.active_board_epoch == null) return null;
         const idempotencyKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
             ? crypto.randomUUID()
             : `bioxp-y-${Date.now()}`;
-        invokeYAction.mutate({
-            actionId,
+        return {
+            expected_connection_generation: generation,
+            schema_version: 'bioxp.operator_action_request.v2' as const,
+            expected_ownership_generation: yAxisV2.ownership_generation,
+            idempotency_key: idempotencyKey,
+            expected_board_epoch_by_board: { '4': yAxisV2.active_board_epoch },
+        };
+    };
+    const invokeYMoveSteps = (steps: number) => {
+        const envelope = yNormalEnvelope();
+        if (envelope) submitY({ ...envelope, action_id: 'oem.y.move_steps', inputs: { steps } });
+    };
+    const invokeYMoveAbsolute = (target_steps: number) => {
+        const envelope = yNormalEnvelope();
+        if (envelope) submitY({ ...envelope, action_id: 'oem.y.move_absolute', inputs: { target_steps } });
+    };
+    const invokeYHome = (action_id: 'oem.y.manual_panel_home' | 'oem.y.diagnostic_home') => {
+        const envelope = yNormalEnvelope();
+        if (envelope) submitY({ ...envelope, action_id, inputs: {} });
+    };
+    const interruptY = () => {
+        if (!linkConnected || generation <= 0) return;
+        const observedEpoch = currentDashboardV2?.y_axis.active_board_epoch;
+        interruptYAction.mutate({
+            actionId: 'oem.y.stop',
             request: {
                 expected_connection_generation: generation,
-                expected_ownership_generation: ownershipGenerationV2,
-                idempotency_key: idempotencyKey,
-                inputs,
+                schema_version: 'bioxp.operator_interrupt_request.v1',
+                reason: 'BMS operator requested addressed Serial-206 Y STOP',
+                observed_ownership_generation: currentDashboardV2?.ownership_generation ?? null,
+                observed_board_epoch_by_board: observedEpoch == null ? {} : { '4': observedEpoch },
             },
-        }, {
-            onSuccess: (receipt) => setYCommandId(receipt.command_id),
         });
     };
+    const yStepInputValid = Number.isInteger(yStepInput)
+        && yStepInput >= BIOXP_Y_RELATIVE_MIN_STEPS
+        && yStepInput <= BIOXP_Y_RELATIVE_MAX_STEPS;
+    const yTargetInputValid = Number.isInteger(yTargetInput)
+        && yTargetInput >= BIOXP_Y_ABSOLUTE_MIN_STEPS
+        && yTargetInput <= BIOXP_Y_ABSOLUTE_MAX_STEPS;
     const yMutationDisabled = (actionId: string) =>
-        !linkConnected || invokeYAction.isPending || yActionById(actionId)?.enabled !== true;
+        !v2AuthorityCoherent
+        || invokeYAction.isPending
+        || yActionById(actionId)?.enabled !== true
+        || (actionId === 'oem.y.move_steps' && !yStepInputValid)
+        || (actionId === 'oem.y.move_absolute' && !yTargetInputValid);
+    const yStopDisabled = !linkConnected || generation <= 0 || interruptYAction.isPending;
 
-    const error = invokeOperatorAction.error ?? invokeYAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
+    const error = invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -562,17 +668,34 @@ export function BioXpCockpit() {
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Physical proof</dt><dd className="font-mono text-amber-200">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
                 </dl>
                 <div className="mt-3 flex flex-wrap items-end gap-2">
-                    <label className="text-sm text-slate-300">Step delta<input type="number" value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
-                    <label className="text-sm text-slate-300">Absolute target<input type="number" min={0} max={102956} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeY('oem.y.move_steps', { steps: -Math.abs(yStepInput) })} className={actionClass}>Move −</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual home unavailable.')} onClick={() => invokeY('oem.y.manual_panel_home', {})} className={actionClass}>Manual Home</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeY('oem.y.move_steps', { steps: Math.abs(yStepInput) })} className={actionClass}>Move +</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeY('oem.y.move_absolute', { target_steps: yTargetInput })} className="rounded bg-indigo-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Absolute</button>
-                    <button type="button" disabled={yMutationDisabled('oem.y.stop')} title={yActionDisabledReason('oem.y.stop', 'Y STOP unavailable.')} onClick={() => invokeY('oem.y.stop', {})} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">STOP Y</button>
+                    <label className="text-sm text-slate-300">Step delta<input type="number" min={BIOXP_Y_RELATIVE_MIN_STEPS} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
+                    <label className="text-sm text-slate-300">Absolute target<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono" /></label>
+                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
+                    <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} className={actionClass}>Manual-panel Home</button>
+                    {yActionById('oem.y.diagnostic_home') && <button type="button" disabled={yMutationDisabled('oem.y.diagnostic_home')} title={yActionDisabledReason('oem.y.diagnostic_home', 'Y diagnostic home unavailable.')} onClick={() => invokeYHome('oem.y.diagnostic_home')} className="rounded bg-amber-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Diagnostic Home</button>}
+                    <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} className={actionClass}>Move +</button>
+                    <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} className="rounded bg-indigo-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Absolute</button>
+                    <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">STOP Y</button>
                 </div>
+                <YOperatorError label="Y enqueue" error={invokeYAction.error} />
+                <YOperatorError label="Y STOP" error={interruptYAction.error} />
+                {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
                 {yReceiptCommandId && <p className="mt-2 text-xs text-slate-300">Command <span className="font-mono">{yReceiptCommandId}</span>: <span className="font-mono">{yReceiptQuery.data?.status ?? 'queued'}</span>{yReceiptQuery.data?.completion_class === 'issued_pending' ? ' · awaiting robot completion' : ''}</p>}
+                {yReceiptQuery.data && (
+                    <div className="mt-3 grid gap-2 text-xs lg:grid-cols-2">
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Requested</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.requested_values, null, 2)}</pre></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Effective</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.effective_values, null, 2)}</pre></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Observed, terminal position/speed, discrepancy</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.observed_values, null, 2)}</pre></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Completion</strong><p className="mt-1">class={yReceiptQuery.data.completion_class ?? 'not reported'} · terminal position={String(yReceiptQuery.data.observed_values.terminal_position_steps ?? 'not reported')} · terminal speed={String(yReceiptQuery.data.observed_values.terminal_speed_steps_s ?? 'not reported')} · discrepancy={String(yReceiptQuery.data.observed_values.discrepancy_steps ?? 'not reported')}</p></div>
+                        <div className="rounded border border-amber-800/60 bg-amber-950/20 p-2"><strong>Independent physical observation</strong><p className="mt-1">physical_effect_verified={String(yReceiptQuery.data.physical_effect_verified)}</p></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Controller completion evidence</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.controller_evidence, null, 2)}</pre></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2"><strong>Raw return layers</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.raw_return_layers, null, 2)}</pre></div>
+                        <div className="rounded border border-slate-800 bg-slate-950/60 p-2 lg:col-span-2"><strong>Transport artifacts</strong><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(yReceiptQuery.data.transport_artifacts, null, 2)}</pre></div>
+                    </div>
+                )}
+                {interruptYAction.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYAction.data, null, 2)}</pre></details>}
                 {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
-                {catalogV2Query.isError && <p className="mt-2 text-xs text-amber-200">Y catalog unavailable. Controls remain disabled until the robot publishes v2 authority.</p>}
+                {!v2AuthorityCoherent && <p className="mt-2 text-xs text-amber-200">Fresh, matching v2 catalog and dashboard authority is unavailable. Normal Y controls remain disabled; addressed STOP remains independent.</p>}
             </section>
 
             <BioXpOperatorReports generation={generation} connected={linkConnected} />

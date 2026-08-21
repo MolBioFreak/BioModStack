@@ -3986,6 +3986,227 @@ CommandStatusV2 = Literal[
     "rejected",
 ]
 _NONTERMINAL_V2 = frozenset({"queued", "dispatched", "issued_pending", "interrupting"})
+Board4StateV2 = Literal["unknown", "inactive", "transitioning", "active", "faulted"]
+YAxisLifecycleStateV2 = Literal[
+    "unprepared",
+    "prepared_unreferenced",
+    "referenced_ready",
+    "generation_stale",
+    "reconciliation_required",
+    "faulted",
+]
+YAxisReferenceStateV2 = Literal[
+    "unreferenced",
+    "referenced",
+    "generation_stale",
+    "reconciliation_required",
+]
+MethodStatusV1 = Literal[
+    "queued",
+    "active",
+    "pause_requested",
+    "paused",
+    "cancel_requested",
+    "stopping",
+    "aborting",
+    "completed",
+    "completed_partial",
+    "failed",
+    "cleared",
+    "interrupted",
+    "ambiguous",
+]
+NonnegativeStrictInt = Annotated[StrictInt, Field(ge=0)]
+SignedInt32 = Annotated[StrictInt, Field(ge=-(2**31), le=2**31 - 1)]
+YRelativeStepsV2 = Annotated[StrictInt, Field(ge=-102_936, le=102_936)]
+ReceiptScalarV2 = StrictInt | StrictFloat | StrictBool | str | None
+
+
+class OperatorYMoveStepsInputsV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    steps: YRelativeStepsV2
+
+
+class OperatorYMoveAbsoluteInputsV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target_steps: SignedInt32
+
+
+class OperatorEmptyInputsV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+OperatorNormalInputsV2 = (
+    OperatorYMoveStepsInputsV2
+    | OperatorYMoveAbsoluteInputsV2
+    | OperatorEmptyInputsV2
+)
+
+
+def _canonical_board_epoch_map(value: dict[str, int]) -> dict[str, int]:
+    if any(not key.isdecimal() or str(int(key)) != key for key in value):
+        raise ValueError("board epoch keys must be canonical nonnegative decimal board IDs")
+    return value
+
+
+class OperatorActionRequestV2(BaseModel):
+    """BMS-local connection fence plus the exact normal robot v2 body."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    schema_version: Literal["bioxp.operator_action_request.v2"]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    expected_ownership_generation: NonnegativeStrictInt
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+    inputs: OperatorNormalInputsV2
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def bounded_idempotency_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 128:
+            raise ValueError("idempotency_key must be at most 128 bytes")
+        return value
+
+    @field_validator("expected_board_epoch_by_board")
+    @classmethod
+    def canonical_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
+        return _canonical_board_epoch_map(value)
+
+
+class OperatorInterruptRequestV1(BaseModel):
+    """BMS-local connection fence plus the non-replayable robot STOP body."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    schema_version: Literal["bioxp.operator_interrupt_request.v1"]
+    reason: str = Field(min_length=1, max_length=500)
+    observed_ownership_generation: NonnegativeStrictInt | None
+    observed_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+
+    @field_validator("reason")
+    @classmethod
+    def bounded_reason_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 500:
+            raise ValueError("reason must be at most 500 bytes")
+        return value
+
+    @field_validator("observed_board_epoch_by_board")
+    @classmethod
+    def canonical_observed_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
+        return _canonical_board_epoch_map(value)
+
+
+class OperatorInterruptPersistenceFallbackV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    kind: Literal["serial206_interrupt_jsonl"]
+    reason: str = Field(min_length=1, max_length=500)
+    recorded_at: StrictFloat
+
+    @field_validator("recorded_at")
+    @classmethod
+    def finite_recorded_at(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("interrupt fallback time must be finite")
+        return value
+
+
+class OperatorInterruptReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["bioxp.operator_interrupt_receipt.v1"]
+    robot_identity: str = Field(min_length=1, max_length=160)
+    ownership_generation: NonnegativeStrictInt
+    observed_ownership_generation: NonnegativeStrictInt | None
+    observed_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+    interrupt_attempt_id: str = Field(min_length=1, max_length=160)
+    interrupt_id: str = Field(min_length=1, max_length=160)
+    action_id: Literal["oem.y.stop"]
+    scope: Literal["y"]
+    cutoff: NonnegativeStrictInt | None = None
+    active_command_id: str | None = Field(default=None, max_length=160)
+    active_command_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    global_safety_epoch: NonnegativeStrictInt | None = None
+    x_safety_epoch: NonnegativeStrictInt | None = None
+    y_safety_epoch: NonnegativeStrictInt | None = None
+    z_safety_epoch: NonnegativeStrictInt | None = None
+    oem_abort_latched: Literal[False]
+    controller_stop_attempted: Literal[True]
+    controller_stop_acknowledged: StrictBool
+    controller_response: JsonValue
+    error: str | None = Field(default=None, max_length=1000)
+    physical_effect_verified: Literal[False]
+    persistence_state: Literal["committed", "recovery_required", "fsync_fallback"]
+    recovery_hold: StrictBool
+    transition_sequence: NonnegativeStrictInt | None = None
+    terminal_transition_sequences: list[NonnegativeStrictInt] = Field(default_factory=list, max_length=10_000)
+    persistence_fallback: OperatorInterruptPersistenceFallbackV1 | None = None
+
+    @field_validator("observed_board_epoch_by_board")
+    @classmethod
+    def canonical_observed_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
+        return _canonical_board_epoch_map(value)
+
+    @model_validator(mode="after")
+    def bind_interrupt_semantics(self):
+        if self.active_command_id is not None and self.active_command_id not in self.active_command_ids:
+            raise ValueError("active interrupt command must be present in active_command_ids")
+        if self.controller_stop_acknowledged and self.error is not None:
+            raise ValueError("acknowledged controller STOP cannot carry an error")
+        if not self.controller_stop_acknowledged and not self.error:
+            raise ValueError("unacknowledged controller STOP requires an error")
+        if self.persistence_state == "committed":
+            if not self.controller_stop_acknowledged or self.recovery_hold:
+                raise ValueError("committed STOP requires acknowledgement and no recovery hold")
+            if None in (self.cutoff, self.global_safety_epoch, self.x_safety_epoch, self.y_safety_epoch, self.z_safety_epoch):
+                raise ValueError("committed STOP requires persisted cutoff and safety epochs")
+            if self.persistence_fallback is not None:
+                raise ValueError("committed STOP cannot carry fallback persistence")
+        elif not self.recovery_hold:
+            raise ValueError("non-committed STOP requires recovery hold")
+        if self.persistence_state == "fsync_fallback" and self.persistence_fallback is None:
+            raise ValueError("fsync fallback STOP requires fallback persistence evidence")
+        if self.persistence_state != "fsync_fallback" and self.persistence_fallback is not None:
+            raise ValueError("fallback persistence evidence requires fsync_fallback state")
+        return self
+
+
+class OperatorXYMoveAbsoluteInputsV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    x_steps: SignedInt32
+    y_steps: SignedInt32
+
+
+class OperatorMethodRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_connection_generation: StrictInt = Field(ge=1)
+    schema_version: Literal["bioxp.operator_method_request.v1"]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    method_action_id: Literal["oem.xy.move_absolute", "oem.xy.home"]
+    expected_ownership_generation: NonnegativeStrictInt
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+    inputs: OperatorXYMoveAbsoluteInputsV1 | OperatorEmptyInputsV2
+
+    @field_validator("idempotency_key")
+    @classmethod
+    def bounded_method_idempotency_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 128:
+            raise ValueError("idempotency_key must be at most 128 bytes")
+        return value
+
+    @field_validator("expected_board_epoch_by_board")
+    @classmethod
+    def canonical_method_board_epoch_keys(cls, value: dict[str, int]) -> dict[str, int]:
+        return _canonical_board_epoch_map(value)
+
+    @model_validator(mode="after")
+    def bind_inputs_to_method(self):
+        expected_type = (
+            OperatorXYMoveAbsoluteInputsV1
+            if self.method_action_id == "oem.xy.move_absolute"
+            else OperatorEmptyInputsV2
+        )
+        if not isinstance(self.inputs, expected_type):
+            raise ValueError("method inputs do not match method_action_id")
+        return self
 
 
 class OperatorReceiptErrorV2(BaseModel):
@@ -4007,7 +4228,7 @@ class OperatorActionReceiptV2(BaseModel):
     sequence: StrictInt = Field(ge=1)
     method_id: str | None
     ownership_generation: StrictInt = Field(ge=0)
-    expected_board_epoch_by_board: dict[str, StrictInt]
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
     state_version: StrictInt = Field(ge=1)
     status_path: str = Field(min_length=1, max_length=400)
     accepted_at: StrictFloat
@@ -4046,7 +4267,7 @@ class OperatorTransitionV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     transition_id: str = Field(min_length=1, max_length=160)
-    from_status: str | None
+    from_status: CommandStatusV2 | None
     to_status: CommandStatusV2
     at: StrictFloat
     reason: str | None
@@ -4061,9 +4282,9 @@ class OperatorTransitionV2(BaseModel):
 
 class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
     canonical_inputs: dict[str, JsonValue]
-    requested_values: dict[str, JsonValue]
-    effective_values: dict[str, JsonValue]
-    observed_values: dict[str, JsonValue]
+    requested_values: dict[str, ReceiptScalarV2]
+    effective_values: dict[str, ReceiptScalarV2]
+    observed_values: dict[str, ReceiptScalarV2]
     raw_return_layers: dict[str, JsonValue]
     controller_evidence: dict[str, JsonValue]
     transport_artifacts: list[OperatorTransportArtifactV2]
@@ -4107,9 +4328,9 @@ class OperatorQueueV1(BaseModel):
 class OperatorBoard4AuthorityV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    state: str = Field(min_length=1, max_length=80)
-    prior_board_epoch: StrictInt | None
-    active_board_epoch: StrictInt | None
+    state: Board4StateV2
+    prior_board_epoch: NonnegativeStrictInt | None
+    active_board_epoch: NonnegativeStrictInt | None
     transition_phase: str = Field(min_length=1, max_length=80)
     transition_evidence: dict[str, JsonValue]
     member_motors: dict[str, StrictInt]
@@ -4123,6 +4344,13 @@ class OperatorBoard4AuthorityV2(BaseModel):
             raise ValueError("authority time must be finite")
         return value
 
+    @field_validator("member_motors")
+    @classmethod
+    def exact_member_motors(cls, value: dict[str, int]) -> dict[str, int]:
+        if value != {"y": 0, "z": 1, "gripper": 2}:
+            raise ValueError("board 4 member motors must be the frozen Serial-206 map")
+        return value
+
 
 class OperatorYAxisAuthorityV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -4131,11 +4359,11 @@ class OperatorYAxisAuthorityV2(BaseModel):
     board_id: Literal[4]
     motor_id: Literal[0]
     ownership_generation: StrictInt = Field(ge=0)
-    prior_board_epoch: StrictInt | None
-    active_board_epoch: StrictInt | None
-    prepared_board_epoch: StrictInt | None
-    lifecycle_state: str = Field(min_length=1, max_length=80)
-    reference_state: str = Field(min_length=1, max_length=80)
+    prior_board_epoch: NonnegativeStrictInt | None
+    active_board_epoch: NonnegativeStrictInt | None
+    prepared_board_epoch: NonnegativeStrictInt | None
+    lifecycle_state: YAxisLifecycleStateV2
+    reference_state: YAxisReferenceStateV2
     position_steps: StrictInt | None
     position_reply_valid: StrictBool
     position_status_code: StrictInt | None
@@ -4184,16 +4412,48 @@ class OperatorDashboardV2(BaseModel):
             raise ValueError("dashboard time must be finite")
         return value
 
+    @model_validator(mode="after")
+    def bind_embedded_authority(self):
+        if self.y_axis.ownership_generation != self.ownership_generation:
+            raise ValueError("Y ownership generation must match dashboard ownership generation")
+        if self.y_axis.prior_board_epoch != self.board4.prior_board_epoch:
+            raise ValueError("Y prior board epoch must match board 4 authority")
+        if self.y_axis.active_board_epoch != self.board4.active_board_epoch:
+            raise ValueError("Y active board epoch must match board 4 authority")
+        return self
+
 
 class OperatorActionSpecV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     action_id: str = Field(min_length=1, max_length=160)
-    request_schema_version: str = Field(min_length=1, max_length=160)
-    response_schema_version: str = Field(min_length=1, max_length=160)
+    request_schema_version: Literal[
+        "bioxp.operator_action_request.v2",
+        "bioxp.operator_interrupt_request.v1",
+    ]
+    response_schema_version: Literal[
+        "bioxp.operator_action_receipt.v2",
+        "bioxp.operator_interrupt_receipt.v1",
+    ]
     interrupt: StrictBool
     enabled: StrictBool
     disabled_reason: str | None
+
+    @model_validator(mode="after")
+    def bind_request_schema_to_interrupt(self):
+        expected_request = (
+            "bioxp.operator_interrupt_request.v1"
+            if self.interrupt
+            else "bioxp.operator_action_request.v2"
+        )
+        expected_response = (
+            "bioxp.operator_interrupt_receipt.v1"
+            if self.interrupt
+            else "bioxp.operator_action_receipt.v2"
+        )
+        if self.request_schema_version != expected_request or self.response_schema_version != expected_response:
+            raise ValueError("catalog request/response schemas do not match interrupt classification")
+        return self
 
 
 class OperatorControlCatalogV2(BaseModel):
@@ -4211,6 +4471,36 @@ class OperatorActionHistoryV2(BaseModel):
     items: list[OperatorActionReceiptV2]
     next_cursor: str | None
     limit: StrictInt = Field(ge=1, le=200)
+
+
+class OperatorMethodV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["bioxp.operator_method.v1"]
+    method_id: str = Field(min_length=1, max_length=160)
+    action_id: Literal["oem.xy.move_absolute", "oem.xy.home"]
+    status: MethodStatusV1
+    state_version: StrictInt = Field(ge=1)
+    child_receipts: list[OperatorActionReceiptV2]
+    accepted_at: StrictFloat
+    finished_at: StrictFloat | None
+
+    @field_validator("accepted_at", "finished_at")
+    @classmethod
+    def finite_method_times(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("method times must be finite")
+        return value
+
+
+OperatorDashboardWire = Annotated[
+    OperatorDashboard | OperatorDashboardV2,
+    Field(discriminator="schema_version"),
+]
+OperatorControlCatalogWire = Annotated[
+    OperatorControlCatalog | OperatorControlCatalogV2,
+    Field(discriminator="schema_version"),
+]
 
 
 class OperatorReportSnapshotV1(BaseModel):

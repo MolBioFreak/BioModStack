@@ -39,6 +39,7 @@ class FakeRobotClient:
         self.blocking_action_id: str | None = None
         self.status_probe_started: asyncio.Event | None = None
         self.status_probe_release: asyncio.Event | None = None
+        self.request_calls: list[tuple[str, dict[str, Any]]] = []
 
     async def probe(self) -> dict[str, Any]:
         self.probes += 1
@@ -60,6 +61,7 @@ class FakeRobotClient:
         self.closed = True
 
     async def request(self, route_name: str, **kwargs: Any) -> dict[str, Any]:
+        self.request_calls.append((route_name, kwargs))
         if self.request_started is not None:
             self.request_started.set()
         if self.request_release is not None and (
@@ -740,3 +742,220 @@ def test_dns_failure_deactivates_and_records_operator_visible_error(tmp_path: Pa
     assert snapshot.runtime_ready is None
     assert snapshot.hardware_ready is None
     assert snapshot.last_error == "BioXP target DNS resolution failed"
+
+
+@pytest.mark.parametrize("lane", ["enqueue", "interrupt"])
+def test_timed_out_dispatched_v2_work_keeps_lane_and_generation_lease_until_remote_exit(tmp_path: Path, lane: str) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import RobotTimeoutError
+
+    clients: list[FakeRobotClient] = []
+    service = _service(
+        tmp_path,
+        clients,
+        v2_enqueue_timeout_seconds=0.01,
+        interrupt_timeout_seconds=0.01,
+    )
+
+    async def scenario() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        route = "invoke_operator_action_v2" if lane == "enqueue" else "interrupt_operator_action_v1"
+        action_id = "oem.y.move_steps" if lane == "enqueue" else "oem.y.stop"
+
+        if lane == "enqueue":
+            first = service.request_active_v2_enqueue(
+                route,
+                expected_generation=connected.generation,
+                path_params={"action_id": action_id},
+                json_data={"schema_version": "bioxp.operator_action_request.v2"},
+            )
+        else:
+            first = service.request_active_safety_interrupt(
+                route,
+                expected_generation=connected.generation,
+                path_params={"action_id": action_id},
+                json_data={"schema_version": "bioxp.operator_interrupt_request.v1"},
+            )
+        with pytest.raises(RobotTimeoutError) as caught:
+            await first
+        assert caught.value.dispatch_state == "outcome_ambiguous"
+        assert caught.value.status_recovery == "query_current_v2_dashboard_and_receipt_before_any_retry"
+        assert len(robot.request_calls) == 1
+
+        if lane == "enqueue":
+            second = asyncio.create_task(service.request_active_v2_enqueue(
+                route,
+                expected_generation=connected.generation,
+                path_params={"action_id": action_id},
+                json_data={"schema_version": "bioxp.operator_action_request.v2"},
+            ))
+        else:
+            second = asyncio.create_task(service.request_active_safety_interrupt(
+                route,
+                expected_generation=connected.generation,
+                path_params={"action_id": action_id},
+                json_data={"schema_version": "bioxp.operator_interrupt_request.v1"},
+            ))
+        disconnect = asyncio.create_task(service.disconnect())
+        await asyncio.sleep(0)
+        assert len(robot.request_calls) == 1
+        assert second.done() is False
+        assert disconnect.done() is False
+
+        robot.request_release.set()
+        await second
+        await disconnect
+        assert len(robot.request_calls) == 2
+        assert robot.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_v2_query_enqueue_and_interrupt_lanes_enter_independently(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def scenario() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        entered: set[str] = set()
+        all_entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def concurrent_request(route_name: str, **kwargs: Any) -> dict[str, Any]:
+            robot.request_calls.append((route_name, kwargs))
+            entered.add(route_name)
+            if len(entered) == 3:
+                all_entered.set()
+            await release.wait()
+            return {"route_name": route_name}
+
+        robot.request = concurrent_request  # type: ignore[method-assign]
+        query = asyncio.create_task(service.request_active_v2_query(
+            "operator_dashboard_v2",
+            expected_generation=connected.generation,
+        ))
+        enqueue = asyncio.create_task(service.request_active_v2_enqueue(
+            "invoke_operator_action_v2",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.y.move_steps"},
+            json_data={"schema_version": "bioxp.operator_action_request.v2"},
+        ))
+        interrupt = asyncio.create_task(service.request_active_safety_interrupt(
+            "interrupt_operator_action_v1",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.y.stop"},
+            json_data={"schema_version": "bioxp.operator_interrupt_request.v1"},
+        ))
+
+        await asyncio.wait_for(all_entered.wait(), timeout=1.0)
+        assert entered == {
+            "operator_dashboard_v2",
+            "invoke_operator_action_v2",
+            "interrupt_operator_action_v1",
+        }
+        assert all(not task.done() for task in (query, enqueue, interrupt))
+        release.set()
+        await asyncio.gather(query, enqueue, interrupt)
+
+    asyncio.run(scenario())
+
+
+def test_timeout_before_dispatch_releases_waiting_lease_and_is_explicitly_retryable(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import RobotTimeoutError
+
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+    service.v2_enqueue_timeout_seconds = 1.0
+    asyncio.run(service.save_profile(BioXpProfile(api_url="http://robot:8123")))
+    asyncio.run(service.connect())
+    client = clients[0]
+    request_started = asyncio.Event()
+    request_release = asyncio.Event()
+    client.request_started = request_started
+    client.request_release = request_release
+
+    async def scenario() -> None:
+        first = asyncio.create_task(service.request_active_v2_enqueue(
+            "invoke_operator_action_v2",
+            expected_generation=1,
+            json_data={"command": "first"},
+        ))
+        await request_started.wait()
+        service.v2_enqueue_timeout_seconds = 0.01
+        second = asyncio.create_task(service.request_active_v2_enqueue(
+            "invoke_operator_action_v2",
+            expected_generation=1,
+            json_data={"command": "second"},
+        ))
+        with pytest.raises(RobotTimeoutError) as captured:
+            await second
+        assert captured.value.dispatched is False
+        assert captured.value.dispatch_state == "not_dispatched"
+        assert captured.value.caller_can_retry is True
+        assert len(client.request_calls) == 1
+        request_release.set()
+        await first
+        assert service._generation_leases[1].lease_count == 0  # noqa: SLF001
+        assert service._generation_leases[1].state == "OPEN"  # noqa: SLF001
+
+    asyncio.run(scenario())
+
+
+def test_connect_candidate_cannot_publish_after_saved_profile_revision_changes(tmp_path: Path) -> None:
+    BioXpConnectionService, BioXpProfile, BioXpProfileStore, BioXpTargetPolicy = _load()
+
+    async def resolver(host: str) -> tuple[str, ...]:
+        return ("100.64.0.10" if host == "robot-a" else "100.64.0.11",)
+
+    probe_started = asyncio.Event()
+    probe_release = asyncio.Event()
+    clients: list[FakeRobotClient] = []
+
+    class SlowFirstClient(FakeRobotClient):
+        async def probe_status_only(self) -> dict[str, Any]:
+            if len(clients) == 1:
+                probe_started.set()
+                await probe_release.wait()
+            return await super().probe_status_only()
+
+    store = BioXpProfileStore(tmp_path / "profile.json")
+    policy = BioXpTargetPolicy(
+        allowed_hosts={"robot-a", "robot-b"},
+        allowed_cidrs={"100.64.0.0/10"},
+        resolver=resolver,
+    )
+
+    def factory(target):
+        client = SlowFirstClient(target)
+        clients.append(client)
+        return client
+
+    service = BioXpConnectionService(store, policy, client_factory=factory, initial_generation=0)
+
+    async def scenario() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot-a:8123"))
+        stale_connect = asyncio.create_task(service.connect())
+        await probe_started.wait()
+        await service.save_profile(BioXpProfile(api_url="http://robot-b:8123"))
+        current = await service.connect()
+        assert current.active is True
+        assert current.masked_target == "http://ro***b:8123"
+        probe_release.set()
+        with pytest.raises(Exception, match="profile or connection changed"):
+            await stale_connect
+        snapshot = service.snapshot()
+        assert snapshot.active is True
+        assert snapshot.generation == current.generation
+        assert service.active_client is clients[1]
+        assert clients[0].closed is True
+        assert clients[1].closed is False
+
+    asyncio.run(scenario())

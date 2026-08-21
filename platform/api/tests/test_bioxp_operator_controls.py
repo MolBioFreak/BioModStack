@@ -11,7 +11,7 @@ import pytest
 
 from routers import bioxp
 from routers.bioxp.operator_controls import _translate_robot_error
-from services.bioxp.errors import ConnectionStateError, RobotResponseError
+from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTimeoutError
 from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionReceipt,
@@ -130,6 +130,114 @@ def pipette_readback(*, include_data: bool = False) -> dict:
             "physical_effect_verified": False,
             "physical_effect_claim_suppressed": True,
         },
+    }
+
+
+def v2_receipt(*, action_id: str = "oem.y.move_steps", command_id: str = "cmd-1") -> dict:
+    return {
+        "schema_version": "bioxp.operator_action_receipt.v2",
+        "command_id": command_id,
+        "action_id": action_id,
+        "status": "queued",
+        "terminal": False,
+        "sequence": 1,
+        "method_id": None,
+        "ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2},
+        "state_version": 1,
+        "status_path": f"/operator/v2/actions/receipts/{command_id}",
+        "accepted_at": 1.0,
+        "queued_at": 1.0,
+        "dispatched_at": None,
+        "finished_at": None,
+        "terminal_receipt_id": None,
+        "completion_class": None,
+        "physical_effect_verified": False,
+        "error": None,
+    }
+
+
+def v2_receipt_detail() -> dict:
+    return {
+        **v2_receipt(),
+        "canonical_inputs": {"steps": 20},
+        "requested_values": {},
+        "effective_values": {},
+        "observed_values": {},
+        "raw_return_layers": {},
+        "controller_evidence": {},
+        "transport_artifacts": [],
+        "child_receipts": [],
+        "transitions": [],
+    }
+
+
+def v2_dashboard() -> dict:
+    return {
+        "schema_version": "bioxp.operator_dashboard.v2",
+        "generated_at": 1.0,
+        "ownership_generation": 1,
+        "board4": {
+            "state": "active",
+            "prior_board_epoch": 1,
+            "active_board_epoch": 2,
+            "transition_phase": "committed",
+            "transition_evidence": {},
+            "member_motors": {"y": 0, "z": 1, "gripper": 2},
+            "state_version": 2,
+            "updated_at": 1.0,
+        },
+        "y_axis": {
+            "axis": "y",
+            "board_id": 4,
+            "motor_id": 0,
+            "ownership_generation": 1,
+            "prior_board_epoch": 1,
+            "active_board_epoch": 2,
+            "prepared_board_epoch": 2,
+            "lifecycle_state": "referenced_ready",
+            "reference_state": "referenced",
+            "position_steps": 1000,
+            "position_reply_valid": True,
+            "position_status_code": 100,
+            "speed_steps_s": 0,
+            "speed_reply_valid": True,
+            "speed_status_code": 100,
+            "left_switch_raw": 1,
+            "left_switch_reply_valid": True,
+            "left_switch_status_code": 100,
+            "home_effective": True,
+            "profile_fingerprint": "a" * 64,
+            "profile_readback_valid": True,
+            "profile_mismatches": [],
+            "active_command": None,
+            "interrupt_epoch": 0,
+            "latest_compact_receipt": None,
+            "last_discrepancy_steps": None,
+            "state_version": 2,
+            "updated_at": 1.0,
+            "physical_position_verified": False,
+        },
+        "active_commands": [],
+        "command_queue": {
+            "schema_version": "bioxp.oem_command_queue.v1",
+            "generated_at": 1.0,
+            "items": [],
+        },
+        "latest_receipts": [],
+    }
+
+
+def v2_method() -> dict:
+    return {
+        "schema_version": "bioxp.operator_method.v1",
+        "method_id": "method-1",
+        "action_id": "oem.xy.home",
+        "status": "queued",
+        "state_version": 1,
+        "child_receipts": [],
+        "accepted_at": 1.0,
+        "finished_at": None,
     }
 
 
@@ -317,6 +425,38 @@ def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cm
         "observes_command_id": None,
         "error": None,
         "stage_receipts": [],
+    }
+
+
+def y_interrupt_receipt() -> dict:
+    return {
+        "schema_version": "bioxp.operator_interrupt_receipt.v1",
+        "robot_identity": "bioxp3200-serial206",
+        "ownership_generation": 7,
+        "interrupt_attempt_id": "interrupt-attempt-12345678",
+        "interrupt_id": "interrupt-12345678",
+        "action_id": "oem.y.stop",
+        "scope": "y",
+        "cutoff": 12,
+        "active_command_id": "command-y-12345678",
+        "active_command_ids": ["command-y-12345678"],
+        "global_safety_epoch": 9,
+        "x_safety_epoch": 4,
+        "y_safety_epoch": 7,
+        "z_safety_epoch": 3,
+        "oem_abort_latched": False,
+        "controller_stop_attempted": True,
+        "controller_stop_acknowledged": True,
+        "controller_response": {"status": 100},
+        "error": None,
+        "physical_effect_verified": False,
+        "persistence_state": "committed",
+        "recovery_hold": False,
+        "transition_sequence": 12,
+        "terminal_transition_sequences": [12],
+        "persistence_fallback": None,
+        "observed_ownership_generation": 7,
+        "observed_board_epoch_by_board": {"4": 8},
     }
 
 
@@ -562,6 +702,33 @@ class FakeRobotClient:
             },
             "operator_action_admission": {"action_id": "motion.home_xy", "ownership_generation": 7, "enabled": False, "disabled_reason": "Motion is inactive. Activate motion before moving this motor.", "dependencies": [{"key": "motion_enabled", "label": "Motion enabled", "met": False, "reason": "Motion is inactive. Activate motion before moving this motor."}]},
             "invoke_operator_action": receipt(),
+            "interrupt_operator_action_v1": y_interrupt_receipt(),
+            "operator_control_catalog_v2": {
+                "schema_version": "bioxp.operator_control_catalog.v2",
+                "dashboard": v2_dashboard(),
+                "actions": [{
+                    "action_id": "oem.y.move_steps",
+                    "request_schema_version": "bioxp.operator_action_request.v2",
+                    "response_schema_version": "bioxp.operator_action_receipt.v2",
+                    "interrupt": False,
+                    "enabled": True,
+                    "disabled_reason": None,
+                }],
+            },
+            "operator_dashboard_v2": v2_dashboard(),
+            "invoke_operator_action_v2": v2_receipt(),
+            "operator_action_history_v2": {
+                "schema_version": "bioxp.operator_action_history.v2",
+                "items": [v2_receipt()],
+                "next_cursor": None,
+                "limit": 100,
+            },
+            "operator_action_receipt_v2": v2_receipt(),
+            "operator_action_receipt_v2_detail": v2_receipt_detail(),
+            "submit_operator_method_v1": v2_method(),
+            "operator_method_status_v1": v2_method(),
+            "operator_command_status_v2": v2_receipt(),
+            "operator_command_status_v2_detail": v2_receipt_detail(),
             "operator_action_history": {
                 "schema_version": "bioxp.operator_action_history.v1",
                 "receipts": [receipt()],
@@ -608,6 +775,22 @@ class FakeConnection:
             route_name,
             expected_generation=expected_generation,
             require_fresh=require_fresh,
+            **kwargs,
+        )
+
+    async def request_active_v2_query(self, route_name, *, expected_generation, **kwargs):
+        if kwargs.get("params", {}).get("detail") is True:
+            route_name = f"{route_name}_detail"
+        return await self.request_active(
+            route_name,
+            expected_generation=expected_generation,
+            **kwargs,
+        )
+
+    async def request_active_v2_enqueue(self, route_name, *, expected_generation, **kwargs):
+        return await self.request_active(
+            route_name,
+            expected_generation=expected_generation,
             **kwargs,
         )
 
@@ -760,11 +943,158 @@ def test_robot_409_translation_preserves_structured_detail():
     detail = {"error": "action_unavailable", "reason": {"key": "z_switch_masks_clear", "met": False}}
     translated = _translate_robot_error(RobotResponseError(409, detail))
     assert translated.status_code == 409
+    assert translated.detail == detail
+
+
+def test_dispatched_timeout_translation_is_explicitly_ambiguous_and_do_not_retry():
+    translated = _translate_robot_error(RobotTimeoutError("late robot response possible", dispatched=True))
+    assert translated.status_code == 504
     assert translated.detail == {
-        "error": "bioxp_robot_response_error",
-        "robot_status": 409,
-        "robot_detail": detail,
+        "error": "bioxp_robot_timeout",
+        "message": "late robot response possible",
+        "robot_response_received": False,
+        "dispatch_state": "outcome_ambiguous",
+        "retry_guidance": "do_not_retry_until_status_recovery",
+        "status_recovery": "query_current_v2_dashboard_and_receipt_before_any_retry",
     }
+
+
+@pytest.mark.parametrize("action_id", ["oem.y.move_steps", "oem.y.stop", "oem.xy.home"])
+def test_legacy_y_and_xy_admission_and_invocation_are_retired_at_bms_boundary(monkeypatch, action_id):
+    client, runtime = make_client(monkeypatch)
+    admission = client.post(
+        f"/api/bioxp/operator-controls/actions/{action_id}/admission",
+        json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "inputs": {},
+        },
+    )
+    invocation = client.post(
+        f"/api/bioxp/operator-controls/actions/{action_id}",
+        json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "idempotency_key": "retired-12345678",
+            "inputs": {},
+        },
+    )
+    for response in (admission, invocation):
+        assert response.status_code == 410
+        assert response.json()["detail"] == {
+            "error": "legacy_y_xy_operator_surface_retired",
+            "action_id": action_id,
+            "replacement": "Use strict /operator-controls/v2 actions, interrupts, or methods.",
+        }
+    assert runtime.connection.client.calls == []
+    assert runtime.connection.safety_interrupt_calls == []
+
+
+def test_legacy_catalog_projection_removes_y_and_xy_action_identities(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    payload = runtime.connection.client.responses["operator_control_catalog"]
+    payload["actions"].extend([
+        {**copy.deepcopy(payload["actions"][0]), "action_id": "oem.y.move_steps"},
+        {**copy.deepcopy(payload["actions"][0]), "action_id": "oem.xy.home"},
+    ])
+    response = client.get("/api/bioxp/operator-controls/catalog")
+    assert response.status_code == 200
+    assert [row["action_id"] for row in response.json()["actions"]] == ["motion.home_xy"]
+
+
+def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_mismatch(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    body = {
+        "expected_connection_generation": 77,
+        "schema_version": "bioxp.operator_interrupt_request.v1",
+        "reason": "operator requested Y STOP",
+        "observed_ownership_generation": 7,
+        "observed_board_epoch_by_board": {"4": 8},
+    }
+
+    response = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == y_interrupt_receipt()
+    route_name, kwargs = runtime.connection.safety_interrupt_calls[-1]
+    assert route_name == "interrupt_operator_action_v1"
+    assert kwargs == {
+        "path_params": {"action_id": "oem.y.stop"},
+        "json_data": {
+            "schema_version": "bioxp.operator_interrupt_request.v1",
+            "reason": "operator requested Y STOP",
+            "observed_ownership_generation": 7,
+            "observed_board_epoch_by_board": {"4": 8},
+        },
+    }
+
+    runtime.connection.client.responses["interrupt_operator_action_v1"] = {
+        **y_interrupt_receipt(),
+        "action_id": "oem.x.stop",
+    }
+    mismatch = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
+    assert mismatch.status_code == 502
+    assert mismatch.json()["detail"] == "BioXP robot returned an invalid operator-control contract"
+
+    missing_recovery_hold = y_interrupt_receipt()
+    del missing_recovery_hold["recovery_hold"]
+    runtime.connection.client.responses["interrupt_operator_action_v1"] = missing_recovery_hold
+    incomplete = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
+    assert incomplete.status_code == 502
+
+
+def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    action_request = {
+        "expected_connection_generation": 77,
+        "schema_version": "bioxp.operator_action_request.v2",
+        "idempotency_key": "move-12345678",
+        "expected_ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2},
+        "inputs": {"steps": 20},
+    }
+    method_request = {
+        "expected_connection_generation": 77,
+        "schema_version": "bioxp.operator_method_request.v1",
+        "idempotency_key": "method-12345678",
+        "method_action_id": "oem.xy.home",
+        "expected_ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2, "5": 3},
+        "inputs": {},
+    }
+
+    responses = [
+        client.get("/api/bioxp/operator-controls/v2/catalog"),
+        client.get("/api/bioxp/operator-controls/v2/dashboard"),
+        client.post("/api/bioxp/operator-controls/v2/actions/oem.y.move_steps", json=action_request),
+        client.get("/api/bioxp/operator-controls/v2/history?limit=100"),
+        client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1"),
+        client.get("/api/bioxp/operator-controls/v2/receipts/cmd-1?detail=true"),
+        client.post("/api/bioxp/operator-controls/v2/methods", json=method_request),
+        client.get("/api/bioxp/operator-controls/v2/methods/method-1"),
+        client.get("/api/bioxp/operator-controls/v2/commands/cmd-1"),
+        client.get("/api/bioxp/operator-controls/v2/commands/cmd-1?detail=true"),
+    ]
+
+    assert [response.status_code for response in responses] == [200, 200, 202, 200, 200, 200, 202, 200, 200, 200]
+    assert responses[0].json()["dashboard"]["y_axis"]["active_board_epoch"] == 2
+    assert responses[2].json()["command_id"] == "cmd-1"
+    assert responses[5].json()["canonical_inputs"] == {"steps": 20}
+    assert responses[6].json()["method_id"] == "method-1"
+    assert [call[0] for call in runtime.connection.client.calls] == [
+        "operator_control_catalog_v2",
+        "operator_dashboard_v2",
+        "invoke_operator_action_v2",
+        "operator_action_history_v2",
+        "operator_action_receipt_v2",
+        "operator_action_receipt_v2_detail",
+        "submit_operator_method_v1",
+        "operator_method_status_v1",
+        "operator_command_status_v2",
+        "operator_command_status_v2_detail",
+    ]
+    assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
+    assert "expected_connection_generation" not in runtime.connection.client.calls[6][1]["json_data"]
 
 
 def test_robot_client_uses_fixed_operator_routes_only():
