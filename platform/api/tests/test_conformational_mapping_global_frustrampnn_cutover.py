@@ -505,7 +505,10 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
         "request_sha256": "4" * 64,
         "backend": "external_import",
         "targets": [{"target_id": "target-a"}],
-        "analysis_policy": {},
+        "analysis_policy": {
+            "clash_detector_id": "bms_clash",
+            "clash_detector_version": "1",
+        },
     }
     request_path = tmp_path / "cm_request_v1.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
@@ -596,9 +599,28 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
             "ranking_policy": {}, "clash_records": [], "exclusions": [], "results": [],
         }
 
+    clash_calls: list[dict[str, object]] = []
+
+    def fake_build_clash_rows(
+        normalized_pdb: Path,
+        structure_map: dict[str, object],
+        *,
+        candidate_id: str,
+        detector_id: str,
+        detector_version: str,
+    ) -> dict[object, object]:
+        clash_calls.append({
+            "normalized_pdb": normalized_pdb,
+            "structure_map": structure_map,
+            "candidate_id": candidate_id,
+            "detector_id": detector_id,
+            "detector_version": detector_version,
+        })
+        return {}
+
     monkeypatch.setattr(module, "validate_result_manifest", fake_validate)
     monkeypatch.setattr(module, "analyze_landscapes", fake_analyze)
-    monkeypatch.setattr(module, "build_clash_rows", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module, "build_clash_rows", fake_build_clash_rows)
     monkeypatch.setattr(module, "derive_state_landscape_analysis_for_request", lambda *_args: None)
     output = tmp_path / "output"
 
@@ -614,6 +636,15 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
         (bundle, {"schema_version": 2}),
         (output / "frustrampnn/results/candidate-a", {"schema_version": 2}),
     ]
+    assert clash_calls == [{
+        "normalized_pdb": output / "frustrampnn/results/candidate-a/normalized_input.pdb",
+        "structure_map": json.loads(
+            payloads["frustrampnn_structure_map_v1.json"]
+        ),
+        "candidate_id": candidate_id,
+        "detector_id": "bms_clash",
+        "detector_version": "1",
+    }]
     assert seen_landscapes == [global_landscape]
     references = json.loads(
         (output / "derived/cm_frustrampnn_result_references_v1.json").read_text()

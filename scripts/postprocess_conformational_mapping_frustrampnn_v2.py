@@ -203,10 +203,11 @@ def postprocess_canonical_bundles(
                 )
             normalized = destination / "normalized_input.pdb"
             candidate_clashes = build_clash_rows(
-                str(candidate_id), normalized, item["structure_map"],
-                detector_version=request["analysis_policy"].get(
-                    "clash_detector_version", "cm_clash_detector_v1"
-                ),
+                normalized,
+                item["structure_map"],
+                candidate_id=str(candidate_id),
+                detector_id=request["analysis_policy"]["clash_detector_id"],
+                detector_version=request["analysis_policy"]["clash_detector_version"],
             )
             if set(clash_rows).intersection(candidate_clashes):
                 raise CMFrustraMPNNPostprocessError(
