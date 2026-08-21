@@ -29,6 +29,7 @@ from services.scientific_artifacts.contracts import (
     canonical_sha256,
     envelope_rows,
     reconstruct_envelope,
+    resolve_json_value,
 )
 from services.scientific_artifacts.writer import (
     InstalledArtifact,
@@ -526,18 +527,57 @@ def backfill_cm_landscape_provenance(source: sqlite3.Connection, target: sqlite3
     return checked
 
 
-def telemetry_rows(source: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+def telemetry_rows(
+    source: sqlite3.Connection,
+    table: str,
+    source_artifact_root: Path | None = None,
+) -> list[dict[str, Any]]:
     source.row_factory = sqlite3.Row
-    result = []
-    for index, row in enumerate(source.execute(f'SELECT * FROM "{table}" ORDER BY {"timestamp_ms" if table == "raw_samples" else "bucket_ms"}')):
-        payload = json_value(row["payload_json"])
-        gpus = payload.get("gpus") if isinstance(payload, dict) and isinstance(payload.get("gpus"), list) else []
-        result.append({"row_index": index, "timestamp_ms": int(payload.get("timestamp_ms", row["timestamp_ms"] if table == "raw_samples" else 0)), "bucket_ms": int(row["bucket_ms"] if table == "minute_aggregates" else 0), "sample_count": int(row["sample_count"] if table == "minute_aggregates" else 1), "timestamp": str(payload.get("timestamp", "")) if isinstance(payload, dict) else "", "payload_json": str(row["payload_json"]), "cpu_utilization": float((payload.get("cpu") or {}).get("utilization", 0.0) or 0.0) if isinstance(payload, dict) else 0.0, "ram_utilization": float((payload.get("ram") or {}).get("utilization", 0.0) or 0.0) if isinstance(payload, dict) else 0.0, "gpu_utilization": [float((gpu or {}).get("utilization", 0.0) or 0.0) for gpu in gpus], "gpu_memory_used_mb": [float((gpu or {}).get("memory_used_mb", 0.0) or 0.0) for gpu in gpus], "gpu_names": [str((gpu or {}).get("name", "")) for gpu in gpus]})
+    root = source_artifact_root.resolve() if source_artifact_root else None
+    result: list[dict[str, Any]] = []
+    key = "timestamp_ms" if table == "raw_samples" else "bucket_ms"
+    for index, row in enumerate(source.execute(f'SELECT * FROM "{table}" ORDER BY {key}')):
+        raw_payload = str(row["payload_json"])
+        if table == "raw_samples" and raw_payload == "{}" and row["staging_relative_path"] and root:
+            staging = (root / str(row["staging_relative_path"])).resolve()
+            staging.relative_to(root)
+            lines = staging.read_text(encoding="utf-8").splitlines()
+            raw_payload = lines[int(row["staging_row_locator"])]
+        payload_value = json_value(raw_payload)
+        if isinstance(payload_value, dict) and payload_value.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            payload_value = resolve_json_value(payload_value, root=root)
+            raw_payload = json_text(payload_value)
+        payload = payload_value if isinstance(payload_value, dict) else {}
+        gpus = payload.get("gpus") if isinstance(payload.get("gpus"), list) else []
+        result.append(
+            {
+                "row_index": index,
+                "timestamp_ms": int(payload.get("timestamp_ms", row[key] if table == "raw_samples" else 0)),
+                "bucket_ms": int(row["bucket_ms"] if table == "minute_aggregates" else 0),
+                "sample_count": int(row["sample_count"] if table == "minute_aggregates" else 1),
+                "timestamp": str(payload.get("timestamp", "")),
+                "payload_json": raw_payload,
+                "cpu_utilization": float((payload.get("cpu") or {}).get("utilization", 0.0) or 0.0),
+                "ram_utilization": float((payload.get("ram") or {}).get("utilization", 0.0) or 0.0),
+                "gpu_utilization": [float((gpu or {}).get("utilization", 0.0) or 0.0) for gpu in gpus],
+                "gpu_memory_used_mb": [float((gpu or {}).get("memory_used_mb", 0.0) or 0.0) for gpu in gpus],
+                "gpu_names": [str((gpu or {}).get("name", "")) for gpu in gpus],
+            }
+        )
     return result
 
 
-def backfill_telemetry_table(source: sqlite3.Connection, target: sqlite3.Connection, root: Path, table: str) -> int:
-    rows = telemetry_rows(source, table)
+def backfill_telemetry_table(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    table: str,
+    source_artifact_root: Path | None = None,
+) -> int:
+    rows = telemetry_rows(source, table, source_artifact_root=source_artifact_root)
     source_sha256 = digest_rows(rows)
     artifact = install_parquet_rows(root=root, owner_kind="telemetry", owner_id=table, role="history", schema_id="bms.telemetry-history.v1", schema_version=1, source_sha256=source_sha256, rows=rows, schema=TELEMETRY_SCHEMA)
     if read_rows(artifact, root=root) != rows:
@@ -551,6 +591,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--target", type=Path, required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
+    parser.add_argument("--source-artifact-root", type=Path)
     parser.add_argument("--store", choices=["core", "telemetry"], required=True)
     parser.add_argument("--apply", action="store_true")
     return parser.parse_args()
@@ -572,7 +613,7 @@ def main() -> int:
         if args.store == "core":
             counts = {"cm_records": backfill_cm_records(source, target, args.artifact_root), "frustrampnn_statistics": backfill_frustrampnn_statistics(source, target, args.artifact_root), "design_payload_rows": backfill_design_payloads(source, target, args.artifact_root), "frustrampnn_landscape_rows": backfill_frustrampnn_landscape(source, target, args.artifact_root), "cm_landscape_provenance_rows": backfill_cm_landscape_provenance(source, target, args.artifact_root)}
         else:
-            counts = {"raw_samples": backfill_telemetry_table(source, target, args.artifact_root, "raw_samples"), "minute_aggregates": backfill_telemetry_table(source, target, args.artifact_root, "minute_aggregates")}
+            counts = {"raw_samples": backfill_telemetry_table(source, target, args.artifact_root, "raw_samples", source_artifact_root=args.source_artifact_root or args.artifact_root), "minute_aggregates": backfill_telemetry_table(source, target, args.artifact_root, "minute_aggregates", source_artifact_root=args.source_artifact_root or args.artifact_root)}
         print(json.dumps(counts, sort_keys=True))
         return 0
     finally:
