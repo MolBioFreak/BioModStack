@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-sign-counter.v1",
+  "title": "Atomic WebAuthn sign-counter advancement v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "sign_counter_receipt_id",
+    "credential_id_base64url",
+    "credential_id_sha256",
+    "challenge_id",
+    "expected_generation",
+    "new_generation",
+    "prior_sign_count",
+    "asserted_sign_count",
+    "accepted_sign_count",
+    "atomic_compare_and_advance",
+    "counter_service_assertion",
+    "advanced_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-sign-counter.v1"
+    },
+    "sign_counter_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "credential_id_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "credential_id_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "expected_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "new_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "prior_sign_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "asserted_sign_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "accepted_sign_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "atomic_compare_and_advance": {
+      "const": true
+    },
+    "counter_service_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-authn-service"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "advanced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

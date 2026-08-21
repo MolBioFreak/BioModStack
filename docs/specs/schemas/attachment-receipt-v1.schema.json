@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.global.attachment-receipt.v1",
+  "title": "Verified global attachment receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "attachment_receipt_id", "external_receipt_id", "external_content_digest", "external_contract_digest", "lineage_edge_id", "project_id", "project_head_generation", "global_experiment_id", "global_experiment_revision_id", "domain_experiment_id", "domain_experiment_revision_id", "domain_context_id", "adapter_id", "adapter_version", "entity_id", "entity_revision_or_generation", "operation", "role", "note", "normalized_request_sha256", "created_by", "created_at", "receipt_sha256"],
+  "properties": {
+    "schema": {"const": "bms.global.attachment-receipt.v1"},
+    "attachment_receipt_id": {"$ref": "#/$defs/id"},
+    "external_receipt_id": {"$ref": "#/$defs/id"},
+    "external_content_digest": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "external_contract_digest": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "lineage_edge_id": {"$ref": "#/$defs/id"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "project_head_generation": {"type": "integer", "minimum": 0},
+    "global_experiment_id": {"$ref": "#/$defs/id"},
+    "global_experiment_revision_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_revision_id": {"$ref": "#/$defs/id"},
+    "domain_context_id": {"$ref": "#/$defs/nullableId"},
+    "adapter_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "adapter_version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "entity_id": {"$ref": "#/$defs/id"},
+    "entity_revision_or_generation": {"type": "string", "minLength": 1, "maxLength": 255},
+    "operation": {"type": "string", "minLength": 1, "maxLength": 128},
+    "role": {"type": "string", "minLength": 1, "maxLength": 128},
+    "note": {"anyOf": [{"type": "string", "maxLength": 2048}, {"type": "null"}]},
+    "normalized_request_sha256": {"$ref": "#/$defs/sha256"},
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "created_at": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "anyOf": [
+    {"properties": {"external_content_digest": {"$ref": "#/$defs/sha256"}}},
+    {"properties": {"external_contract_digest": {"$ref": "#/$defs/sha256"}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "nullableId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

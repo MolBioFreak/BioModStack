@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.development-runtime.v3",
+  "title": "Reconstructable managed Development runtime identity v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "development_runtime_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployment_id",
+    "components",
+    "deployed_build_algorithm",
+    "deployed_build_sha256",
+    "listeners",
+    "listener_set_algorithm",
+    "listener_set_sha256",
+    "databases",
+    "database_set_algorithm",
+    "database_set_sha256",
+    "runtime_verifier_assertion",
+    "observed_at",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.development-runtime.v3"
+    },
+    "development_runtime_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployment_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "components": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-api"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-frontend"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-workflow-adapter"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "deployed_build_algorithm": {
+      "const": "sha256-rfc8785-ordered-development-component-build-rows-v2"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "listeners": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/listener"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "listener_id": {
+                  "const": "development-api-listener"
+                },
+                "component_id": {
+                  "const": "development-api"
+                },
+                "port": {
+                  "const": 18002
+                }
+              },
+              "required": [
+                "listener_id",
+                "component_id",
+                "port"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/listener"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "listener_id": {
+                  "const": "development-frontend-listener"
+                },
+                "component_id": {
+                  "const": "development-frontend"
+                },
+                "port": {
+                  "const": 18082
+                }
+              },
+              "required": [
+                "listener_id",
+                "component_id",
+                "port"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/listener"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "listener_id": {
+                  "const": "development-workflow-adapter-listener"
+                },
+                "component_id": {
+                  "const": "development-workflow-adapter"
+                },
+                "port": {
+                  "const": 18001
+                }
+              },
+              "required": [
+                "listener_id",
+                "component_id",
+                "port"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "listener_set_algorithm": {
+      "const": "sha256-rfc8785-ordered-listener-owner-rows-v1"
+    },
+    "listener_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "databases": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/database"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "global-experiments"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/database"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/database"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-ngs-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/database"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "core-ngs"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/database"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "biomodstack-native"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "database_set_algorithm": {
+      "const": "sha256-rfc8785-ordered-development-database-identities-v1"
+    },
+    "database_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runtime_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-runtime-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_id",
+        "source_commit",
+        "source_tree",
+        "source_root",
+        "build_artifact",
+        "process_identity",
+        "component_build_algorithm",
+        "component_build_sha256"
+      ],
+      "properties": {
+        "component_id": {
+          "enum": [
+            "development-api",
+            "development-frontend",
+            "development-workflow-adapter"
+          ]
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_root": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "build_artifact": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        "process_identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "process_id",
+            "process_started_at",
+            "working_directory",
+            "managed_unit",
+            "executable_artifact",
+            "command_line_artifact",
+            "environment_artifact"
+          ],
+          "properties": {
+            "process_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "process_started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "working_directory": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "managed_unit": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "executable_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+            },
+            "command_line_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            },
+            "environment_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            }
+          }
+        },
+        "component_build_algorithm": {
+          "const": "sha256-rfc8785-component-source-build-process-v2"
+        },
+        "component_build_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "listener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "listener_id",
+        "component_id",
+        "transport",
+        "address",
+        "port",
+        "process_id",
+        "socket_inode",
+        "row_algorithm",
+        "row_sha256"
+      ],
+      "properties": {
+        "listener_id": {
+          "enum": [
+            "development-api-listener",
+            "development-frontend-listener",
+            "development-workflow-adapter-listener"
+          ]
+        },
+        "component_id": {
+          "enum": [
+            "development-api",
+            "development-frontend",
+            "development-workflow-adapter"
+          ]
+        },
+        "transport": {
+          "const": "tcp"
+        },
+        "address": {
+          "const": "127.0.0.1"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "process_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "socket_inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "row_algorithm": {
+          "const": "sha256-rfc8785-listener-owner-row-v1"
+        },
+        "row_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "configured_path",
+        "device_id",
+        "inode",
+        "size_bytes",
+        "store_binding_sha256",
+        "identity_algorithm",
+        "identity_sha256"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs",
+            "biomodstack-native"
+          ]
+        },
+        "configured_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "device_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "store_binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "identity_algorithm": {
+          "const": "sha256-rfc8785-store-path-device-inode-size-binding-v1"
+        },
+        "identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

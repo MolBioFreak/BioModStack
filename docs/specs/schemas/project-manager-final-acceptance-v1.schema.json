@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.final-acceptance.v1",
+  "title": "Project Manager final Development acceptance receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_commit",
+    "source_tree",
+    "shared_package_acceptance_receipt",
+    "development_runtime_receipt",
+    "exact_tree_review_receipt",
+    "health_acceptance_receipt",
+    "restart_reopen_receipt",
+    "browser_acceptance_receipt",
+    "operator_visual_acceptance_receipt",
+    "outcome",
+    "accepted_at",
+    "accepted_by",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.final-acceptance.v1"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "shared_package_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "exact_tree_review_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "health_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "restart_reopen_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "accepted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "content_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only content_sha256 omitted."
+    },
+    "operator_visual_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-visual-acceptance.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    }
+  }
+}

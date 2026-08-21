@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-evidence-body.pm01.v2",
+  "title": "PM-01 authenticated coverage evidence body v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_body_id",
+    "package_id",
+    "coverage_item",
+    "coverage_contract_id",
+    "source_commit",
+    "source_tree",
+    "coverage_denominator",
+    "producer_receipts",
+    "positive_observations",
+    "negative_observations",
+    "resolver_trace",
+    "evidence_kinds",
+    "native_owner_attestations",
+    "self_digest_algorithm",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-evidence-body.pm01.v2"
+    },
+    "evidence_body_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "const": "PM-01"
+    },
+    "coverage_item": {
+      "enum": [
+        "responsive-geometry",
+        "semantic-control-denominator",
+        "keyboard-accessibility",
+        "deep-link-reload"
+      ]
+    },
+    "coverage_contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage_denominator": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "producer_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/receiptPointer"
+      }
+    },
+    "positive_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "negative_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "resolver_trace": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "evidence_kinds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "native_owner_attestations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "ngs-molbio-frontend-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only content_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "responsive-geometry"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.responsive-geometry.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "responsive-geometry-denominator",
+              "responsive-geometry-positive-observation",
+              "responsive-geometry-negative-observation",
+              "responsive-geometry-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "semantic-control-denominator"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.semantic-control-denominator.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "semantic-control-denominator-denominator",
+              "semantic-control-denominator-positive-observation",
+              "semantic-control-denominator-negative-observation",
+              "semantic-control-denominator-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "keyboard-accessibility"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.keyboard-accessibility.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "keyboard-accessibility-denominator",
+              "keyboard-accessibility-positive-observation",
+              "keyboard-accessibility-negative-observation",
+              "keyboard-accessibility-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "deep-link-reload"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.deep-link-reload.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "deep-link-reload-denominator",
+              "deep-link-reload-positive-observation",
+              "deep-link-reload-negative-observation",
+              "deep-link-reload-resolver-trace"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

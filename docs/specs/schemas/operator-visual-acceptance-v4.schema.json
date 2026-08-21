@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-visual-acceptance.v4",
+  "title": "Christian signed dual-route three-viewport visual acceptance v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "visual_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "development_runtime_receipt",
+    "browser_acceptance_receipt",
+    "operator_principal_id",
+    "operator_role",
+    "operator_authorization_receipt",
+    "decision",
+    "viewport_evidence",
+    "viewport_evidence_algorithm",
+    "viewport_evidence_sha256",
+    "decided_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-visual-acceptance.v4"
+    },
+    "visual_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.development-runtime.v3"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.browser-acceptance.v3"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "operator_principal_id": {
+      "const": "christian-release-owner-v1"
+    },
+    "operator_role": {
+      "const": "release_owner"
+    },
+    "operator_authorization_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-decision-authorization.v3"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "decision": {
+      "const": "pass"
+    },
+    "viewport_evidence": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/viewport"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 1366
+                },
+                "height_px": {
+                  "const": 768
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/viewport"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 1920
+                },
+                "height_px": {
+                  "const": 1080
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/viewport"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 2560
+                },
+                "height_px": {
+                  "const": 1440
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "viewport_evidence_algorithm": {
+      "const": "sha256-rfc8785-ordered-visual-viewport-evidence-v4"
+    },
+    "viewport_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width_px",
+        "height_px",
+        "designer_evidence",
+        "ngs_evidence"
+      ],
+      "properties": {
+        "width_px": {
+          "enum": [
+            1366,
+            1920,
+            2560
+          ]
+        },
+        "height_px": {
+          "enum": [
+            768,
+            1080,
+            1440
+          ]
+        },
+        "designer_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "route",
+            "screenshot_artifact",
+            "geometry_receipt_artifact"
+          ],
+          "properties": {
+            "route": {
+              "const": "/designer"
+            },
+            "screenshot_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+            },
+            "geometry_receipt_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            }
+          }
+        },
+        "ngs_evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "route",
+            "screenshot_artifact",
+            "geometry_receipt_artifact"
+          ],
+          "properties": {
+            "route": {
+              "const": "/ngs"
+            },
+            "screenshot_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+            },
+            "geometry_receipt_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            }
+          }
+        }
+      }
+    }
+  }
+}

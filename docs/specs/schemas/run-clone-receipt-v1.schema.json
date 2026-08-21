@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.run-clone-receipt.v1",
+  "title": "Immutable run-to-Plan clone receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "clone_receipt_id", "project_id", "global_experiment_id", "domain_experiment_id", "domain_experiment_revision_id", "source_run_group_id", "source_run_id", "source_attempt_id", "source_preparation_id", "source_workflow_plan_id", "source_workflow_revision_id", "source_capability_contract_sha256", "source_requested_settings_sha256", "source_effective_settings_sha256", "new_workflow_plan_id", "new_draft_id", "new_draft_generation", "copied_payload_sha256", "lineage_edge_id", "lineage_mode", "lineage_source_resource_id", "lineage_target_resource_id", "lineage_edge_key", "normalized_request_sha256", "created_by", "created_at", "receipt_sha256"],
+  "properties": {
+    "schema": {"const": "bms.run-clone-receipt.v1"},
+    "clone_receipt_id": {"$ref": "#/$defs/id"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "global_experiment_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_revision_id": {"$ref": "#/$defs/id"},
+    "source_run_group_id": {"$ref": "#/$defs/id"},
+    "source_run_id": {"$ref": "#/$defs/id"},
+    "source_attempt_id": {"$ref": "#/$defs/id"},
+    "source_preparation_id": {"$ref": "#/$defs/id"},
+    "source_workflow_plan_id": {"$ref": "#/$defs/id"},
+    "source_workflow_revision_id": {"$ref": "#/$defs/id"},
+    "source_capability_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "source_requested_settings_sha256": {"$ref": "#/$defs/sha256"},
+    "source_effective_settings_sha256": {"$ref": "#/$defs/sha256"},
+    "new_workflow_plan_id": {"$ref": "#/$defs/id"},
+    "new_draft_id": {"$ref": "#/$defs/id"},
+    "new_draft_generation": {"const": 0},
+    "copied_payload_sha256": {"$ref": "#/$defs/sha256"},
+    "lineage_edge_id": {"$ref": "#/$defs/id"},
+    "lineage_mode": {"const": "derived_from"},
+    "lineage_source_resource_id": {"$ref": "#/$defs/id"},
+    "lineage_target_resource_id": {"$ref": "#/$defs/id"},
+    "lineage_edge_key": {"const": "cloned-plan-intent"},
+    "normalized_request_sha256": {"$ref": "#/$defs/sha256"},
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "created_at": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

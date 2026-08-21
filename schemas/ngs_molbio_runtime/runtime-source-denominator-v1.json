@@ -66,6 +66,7 @@
     "platform/frontend/src/App.tsx",
     "platform/frontend/src/components/NGSToolkit.tsx",
     "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
+    "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainDatasetOperator.tsx",
     "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
@@ -88,5 +89,5 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "5a4b82639eaacc84a90575da7e69d03f6d77ee83d8c60e9f7e19c7944aef808c"
+  "content_sha256": "a4a8f9e501dd65d455e72c9900b03d06ba79573974a52a547cf75e54a3c596f8"
 }

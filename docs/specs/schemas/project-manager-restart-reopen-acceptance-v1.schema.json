@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.restart-reopen-acceptance.v1",
+  "title": "Managed restart and exact reopen acceptance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "restart_reopen_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "restart_id",
+    "pre_restart_process_set_sha256",
+    "post_restart_process_set_sha256",
+    "reopen_cases",
+    "outcome",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.restart-reopen-acceptance.v1"
+    },
+    "restart_reopen_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "restart_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "pre_restart_process_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "post_restart_process_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reopen_cases": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "resource_kind",
+          "stable_id",
+          "exact_revision_id",
+          "content_sha256",
+          "outcome"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "resource_kind": {
+            "enum": [
+              "project_revision",
+              "global_experiment_revision",
+              "domain_experiment_revision",
+              "local_state_revision",
+              "dataset_revision",
+              "run",
+              "result",
+              "research_record"
+            ]
+          },
+          "stable_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "exact_revision_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "outcome": {
+            "const": "pass"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "project_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "global_experiment_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "domain_experiment_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "local_state_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "dataset_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "run"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "result"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "research_record"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        }
+      ]
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  }
+}

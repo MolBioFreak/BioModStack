@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project.v2",
+  "title": "BioModStack Project v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "project_scope",
+    "name",
+    "description",
+    "research_objective",
+    "owner",
+    "contributors",
+    "tags",
+    "status",
+    "start_date",
+    "target_end_date",
+    "external_references",
+    "created_by",
+    "change_summary",
+    "needs_metadata_review"
+  ],
+  "properties": {
+    "schema": {"const": "bms.project.v2"},
+    "project_scope": {"enum": ["global", "ngs_molbio_local"]},
+    "name": {"type": "string", "minLength": 1, "maxLength": 255},
+    "description": {"type": "string", "maxLength": 8192},
+    "research_objective": {"type": "string", "maxLength": 8192},
+    "owner": {"type": "string", "minLength": 1, "maxLength": 255},
+    "contributors": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 255}
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64}
+    },
+    "status": {"enum": ["draft", "active", "on_hold", "completed", "archived"]},
+    "start_date": {
+      "anyOf": [
+        {"type": "string", "format": "date"},
+        {"type": "null"}
+      ]
+    },
+    "target_end_date": {
+      "anyOf": [
+        {"type": "string", "format": "date"},
+        {"type": "null"}
+      ]
+    },
+    "external_references": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "value", "label"],
+        "properties": {
+          "kind": {"enum": ["doi", "url", "accession", "ticket", "other"]},
+          "value": {"type": "string", "minLength": 1, "maxLength": 2048},
+          "label": {"type": "string", "maxLength": 255}
+        }
+      }
+    },
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "change_summary": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "needs_metadata_review": {"type": "boolean"}
+  }
+}

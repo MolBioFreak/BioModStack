@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.continuation.v2",
+  "title": "Project Manager single-collection continuation page v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "subject_id", "subject_generation", "assembled_at", "collection", "focus_id", "selected_node_key", "tree_parent_node_key", "snapshot_token", "source_receipt_ids", "source_authorities", "source_digest_set_sha256", "adapter_versions", "reconciliation", "items", "stream_item_count", "next_cursor", "has_more", "total"],
+  "properties": {
+    "schema": {"const": "bms.project-manager.continuation.v2"},
+    "subject_id": {"$ref": "#/$defs/id"},
+    "subject_generation": {"type": "integer", "minimum": 0},
+    "assembled_at": {"type": "string", "format": "date-time"},
+    "collection": {"enum": ["tree", "map", "runs", "results", "lineage", "notes", "decisions", "datasets", "activity"]},
+    "focus_id": {"$ref": "#/$defs/nullableId"},
+    "selected_node_key": {"$ref": "#/$defs/nullableKey"},
+    "tree_parent_node_key": {"$ref": "#/$defs/nullableKey"},
+    "snapshot_token": {"type": "string", "minLength": 1, "maxLength": 512},
+    "source_receipt_ids": {"type": "array", "maxItems": 2000, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+    "source_authorities": {"type": "array", "maxItems": 2000, "uniqueItems": true, "items": {"$ref": "#/$defs/sourceAuthority"}},
+    "source_digest_set_sha256": {"$ref": "#/$defs/sha256"},
+    "adapter_versions": {"type": "array", "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/adapterVersion"}},
+    "reconciliation": {"$ref": "#/$defs/reconciliation"},
+    "items": {"type": "array", "maxItems": 301},
+    "stream_item_count": {"type": "integer", "minimum": 0, "maximum": 100},
+    "next_cursor": {"$ref": "#/$defs/nullableCursor"},
+    "has_more": {"type": "boolean"},
+    "total": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+  },
+  "allOf": [
+    {"if": {"properties": {"has_more": {"const": true}}, "required": ["has_more"]}, "then": {"properties": {"next_cursor": {"type": "string", "minLength": 1, "maxLength": 512}, "items": {"minItems": 1}, "stream_item_count": {"minimum": 1}}}},
+    {"if": {"properties": {"has_more": {"const": false}}, "required": ["has_more"]}, "then": {"properties": {"next_cursor": {"type": "null"}}}},
+    {"if": {"properties": {"collection": {"const": "tree"}}, "required": ["collection"]}, "then": {"properties": {"tree_parent_node_key": {"type": "string", "minLength": 1, "maxLength": 512}}}},
+    {"if": {"properties": {"collection": {"enum": ["map", "runs", "results", "lineage", "notes", "decisions", "datasets", "activity"]}}, "required": ["collection"]}, "then": {"properties": {"tree_parent_node_key": {"type": "null"}}}},
+    {"if": {"properties": {"collection": {"const": "runs"}}, "required": ["collection"]}, "then": {"properties": {"items": {"maxItems": 100, "items": {"$ref": "bms.project-manager.run.v2"}}}}, "else": {"properties": {"items": {"items": {"$ref": "#/$defs/item"}}}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "nullableId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "nullableKey": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}]},
+    "nullableCursor": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "item": {"type": "object", "additionalProperties": false, "required": ["stable_id", "schema", "source_authority_keys", "payload"], "properties": {"stable_id": {"type": "string", "minLength": 1, "maxLength": 512}, "schema": {"type": "string", "pattern": "^bms\\.[A-Za-z0-9_.-]+$", "maxLength": 255}, "source_authority_keys": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}}, "payload": {"type": "object"}}},
+    "sourceAuthority": {"type": "object", "additionalProperties": false, "required": ["authority_kind", "stable_id", "revision_or_generation", "content_sha256", "adapter_id", "adapter_version"], "properties": {"authority_kind": {"type": "string", "minLength": 1, "maxLength": 128}, "stable_id": {"type": "string", "minLength": 1, "maxLength": 255}, "revision_or_generation": {"type": "string", "minLength": 1, "maxLength": 255}, "content_sha256": {"$ref": "#/$defs/sha256"}, "adapter_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]}, "adapter_version": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]}}},
+    "adapterVersion": {"type": "object", "additionalProperties": false, "required": ["adapter_id", "version"], "properties": {"adapter_id": {"type": "string", "minLength": 1, "maxLength": 255}, "version": {"type": "string", "minLength": 1, "maxLength": 128}}},
+    "reconciliation": {"type": "object", "additionalProperties": false, "required": ["state", "last_verified_at", "reason"], "properties": {"state": {"enum": ["current", "pending", "stale", "source_unavailable", "digest_mismatch"]}, "last_verified_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}, "reason": {"anyOf": [{"type": "string", "maxLength": 2048}, {"type": "null"}]}}}
+  }
+}

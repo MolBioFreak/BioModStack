@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-challenge-issued.v1",
+  "title": "Durable one-use issued operator challenge v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "issued_challenge_receipt_id",
+    "state",
+    "challenge_id",
+    "challenge_revision",
+    "operator_principal_id",
+    "audience",
+    "nonce_base64url",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "development_runtime_receipt",
+    "browser_acceptance_receipt",
+    "viewport_evidence_algorithm",
+    "viewport_evidence_sha256",
+    "decision",
+    "rp_id",
+    "origin",
+    "trust_registry_generation",
+    "trust_registry_sha256",
+    "credential_id_base64url",
+    "issued_at",
+    "expires_at",
+    "challenge_preimage_algorithm",
+    "challenge_sha256",
+    "challenge_service_assertion",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-challenge-issued.v1"
+    },
+    "issued_challenge_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "state": {
+      "const": "issued"
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "challenge_revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "operator_principal_id": {
+      "const": "christian-release-owner-v1"
+    },
+    "audience": {
+      "const": "bms-project-manager-pm12"
+    },
+    "nonce_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.development-runtime.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.browser-acceptance.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "viewport_evidence_algorithm": {
+      "const": "sha256-rfc8785-ordered-visual-viewport-evidence-v3"
+    },
+    "viewport_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decision": {
+      "const": "pass"
+    },
+    "rp_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "origin": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 1024
+    },
+    "trust_registry_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "trust_registry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "credential_id_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "challenge_preimage_algorithm": {
+      "const": "sha256-rfc8785-operator-decision-challenge-v2"
+    },
+    "challenge_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "challenge_service_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-authn-service"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

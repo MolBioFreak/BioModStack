@@ -1,0 +1,2984 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.browser-acceptance.v3",
+  "title": "Fixed Slice A Slice B and N6 browser acceptance v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "browser_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "browser_engine",
+    "browser_version",
+    "scenarios",
+    "outcome_algorithm",
+    "outcome",
+    "browser_verifier_assertion",
+    "observed_at",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.browser-acceptance.v3"
+    },
+    "browser_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "browser_engine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "browser_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "scenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice_a",
+        "slice_b",
+        "n6"
+      ],
+      "properties": {
+        "slice_a": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scenario_id",
+            "started_at",
+            "completed_at",
+            "browser_session_artifact",
+            "steps"
+          ],
+          "properties": {
+            "scenario_id": {
+              "const": "slice-a"
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "completed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "browser_session_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 12,
+              "maxItems": 12,
+              "items": false,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "project-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "project-v2-exact-readback"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "project-v2-exact-readback",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "global-experiment-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.global-experiment.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "global-experiment-v2-exact-readback"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "global-experiment-v2-exact-readback",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "protein-domain-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "protein-domain-v3-exact-readback"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "protein-domain-v3-exact-readback",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "ngs-domain-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "ngs-domain-v3-exact-readback"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "ngs-domain-v3-exact-readback",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "protein-authority-attach"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.attach"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "native-receipt-and-lineage-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "native-receipt-and-lineage-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "ngs-authority-attach"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.attach"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "native-receipt-and-lineage-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "native-receipt-and-lineage-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "tree-map-inspector"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "tree-map-inspector-agree"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "tree-map-inspector-agree",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "protein-canonical-reopen"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "exact-native-reopen"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "exact-native-reopen",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "ngs-canonical-reopen"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "exact-native-reopen"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "exact-native-reopen",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "decision-append-visible"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.research-record.append"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "decision-visible-in-project-surfaces"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "decision-visible-in-project-surfaces",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "archive-restore"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.restore"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "lifecycle-successors-preserve-history"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "lifecycle-successors-preserve-history",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "restart-project-reopen"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "same-project-reopens-after-managed-restart"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "same-project-reopens-after-managed-restart",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "slice_b": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scenario_id",
+            "started_at",
+            "completed_at",
+            "browser_session_artifact",
+            "steps",
+            "capability_execution_denominator",
+            "execution_control_receipt"
+          ],
+          "properties": {
+            "scenario_id": {
+              "const": "slice-b"
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "completed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "browser_session_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 15,
+              "maxItems": 15,
+              "items": false,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "plan-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.plan.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "plan-draft-generation-zero"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "plan-draft-generation-zero",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "draft-replace"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.plan.draft.replace"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "generation-cas"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "generation-cas",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "plan-publish"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.plan.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "immutable-plan-revision"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "immutable-plan-revision",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "prepare-no-job"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.preparation.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "preparation-created",
+                            "canonical-job-count-unchanged"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "preparation-created",
+                              "passed": true
+                            },
+                            {
+                              "assertion_id": "canonical-job-count-unchanged",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "launch-context-issue"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.launch-context.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "context-v2-issued"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "context-v2-issued",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "run-group-launch"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "attempt-fence-created"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "attempt-fence-created",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "single-native-job"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "one-attempt-one-canonical-job"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "one-attempt-one-canonical-job",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "terminal-result-link"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "terminal-receipt-auto-linked"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "terminal-receipt-auto-linked",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "retry"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.retry"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "fresh-attempt-and-fence"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "fresh-attempt-and-fence",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "resubmit"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.resubmit"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "fresh-run-group"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "fresh-run-group",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "clone-no-job"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.clone"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "fresh-plan-intent",
+                            "canonical-job-count-unchanged"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "fresh-plan-intent",
+                              "passed": true
+                            },
+                            {
+                              "assertion_id": "canonical-job-count-unchanged",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "fenced-cancellation"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.cancel"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "cancel-race-authority-preserved"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "cancel-race-authority-preserved",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "compatible-comparison"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.comparison.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "compatibility-adapter-proved"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "compatibility-adapter-proved",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "all-capability-results"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "capability-inventory-one-to-one"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "capability-inventory-one-to-one",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "bounded-result-reopen"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "exact-terminal-result-reopen"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "exact-terminal-result-reopen",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "capability_execution_denominator": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.capability-execution-denominator.v2"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            },
+            "execution_control_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.execution-control-acceptance.v2"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            }
+          }
+        },
+        "n6": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scenario_id",
+            "started_at",
+            "completed_at",
+            "browser_session_artifact",
+            "steps",
+            "execution_control_receipt",
+            "health_receipt"
+          ],
+          "properties": {
+            "scenario_id": {
+              "const": "n6"
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "completed_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "browser_session_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 20,
+              "maxItems": 20,
+              "items": false,
+              "prefixItems": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "project-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "project-created"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "project-created",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "global-experiment-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.global-experiment.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "experiment-created"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "experiment-created",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "ngs-domain-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "domain-created"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "domain-created",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "binding-initialize"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.binding.initialize"
+                        },
+                        "expected_status_code": {
+                          "const": 202
+                        },
+                        "assertions": {
+                          "const": [
+                            "connector-command-created"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 202
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "connector-command-created",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "binding-ready"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.binding"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "binding-acknowledged"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "binding-acknowledged",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "state-revision"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.ngs.state.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "state-revision-current"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "state-revision-current",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "sample-create-revise"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.ngs.sample.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "sample-history-retained"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "sample-history-retained",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "reference-create-revise"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.ngs.reference.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "reference-history-retained"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "reference-history-retained",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "dataset-create"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.dataset.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "dataset-kind-persisted"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "dataset-kind-persisted",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "dataset-revision"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.dataset.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "ordered-members-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "ordered-members-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "dataset-pagination"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.dataset.members"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "all-members-once"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "all-members-once",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "plan-create-publish"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.plan.revision.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "plan-revision-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "plan-revision-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "preparation"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.preparation.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "preparation-no-job"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "preparation-no-job",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "launch-context"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.launch-context.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "launch-context-v2-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "launch-context-v2-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "launch"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.run-group.create"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "single-authority-path"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "single-authority-path",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "terminal-result"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "terminal-result-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "terminal-result-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "evidence-attachment"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.domain.attach"
+                        },
+                        "expected_status_code": {
+                          "const": 201
+                        },
+                        "assertions": {
+                          "const": [
+                            "evidence-lineage-bound"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 201
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "evidence-lineage-bound",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "eln-visible"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "eln-record-reopened"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "eln-record-reopened",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "connector-resource-closure"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.project.detail"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "zero-conflict-gap-orphan",
+                            "resource-ledger-reconciled"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "zero-conflict-gap-orphan",
+                              "passed": true
+                            },
+                            {
+                              "assertion_id": "resource-ledger-reconciled",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/browserStep"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "step_id": {
+                          "const": "exact-reopen"
+                        },
+                        "route_template_id": {
+                          "const": "bms.route.result.surface"
+                        },
+                        "expected_status_code": {
+                          "const": 200
+                        },
+                        "assertions": {
+                          "const": [
+                            "result-and-input-authorities-reopen"
+                          ]
+                        },
+                        "response_observation": {
+                          "type": "object",
+                          "properties": {
+                            "status_code": {
+                              "const": 200
+                            }
+                          },
+                          "required": [
+                            "status_code"
+                          ]
+                        },
+                        "assertion_results": {
+                          "const": [
+                            {
+                              "assertion_id": "result-and-input-authorities-reopen",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "step_id",
+                        "route_template_id",
+                        "expected_status_code",
+                        "assertions",
+                        "response_observation",
+                        "assertion_results"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            "execution_control_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.execution-control-acceptance.v2"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            },
+            "health_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.health-acceptance.v3"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "browser_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-browser-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    },
+    "outcome_algorithm": {
+      "const": "all-fixed-browser-step-observed-status-and-assertions-pass-v3"
+    },
+    "outcome": {
+      "const": "pass"
+    }
+  },
+  "$defs": {
+    "browserStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step_id",
+        "route_template_id",
+        "expected_status_code",
+        "request_evidence",
+        "response_observation",
+        "authority_bindings",
+        "assertions",
+        "screenshot_artifact",
+        "dom_snapshot_artifact",
+        "console_log_artifact",
+        "network_log_artifact",
+        "console_error_count",
+        "network_failure_count",
+        "assertion_results"
+      ],
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "route_template_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "expected_status_code": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "request_evidence": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+            }
+          ]
+        },
+        "response_observation": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/httpObservation"
+        },
+        "authority_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "authority_kind",
+              "stable_id",
+              "exact_revision_or_generation",
+              "schema_id",
+              "content_algorithm",
+              "content_sha256"
+            ],
+            "properties": {
+              "authority_kind": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "stable_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "exact_revision_or_generation": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "schema_id": {
+                "type": "string",
+                "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$"
+              },
+              "content_algorithm": {
+                "const": "sha256-rfc8785-complete-authority-response-v1"
+              },
+              "content_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "assertions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          }
+        },
+        "screenshot_artifact": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        "dom_snapshot_artifact": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        "console_log_artifact": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        "network_log_artifact": {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        "console_error_count": {
+          "const": 0
+        },
+        "network_failure_count": {
+          "const": 0
+        },
+        "assertion_results": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assertion_id",
+              "passed"
+            ],
+            "properties": {
+              "assertion_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "passed": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

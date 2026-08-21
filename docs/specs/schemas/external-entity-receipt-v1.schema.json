@@ -4,23 +4,28 @@
   "title": "BioModStack External Entity Receipt",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "store_id", "entity_kind", "entity_id", "entity_revision_id", "content_digest", "contract_digest", "source_build_revision", "verified_at", "verifier_id", "reopen_uri", "metadata"],
+  "required": ["schema", "store_id", "entity_kind", "entity_id", "entity_revision_id", "content_digest", "contract_digest", "source_build_revision", "verified_at", "verifier_id", "reopen_route", "metadata"],
   "properties": {
     "schema": {"const": "bms.global.external-entity-receipt.v1"},
     "store_id": {"enum": ["core", "molbio", "ont", "bioxp", "other-approved-store"]},
-    "entity_kind": {"type": "string", "minLength": 1},
-    "entity_id": {"type": "string", "minLength": 1},
-    "entity_revision_id": {"type": ["string", "null"]},
-    "content_digest": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-    "contract_digest": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-    "source_build_revision": {"type": ["string", "null"]},
+    "entity_kind": {"type": "string", "minLength": 1, "maxLength": 128},
+    "entity_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "entity_revision_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]},
+    "content_digest": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "contract_digest": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "source_build_revision": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 255}, {"type": "null"}]},
     "verified_at": {"type": "string", "format": "date-time"},
-    "verifier_id": {"type": "string", "minLength": 1},
-    "reopen_uri": {"type": "string", "pattern": "^/"},
-    "metadata": {"type": "object"}
+    "verifier_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "reopen_route": {"$ref": "#/$defs/internalRoute"},
+    "metadata": {"$ref": "#/$defs/typedPayload"}
   },
   "anyOf": [
-    {"properties": {"content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
-    {"properties": {"contract_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
-  ]
+    {"properties": {"content_digest": {"$ref": "#/$defs/sha256"}}},
+    {"properties": {"contract_digest": {"$ref": "#/$defs/sha256"}}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "internalRoute": {"type": "object", "additionalProperties": false, "required": ["template_id", "path", "query"], "properties": {"template_id": {"type": "string", "pattern": "^bms\\.route\\.[A-Za-z0-9_.-]+$", "maxLength": 255}, "path": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$", "allOf": [{"not": {"pattern": "(^|/)\\.\\.?(/|$)"}}, {"not": {"pattern": "%2[fF]|%5[cC]"}}]}, "query": {"type": "object", "maxProperties": 32, "propertyNames": {"pattern": "^[A-Za-z0-9_.-]+$", "maxLength": 128}, "additionalProperties": {"type": "string", "maxLength": 2048}}}},
+    "typedPayload": {"type": "object", "additionalProperties": false, "required": ["schema_id", "content_sha256", "canonical_size_bytes", "payload"], "properties": {"schema_id": {"type": "string", "pattern": "^bms\\.[A-Za-z0-9_.-]+$", "maxLength": 255}, "content_sha256": {"$ref": "#/$defs/sha256"}, "canonical_size_bytes": {"type": "integer", "minimum": 2, "maximum": 8192}, "payload": {"type": "object", "maxProperties": 64}}}
+  }
 }

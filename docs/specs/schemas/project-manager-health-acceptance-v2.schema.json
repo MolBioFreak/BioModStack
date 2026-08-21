@@ -1,0 +1,380 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.health-acceptance.v2",
+  "title": "Typed Development service connector resource and operations health v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "health_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "observations",
+    "health_verifier_assertion",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.health-acceptance.v2"
+    },
+    "health_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api",
+        "frontend",
+        "workflow_adapter",
+        "connector",
+        "resource_admission",
+        "operations"
+      ],
+      "properties": {
+        "api": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation",
+            "ready",
+            "source_identity_match",
+            "build_identity_match",
+            "database_ready",
+            "migration_ready"
+          ],
+          "properties": {
+            "observation": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+            },
+            "ready": {
+              "const": true
+            },
+            "source_identity_match": {
+              "const": true
+            },
+            "build_identity_match": {
+              "const": true
+            },
+            "database_ready": {
+              "const": true
+            },
+            "migration_ready": {
+              "const": true
+            }
+          }
+        },
+        "frontend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "route",
+            "status_code",
+            "response_artifact",
+            "embedded_build_algorithm",
+            "embedded_build_sha256"
+          ],
+          "properties": {
+            "route": {
+              "const": "/"
+            },
+            "status_code": {
+              "const": 200
+            },
+            "response_artifact": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+            },
+            "embedded_build_algorithm": {
+              "const": "sha256-utf8-frontend-build-marker-value-v1"
+            },
+            "embedded_build_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "workflow_adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation",
+            "ready",
+            "source_identity_match",
+            "build_identity_match",
+            "development_lane"
+          ],
+          "properties": {
+            "observation": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+            },
+            "ready": {
+              "const": true
+            },
+            "source_identity_match": {
+              "const": true
+            },
+            "build_identity_match": {
+              "const": true
+            },
+            "development_lane": {
+              "const": true
+            }
+          }
+        },
+        "connector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation",
+            "failure_count",
+            "unresolved_conflict_count",
+            "deferred_gap_count",
+            "active_lease_count",
+            "high_watermarks_algorithm",
+            "high_watermarks_sha256"
+          ],
+          "properties": {
+            "observation": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+            },
+            "failure_count": {
+              "const": 0
+            },
+            "unresolved_conflict_count": {
+              "const": 0
+            },
+            "deferred_gap_count": {
+              "const": 0
+            },
+            "active_lease_count": {
+              "const": 0
+            },
+            "high_watermarks_algorithm": {
+              "const": "sha256-rfc8785-connector-high-watermarks-v1"
+            },
+            "high_watermarks_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "resource_admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation",
+            "cpu_thread_limit",
+            "dram_byte_limit",
+            "unreconciled_reservation_count",
+            "orphan_execution_count",
+            "ledger_algorithm",
+            "ledger_sha256"
+          ],
+          "properties": {
+            "observation": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+            },
+            "cpu_thread_limit": {
+              "const": 24
+            },
+            "dram_byte_limit": {
+              "const": 103079215104
+            },
+            "unreconciled_reservation_count": {
+              "const": 0
+            },
+            "orphan_execution_count": {
+              "const": 0
+            },
+            "ledger_algorithm": {
+              "const": "sha256-rfc8785-resource-admission-ledger-v1"
+            },
+            "ledger_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation",
+            "backup_receipt",
+            "restoration_receipt",
+            "export_receipt",
+            "payload_ownership_audit_receipt"
+          ],
+          "properties": {
+            "observation": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+            },
+            "backup_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.backup-receipt.v3"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            },
+            "restoration_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.restoration-receipt.v3"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            },
+            "export_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.project-manager.export-receipt.v3"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            },
+            "payload_ownership_audit_receipt": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "receipt_schema_id",
+                "receipt_id",
+                "receipt_sha256",
+                "native_identity"
+              ],
+              "properties": {
+                "receipt_schema_id": {
+                  "const": "bms.payload-ownership-audit.v1"
+                },
+                "receipt_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "receipt_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "native_identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "health_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-health-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

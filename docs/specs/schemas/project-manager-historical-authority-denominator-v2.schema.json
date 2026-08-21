@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.historical-authority-denominator.v2",
+  "title": "Exact retained historical schema-version and reopen denominator v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "denominator_id",
+    "source_commit",
+    "source_tree",
+    "source_snapshot_set",
+    "extraction_algorithm",
+    "schema_versions",
+    "cases",
+    "extractor_assertion",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.historical-authority-denominator.v2"
+    },
+    "denominator_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_snapshot_set": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "extraction_algorithm": {
+      "const": "sqlite-retained-schema-version-keyset-scan-v1"
+    },
+    "schema_versions": {
+      "type": "object",
+      "minProperties": 7,
+      "maxProperties": 256,
+      "required": [
+        "bms.project.v1",
+        "bms.global-experiment.v1",
+        "bms.domain-experiment.v1",
+        "bms.domain-experiment.v2",
+        "bms.protein-in-silico-experiment.v1",
+        "bms.protein-in-silico-experiment.v2",
+        "bms.research-record.v1"
+      ],
+      "propertyNames": {
+        "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registry_entry_sha256",
+          "case_ids"
+        ],
+        "properties": {
+          "registry_entry_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "case_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 100000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "object",
+      "minProperties": 7,
+      "maxProperties": 100000,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._:-]{1,255}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_id",
+          "contract_version",
+          "authority_family",
+          "resource_kind",
+          "store_id",
+          "stable_id",
+          "exact_revision_id",
+          "raw_persisted_bytes_sha256",
+          "route_template_id",
+          "route_parameters",
+          "canonical_response_algorithm",
+          "expected_content_sha256",
+          "expected_response_size_bytes"
+        ],
+        "properties": {
+          "schema_id": {
+            "type": "string",
+            "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$"
+          },
+          "contract_version": {
+            "type": "string",
+            "pattern": "^v[0-9]+$"
+          },
+          "authority_family": {
+            "enum": [
+              "project-manager",
+              "ngs-molbio",
+              "protein",
+              "conformational-mapping",
+              "molecular-dynamics",
+              "frustrampnn",
+              "structure-prediction",
+              "trajectory"
+            ]
+          },
+          "resource_kind": {
+            "enum": [
+              "project_revision",
+              "global_experiment_revision",
+              "domain_experiment_revision",
+              "local_state_revision",
+              "dataset_revision",
+              "run",
+              "result",
+              "research_record"
+            ]
+          },
+          "store_id": {
+            "enum": [
+              "global-experiments",
+              "molbio-domain",
+              "molbio-ngs-domain",
+              "core-ngs",
+              "biomodstack-native"
+            ]
+          },
+          "stable_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "exact_revision_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "raw_persisted_bytes_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "route_template_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "route_parameters": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 32,
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            }
+          },
+          "canonical_response_algorithm": {
+            "const": "sha256-rfc8785-complete-response-v1"
+          },
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expected_response_size_bytes": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 1048576
+          }
+        }
+      }
+    },
+    "extractor_assertion": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  }
+}

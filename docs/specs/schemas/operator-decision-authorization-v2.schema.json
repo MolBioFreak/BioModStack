@@ -1,0 +1,314 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-decision-authorization.v2",
+  "title": "Reproducible Christian WebAuthn decision authorization v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "authorization_receipt_id",
+    "operator_principal_id",
+    "operator_role",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "development_runtime_receipt",
+    "browser_acceptance_receipt",
+    "viewport_evidence_algorithm",
+    "viewport_evidence_sha256",
+    "decision",
+    "trust_registry_receipt",
+    "issued_challenge_receipt",
+    "consumed_challenge_receipt",
+    "sign_counter_receipt",
+    "credential_id_base64url",
+    "credential_id_sha256",
+    "cose_public_key_sha256",
+    "client_data_json_artifact",
+    "authenticator_data_artifact",
+    "signature_artifact",
+    "signature_algorithm",
+    "rp_id_verified",
+    "origin_verified",
+    "challenge_verified",
+    "signature_verified",
+    "user_present",
+    "user_verified",
+    "sign_counter_advanced",
+    "authorized_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-decision-authorization.v2"
+    },
+    "authorization_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "operator_principal_id": {
+      "const": "christian-release-owner-v1"
+    },
+    "operator_role": {
+      "const": "release_owner"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.development-runtime.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.browser-acceptance.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "viewport_evidence_algorithm": {
+      "const": "sha256-rfc8785-ordered-visual-viewport-evidence-v3"
+    },
+    "viewport_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decision": {
+      "const": "pass"
+    },
+    "trust_registry_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-trust-registry.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "issued_challenge_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-challenge-issued.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "consumed_challenge_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-challenge-consumed.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "sign_counter_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-sign-counter.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "credential_id_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "credential_id_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "cose_public_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "client_data_json_artifact": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+    },
+    "authenticator_data_artifact": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+    },
+    "signature_artifact": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+    },
+    "signature_algorithm": {
+      "enum": [
+        "ES256",
+        "EdDSA"
+      ]
+    },
+    "rp_id_verified": {
+      "const": true
+    },
+    "origin_verified": {
+      "const": true
+    },
+    "challenge_verified": {
+      "const": true
+    },
+    "signature_verified": {
+      "const": true
+    },
+    "user_present": {
+      "const": true
+    },
+    "user_verified": {
+      "const": true
+    },
+    "sign_counter_advanced": {
+      "const": true
+    },
+    "authorized_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

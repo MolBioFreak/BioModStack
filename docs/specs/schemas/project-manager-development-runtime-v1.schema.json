@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.development-runtime.v1",
+  "title": "Managed Development runtime identity receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "development_runtime_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "deployment_id",
+    "components",
+    "listener_owner_sha256",
+    "database_identity_sha256",
+    "outcome",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.development-runtime.v1"
+    },
+    "development_runtime_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "deployment_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "components": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-api"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-frontend"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/component"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "component_id": {
+                  "const": "development-workflow-adapter"
+                }
+              },
+              "required": [
+                "component_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "listener_owner_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "database_identity_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component_id",
+        "build_sha256",
+        "source_root",
+        "process_id",
+        "process_started_at"
+      ],
+      "properties": {
+        "component_id": {
+          "enum": [
+            "development-api",
+            "development-frontend",
+            "development-workflow-adapter"
+          ]
+        },
+        "build_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_root": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "process_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "process_started_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

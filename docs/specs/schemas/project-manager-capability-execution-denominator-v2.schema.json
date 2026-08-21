@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.capability-execution-denominator.v2",
+  "title": "All installed Protein and MD capability execution denominator v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "capability_execution_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "capability_inventory",
+    "executions",
+    "comparison_receipts",
+    "resolver_assertion",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.capability-execution-denominator.v2"
+    },
+    "capability_execution_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capability_inventory": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "executions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 256,
+      "propertyNames": {
+        "pattern": "^[a-z0-9._-]{1,255}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "registry_entry_sha256",
+          "plan_revision_id",
+          "preparation_id",
+          "run_group_id",
+          "attempt_id",
+          "canonical_job_id",
+          "terminal_result_receipt",
+          "result_surface_observation"
+        ],
+        "properties": {
+          "registry_entry_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "plan_revision_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "preparation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "run_group_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "attempt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "canonical_job_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "terminal_result_receipt": {
+            "$ref": "bms.project-manager.operational-evidence.v2#/$defs/receiptPointer"
+          },
+          "result_surface_observation": {
+            "$ref": "bms.project-manager.operational-evidence.v2#/$defs/httpObservation"
+          }
+        }
+      }
+    },
+    "comparison_receipts": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/receiptPointer"
+      }
+    },
+    "resolver_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-capability-execution-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  }
+}

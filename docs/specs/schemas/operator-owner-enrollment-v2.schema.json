@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-owner-enrollment.v2",
+  "title": "Christian local-console WebAuthn owner enrollment v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "owner_enrollment_receipt_id",
+    "operator_principal_id",
+    "operator_role",
+    "enrollment_method",
+    "credential_id_base64url",
+    "credential_id_sha256",
+    "cose_public_key_base64url",
+    "cose_public_key_sha256",
+    "signature_algorithm",
+    "rp_id",
+    "allowed_origins",
+    "initial_sign_count",
+    "enrollment_service_assertion",
+    "enrolled_at",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-owner-enrollment.v2"
+    },
+    "owner_enrollment_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "operator_principal_id": {
+      "const": "christian-release-owner-v1"
+    },
+    "operator_role": {
+      "const": "release_owner"
+    },
+    "enrollment_method": {
+      "const": "local-console-webauthn-owner-enrollment-v1"
+    },
+    "credential_id_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "credential_id_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "cose_public_key_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,4096}$"
+    },
+    "cose_public_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signature_algorithm": {
+      "enum": [
+        "ES256",
+        "EdDSA"
+      ]
+    },
+    "rp_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "allowed_origins": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "format": "uri",
+        "maxLength": 1024
+      }
+    },
+    "initial_sign_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "enrollment_service_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-owner-enrollment-service-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "enrolled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  }
+}

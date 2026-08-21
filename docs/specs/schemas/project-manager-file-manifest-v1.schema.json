@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.file-manifest.v1",
+  "title": "Governed root file manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "manifest_id",
+    "root_id",
+    "source_root_identity",
+    "path_policy",
+    "symlink_policy",
+    "ordered_files_algorithm",
+    "files",
+    "file_count",
+    "total_size_bytes",
+    "ordered_files_sha256",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.file-manifest.v1"
+    },
+    "manifest_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "root_id": {
+      "enum": [
+        "global-project-artifacts",
+        "molbio-governed-artifacts",
+        "ngs-governed-results",
+        "bms-native-results",
+        "project-export"
+      ]
+    },
+    "source_root_identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "path_policy": {
+      "const": "utf8-nfc-root-relative-posix-no-dot-segments-v1"
+    },
+    "symlink_policy": {
+      "const": "reject-all-symlinks-v1"
+    },
+    "ordered_files_algorithm": {
+      "const": "sha256-path-nul-size-u64be-raw-digest-v1"
+    },
+    "files": {
+      "type": "object",
+      "maxProperties": 1000000,
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "size_bytes",
+          "sha256",
+          "file_kind"
+        ],
+        "properties": {
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "file_kind": {
+            "const": "regular_file"
+          }
+        }
+      }
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "total_size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ordered_files_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete manifest with only content_sha256 omitted."
+    }
+  }
+}

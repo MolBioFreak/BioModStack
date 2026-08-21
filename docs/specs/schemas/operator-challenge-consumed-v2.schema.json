@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-challenge-consumed.v2",
+  "title": "Atomic one-use consumed operator challenge v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "consumed_challenge_receipt_id",
+    "issued_challenge_receipt",
+    "challenge_id",
+    "challenge_revision",
+    "state",
+    "challenge_sha256",
+    "assertion_id",
+    "atomic_compare_state",
+    "atomic_set_state",
+    "consumed_at",
+    "challenge_service_assertion",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-challenge-consumed.v2"
+    },
+    "consumed_challenge_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "issued_challenge_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.operator-challenge-issued.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "challenge_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "state": {
+      "const": "consumed"
+    },
+    "challenge_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "assertion_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "atomic_compare_state": {
+      "const": "issued"
+    },
+    "atomic_set_state": {
+      "const": "consumed"
+    },
+    "consumed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "challenge_service_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-authn-service"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  }
+}

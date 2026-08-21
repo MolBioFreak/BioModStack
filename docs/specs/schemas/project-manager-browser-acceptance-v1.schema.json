@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.browser-acceptance.v1",
+  "title": "Managed Development browser acceptance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "browser_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "scenarios",
+    "browser_engine",
+    "browser_version",
+    "outcome",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.browser-acceptance.v1"
+    },
+    "browser_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/scenario"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "scenario_id": {
+                  "const": "slice-a"
+                }
+              },
+              "required": [
+                "scenario_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/scenario"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "scenario_id": {
+                  "const": "slice-b"
+                }
+              },
+              "required": [
+                "scenario_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/scenario"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "scenario_id": {
+                  "const": "n6"
+                }
+              },
+              "required": [
+                "scenario_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "browser_engine": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "browser_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "route",
+        "screenshot_sha256",
+        "network_error_count",
+        "console_error_count",
+        "outcome"
+      ],
+      "properties": {
+        "scenario_id": {
+          "enum": [
+            "slice-a",
+            "slice-b",
+            "n6"
+          ]
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/",
+          "maxLength": 1024
+        },
+        "screenshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "network_error_count": {
+          "const": 0
+        },
+        "console_error_count": {
+          "const": 0
+        },
+        "outcome": {
+          "const": "pass"
+        }
+      }
+    }
+  }
+}

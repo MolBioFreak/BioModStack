@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-decision-authorization.v1",
+  "title": "Christian release-owner signed decision authorization v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "authorization_receipt_id",
+    "operator_principal_id",
+    "operator_role",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "development_runtime_receipt",
+    "browser_acceptance_receipt",
+    "viewport_evidence_sha256",
+    "decision",
+    "audience",
+    "decision_nonce",
+    "challenge_algorithm",
+    "challenge_sha256",
+    "trust_registry_id",
+    "trust_registry_sha256",
+    "trust_registry_entry_sha256",
+    "credential_id_sha256",
+    "credential_public_key_sha256",
+    "issuer_id",
+    "assertion_format",
+    "rp_id",
+    "origin",
+    "client_data_json_sha256",
+    "authenticator_data_sha256",
+    "signature_algorithm",
+    "signature_base64url",
+    "sign_count",
+    "user_present",
+    "user_verified",
+    "issued_at",
+    "expires_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-decision-authorization.v1"
+    },
+    "authorization_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "operator_principal_id": {
+      "const": "christian-release-owner-v1"
+    },
+    "operator_role": {
+      "const": "release_owner"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.development-runtime.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.browser-acceptance.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "viewport_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "decision": {
+      "const": "pass"
+    },
+    "audience": {
+      "const": "bms-project-manager-pm12"
+    },
+    "decision_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32,128}$"
+    },
+    "challenge_algorithm": {
+      "const": "sha256-rfc8785-operator-decision-challenge-v1"
+    },
+    "challenge_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "trust_registry_id": {
+      "const": "bms.operator-trust-registry.v1"
+    },
+    "trust_registry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "trust_registry_entry_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "credential_id_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "credential_public_key_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "issuer_id": {
+      "const": "bms-development-authn-service"
+    },
+    "assertion_format": {
+      "const": "webauthn-assertion-v1"
+    },
+    "rp_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253
+    },
+    "origin": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 1024
+    },
+    "client_data_json_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "authenticator_data_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "signature_algorithm": {
+      "enum": [
+        "ES256",
+        "EdDSA"
+      ]
+    },
+    "signature_base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,2048}$"
+    },
+    "sign_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "user_present": {
+      "const": true
+    },
+    "user_verified": {
+      "const": true
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  }
+}

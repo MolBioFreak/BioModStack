@@ -4,47 +4,40 @@
   "title": "BioModStack Presentation / Result Surface Descriptor",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema",
-    "receipt_id",
-    "entity_kind",
-    "entity_id",
-    "contract_id",
-    "content_digest",
-    "surface_kind",
-    "route",
-    "readiness",
-    "native_summary",
-    "scientific_acceptance",
-    "provenance",
-    "available_actions"
-  ],
+  "required": ["schema", "receipt_id", "entity_kind", "entity_id", "contract_id", "content_digest", "surface_kind", "route", "readiness", "native_summary", "scientific_acceptance", "provenance", "comparison", "available_actions"],
   "properties": {
     "schema": {"const": "bms.result-surface.v1"},
-    "receipt_id": {"type": "string", "minLength": 1},
-    "entity_kind": {"type": "string", "minLength": 1},
-    "entity_id": {"type": "string", "minLength": 1},
-    "contract_id": {"type": "string", "minLength": 1},
-    "content_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "surface_kind": {
-      "enum": ["protein_design", "molecular_dynamics", "conformational_mapping", "frustrampnn", "ngs", "molbio", "artifact", "unsupported"]
-    },
-    "route": {"type": ["string", "null"]},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "entity_kind": {"type": "string", "minLength": 1, "maxLength": 128},
+    "entity_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "contract_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "content_digest": {"$ref": "#/$defs/sha256"},
+    "surface_kind": {"enum": ["protein_design", "molecular_dynamics", "conformational_mapping", "frustrampnn", "ngs", "molbio", "artifact", "unsupported"]},
+    "route": {"anyOf": [{"$ref": "#/$defs/internalRoute"}, {"type": "null"}]},
     "readiness": {"enum": ["running", "partial", "ready", "failed", "blocked", "unsupported"]},
-    "native_summary": {"type": "object"},
-    "scientific_acceptance": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["state", "reason"],
-      "properties": {
-        "state": {"enum": ["passed", "failed", "review", "unavailable", "not_applicable"]},
-        "reason": {"type": ["string", "null"]}
-      }
-    },
-    "provenance": {"type": "object"},
-    "available_actions": {
-      "type": "array",
-      "items": {"enum": ["open", "download", "compare", "attach_evidence"]}
-    }
+    "native_summary": {"$ref": "#/$defs/typedPayload"},
+    "scientific_acceptance": {"type": "object", "additionalProperties": false, "required": ["state", "reason"], "properties": {"state": {"enum": ["passed", "failed", "review", "unavailable", "not_applicable"]}, "reason": {"anyOf": [{"type": "string", "maxLength": 2048}, {"type": "null"}]}}},
+    "provenance": {"$ref": "#/$defs/typedPayload"},
+    "comparison": {"$ref": "#/$defs/comparisonProjection"},
+    "available_actions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"enum": ["open", "download", "compare", "attach_evidence"]}}
+  },
+  "allOf": [
+    {"if": {"properties": {"surface_kind": {"const": "unsupported"}}, "required": ["surface_kind"]}, "then": {"properties": {"readiness": {"const": "unsupported"}, "route": {"type": "null"}, "comparison": {"properties": {"state": {"const": "not_applicable"}, "reason": {"type": "null"}, "authority": {"type": "null"}}}, "available_actions": {"maxItems": 0}, "scientific_acceptance": {"properties": {"state": {"enum": ["unavailable", "not_applicable"]}}}}}, "else": {"properties": {"route": {"$ref": "#/$defs/internalRoute"}, "readiness": {"not": {"const": "unsupported"}}}}},
+    {"if": {"properties": {"readiness": {"const": "unsupported"}}, "required": ["readiness"]}, "then": {"properties": {"surface_kind": {"const": "unsupported"}}}},
+    {"if": {"properties": {"surface_kind": {"enum": ["protein_design", "molecular_dynamics", "conformational_mapping", "frustrampnn", "ngs", "molbio"]}}, "required": ["surface_kind"]}, "then": {"properties": {"available_actions": {"contains": {"const": "open"}}}}},
+    {"if": {"properties": {"surface_kind": {"const": "artifact"}}, "required": ["surface_kind"]}, "then": {"properties": {"available_actions": {"contains": {"const": "download"}}}}},
+    {"if": {"properties": {"available_actions": {"contains": {"enum": ["open", "download"]}}}, "required": ["available_actions"]}, "then": {"properties": {"route": {"$ref": "#/$defs/internalRoute"}}}},
+    {"if": {"properties": {"route": {"type": "null"}}, "required": ["route"]}, "then": {"properties": {"surface_kind": {"const": "unsupported"}, "available_actions": {"maxItems": 0}}}},
+    {"if": {"properties": {"comparison": {"properties": {"state": {"const": "available"}}, "required": ["state"]}}, "required": ["comparison"]}, "then": {"properties": {"readiness": {"const": "ready"}, "route": {"$ref": "#/$defs/internalRoute"}, "comparison": {"properties": {"reason": {"type": "null"}, "authority": {"$ref": "#/$defs/comparisonAuthority"}}}, "available_actions": {"contains": {"const": "compare"}}}}},
+    {"if": {"properties": {"comparison": {"properties": {"state": {"enum": ["incompatible", "unavailable"]}}, "required": ["state"]}}, "required": ["comparison"]}, "then": {"properties": {"comparison": {"properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 2048}, "authority": {"type": "null"}}}, "available_actions": {"not": {"contains": {"const": "compare"}}}}}},
+    {"if": {"properties": {"comparison": {"properties": {"state": {"const": "not_applicable"}}, "required": ["state"]}}, "required": ["comparison"]}, "then": {"properties": {"comparison": {"properties": {"reason": {"type": "null"}, "authority": {"type": "null"}}}, "available_actions": {"not": {"contains": {"const": "compare"}}}}}},
+    {"if": {"properties": {"available_actions": {"contains": {"const": "compare"}}}, "required": ["available_actions"]}, "then": {"properties": {"comparison": {"properties": {"state": {"const": "available"}, "authority": {"$ref": "#/$defs/comparisonAuthority"}}}}}}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "internalRoute": {"type": "object", "additionalProperties": false, "required": ["template_id", "path", "query"], "properties": {"template_id": {"type": "string", "pattern": "^bms\\.route\\.[A-Za-z0-9_.-]+$", "maxLength": 255}, "path": {"type": "string", "minLength": 1, "maxLength": 1000, "pattern": "^/(?!/)[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$", "allOf": [{"not": {"pattern": "(^|/)\\.\\.?(/|$)"}}, {"not": {"pattern": "%2[fF]|%5[cC]"}}]}, "query": {"type": "object", "maxProperties": 32, "propertyNames": {"pattern": "^[A-Za-z0-9_.-]+$", "maxLength": 128}, "additionalProperties": {"type": "string", "maxLength": 2048}}}},
+    "typedPayload": {"type": "object", "additionalProperties": false, "required": ["schema_id", "content_sha256", "canonical_size_bytes", "payload"], "properties": {"schema_id": {"type": "string", "pattern": "^bms\\.[A-Za-z0-9_.-]+$", "maxLength": 255}, "content_sha256": {"$ref": "#/$defs/sha256"}, "canonical_size_bytes": {"type": "integer", "minimum": 2, "maximum": 65536}, "payload": {"type": "object", "maxProperties": 128}}},
+    "comparisonAuthority": {"type": "object", "additionalProperties": false, "required": ["adapter_id", "adapter_version", "receipt_id", "receipt_sha256"], "properties": {"adapter_id": {"type": "string", "minLength": 1, "maxLength": 255}, "adapter_version": {"type": "string", "minLength": 1, "maxLength": 128}, "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128}, "receipt_sha256": {"$ref": "#/$defs/sha256"}}},
+    "comparisonProjection": {"type": "object", "additionalProperties": false, "required": ["state", "reason", "authority"], "properties": {"state": {"enum": ["available", "not_applicable", "incompatible", "unavailable"]}, "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 2048}, {"type": "null"}]}, "authority": {"anyOf": [{"$ref": "#/$defs/comparisonAuthority"}, {"type": "null"}]}}}
   }
 }

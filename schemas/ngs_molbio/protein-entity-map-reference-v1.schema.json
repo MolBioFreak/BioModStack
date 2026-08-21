@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.protein-entity-map-reference.v1",
+  "title": "Bounded Protein entity-map authority reference",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "authority_kind",
+    "receipt_id",
+    "receipt_sha256",
+    "content_sha256",
+    "canonical_size_bytes",
+    "entity_count",
+    "residue_mapping_count",
+    "display_entities"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.protein-entity-map-reference.v1"
+    },
+    "authority_kind": {
+      "enum": [
+        "native_receipt",
+        "governed_artifact_receipt"
+      ]
+    },
+    "receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "canonical_size_bytes": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "entity_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "residue_mapping_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000000
+    },
+    "display_entities": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entity_instance_id",
+          "source_entity_id",
+          "entity_type",
+          "label_asym_id",
+          "auth_asym_id"
+        ],
+        "properties": {
+          "entity_instance_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "source_entity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "entity_type": {
+            "enum": [
+              "protein",
+              "dna",
+              "rna",
+              "ligand",
+              "ion",
+              "other"
+            ]
+          },
+          "label_asym_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          },
+          "auth_asym_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.protein-in-silico-experiment.v3",
+  "title": "Protein In Silico Domain payload v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "experiment_mode",
+    "scientific_objective",
+    "targets",
+    "design_constraints",
+    "planned_capability_ids",
+    "comparison_groups",
+    "validation_capability_ids",
+    "acceptance_criteria",
+    "evidence_plan"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.protein-in-silico-experiment.v3"
+    },
+    "experiment_mode": {
+      "enum": [
+        "exploration",
+        "design",
+        "redesign",
+        "prediction",
+        "validation",
+        "comparison",
+        "simulation",
+        "analysis"
+      ]
+    },
+    "scientific_objective": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.protein-target.v3"
+      }
+    },
+    "design_constraints": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {
+        "$ref": "bms.protein-constraint.v1"
+      }
+    },
+    "planned_capability_ids": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "comparison_groups": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "bms.protein-comparison-group.v1"
+      }
+    },
+    "validation_capability_ids": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "bms.scientific-criterion.v2"
+      }
+    },
+    "evidence_plan": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "bms.evidence-requirement.v2"
+      }
+    }
+  }
+}

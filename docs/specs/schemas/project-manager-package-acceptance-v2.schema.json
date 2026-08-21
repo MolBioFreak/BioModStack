@@ -1,0 +1,2412 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-acceptance.v2",
+  "title": "Owner-authenticated bounded PM package acceptance v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package_acceptance_receipt_id",
+    "package_id",
+    "source_commit",
+    "source_tree",
+    "package_owner_registry",
+    "owner_principal_id",
+    "coverage",
+    "evidence_receipts",
+    "evidence_manifest_algorithm",
+    "evidence_manifest_sha256",
+    "owner_assertion",
+    "accepted_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-acceptance.v2"
+    },
+    "package_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "package_id": {
+      "enum": [
+        "PM-01",
+        "PM-02",
+        "PM-03A",
+        "PM-03B",
+        "PM-04",
+        "PM-05",
+        "PM-06",
+        "PM-07",
+        "PM-08A",
+        "PM-08B",
+        "PM-09",
+        "PM-10A",
+        "PM-10B"
+      ]
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "package_owner_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.package-owner-registry.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "owner_principal_id": {
+      "enum": [
+        "global-protein-owner",
+        "ngs-molbio-domain-owner",
+        "ngs-molbio-frontend-owner",
+        "ngs-molbio-shared-artifact-owner",
+        "ngs-molbio-shared-attachment-owner",
+        "ngs-molbio-shared-package-owner"
+      ]
+    },
+    "coverage": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "responsive-geometry",
+          "semantic-control-denominator",
+          "keyboard-accessibility",
+          "deep-link-reload",
+          "source-denominator",
+          "runtime-registry",
+          "capability-dataset-exposure",
+          "operator-trust-registry",
+          "negative-drift",
+          "project-v2",
+          "global-experiment-v2",
+          "protein-domain-v3",
+          "hierarchy-revisions",
+          "ngs-domain-v3",
+          "local-projects",
+          "domain-provisioning",
+          "project-links",
+          "attachment-receipts",
+          "literal-deep-links",
+          "cross-project-denials",
+          "zero-payload-copy",
+          "samples",
+          "managed-references",
+          "evidence",
+          "datasets",
+          "plans-preparations",
+          "composite-read-model",
+          "pagination",
+          "eln-records",
+          "adapter-versions",
+          "maintained-projections",
+          "receipt-freshness",
+          "successor-receipts",
+          "domain-lineage",
+          "restart-reverification",
+          "plan-execution",
+          "launch-context-v2",
+          "launch-fencing",
+          "retry-resubmit-clone-cancel",
+          "protein-adapters",
+          "molecular-dynamics-adapters",
+          "compatible-comparison",
+          "native-result-chain",
+          "validation-artifacts",
+          "bounded-attempt-logs",
+          "result-surfaces",
+          "native-viewers",
+          "connector-commands",
+          "inbox-outbox",
+          "acknowledgements",
+          "lease-retry-reconciliation",
+          "worker-convergence",
+          "backup-v3",
+          "restoration-v3",
+          "export-v3",
+          "payload-ownership-audit"
+        ]
+      }
+    },
+    "evidence_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "coverage_item",
+          "evidence_contract_id",
+          "receipt_schema_id",
+          "receipt_id",
+          "receipt_sha256",
+          "native_identity",
+          "evidence_body_schema_id",
+          "evidence_body_schema_sha256"
+        ],
+        "properties": {
+          "coverage_item": {
+            "enum": [
+              "responsive-geometry",
+              "semantic-control-denominator",
+              "keyboard-accessibility",
+              "deep-link-reload",
+              "source-denominator",
+              "runtime-registry",
+              "capability-dataset-exposure",
+              "operator-trust-registry",
+              "negative-drift",
+              "project-v2",
+              "global-experiment-v2",
+              "protein-domain-v3",
+              "hierarchy-revisions",
+              "ngs-domain-v3",
+              "local-projects",
+              "domain-provisioning",
+              "project-links",
+              "attachment-receipts",
+              "literal-deep-links",
+              "cross-project-denials",
+              "zero-payload-copy",
+              "samples",
+              "managed-references",
+              "evidence",
+              "datasets",
+              "plans-preparations",
+              "composite-read-model",
+              "pagination",
+              "eln-records",
+              "adapter-versions",
+              "maintained-projections",
+              "receipt-freshness",
+              "successor-receipts",
+              "domain-lineage",
+              "restart-reverification",
+              "plan-execution",
+              "launch-context-v2",
+              "launch-fencing",
+              "retry-resubmit-clone-cancel",
+              "protein-adapters",
+              "molecular-dynamics-adapters",
+              "compatible-comparison",
+              "native-result-chain",
+              "validation-artifacts",
+              "bounded-attempt-logs",
+              "result-surfaces",
+              "native-viewers",
+              "connector-commands",
+              "inbox-outbox",
+              "acknowledgements",
+              "lease-retry-reconciliation",
+              "worker-convergence",
+              "backup-v3",
+              "restoration-v3",
+              "export-v3",
+              "payload-ownership-audit"
+            ]
+          },
+          "evidence_contract_id": {
+            "type": "string",
+            "pattern": "^bms\\.project-manager\\.coverage\\.[a-z0-9-]+\\.v1$"
+          },
+          "receipt_schema_id": {
+            "const": "bms.project-manager.package-evidence.v1"
+          },
+          "receipt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "receipt_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "native_identity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "evidence_body_schema_id": {
+            "enum": [
+              "bms.project-manager.package-evidence-body.pm01.v1",
+              "bms.project-manager.package-evidence-body.pm02.v1",
+              "bms.project-manager.package-evidence-body.pm03a.v1",
+              "bms.project-manager.package-evidence-body.pm03b.v1",
+              "bms.project-manager.package-evidence-body.pm04.v1",
+              "bms.project-manager.package-evidence-body.pm05.v1",
+              "bms.project-manager.package-evidence-body.pm06.v1",
+              "bms.project-manager.package-evidence-body.pm07.v1",
+              "bms.project-manager.package-evidence-body.pm08a.v1",
+              "bms.project-manager.package-evidence-body.pm08b.v1",
+              "bms.project-manager.package-evidence-body.pm09.v1",
+              "bms.project-manager.package-evidence-body.pm10a.v1",
+              "bms.project-manager.package-evidence-body.pm10b.v1"
+            ]
+          },
+          "evidence_body_schema_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "evidence_manifest_algorithm": {
+      "const": "sha256-rfc8785-ordered-complete-package-evidence-bodies-v2"
+    },
+    "evidence_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "owner_assertion": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "evidencePointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coverage_item",
+        "evidence_contract_id",
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity",
+        "evidence_body_schema_id",
+        "evidence_body_schema_sha256"
+      ],
+      "properties": {
+        "coverage_item": {
+          "enum": [
+            "responsive-geometry",
+            "semantic-control-denominator",
+            "keyboard-accessibility",
+            "deep-link-reload",
+            "source-denominator",
+            "runtime-registry",
+            "capability-dataset-exposure",
+            "operator-trust-registry",
+            "negative-drift",
+            "project-v2",
+            "global-experiment-v2",
+            "protein-domain-v3",
+            "hierarchy-revisions",
+            "ngs-domain-v3",
+            "local-projects",
+            "domain-provisioning",
+            "project-links",
+            "attachment-receipts",
+            "literal-deep-links",
+            "cross-project-denials",
+            "zero-payload-copy",
+            "samples",
+            "managed-references",
+            "evidence",
+            "datasets",
+            "plans-preparations",
+            "composite-read-model",
+            "pagination",
+            "eln-records",
+            "adapter-versions",
+            "maintained-projections",
+            "receipt-freshness",
+            "successor-receipts",
+            "domain-lineage",
+            "restart-reverification",
+            "plan-execution",
+            "launch-context-v2",
+            "launch-fencing",
+            "retry-resubmit-clone-cancel",
+            "protein-adapters",
+            "molecular-dynamics-adapters",
+            "compatible-comparison",
+            "native-result-chain",
+            "validation-artifacts",
+            "bounded-attempt-logs",
+            "result-surfaces",
+            "native-viewers",
+            "connector-commands",
+            "inbox-outbox",
+            "acknowledgements",
+            "lease-retry-reconciliation",
+            "worker-convergence",
+            "backup-v3",
+            "restoration-v3",
+            "export-v3",
+            "payload-ownership-audit"
+          ]
+        },
+        "evidence_contract_id": {
+          "type": "string",
+          "pattern": "^bms\\.project-manager\\.coverage\\.[a-z0-9-]+\\.v1$"
+        },
+        "receipt_schema_id": {
+          "const": "bms.project-manager.package-evidence.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "evidence_body_schema_id": {
+          "enum": [
+            "bms.project-manager.package-evidence-body.pm01.v1",
+            "bms.project-manager.package-evidence-body.pm02.v1",
+            "bms.project-manager.package-evidence-body.pm03a.v1",
+            "bms.project-manager.package-evidence-body.pm03b.v1",
+            "bms.project-manager.package-evidence-body.pm04.v1",
+            "bms.project-manager.package-evidence-body.pm05.v1",
+            "bms.project-manager.package-evidence-body.pm06.v1",
+            "bms.project-manager.package-evidence-body.pm07.v1",
+            "bms.project-manager.package-evidence-body.pm08a.v1",
+            "bms.project-manager.package-evidence-body.pm08b.v1",
+            "bms.project-manager.package-evidence-body.pm09.v1",
+            "bms.project-manager.package-evidence-body.pm10a.v1",
+            "bms.project-manager.package-evidence-body.pm10b.v1"
+          ]
+        },
+        "evidence_body_schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-01"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-frontend-owner"
+          },
+          "coverage": {
+            "const": [
+              "responsive-geometry",
+              "semantic-control-denominator",
+              "keyboard-accessibility",
+              "deep-link-reload"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "responsive-geometry"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.responsive-geometry.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm01.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "semantic-control-denominator"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.semantic-control-denominator.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm01.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "keyboard-accessibility"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.keyboard-accessibility.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm01.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "deep-link-reload"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.deep-link-reload.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm01.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-02"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "source-denominator",
+              "runtime-registry",
+              "capability-dataset-exposure",
+              "operator-trust-registry",
+              "negative-drift"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "source-denominator"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.source-denominator.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm02.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "runtime-registry"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.runtime-registry.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm02.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "capability-dataset-exposure"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.capability-dataset-exposure.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm02.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "operator-trust-registry"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.operator-trust-registry.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm02.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "negative-drift"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.negative-drift.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm02.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-03A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "global-protein-owner"
+          },
+          "coverage": {
+            "const": [
+              "project-v2",
+              "global-experiment-v2",
+              "protein-domain-v3",
+              "hierarchy-revisions"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "project-v2"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.project-v2.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "global-experiment-v2"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.global-experiment-v2.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "protein-domain-v3"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.protein-domain-v3.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "hierarchy-revisions"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.hierarchy-revisions.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-03B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-domain-owner"
+          },
+          "coverage": {
+            "const": [
+              "ngs-domain-v3",
+              "local-projects",
+              "domain-provisioning",
+              "project-links"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "ngs-domain-v3"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.ngs-domain-v3.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "local-projects"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.local-projects.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "domain-provisioning"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.domain-provisioning.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "project-links"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.project-links.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm03b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-04"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-attachment-owner"
+          },
+          "coverage": {
+            "const": [
+              "attachment-receipts",
+              "literal-deep-links",
+              "cross-project-denials",
+              "zero-payload-copy"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "attachment-receipts"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.attachment-receipts.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm04.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "literal-deep-links"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.literal-deep-links.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm04.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "cross-project-denials"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.cross-project-denials.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm04.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "zero-payload-copy"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.zero-payload-copy.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm04.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-05"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-domain-owner"
+          },
+          "coverage": {
+            "const": [
+              "samples",
+              "managed-references",
+              "evidence",
+              "datasets",
+              "plans-preparations"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "samples"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.samples.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm05.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "managed-references"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.managed-references.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm05.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "evidence"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.evidence.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm05.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "datasets"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.datasets.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm05.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "plans-preparations"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.plans-preparations.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm05.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-06"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "composite-read-model",
+              "pagination",
+              "eln-records",
+              "adapter-versions",
+              "maintained-projections"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "composite-read-model"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.composite-read-model.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm06.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "pagination"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.pagination.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm06.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "eln-records"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.eln-records.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm06.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "adapter-versions"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.adapter-versions.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm06.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "maintained-projections"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.maintained-projections.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm06.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-07"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "receipt-freshness",
+              "successor-receipts",
+              "domain-lineage",
+              "restart-reverification"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "receipt-freshness"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.receipt-freshness.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm07.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "successor-receipts"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.successor-receipts.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm07.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "domain-lineage"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.domain-lineage.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm07.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "restart-reverification"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.restart-reverification.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm07.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-08A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "plan-execution",
+              "launch-context-v2",
+              "launch-fencing",
+              "retry-resubmit-clone-cancel"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "plan-execution"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.plan-execution.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "launch-context-v2"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.launch-context-v2.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "launch-fencing"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.launch-fencing.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "retry-resubmit-clone-cancel"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.retry-resubmit-clone-cancel.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-08B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "global-protein-owner"
+          },
+          "coverage": {
+            "const": [
+              "protein-adapters",
+              "molecular-dynamics-adapters",
+              "compatible-comparison",
+              "native-result-chain"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "protein-adapters"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.protein-adapters.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "molecular-dynamics-adapters"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.molecular-dynamics-adapters.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "compatible-comparison"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.compatible-comparison.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "native-result-chain"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.native-result-chain.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm08b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-09"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-artifact-owner"
+          },
+          "coverage": {
+            "const": [
+              "validation-artifacts",
+              "bounded-attempt-logs",
+              "result-surfaces",
+              "native-viewers"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "validation-artifacts"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.validation-artifacts.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm09.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "bounded-attempt-logs"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.bounded-attempt-logs.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm09.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "result-surfaces"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.result-surfaces.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm09.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "native-viewers"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.native-viewers.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm09.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-10A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "connector-commands",
+              "inbox-outbox",
+              "acknowledgements",
+              "lease-retry-reconciliation"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "connector-commands"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.connector-commands.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "inbox-outbox"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.inbox-outbox.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "acknowledgements"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.acknowledgements.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "lease-retry-reconciliation"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.lease-retry-reconciliation.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10a.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-10B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "owner_principal_id": {
+            "const": "ngs-molbio-shared-package-owner"
+          },
+          "coverage": {
+            "const": [
+              "worker-convergence",
+              "backup-v3",
+              "restoration-v3",
+              "export-v3",
+              "payload-ownership-audit"
+            ]
+          },
+          "evidence_receipts": {
+            "type": "array",
+            "minItems": 5,
+            "maxItems": 5,
+            "items": false,
+            "prefixItems": [
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "worker-convergence"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.worker-convergence.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "backup-v3"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.backup-v3.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "restoration-v3"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.restoration-v3.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "export-v3"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.export-v3.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              },
+              {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/evidencePointer"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "coverage_item": {
+                        "const": "payload-ownership-audit"
+                      },
+                      "evidence_contract_id": {
+                        "const": "bms.project-manager.coverage.payload-ownership-audit.v1"
+                      },
+                      "evidence_body_schema_id": {
+                        "const": "bms.project-manager.package-evidence-body.pm10b.v1"
+                      }
+                    },
+                    "required": [
+                      "coverage_item",
+                      "evidence_contract_id",
+                      "evidence_body_schema_id"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_principal_id",
+          "coverage",
+          "evidence_receipts"
+        ]
+      }
+    }
+  ]
+}
