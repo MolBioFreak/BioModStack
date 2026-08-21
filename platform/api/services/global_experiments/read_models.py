@@ -628,6 +628,8 @@ def _run_item(
     adapter_id = _first_value([terminal, binding, scheduler_params, workflow], "adapter_id", "workflow_adapter")
     effective_state = latest.state if latest is not None else run.state
     available_actions = ["view_lineage"]
+    if latest is not None:
+        available_actions.append("clone")
     if effective_state == "completed" and output_receipt_ids:
         available_actions.insert(0, "open_results")
     if effective_state == "failed":

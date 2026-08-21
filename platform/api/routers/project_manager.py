@@ -39,6 +39,8 @@ from experiment_models import (
 )
 from experiment_operations import register_external_entity_receipt
 from experiment_services import (
+    add_audit_event,
+    canonical_json,
     ExperimentServiceError,
     IdempotencyConflict,
     NotFound,
@@ -47,6 +49,7 @@ from experiment_services import (
     create_run_group,
     create_workflow,
     load_workflow_plan_authority,
+    new_id,
     persist_workflow_plan_authority,
     prepare_workflow,
     derive_run_group_state,
@@ -57,6 +60,7 @@ from experiment_services import (
     save_workflow_draft,
     save_workflow_revision,
     validate_preparation_authority,
+    validate_workflow_payload_for_plan,
     workflow_plan_capability_contract,
 )
 from services.global_experiments.adapters import AdapterError, registry
@@ -165,6 +169,15 @@ class RunGroupRetryRequest(StrictRequestModel):
 class RunGroupResubmitRequest(StrictRequestModel):
     expected_run_group_generation: int = Field(ge=0)
     preparation_launches: list[PreparationLaunch] = Field(min_length=1, max_length=128)
+
+
+class RunCloneRequest(StrictRequestModel):
+    expected_run_group_generation: int = Field(ge=0)
+    source_run_id: str = Field(min_length=1, max_length=128)
+    source_attempt_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=255)
+    change_summary: str = Field(min_length=1, max_length=1024)
+    expected_domain_revision_id: str = Field(min_length=1, max_length=128)
 
 
 class RunGroupCancelRequest(StrictRequestModel):
@@ -1618,6 +1631,244 @@ async def resubmit_domain_run_group(project_id: str, experiment_id: str, domain_
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _service_error(exc) from exc
+
+
+@router.post("/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/run-groups/{run_group_id}/clone", status_code=201)
+async def clone_domain_run_intent(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    run_group_id: str,
+    payload: RunCloneRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    scope = ""
+    key = ""
+    request_sha256 = ""
+    try:
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
+        if not actor or len(actor) > 255:
+            raise ValidationFailure("run clone actor identity is outside the closed receipt bound")
+        _project, _experiment, domain = await _domain_hierarchy(
+            session, project_id, experiment_id, domain_id
+        )
+        key = _idempotency_key(request)
+        normalized_request = {
+            "operation": "run-clone",
+            "project_id": project_id,
+            "global_experiment_id": experiment_id,
+            "domain_experiment_id": domain_id,
+            "source_run_group_id": run_group_id,
+            "created_by": actor,
+            **payload.model_dump(),
+        }
+        request_sha256 = hashlib.sha256(
+            canonical_json(normalized_request).encode("utf-8")
+        ).hexdigest()
+        scope = f"run-clone:{hashlib.sha256(f'{project_id}:{domain_id}:{run_group_id}'.encode()).hexdigest()}"
+        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
+        if claim is not None:
+            if claim.request_sha256 != request_sha256:
+                raise IdempotencyConflict("run clone idempotency key conflicts with another request")
+            receipt_resource = await session.get(ExperimentResource, claim.result_resource_id)
+            if receipt_resource is None or receipt_resource.kind != "run_clone_receipt":
+                raise ValidationFailure("persisted run clone receipt authority is unavailable")
+            return json.loads(claim.response_json)
+
+        group = await session.get(ExperimentRunGroup, run_group_id)
+        if group is None or group.workspace_id != project_id:
+            raise NotFound("Run group not found")
+        if group.generation != payload.expected_run_group_generation:
+            raise RevisionConflict("Run group generation changed")
+        if domain.current_revision_id != payload.expected_domain_revision_id:
+            raise RevisionConflict("Domain revision changed")
+
+        source_run = await session.get(ExperimentWorkflowRun, payload.source_run_id)
+        source_attempt = await session.get(ExperimentRunAttempt, payload.source_attempt_id)
+        if (
+            source_run is None
+            or source_run.workspace_id != project_id
+            or source_run.run_group_id != run_group_id
+            or source_attempt is None
+            or source_attempt.workspace_id != project_id
+            or source_attempt.workflow_run_id != source_run.resource_id
+        ):
+            raise ValidationFailure("source attempt does not belong to the exact source run and run group")
+        source_preparation = await session.get(
+            ExperimentWorkflowPreparation, source_attempt.preparation_id
+        )
+        source_revision = await session.get(
+            ExperimentRevision,
+            source_preparation.workflow_revision_id if source_preparation else "",
+        )
+        source_plan = await session.get(
+            ExperimentAggregateHead, source_revision.subject_id if source_revision else ""
+        )
+        if (
+            source_preparation is None
+            or source_preparation.workspace_id != project_id
+            or source_revision is None
+            or source_plan is None
+            or source_plan.aggregate_kind != "workflow"
+            or source_plan.workspace_id != project_id
+            or source_plan.parent_id != domain_id
+        ):
+            raise ValidationFailure("source attempt has no exact immutable Plan authority")
+        source_authority, source_contract = await _stored_plan_authority(session, source_plan)
+        if source_authority.expected_domain_revision_id != payload.expected_domain_revision_id:
+            raise RevisionConflict("source Plan belongs to another Domain revision")
+        source_payload = json.loads(source_revision.canonical_payload)
+        validate_workflow_payload_for_plan(source_payload, source_contract)
+        requested_settings = source_payload.get("parameters")
+        effective_settings = json.loads(source_preparation.scheduler_payload_json).get("params")
+        if not isinstance(requested_settings, dict) or not isinstance(effective_settings, dict):
+            raise ValidationFailure("source preparation lacks complete requested/effective settings")
+        copied_payload_sha256 = hashlib.sha256(
+            source_revision.canonical_payload.encode("utf-8")
+        ).hexdigest()
+        if copied_payload_sha256 != source_revision.payload_sha256:
+            raise ValidationFailure("source Workflow Plan revision payload digest mismatch")
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        new_plan = await create_workflow(
+            session,
+            project_id,
+            payload.name,
+            source_plan.description,
+            experiment_id=domain_id,
+        )
+        session.add(
+            ExperimentWorkflowPlanAuthority(
+                workflow_id=new_plan.aggregate_id,
+                workspace_id=project_id,
+                domain_experiment_id=domain_id,
+                expected_domain_revision_id=payload.expected_domain_revision_id,
+                capability_contract_json=source_authority.capability_contract_json,
+                capability_contract_sha256=source_authority.capability_contract_sha256,
+                created_at=created_at,
+            )
+        )
+        new_draft = await session.scalar(
+            select(ExperimentWorkflowDraft).where(
+                ExperimentWorkflowDraft.workflow_id == new_plan.aggregate_id
+            )
+        )
+        if new_draft is None or new_draft.generation != 0:
+            raise ValidationFailure("fresh cloned Plan draft authority is unavailable")
+        new_draft.base_revision_id = source_revision.resource_id
+        new_draft.canonical_payload = source_revision.canonical_payload
+        new_draft.updated_at = created_at
+
+        lineage_edge = ExperimentLineageEdge(
+            id=new_id("lineage"),
+            workspace_id=project_id,
+            source_resource_id=new_draft.resource_id,
+            target_resource_id=source_revision.resource_id,
+            edge_mode="derived_from",
+            edge_key="cloned-plan-intent",
+            metadata_json=canonical_json(
+                {
+                    "operation": "run-clone",
+                    "source_run_group_id": run_group_id,
+                    "source_run_id": source_run.resource_id,
+                    "source_attempt_id": source_attempt.resource_id,
+                    "change_summary": payload.change_summary,
+                }
+            ),
+            created_at=created_at,
+        )
+        session.add(lineage_edge)
+        receipt_resource_id = new_id("run-clone-receipt")
+        session.add(
+            ExperimentResource(
+                id=receipt_resource_id,
+                kind="run_clone_receipt",
+                workspace_id=project_id,
+                lifecycle_owner_id=new_plan.aggregate_id,
+                created_at=created_at,
+            )
+        )
+        await session.flush()
+        receipt = {
+            "schema": "bms.run-clone-receipt.v1",
+            "clone_receipt_id": receipt_resource_id,
+            "project_id": project_id,
+            "global_experiment_id": experiment_id,
+            "domain_experiment_id": domain_id,
+            "domain_experiment_revision_id": payload.expected_domain_revision_id,
+            "source_run_group_id": run_group_id,
+            "source_run_id": source_run.resource_id,
+            "source_attempt_id": source_attempt.resource_id,
+            "source_preparation_id": source_preparation.resource_id,
+            "source_workflow_plan_id": source_plan.aggregate_id,
+            "source_workflow_revision_id": source_revision.resource_id,
+            "source_capability_contract_sha256": source_authority.capability_contract_sha256,
+            "source_requested_settings_sha256": hashlib.sha256(
+                canonical_json(requested_settings).encode("utf-8")
+            ).hexdigest(),
+            "source_effective_settings_sha256": hashlib.sha256(
+                canonical_json(effective_settings).encode("utf-8")
+            ).hexdigest(),
+            "new_workflow_plan_id": new_plan.aggregate_id,
+            "new_draft_id": new_draft.resource_id,
+            "new_draft_generation": 0,
+            "copied_payload_sha256": copied_payload_sha256,
+            "lineage_edge_id": lineage_edge.id,
+            "lineage_mode": "derived_from",
+            "lineage_source_resource_id": new_draft.resource_id,
+            "lineage_target_resource_id": source_revision.resource_id,
+            "lineage_edge_key": "cloned-plan-intent",
+            "normalized_request_sha256": request_sha256,
+            "created_by": actor,
+            "created_at": created_at,
+        }
+        receipt["receipt_sha256"] = hashlib.sha256(
+            canonical_json(receipt).encode("utf-8")
+        ).hexdigest()
+        session.add(
+            ExperimentIdempotencyClaim(
+                scope=scope,
+                idempotency_key=key,
+                request_sha256=request_sha256,
+                result_resource_id=receipt_resource_id,
+                response_json=canonical_json(receipt),
+                created_at=created_at,
+            )
+        )
+        add_audit_event(
+            session,
+            workspace_id=project_id,
+            resource_id=domain_id,
+            event_type="run_intent_cloned",
+            generation=domain.head_generation,
+            payload={
+                "clone_receipt_id": receipt_resource_id,
+                "source_run_group_id": run_group_id,
+                "source_run_id": source_run.resource_id,
+                "source_attempt_id": source_attempt.resource_id,
+                "new_workflow_plan_id": new_plan.aggregate_id,
+                "new_draft_id": new_draft.resource_id,
+                "lineage_edge_id": lineage_edge.id,
+                "change_summary": payload.change_summary,
+            },
+        )
+        await session.commit()
+        return receipt
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
+    except IntegrityError:
+        await session.rollback()
+        if not scope or not key or not request_sha256:
+            raise
+        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
+        if claim is None or claim.request_sha256 != request_sha256:
+            raise
+        receipt_resource = await session.get(ExperimentResource, claim.result_resource_id)
+        if receipt_resource is None or receipt_resource.kind != "run_clone_receipt":
+            raise ValidationFailure("persisted run clone receipt authority is unavailable")
+        return json.loads(claim.response_json)
 
 
 @router.post("/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/run-groups/{run_group_id}/cancel")

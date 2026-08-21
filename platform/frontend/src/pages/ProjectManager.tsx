@@ -466,7 +466,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             if (!summary) throw new Error('No validated Project context is available.');
             const workflowNodeKey = `workflow:${run.workflow_id}`;
             const domainExperimentId = domainExperimentForNode(summary, workflowNodeKey);
-            if (action === 'retry' || action === 'resubmit') {
+            if (action === 'retry' || action === 'resubmit' || action === 'clone') {
                 if (!run.batch_or_run_group_id) throw new Error('The server did not issue a run-group identity.');
                 const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
                     ?? focusId
@@ -483,6 +483,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     ownership_scope: 'global',
                     run_group_action: action,
                 });
+                if (action === 'clone') {
+                    const sourceAttempt = run.attempts.at(-1);
+                    if (!sourceAttempt) throw new Error('The server did not issue an exact source attempt for clone.');
+                    query.set('source_run_id', run.run_id);
+                    query.set('source_attempt_id', sourceAttempt.attempt_id);
+                }
                 return { kind: 'route' as const, route: `/ngs?${query.toString()}` };
             }
             if (action === 'view_lineage') {

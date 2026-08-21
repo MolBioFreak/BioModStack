@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
     attachExistingEntity,
     listDomainAdapters,
@@ -153,6 +154,15 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
     const alreadyAttached = attached || Boolean(selected && summary?.map.nodes.some((node) => node.canonical_identity.entity_id === selected.entity_id));
     const adapterCompatible = Boolean(selectedAdapterDomainKind && domainKind && selectedAdapterDomainKind === domainKind);
     const canAttach = Boolean(projectId && globalId && domainId && adapterId && adapterCompatible && Number.isInteger(expectedHeadGeneration) && selected?.attachable && operation !== 'clone_import_revision' && !alreadyAttached);
+    const cloneOperatorHref = projectId && globalId && domainId
+        ? `/ngs?${new URLSearchParams({
+            workspace_id: projectId,
+            ownership_scope: 'global',
+            global_experiment_id: globalId,
+            domain_experiment_id: domainId,
+            section: 'workflow-plans',
+        }).toString()}`
+        : null;
 
     return (
         <div className="fixed inset-0 z-[100] grid place-items-center bg-black/70 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
@@ -182,16 +192,16 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
                     <div className="grid gap-3 sm:grid-cols-2">
                         <label className="text-xs font-semibold text-content-secondary">Operation mode
                             <select aria-label="Attachment operation mode" value={operation} onChange={(event) => { const next = event.target.value as AttachmentOperationMode; setOperation(next); if (next !== 'clone_import_revision') setRole(operationCopy[next].role); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
-                                <option value="attach_reference">Attach membership / reference receipt</option><option value="bind_input">Bind immutable input</option><option value="link_output">Link generated output</option><option value="attach_evidence">Attach evidence</option><option value="clone_import_revision" disabled>Clone / import into new revision — unsupported</option>
+                                <option value="attach_reference">Attach membership / reference receipt</option><option value="bind_input">Bind immutable input</option><option value="link_output">Link generated output</option><option value="attach_evidence">Attach evidence</option><option value="clone_import_revision">Clone / import exact run intent into a new Plan draft</option>
                             </select>
                         </label>
                         <label className="text-xs font-semibold text-content-secondary">Lineage role
-                            <select aria-label="Lineage role" value={role} onChange={(event) => setRole(event.target.value as LineageRole)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
+                            <select aria-label="Lineage role" value={role} disabled={operation === 'clone_import_revision'} onChange={(event) => setRole(event.target.value as LineageRole)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content disabled:opacity-50">
                                 <option value="references">References</option><option value="uses_input">Uses immutable input</option><option value="produced">Produced output</option><option value="validated_by">Validated by evidence</option>
                             </select>
                         </label>
                     </div>
-                    <p className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content-secondary">{operation === 'clone_import_revision' ? 'Disabled: the frozen attachment API cannot create a new experiment revision or copy/import canonical material.' : operationCopy[operation].copy} {roleCopy[role]}</p>
+                    <p className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content-secondary">{operation === 'clone_import_revision' ? 'Use the exact Run Group operator. It selects one immutable run and attempt, imports the complete source Plan payload and pinned capability contract into a fresh generation-0 draft, and writes derived_from lineage. It creates no preparation or Job.' : `${operationCopy[operation].copy} ${roleCopy[role]}`}</p>
                     {!source && <div className="rounded-xl border border-border-primary bg-surface p-3">
                         <label className="text-xs font-semibold text-content-secondary">Canonical source adapter
                             <select value={adapterId} onChange={(event) => { setAdapterId(event.target.value); setSelected(null); searchMutation.reset(); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2.5 text-content">
@@ -211,7 +221,7 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
                     <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs text-content-secondary">The server re-verifies canonical identity and digest, persists the selected operation and note, and rejects stale Project generations.</p>
                     {(attachMutation.isError || searchMutation.isError || projects.isError || globals.isError || domains.isError || adapters.isError) && <p role="alert" className="rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(attachMutation.error ?? searchMutation.error ?? projects.error ?? globals.error ?? domains.error ?? adapters.error)}</p>}
                     {attached && <p role="status" className="rounded-lg border border-success/50 bg-success/10 p-3 text-xs text-success">Verified receipt attached. The canonical source remains authoritative.</p>}
-                    <div className="flex justify-end gap-2 border-t border-border-primary pt-4"><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button><button type="button" disabled={!canAttach || attachMutation.isPending} onClick={() => attachMutation.mutate()} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{attachMutation.isPending ? 'Verifying…' : alreadyAttached ? 'Already attached' : 'Verify receipt and attach'}</button></div>
+                    <div className="flex justify-end gap-2 border-t border-border-primary pt-4"><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button>{operation === 'clone_import_revision' ? (cloneOperatorHref ? <Link to={cloneOperatorHref} onClick={onClose} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white">Open exact run-clone operator</Link> : <button type="button" disabled className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white opacity-50">Select complete hierarchy context</button>) : <button type="button" disabled={!canAttach || attachMutation.isPending} onClick={() => attachMutation.mutate()} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{attachMutation.isPending ? 'Verifying…' : alreadyAttached ? 'Already attached' : 'Verify receipt and attach'}</button>}</div>
                 </div>
             </section>
         </div>

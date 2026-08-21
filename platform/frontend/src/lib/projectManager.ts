@@ -129,6 +129,37 @@ export interface DomainRunGroup {
     updated_at: string;
 }
 
+export interface RunCloneReceipt {
+    schema: 'bms.run-clone-receipt.v1';
+    clone_receipt_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    domain_experiment_revision_id: string;
+    source_run_group_id: string;
+    source_run_id: string;
+    source_attempt_id: string;
+    source_preparation_id: string;
+    source_workflow_plan_id: string;
+    source_workflow_revision_id: string;
+    source_capability_contract_sha256: string;
+    source_requested_settings_sha256: string;
+    source_effective_settings_sha256: string;
+    new_workflow_plan_id: string;
+    new_draft_id: string;
+    new_draft_generation: 0;
+    copied_payload_sha256: string;
+    lineage_edge_id: string;
+    lineage_mode: 'derived_from';
+    lineage_source_resource_id: string;
+    lineage_target_resource_id: string;
+    lineage_edge_key: 'cloned-plan-intent';
+    normalized_request_sha256: string;
+    created_by: string;
+    created_at: string;
+    receipt_sha256: string;
+}
+
 export interface RunControlCommandDocument {
     schema: 'bms.run-control-command.v1';
     command_id: string;
@@ -1865,6 +1896,27 @@ export async function resubmitDomainRunGroup(
             expected_run_group_generation: expectedRunGroupGeneration,
             preparation_launches: preparationLaunches,
         },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function cloneDomainRunIntent(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    request: {
+        expected_run_group_generation: number;
+        source_run_id: string;
+        source_attempt_id: string;
+        name: string;
+        change_summary: string;
+        expected_domain_revision_id: string;
+    },
+): Promise<RunCloneReceipt> {
+    return (await api.post<RunCloneReceipt>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/clone`,
+        request,
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
     )).data;
 }

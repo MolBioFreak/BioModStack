@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     cancelDomainRunGroup,
+    cloneDomainRunIntent,
     createDomainWorkflowPlan,
     getDomainRunGroup,
     getDomainWorkflowPlan,
@@ -31,6 +32,7 @@ import {
     type JsonValue,
     type PreparationLaunchRequest,
     type PreparedLaunchContext,
+    type RunCloneReceipt,
 } from '../../lib/projectManager';
 import ExperimentReferenceLinks from './ExperimentReferenceLinks';
 
@@ -1402,6 +1404,10 @@ export default function DomainWorkflowOperator({
 }: DomainWorkflowOperatorProps) {
     const queryClient = useQueryClient();
     const scope = [projectId, globalExperimentId, domainExperimentId] as const;
+    const routeParameters = new URLSearchParams(window.location.search);
+    const routedCloneAction = routeParameters.get('run_group_action') === 'clone';
+    const routedCloneRunId = routedCloneAction ? routeParameters.get('source_run_id')?.trim() ?? '' : '';
+    const routedCloneAttemptId = routedCloneAction ? routeParameters.get('source_attempt_id')?.trim() ?? '' : '';
     const [selectedPlanId, setSelectedPlanId] = useState('');
     const [selectedPlanRevisionId, setSelectedPlanRevisionId] = useState('');
     const [planName, setPlanName] = useState('');
@@ -1422,6 +1428,11 @@ export default function DomainWorkflowOperator({
     const [activeRunGroupId, setActiveRunGroupId] = useState(initialRunGroupId?.trim() ?? '');
     const [runGroupLookupId, setRunGroupLookupId] = useState(initialRunGroupId?.trim() ?? '');
     const [cancelReason, setCancelReason] = useState('Operator cancelled from the NGS/MolBio Domain workspace');
+    const [cloneSourceRunId, setCloneSourceRunId] = useState(routedCloneRunId);
+    const [cloneSourceAttemptId, setCloneSourceAttemptId] = useState(routedCloneAttemptId);
+    const [clonePlanName, setClonePlanName] = useState('Cloned Workflow Plan intent');
+    const [cloneChangeSummary, setCloneChangeSummary] = useState('Clone exact immutable run intent for revision');
+    const [cloneReceipt, setCloneReceipt] = useState<RunCloneReceipt | null>(null);
     const [resultSurfaces, setResultSurfaces] = useState<Record<string, DomainResultSurface>>({});
     const selectionAuthorityKey = JSON.stringify([
         projectId,
@@ -1440,7 +1451,11 @@ export default function DomainWorkflowOperator({
 
     useEffect(() => {
         setRetryPreparationByRunId({});
-    }, [activeRunGroupId]);
+        const initialGroup = initialRunGroupId?.trim() ?? '';
+        setCloneSourceRunId(activeRunGroupId === initialGroup ? routedCloneRunId : '');
+        setCloneSourceAttemptId(activeRunGroupId === initialGroup ? routedCloneAttemptId : '');
+        setCloneReceipt(null);
+    }, [activeRunGroupId, initialRunGroupId, routedCloneAttemptId, routedCloneRunId]);
 
     const removeSelectedPreparation = (preparationId: string) => {
         setSelectedPreparations((current) => current.filter(
@@ -1874,6 +1889,28 @@ export default function DomainWorkflowOperator({
             setRunGroupLookupId(group.run_group_id);
         },
     });
+    const cloneMutation = useMutation({
+        mutationFn: async () => {
+            if (!canMutate) throw new Error(mutationBlocker ?? 'Mutation authority is unavailable.');
+            const group = runGroupQuery.data;
+            if (!group || !domainRevisionId) throw new Error('Load one exact Run Group and current Domain revision.');
+            if (!cloneSourceRunId || !cloneSourceAttemptId) throw new Error('Select one exact source run and attempt.');
+            if (!clonePlanName.trim() || !cloneChangeSummary.trim()) throw new Error('Plan name and change summary are required.');
+            return cloneDomainRunIntent(...scope, group.run_group_id, {
+                expected_run_group_generation: group.generation,
+                source_run_id: cloneSourceRunId,
+                source_attempt_id: cloneSourceAttemptId,
+                name: clonePlanName.trim(),
+                change_summary: cloneChangeSummary.trim(),
+                expected_domain_revision_id: domainRevisionId,
+            });
+        },
+        onSuccess: (receipt) => {
+            setCloneReceipt(receipt);
+            void queryClient.invalidateQueries({ queryKey: ['domain-workflow-plans', ...scope] });
+            setSelectedPlanId(receipt.new_workflow_plan_id);
+        },
+    });
     const cancelMutation = useMutation({
         mutationFn: () => {
             const group = runGroupQuery.data as DomainRunGroup;
@@ -1893,6 +1930,17 @@ export default function DomainWorkflowOperator({
     const selectedPlan = planQuery.data;
     const selectedRevision = revisionsQuery.data?.items.find((revision) => revision.revision_id === selectedPlanRevisionId) ?? null;
     const runGroup = runGroupQuery.data;
+    const cloneSourceRun = runGroup?.runs.find((run) => run.run_id === cloneSourceRunId) ?? null;
+    const cloneSourceAttempt = cloneSourceRun?.attempts.find((attempt) => attempt.attempt_id === cloneSourceAttemptId) ?? null;
+    const cloneBlocker = !runGroup
+        ? 'Load one exact Run Group.'
+        : !domainRevisionId
+            ? 'The exact current Domain revision is unavailable.'
+            : !cloneSourceRun || !cloneSourceAttempt
+                ? 'Select one exact source run and attempt.'
+                : !clonePlanName.trim() || !cloneChangeSummary.trim()
+                    ? 'Plan name and change summary are required.'
+                    : null;
     const retryEligibleRuns = eligibleFailedRuns(runGroup);
     const retryBlocker = retryPreparationMappingError(
         runGroup,
@@ -1934,6 +1982,7 @@ export default function DomainWorkflowOperator({
         ?? launchMutation.error
         ?? retryMutation.error
         ?? resubmitMutation.error
+        ?? cloneMutation.error
         ?? cancelMutation.error
         ?? reopenResultMutation.error;
 
@@ -2243,6 +2292,63 @@ export default function DomainWorkflowOperator({
                                 </div>
                             </div>
                         ))}
+                        <div className="rounded-md border border-border-primary bg-surface p-3">
+                            <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">Clone exact run intent into a fresh Plan draft</h4>
+                            <p className="mt-1 text-xs text-content-secondary">
+                                This operation imports the exact immutable source Plan payload and pinned capability contract into a new generation-0 editable draft. It creates no preparation, launch context, dispatch, or Job.
+                            </p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <label className="text-xs font-semibold text-content-secondary">Source Workflow Run
+                                    <select
+                                        className={`${INPUT_CLASS} mt-1`}
+                                        value={cloneSourceRunId}
+                                        onChange={(event) => {
+                                            setCloneSourceRunId(event.target.value);
+                                            setCloneSourceAttemptId('');
+                                            setCloneReceipt(null);
+                                        }}
+                                    >
+                                        <option value="">Select exact run</option>
+                                        {runGroup.runs.filter((run) => run.attempts.length > 0).map((run) => (
+                                            <option key={run.run_id} value={run.run_id}>{run.run_id} · {run.state}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Source Attempt
+                                    <select
+                                        className={`${INPUT_CLASS} mt-1`}
+                                        value={cloneSourceAttemptId}
+                                        onChange={(event) => { setCloneSourceAttemptId(event.target.value); setCloneReceipt(null); }}
+                                        disabled={!cloneSourceRun}
+                                    >
+                                        <option value="">Select exact attempt</option>
+                                        {(cloneSourceRun?.attempts ?? []).map((attempt) => (
+                                            <option key={attempt.attempt_id} value={attempt.attempt_id}>#{attempt.attempt_number} · {attempt.attempt_id} · {attempt.state}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Fresh Plan name
+                                    <input className={`${INPUT_CLASS} mt-1`} value={clonePlanName} onChange={(event) => setClonePlanName(event.target.value)} />
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Change summary
+                                    <input className={`${INPUT_CLASS} mt-1`} value={cloneChangeSummary} onChange={(event) => setCloneChangeSummary(event.target.value)} />
+                                </label>
+                            </div>
+                            {cloneBlocker && <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">Clone blocked: {cloneBlocker}</p>}
+                            <button type="button" className={`${PRIMARY_BUTTON_CLASS} mt-3`} disabled={!canMutate || Boolean(cloneBlocker) || cloneMutation.isPending} onClick={() => cloneMutation.mutate()}>
+                                {cloneMutation.isPending ? 'Cloning exact intent…' : 'Clone into fresh editable Plan draft'}
+                            </button>
+                            {cloneReceipt && (
+                                <div className="mt-3 grid gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 md:grid-cols-3">
+                                    <KeyValue label="Clone receipt" value={cloneReceipt.clone_receipt_id} />
+                                    <KeyValue label="Fresh Plan" value={cloneReceipt.new_workflow_plan_id} />
+                                    <KeyValue label="Fresh draft" value={cloneReceipt.new_draft_id} />
+                                    <KeyValue label="Copied payload digest" value={cloneReceipt.copied_payload_sha256} />
+                                    <KeyValue label="Lineage edge" value={cloneReceipt.lineage_edge_id} />
+                                    <KeyValue label="Receipt digest" value={cloneReceipt.receipt_sha256} />
+                                </div>
+                            )}
+                        </div>
                         {runGroup.state === 'failed' && (
                             <div className="rounded-md border border-border-primary bg-surface p-3">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">Complete retry preparation mapping</h4>
