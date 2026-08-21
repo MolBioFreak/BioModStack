@@ -396,7 +396,7 @@ export default function FrustraMpnnResultsViewer({
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
                         onChange={setFrustrampnnSettings}
-                        governedSource={selectedInvocation ? {
+                        governedSource={job.model_id === 'frustrampnn' && selectedInvocation ? {
                             kind: 'owned',
                             reference: { job_id: job.id, invocation_id: selectedInvocation },
                         } : undefined}

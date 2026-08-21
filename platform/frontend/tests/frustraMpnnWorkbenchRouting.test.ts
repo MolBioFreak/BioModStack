@@ -28,6 +28,8 @@ test('direct and conformational-mapping results mount the same global FrustraMPN
     assert.match(resultSurface, /useSearchParams\(\)/);
     assert.match(resultSurface, /searchParams\.get\('invocation_id'\)/);
     assert.match(resultSurface, /listFrustraMpnnResults\(job\.id, 50, resultOffset/);
+    assert.match(resultSurface, /governedSource=\{job\.model_id === 'frustrampnn' && selectedInvocation \? \{/);
+    assert.match(resultSurface, /reference: \{ job_id: job\.id, invocation_id: selectedInvocation \}/);
     assert.match(resultSurface, /Previous[\s\S]*Next/);
     assert.match(resultSurface, /metric_workbench_open: metricWorkbenchOpen/);
     assert.match(resultSurface, /landscape_offset: offset/);
