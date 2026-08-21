@@ -1,7 +1,7 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "43d56e3fa8981d89e9df7b937e3c7522809ed15acbce599704fb7b40b9481ddc",
+  "content_sha256": "afa8f76ecca9e78d2e9fa1af592e4b612455add3baeed49cbbe84c9709a37bdb",
   "environment": {
     "git": "not invoked during deterministic reseal",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
@@ -27,7 +27,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "8b889cac93882e3e73c57170b08bfade5dbee610c5d980945c8c6a131b3d38b2",
+      "sha256": "cf31febd8936549ca91cb4efc8c2c6853888cdc3665c81c96478793e2919ba04",
       "size_bytes": 100169
     },
     {
@@ -52,7 +52,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "daa577503d128b0ad24a01e6274122fec4ead39435c179376dafa8a721874da1",
+      "sha256": "c51f58078dc62b2532f99f66e8115a7027141a726887296fe300e3d35c76e120",
       "size_bytes": 26539
     },
     {
@@ -187,8 +187,8 @@
     },
     {
       "path": "schemas/ngs_molbio/global-binding-receipt-v1.schema.json",
-      "sha256": "4fba59277cd7a7e1b6d9c25e1f9ee6616967e473c0cafb441f930fc9f344db1a",
-      "size_bytes": 3890
+      "sha256": "ebd2c7a4909855c3255371f43283cf8d02dadc038dbda62ca12d5bd163200653",
+      "size_bytes": 3896
     },
     {
       "path": "schemas/ngs_molbio/instrument-run-evidence-attached-v1.schema.json",
@@ -456,7 +456,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "2658b25c7b1fb22354a44d2f97838c3b4665fe7c3e1037ce4111e60f092e57eb",
+  "payload_fingerprint_sha256": "e1a75892a4d6ea6e3dce24e98f27d2ebd90fbb15cda3f99ddf0c7fa5bb1aa3b8",
   "result": {
     "adapters": 27,
     "capabilities": 21,

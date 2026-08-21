@@ -200,8 +200,12 @@ async def _hierarchy(
         domain_payload = json.loads(domain_revision.canonical_payload)
     except json.JSONDecodeError as exc:
         raise ConnectorConflict("Domain Experiment revision is invalid JSON") from exc
-    if domain_payload.get("schema") != "bms.domain-experiment.v2" or domain_payload.get("domain_kind") != "ngs_molbio" or domain_payload.get("domain_contract_version") != "2":
-        raise ConnectorConflict("binding requires an exact NGS/MolBio Domain v2 revision")
+    if (
+        domain_payload.get("schema") not in {"bms.domain-experiment.v2", "bms.domain-experiment.v4"}
+        or domain_payload.get("domain_kind") != "ngs_molbio"
+        or domain_payload.get("domain_contract_version") not in {"2", "3"}
+    ):
+        raise ConnectorConflict("binding requires an exact NGS/MolBio Domain v2 or v4 revision")
     return project, experiment, domain, project_revision, experiment_revision, domain_revision
 
 
@@ -312,7 +316,8 @@ async def issue_binding_command(
             "id": domain_id, "revision_id": domain_revision.resource_id,
             "generation": domain.head_generation, "digest": domain_revision.payload_sha256,
             "reopen_destination": f"/projects/{project_id}?focus={global_experiment_id}&selected=domain:{domain_id}",
-            "lifecycle_state": domain.lifecycle_state, "domain_kind": "ngs_molbio", "domain_contract_version": "2",
+            "lifecycle_state": domain.lifecycle_state, "domain_kind": "ngs_molbio",
+            "domain_contract_version": json.loads(domain_revision.canonical_payload)["domain_contract_version"],
         },
         "adapter_id": BINDING_ADAPTER_ID, "adapter_version": "1",
         "verified_at": verified_at, "acknowledgement": {"status": "verified"},
@@ -496,8 +501,8 @@ async def exact_local_launch_authority(
         or _digest(experiment_revision.canonical_payload) != experiment_revision.payload_sha256
         or domain_revision is None or domain_revision.subject_id != domain_id
         or domain_revision.revision_number != domain.head_generation
-        or domain_revision.schema_name != "bms.domain-experiment.v2"
-        or domain_revision.schema_version != "1"
+        or domain_revision.schema_name not in {"bms.domain-experiment.v2", "bms.domain-experiment.v4"}
+        or domain_revision.schema_version not in {"1", "3"}
         or _digest(domain_revision.canonical_payload) != domain_revision.payload_sha256
     ):
         raise ValidationFailure("replacement_preparation_required")
@@ -514,9 +519,11 @@ async def exact_local_launch_authority(
         or canonical_json(experiment_payload) != experiment_revision.canonical_payload
         or not isinstance(domain_payload, dict)
         or canonical_json(domain_payload) != domain_revision.canonical_payload
-        or domain_payload.get("schema") != "bms.domain-experiment.v2"
+        or not (
+            (domain_payload.get("schema") == "bms.domain-experiment.v2" and domain_payload.get("domain_contract_version") == "2")
+            or (domain_payload.get("schema") == "bms.domain-experiment.v4" and domain_payload.get("domain_contract_version") == "3")
+        )
         or domain_payload.get("domain_kind") != "ngs_molbio"
-        or domain_payload.get("domain_contract_version") != "2"
         or domain_payload.get("status") == "archived"
     ):
         raise ValidationFailure("replacement_preparation_required")
@@ -649,7 +656,7 @@ async def exact_local_launch_authority(
         or binding_receipt["domain_experiment"].get("generation") != domain.head_generation
         or binding_receipt["domain_experiment"].get("digest") != domain_revision.payload_sha256
         or binding_receipt["domain_experiment"].get("domain_kind") != "ngs_molbio"
-        or binding_receipt["domain_experiment"].get("domain_contract_version") != "2"
+        or binding_receipt["domain_experiment"].get("domain_contract_version") not in {"2", "3"}
         or binding_receipt.get("adapter_id") != BINDING_ADAPTER_ID
         or binding_receipt.get("acknowledgement") != {"status": "verified"}
         or not isinstance(command_payload, dict)

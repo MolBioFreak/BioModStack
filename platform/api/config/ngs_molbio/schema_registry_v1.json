@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "4d6b054282cf2636fbd81c8748f8da4724566cfb1be5c00acb9fc37598e5fc3d",
+  "content_sha256": "fa60a3f84a1f8ee67e0095232c5002eb0ab6cfc4b478087d615685a787dcc1fa",
   "entries": [
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -149,9 +149,9 @@
     },
     {
       "path": "schemas/ngs_molbio/global-binding-receipt-v1.schema.json",
-      "schema_canonical_sha256": "549e14c7cc85e42601f6074f116dcc920b49fbc6cff29c6e2b640a2e01a747c4",
+      "schema_canonical_sha256": "546b4da7166453dba83d72171bf0bab254428e61ae07a0dce596946e90af6311",
       "schema_id": "bms.ngs-molbio.global-binding-receipt.v1",
-      "schema_sha256": "4fba59277cd7a7e1b6d9c25e1f9ee6616967e473c0cafb441f930fc9f344db1a"
+      "schema_sha256": "ebd2c7a4909855c3255371f43283cf8d02dadc038dbda62ca12d5bd163200653"
     },
     {
       "path": "schemas/ngs_molbio/instrument-run-evidence-attached-v1.schema.json",
