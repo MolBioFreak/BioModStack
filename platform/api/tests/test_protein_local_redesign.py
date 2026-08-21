@@ -19,7 +19,7 @@ if str(API_ROOT) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from services.nextflow import build_nextflow_command, normalize_plr_structure_validators
+from services.nextflow import build_nextflow_command, normalize_plr_input_pdb_path, normalize_plr_structure_validators
 from services import rfd3_local_redesign as rfd3_service
 from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
@@ -41,6 +41,44 @@ SOURCE_IDENTITIES = [
         ],
     },
 ]
+
+
+def test_normalize_plr_input_pdb_path_absolutizes_provisioned_relative_path(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "protein_local_redesign" / "source.pdb"
+    params = normalize_plr_input_pdb_path(
+        {"input_pdb": "inputs/protein_local_redesign/source.pdb"},
+        resolve_relative=lambda rel: (tmp_path / rel).resolve(),
+    )
+    assert params["input_pdb"] == str(source.resolve())
+
+
+def test_normalize_plr_input_pdb_path_passes_absolute_paths_through() -> None:
+    def must_not_resolve(_rel: str) -> str:
+        raise AssertionError("absolute input_pdb must pass through untouched")
+
+    params = normalize_plr_input_pdb_path(
+        {"input_pdb": "/abs/source.pdb"},
+        resolve_relative=must_not_resolve,
+    )
+    assert params["input_pdb"] == "/abs/source.pdb"
+
+
+def test_normalize_plr_input_pdb_path_propagates_resolution_errors() -> None:
+    def reject(_rel: str) -> str:
+        raise ValueError("Root not allowed: nope")
+
+    with pytest.raises(ValueError, match="Root not allowed"):
+        normalize_plr_input_pdb_path({"input_pdb": "nope/x.pdb"}, resolve_relative=reject)
+
+
+def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> None:
+    assert normalize_plr_input_pdb_path({}, resolve_relative=lambda rel: None) == {}
+    assert normalize_plr_input_pdb_path(
+        {"input_pdb": ""}, resolve_relative=lambda rel: None
+    ) == {"input_pdb": ""}
+    assert normalize_plr_input_pdb_path(
+        {"input_pdb": 5}, resolve_relative=lambda rel: None
+    ) == {"input_pdb": 5}
 
 
 def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path) -> None:

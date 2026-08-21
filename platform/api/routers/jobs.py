@@ -72,7 +72,7 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, 
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
-from services.nextflow import normalize_plr_structure_validators
+from services.nextflow import normalize_plr_input_pdb_path, normalize_plr_structure_validators
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
@@ -5336,8 +5336,15 @@ async def _create_job(
     if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
         try:
             job_data.params = normalize_plr_structure_validators(job_data.params or {})
+            job_data.params = normalize_plr_input_pdb_path(job_data.params, resolve_relative=resolve_allowed_path)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        input_pdb = (job_data.params or {}).get("input_pdb")
+        if isinstance(input_pdb, str) and input_pdb.strip() and not Path(input_pdb).is_file():
+            raise HTTPException(
+                status_code=422,
+                detail=f"PLR input_pdb provisioned file is missing: {input_pdb}",
+            )
     if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
         if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
             raise HTTPException(
@@ -5345,6 +5352,16 @@ async def _create_job(
                 detail={
                     "local_redesign_contract_error": "workflow_adapter is server-owned for native RFD3"
                 },
+            )
+        try:
+            job_data.params = normalize_plr_input_pdb_path(job_data.params or {}, resolve_relative=resolve_allowed_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        input_pdb = (job_data.params or {}).get("input_pdb")
+        if isinstance(input_pdb, str) and input_pdb.strip() and not Path(input_pdb).is_file():
+            raise HTTPException(
+                status_code=422,
+                detail=f"PLR input_pdb provisioned file is missing: {input_pdb}",
             )
         pinned_gpu = job_data.pinned_gpu
         if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:

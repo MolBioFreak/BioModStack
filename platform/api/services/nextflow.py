@@ -2933,6 +2933,29 @@ def normalize_plr_structure_validators(params: Dict[str, Any]) -> Dict[str, Any]
     return normalized
 
 
+def normalize_plr_input_pdb_path(
+    params: Dict[str, Any],
+    resolve_relative=None,
+) -> Dict[str, Any]:
+    """Absolutize a provisioned relative PLR input_pdb path.
+
+    UI uploads land under the state inputs root and return a relative path
+    like ``inputs/protein_local_redesign/<name>``. Nextflow resolves relative
+    paths against the repo root where the workflow launches, so the adapter
+    must absolutize the value against the same allowed root the upload
+    endpoint wrote to. Absolute paths pass through unchanged.
+    """
+    normalized = dict(params or {})
+    value = normalized.get("input_pdb")
+    if not isinstance(value, str) or not value.strip():
+        return normalized
+    candidate = value.strip()
+    if os.path.isabs(candidate) or resolve_relative is None:
+        return normalized
+    normalized["input_pdb"] = str(resolve_relative(candidate))
+    return normalized
+
+
 def build_nextflow_command(
     model_id: str,
     mode: str,
