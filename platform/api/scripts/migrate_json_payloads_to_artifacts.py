@@ -29,8 +29,8 @@ from services.scientific_artifacts.contracts import (
     canonical_sha256,
     envelope_rows,
     reconstruct_envelope,
-    resolve_json_value,
 )
+from services.scientific_artifacts.resolve import resolve_json_value
 from services.scientific_artifacts.writer import (
     InstalledArtifact,
     artifact_reference,
