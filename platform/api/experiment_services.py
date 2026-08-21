@@ -1518,6 +1518,13 @@ def _validate_lifecycle_transition(
                 f"invalid Domain contract upgrade lifecycle: {current_status} -> {requested_status}"
             )
         return
+    if lifecycle_operation in {"workspace_contract_upgrade", "experiment_contract_upgrade"}:
+        expected_kind = "workspace" if lifecycle_operation == "workspace_contract_upgrade" else "experiment"
+        if aggregate_kind != expected_kind or current_status == "archived" or requested_status != current_status:
+            raise ValidationFailure(
+                f"invalid {expected_kind} contract upgrade lifecycle: {current_status} -> {requested_status}"
+            )
+        return
     if lifecycle_operation is not None:
         raise ValidationFailure(f"unsupported lifecycle operation: {lifecycle_operation}")
     transitions = (
@@ -1595,6 +1602,20 @@ async def _save_revision(
                     and payload.get("domain_contract_version") == "3"
                 ):
                     raise ValidationFailure("Domain Experiment contract version is immutable")
+        if aggregate_kind == "workspace" and current_payload is not None and current_payload.get("schema") != payload.get("schema"):
+            if not (
+                lifecycle_operation == "workspace_contract_upgrade"
+                and current_payload.get("schema") == "bms.project.v1"
+                and payload.get("schema") == "bms.project.v2"
+            ):
+                raise ValidationFailure("Project schema is immutable")
+        if aggregate_kind == "experiment" and current_payload is not None and current_payload.get("schema") != payload.get("schema"):
+            if not (
+                lifecycle_operation == "experiment_contract_upgrade"
+                and current_payload.get("schema") == "bms.global-experiment.v1"
+                and payload.get("schema") == "bms.global-experiment.v2"
+            ):
+                raise ValidationFailure("Global Experiment schema is immutable")
         if payload.get("status") == "archived" and lifecycle_operation != "archive":
             raise ValidationFailure("archival is a lifecycle operation; use the archive route")
         if head.lifecycle_state == "archived" and lifecycle_operation != "restore":

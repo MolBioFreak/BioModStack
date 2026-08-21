@@ -18,6 +18,8 @@ import {
     updateDomainExperiment,
     updateGlobalExperiment,
     updateProject,
+    upgradeGlobalExperiment,
+    upgradeProject,
     type JsonObject,
     type JsonValue,
     type ProjectManagerReadModel,
@@ -112,8 +114,18 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const selectedGlobalId = summary && selection ? globalExperimentForNode(summary, selection.node_key) : null;
     const domainContext = summary ? selectedDomainContext(summary) : null;
     const [name, setName] = useState('');
+    const [description, setDescription] = useState('');
     const [objective, setObjective] = useState('');
     const [question, setQuestion] = useState('');
+    const [hypothesis, setHypothesis] = useState('');
+    const [priority, setPriority] = useState<'low' | 'normal' | 'high' | 'critical'>('normal');
+    const [contributors, setContributors] = useState('');
+    const [tags, setTags] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [targetEndDate, setTargetEndDate] = useState('');
+    const [successCriteria, setSuccessCriteria] = useState('');
+    const [reviewSummary, setReviewSummary] = useState('');
+    const [conclusion, setConclusion] = useState('');
     const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
     const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
     const [proteinTargetId, setProteinTargetId] = useState('');
@@ -142,8 +154,18 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     useEffect(() => {
         if (!mode) return;
         setName('');
+        setDescription('');
         setObjective('');
         setQuestion('');
+        setHypothesis('');
+        setPriority('normal');
+        setContributors('');
+        setTags('');
+        setStartDate('');
+        setTargetEndDate('');
+        setSuccessCriteria('');
+        setReviewSummary('');
+        setConclusion('');
         setDomainKind('protein_in_silico');
         setNgsExperimentMode('analysis');
         setProteinTargetId('');
@@ -161,18 +183,58 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         if (mode !== 'edit' || !detailQuery.data) return;
         setName(detailQuery.data.name ?? '');
         const payload = detailQuery.data.payload ?? {};
+        const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+        setDescription(detailQuery.data.description ?? '');
         setObjective(typeof payload.research_objective === 'string' ? payload.research_objective : typeof payload.objective === 'string' ? payload.objective : '');
         setQuestion(typeof payload.scientific_question === 'string' ? payload.scientific_question : '');
+        setHypothesis(typeof payload.hypothesis === 'string' ? payload.hypothesis : '');
+        setPriority(payload.priority === 'low' || payload.priority === 'high' || payload.priority === 'critical' ? payload.priority : 'normal');
+        setContributors(list(payload.contributors).join(', '));
+        setTags(list(payload.tags).join(', '));
+        setStartDate(typeof payload.start_date === 'string' ? payload.start_date : '');
+        setTargetEndDate(typeof payload.target_end_date === 'string' ? payload.target_end_date : '');
+        setSuccessCriteria(list(payload.success_criteria).join('\n'));
+        setReviewSummary(typeof payload.review_summary === 'string' ? payload.review_summary : '');
+        setConclusion(typeof payload.conclusion === 'string' ? payload.conclusion : '');
     }, [detailQuery.data, mode]);
 
     const mutation = useMutation({
         mutationFn: async () => {
             if (mode === 'create_project') {
-                return createProject({ schema: 'bms.project.v2', project_scope: 'global', name, research_objective: objective, status: 'active', change_summary: 'Created in Project Manager' });
+                return createProject({
+                    schema: 'bms.project.v2',
+                    project_scope: 'global',
+                    name,
+                    description,
+                    research_objective: objective,
+                    contributors: contributors.split(',').map((value) => value.trim()).filter(Boolean),
+                    tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                    status: 'active',
+                    start_date: startDate || null,
+                    target_end_date: targetEndDate || null,
+                    change_summary: 'Created in Project Manager',
+                });
             }
             if (!projectId || !summary) throw new Error('A Project context is required.');
             if (mode === 'create_global') {
-                return createGlobalExperiment(projectId, { schema: 'bms.global-experiment.v2', name, objective, scientific_question: question, status: 'planned', change_summary: 'Created in Project Manager' });
+                return createGlobalExperiment(projectId, {
+                    schema: 'bms.global-experiment.v2',
+                    name,
+                    objective,
+                    scientific_question: question,
+                    hypothesis: hypothesis || null,
+                    description,
+                    status: 'planned',
+                    priority,
+                    tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                    shared_source_receipt_ids: [],
+                    shared_dataset_ids: [],
+                    comparison_plan: null,
+                    success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
+                    review_summary: reviewSummary || null,
+                    conclusion: conclusion || null,
+                    change_summary: 'Created in Project Manager',
+                });
             }
             if (mode === 'create_domain') {
                 const globalId = selection?.node_type === 'global_experiment' ? selectionId : selectedGlobalId;
@@ -188,16 +250,19 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         proteinEntityMapReference,
                         proteinExpectedContentSha256,
                     );
+                    const datasetRevisionIds = (JSON.parse(proteinDatasetMemberRefs || '[]') as Array<{ dataset_revision_id?: unknown }>)
+                        .map((reference) => typeof reference.dataset_revision_id === 'string' ? reference.dataset_revision_id : '')
+                        .filter(Boolean);
                     return createDomainExperiment(projectId, globalId, {
                         schema: 'bms.domain-experiment.v4',
                         domain_kind: 'protein_in_silico',
                         domain_contract_version: '3',
                         name,
                         objective,
-                        status: 'planned',
+                        status: 'draft',
                         tags: [],
                         source_receipt_ids: proteinSourceReceiptIds.split(',').map((value) => value.trim()).filter(Boolean),
-                        dataset_revision_ids: [],
+                        dataset_revision_ids: datasetRevisionIds,
                         change_summary: 'Created in Project Manager',
                         domain_payload: domainPayload,
                     });
@@ -233,10 +298,70 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             if (!detail || !selectionId || !selection) throw new Error('Current generation is still loading.');
             if (mode === 'edit') {
                 if (selection.node_type === 'project') {
-                    return updateProject(projectId, { expected_head_generation: detail.head_generation, name, research_objective: objective, change_summary: 'Edited in Project Manager' });
+                    if (detail.payload?.schema === 'bms.project.v1') {
+                        return upgradeProject(projectId, {
+                            expected_head_generation: detail.head_generation,
+                            schema: 'bms.project.v2',
+                            project_scope: detail.payload.project_scope === 'ngs_molbio_local' ? 'ngs_molbio_local' : 'global',
+                            name,
+                            description,
+                            research_objective: objective,
+                            contributors: contributors.split(',').map((value) => value.trim()).filter(Boolean),
+                            tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                            status: detail.status as 'draft' | 'active' | 'on_hold' | 'completed' | 'archived',
+                            start_date: startDate || null,
+                            target_end_date: targetEndDate || null,
+                            change_summary: 'Upgraded Project to v2 from Project Manager',
+                        });
+                    }
+                    return updateProject(projectId, {
+                        expected_head_generation: detail.head_generation,
+                        name,
+                        description,
+                        research_objective: objective,
+                        contributors: contributors.split(',').map((value) => value.trim()).filter(Boolean),
+                        tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                        start_date: startDate || null,
+                        target_end_date: targetEndDate || null,
+                        change_summary: 'Edited in Project Manager',
+                    });
                 }
                 if (selection.node_type === 'global_experiment') {
-                    return updateGlobalExperiment(projectId, selectionId, { expected_head_generation: detail.head_generation, name, objective, scientific_question: question, change_summary: 'Edited in Project Manager' });
+                    if (detail.payload?.schema === 'bms.global-experiment.v1') {
+                        return upgradeGlobalExperiment(projectId, selectionId, {
+                            expected_head_generation: detail.head_generation,
+                            schema: 'bms.global-experiment.v2',
+                            name,
+                            objective,
+                            scientific_question: question,
+                            hypothesis: hypothesis || null,
+                            description,
+                            status: detail.status as 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived',
+                            priority,
+                            tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                            shared_source_receipt_ids: [],
+                            shared_dataset_ids: [],
+                            comparison_plan: null,
+                            success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
+                            review_summary: reviewSummary || null,
+                            conclusion: conclusion || null,
+                            change_summary: 'Upgraded Global Experiment to v2 from Project Manager',
+                        });
+                    }
+                    return updateGlobalExperiment(projectId, selectionId, {
+                        expected_head_generation: detail.head_generation,
+                        name,
+                        objective,
+                        scientific_question: question,
+                        description,
+                        hypothesis: hypothesis || null,
+                        priority,
+                        tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
+                        success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
+                        review_summary: reviewSummary || null,
+                        conclusion: conclusion || null,
+                        change_summary: 'Edited in Project Manager',
+                    });
                 }
                 if (selection.node_type === 'domain_experiment' && selectedGlobalId) {
                     return updateDomainExperiment(projectId, selectedGlobalId, selectionId, { expected_head_generation: detail.head_generation, name, objective, change_summary: 'Edited in Project Manager' });
@@ -330,6 +455,44 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                             <label className="block text-xs font-semibold text-content-secondary">Name
                                 <input autoFocus value={name} onChange={(event) => setName(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
                             </label>
+                            {(mode === 'create_project' || mode === 'create_global' || (mode === 'edit' && (selection?.node_type === 'project' || selection?.node_type === 'global_experiment'))) && <label className="block text-xs font-semibold text-content-secondary">Description
+                                <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
+                            </label>}
+                            {(mode === 'create_project' || (mode === 'edit' && selection?.node_type === 'project')) && (
+                                <div className="grid gap-3 rounded-xl border border-border-primary bg-surface p-3 sm:grid-cols-2">
+                                    <label className="text-xs font-semibold text-content-secondary">Contributors
+                                        <input value={contributors} onChange={(event) => setContributors(event.target.value)} placeholder="comma-separated names" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="text-xs font-semibold text-content-secondary">Tags
+                                        <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="comma-separated tags" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="text-xs font-semibold text-content-secondary">Start date
+                                        <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="text-xs font-semibold text-content-secondary">Target end date
+                                        <input type="date" value={targetEndDate} onChange={(event) => setTargetEndDate(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                </div>
+                            )}
+                            {(mode === 'create_global' || (mode === 'edit' && selection?.node_type === 'global_experiment')) && (
+                                <div className="space-y-3 rounded-xl border border-border-primary bg-surface p-3">
+                                    <label className="block text-xs font-semibold text-content-secondary">Hypothesis
+                                        <textarea value={hypothesis} onChange={(event) => setHypothesis(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Priority
+                                        <select value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content"><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select>
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Success criteria
+                                        <textarea value={successCriteria} onChange={(event) => setSuccessCriteria(event.target.value)} rows={3} placeholder="one criterion per line" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Review summary
+                                        <textarea value={reviewSummary} onChange={(event) => setReviewSummary(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-content-secondary">Conclusion
+                                        <textarea value={conclusion} onChange={(event) => setConclusion(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                    </label>
+                                </div>
+                            )}
                             {mode === 'create_domain' && <label className="block text-xs font-semibold text-content-secondary">Domain type
                                 <select value={domainKind} onChange={(event) => setDomainKind(event.target.value as typeof domainKind)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
                                     <option value="protein_in_silico">Protein In Silico</option><option value="ngs_molbio">NGS / MolBio</option>

@@ -104,6 +104,10 @@ class ProjectV2CreateRequest(StrictRequestModel):
     change_summary: str = Field(default="created", min_length=1, max_length=1024)
 
 
+class ProjectUpgradeRequest(ProjectV2CreateRequest):
+    expected_head_generation: int = Field(ge=0)
+
+
 ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest
 
 
@@ -116,7 +120,7 @@ class ProjectPatchRequest(StrictRequestModel):
     owner: str | None = None
     contributors: list[str] | None = None
     tags: list[str] | None = None
-    status: Literal["draft", "active", "on_hold", "completed"] | None = None
+    status: Literal["draft", "active", "on_hold", "completed", "archived"] | None = None
     start_date: date | None = None
     target_end_date: date | None = None
     external_references: list[ExternalReference] | None = None
@@ -175,6 +179,10 @@ class GlobalExperimentV2CreateRequest(StrictRequestModel):
     change_summary: str = Field(default="created", min_length=1, max_length=1024)
 
 
+class GlobalExperimentUpgradeRequest(GlobalExperimentV2CreateRequest):
+    expected_head_generation: int = Field(ge=0)
+
+
 GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest
 
 
@@ -186,7 +194,7 @@ class GlobalExperimentPatchRequest(StrictRequestModel):
     scientific_question: str | None = None
     hypothesis: str | None = None
     description: str | None = None
-    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"] | None = None
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"] | None = None
     priority: Literal["low", "normal", "high", "critical"] | None = None
     tags: list[str] | None = None
     shared_source_receipt_ids: list[str] | None = None
@@ -422,6 +430,21 @@ async def _payload(session: AsyncSession, head: ExperimentAggregateHead) -> dict
         return {}
     revision = await session.get(ExperimentRevision, head.current_revision_id)
     return json.loads(revision.canonical_payload) if revision is not None else {}
+
+
+def _require_current_contract(payload: dict[str, Any], *, aggregate_kind: str) -> None:
+    expected = {
+        "workspace": "bms.project.v2",
+        "experiment": "bms.global-experiment.v2",
+        "domain_experiment": "bms.domain-experiment.v4",
+    }[aggregate_kind]
+    if payload.get("schema") != expected:
+        code = {
+            "workspace": "project_contract_upgrade_required",
+            "experiment": "global_experiment_contract_upgrade_required",
+            "domain_experiment": "domain_contract_upgrade_required",
+        }[aggregate_kind]
+        raise HTTPException(status_code=409, detail={"code": code, "message": f"{aggregate_kind} requires its successor contract before mutation"})
 
 
 async def _head_json(
@@ -910,6 +933,43 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_exper
         raise _error(exc) from exc
 
 
+@router.post("/{project_id}/upgrade")
+async def upgrade_project_route(
+    project_id: str,
+    payload: ProjectUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _mutation_principal(request)
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _project(session, project_id)
+        current = await _payload(session, head)
+        if current.get("schema") != "bms.project.v1":
+            raise HTTPException(status_code=409, detail={"code": "project_contract_upgrade_not_required", "message": "Project already uses the v2 contract"})
+        body = payload.model_dump(mode="json", by_alias=True)
+        expected_generation = int(body.pop("expected_head_generation"))
+        body["owner"] = actor
+        body["created_by"] = actor
+        body["needs_metadata_review"] = any(
+            field not in current
+            for field in ("project_scope", "contributors", "tags", "start_date", "target_end_date", "external_references")
+        )
+        await save_hierarchy_revision(
+            session,
+            project_id,
+            "workspace",
+            body,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="workspace_contract_upgrade",
+        )
+        await session.commit()
+        return await _head_json(session, await _project(session, project_id), exposed_kind="project", storage_kind="workspace")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}")
 async def patch_project(
     project_id: str,
@@ -920,6 +980,7 @@ async def patch_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         await save_hierarchy_revision(
             session,
             project_id,
@@ -945,6 +1006,7 @@ async def archive_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="project", storage_kind="workspace")
@@ -963,6 +1025,7 @@ async def restore_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="project", storage_kind="workspace")
@@ -1232,6 +1295,43 @@ async def get_global_experiment(
         raise _error(exc) from exc
 
 
+@router.post("/{project_id}/experiments/{experiment_id}/upgrade")
+async def upgrade_global_experiment_route(
+    project_id: str,
+    experiment_id: str,
+    payload: GlobalExperimentUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _mutation_principal(request)
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _global_experiment(session, experiment_id, project_id)
+        current = await _payload(session, head)
+        if current.get("schema") != "bms.global-experiment.v1":
+            raise HTTPException(status_code=409, detail={"code": "global_experiment_contract_upgrade_not_required", "message": "Global Experiment already uses the v2 contract"})
+        body = payload.model_dump(mode="json", by_alias=True)
+        expected_generation = int(body.pop("expected_head_generation"))
+        body["created_by"] = actor
+        body["needs_metadata_review"] = any(
+            field not in current
+            for field in ("hypothesis", "tags", "shared_source_receipt_ids", "shared_dataset_ids", "comparison_plan", "success_criteria", "review_summary", "conclusion")
+        )
+        await save_hierarchy_revision(
+            session,
+            experiment_id,
+            "experiment",
+            body,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="experiment_contract_upgrade",
+        )
+        await session.commit()
+        return await _head_json(session, await _global_experiment(session, experiment_id, project_id), exposed_kind="global_experiment", storage_kind="global_experiment")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}/experiments/{experiment_id}")
 async def patch_global_experiment(
     project_id: str,
@@ -1243,6 +1343,7 @@ async def patch_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         await save_hierarchy_revision(
             session,
             experiment_id,
@@ -1275,6 +1376,7 @@ async def archive_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1294,6 +1396,7 @@ async def restore_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1651,6 +1754,7 @@ async def patch_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         revision = await save_hierarchy_revision(
             session,
             domain_id,
@@ -1700,6 +1804,7 @@ async def archive_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         archived = await archive_aggregate(
             session,
@@ -1746,6 +1851,7 @@ async def restore_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         restored = await restore_aggregate(
             session,

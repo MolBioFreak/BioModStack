@@ -681,6 +681,8 @@ export interface ProjectV2CreateRequest {
 
 export type ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest;
 
+export type ProjectUpgradeRequest = ProjectV2CreateRequest & { expected_head_generation: number };
+
 export interface NgsMolBioProjectLink {
     schema: 'bms.ngs-molbio-project-link.v1';
     link_id: string;
@@ -728,6 +730,9 @@ export interface GlobalExperimentV2CreateRequest {
     status?: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived';
     priority?: 'low' | 'normal' | 'high' | 'critical';
     tags?: string[];
+    shared_source_receipt_ids?: string[];
+    shared_dataset_ids?: string[];
+    comparison_plan?: string | null;
     success_criteria?: string[];
     review_summary?: string | null;
     conclusion?: string | null;
@@ -735,6 +740,8 @@ export interface GlobalExperimentV2CreateRequest {
 }
 
 export type GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest;
+
+export type GlobalExperimentUpgradeRequest = GlobalExperimentV2CreateRequest & { expected_head_generation: number };
 
 export interface DomainExperimentV2CreateRequest {
     schema: 'bms.domain-experiment.v2';
@@ -1429,6 +1436,10 @@ export async function updateProject(projectId: string, request: HierarchyPatch):
     return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}`, request)).data;
 }
 
+export async function upgradeProject(projectId: string, request: ProjectUpgradeRequest): Promise<HierarchyMutationResult> {
+    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/upgrade`, request)).data;
+}
+
 export async function archiveProject(projectId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
     return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/archive`, { expected_head_generation: expectedHeadGeneration })).data;
 }
@@ -1443,6 +1454,10 @@ export async function createGlobalExperiment(projectId: string, request: GlobalE
 
 export async function updateGlobalExperiment(projectId: string, experimentId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
     return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}`, request)).data;
+}
+
+export async function upgradeGlobalExperiment(projectId: string, experimentId: string, request: GlobalExperimentUpgradeRequest): Promise<HierarchyMutationResult> {
+    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/upgrade`, request)).data;
 }
 
 export async function archiveGlobalExperiment(projectId: string, experimentId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {

@@ -888,6 +888,19 @@ def _verify_protein_domain_semantics(value: dict[str, Any]) -> None:
         )
     targets = value["domain_payload"].get("targets", [])
     _assert_unique_values((target["target_id"] for target in targets), label="protein target ID")
+    planned = value["domain_payload"].get("planned_capability_ids", [])
+    if value.get("status") in {"planned", "active"} and not planned:
+        raise NgsMolBioCapabilityError("planned or active Protein Domains require a registered execution capability")
+    outer_dataset_ids = value.get("dataset_revision_ids", [])
+    target_dataset_ids = [
+        ref["dataset_revision_id"]
+        for target in targets
+        for ref in target.get("dataset_member_refs", [])
+    ]
+    if len(target_dataset_ids) != len(set(target_dataset_ids)) or target_dataset_ids != outer_dataset_ids:
+        raise NgsMolBioCapabilityError(
+            "Protein target Dataset member references must match the ordered outer dataset_revision_ids list"
+        )
 
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
