@@ -10,6 +10,7 @@ import {
     getNgsMolBioBinding,
     initializeNgsMolBioBinding,
     issuePreparedLaunchContext,
+    internalRouteHref,
     launchDomainRunGroup,
     listDomainCapabilities,
     listDomainWorkflowPlanRevisions,
@@ -1900,7 +1901,7 @@ export default function DomainWorkflowOperator({
                 expected_run_group_generation: group.generation,
                 source_run_id: cloneSourceRunId,
                 source_attempt_id: cloneSourceAttemptId,
-                name: clonePlanName.trim(),
+                new_workflow_name: clonePlanName.trim(),
                 change_summary: cloneChangeSummary.trim(),
                 expected_domain_revision_id: domainRevisionId,
             });
@@ -2421,7 +2422,7 @@ export default function DomainWorkflowOperator({
                                                 {surface?.route && (
                                                     <Link
                                                         className={BUTTON_CLASS}
-                                                        to={contextHref(surface.route, {
+                                                        to={contextHref(internalRouteHref(surface.route), {
                                                             launch_context_id: launchContextId,
                                                             run_group_id: runGroup.run_group_id,
                                                         })}

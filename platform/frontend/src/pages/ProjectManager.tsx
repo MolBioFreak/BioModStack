@@ -6,6 +6,7 @@ import {
     createLaunchContext,
     getProjectSummary,
     getResultSurface,
+    internalRouteHref,
     isPermissionError,
     searchProjects,
     projectManagerErrorMessage,
@@ -406,7 +407,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 if (typeof receiptId !== 'string') throw new Error('The server did not issue a receipt-backed canonical surface.');
                 return getResultSurface(projectId, receiptId);
             })();
-            if (!surface.route || !surface.route.startsWith('/') || surface.route.startsWith('//')) {
+            if (!surface.route) {
                 throw new Error('The server did not issue a same-origin canonical route.');
             }
             const globalExperimentId = globalExperimentForNode(summary, summary.selection.node_key)
@@ -438,8 +439,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     return_uri: returnUri,
                 },
             );
-            const routeQuery = new URLSearchParams({ launch_context_id: launchContext.launch_context_id });
-            return `${surface.route}${surface.route.includes('?') ? '&' : '?'}${routeQuery.toString()}`;
+            const route = new URL(internalRouteHref(surface.route), window.location.origin);
+            route.searchParams.set('launch_context_id', launchContext.launch_context_id);
+            return `${route.pathname}${route.search}`;
         },
         onSuccess: (route) => navigate(route),
     });
@@ -497,7 +499,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             }
             if (action === 'open_results') {
                 const surface = run.canonical_surface;
-                if (!surface?.route || !surface.route.startsWith('/') || surface.route.startsWith('//')) {
+                if (!surface?.route) {
                     throw new Error('The server did not issue a same-origin canonical result route.');
                 }
                 const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
@@ -513,8 +515,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     workflow_revision_id: null,
                     return_uri: `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`,
                 });
-                const separator = surface.route.includes('?') ? '&' : '?';
-                return { kind: 'route' as const, route: `${surface.route}${separator}launch_context_id=${encodeURIComponent(launchContext.launch_context_id)}` };
+                const route = new URL(internalRouteHref(surface.route), window.location.origin);
+                route.searchParams.set('launch_context_id', launchContext.launch_context_id);
+                return { kind: 'route' as const, route: `${route.pathname}${route.search}` };
             }
             throw new Error(`Unsupported server-issued run action: ${action}`);
         },

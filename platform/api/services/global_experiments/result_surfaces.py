@@ -1,11 +1,13 @@
 """Explicit Project Manager result surfaces for verified native references."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qsl, urlsplit
 
 from jsonschema import Draft202012Validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +36,49 @@ def _validate_result_surface(surface: dict[str, Any]) -> dict[str, Any]:
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _canonical_bytes(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _typed_payload(schema_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    encoded = _canonical_bytes(payload)
+    return {
+        "schema_id": schema_id,
+        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+        "canonical_size_bytes": len(encoded),
+        "payload": payload,
+    }
+
+
+def _metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("payload"), dict):
+        return dict(metadata["payload"])
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    raise ValidationFailure("stored verification acknowledgement metadata is malformed")
+
+
+def _reopen_route(payload: dict[str, Any]) -> dict[str, Any]:
+    route = payload.get("reopen_route")
+    if isinstance(route, dict):
+        return route
+    uri = payload.get("reopen_uri")
+    if not isinstance(uri, str):
+        raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
+    parsed = urlsplit(uri)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith("/") or parsed.path.startswith("//"):
+        raise ValidationFailure("stored verification acknowledgement has no safe reopen route")
+    query_items = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    if len(query_items) != len({key for key, _value in query_items}):
+        raise ValidationFailure("stored verification acknowledgement reopen route has duplicate query keys")
+    return {
+        "template_id": "bms.route.verified-external-entity.v1",
+        "path": parsed.path,
+        "query": dict(query_items),
+    }
+
+
 def _acknowledgement(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any]:
     try:
         payload = json.loads(receipt.acknowledgement_json)
@@ -47,10 +92,8 @@ def _acknowledgement(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any]
         raise ValidationFailure("stored verification acknowledgement has no entity kind")
     if not isinstance(payload.get("entity_id"), str) or not payload["entity_id"]:
         raise ValidationFailure("stored verification acknowledgement has no entity identity")
-    if not isinstance(payload.get("reopen_uri"), str) or not payload["reopen_uri"].startswith("/"):
-        raise ValidationFailure("stored verification acknowledgement has no safe reopen URI")
-    if not isinstance(payload.get("metadata"), dict):
-        raise ValidationFailure("stored verification acknowledgement metadata is malformed")
+    _reopen_route(payload)
+    _metadata_payload(payload)
     return payload
 
 
@@ -69,15 +112,16 @@ def _validate_persisted_authority(
         "entity_id": receipt.entity_id,
         "entity_revision_id": receipt.generation_or_revision,
         "content_digest": receipt.content_digest,
-        "availability": receipt.availability,
         "verifier_id": authority,
     }
     if any(str(payload.get(field) or "") != str(value) for field, value in expected.items()):
         raise ValidationFailure("stored verification acknowledgement does not match persisted receipt authority")
+    if payload.get("availability") is not None and payload.get("availability") != receipt.availability:
+        raise ValidationFailure("stored verification acknowledgement does not match persisted receipt availability")
 
 
 def _base_surface(payload: dict[str, Any], *, surface_kind: str, readiness: str) -> dict[str, Any]:
-    metadata = payload["metadata"]
+    metadata = _metadata_payload(payload)
     return {
         "surface_kind": surface_kind,
         "entity_kind": payload["entity_kind"],
@@ -89,7 +133,7 @@ def _base_surface(payload: dict[str, Any], *, surface_kind: str, readiness: str)
         "contract_digest": payload.get("contract_digest"),
         "result_contract_id": metadata.get("result_contract_id"),
         "source_build_revision": payload["source_build_revision"],
-        "reopen_uri": payload["reopen_uri"],
+        "reopen_route": _reopen_route(payload),
         "metadata": metadata,
     }
 
@@ -152,7 +196,7 @@ def _sequence_qc_surface(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ont_observation_surface(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload["metadata"]
+    metadata = _metadata_payload(payload)
     state = metadata.get("state")
     generation = metadata.get("observed_generation")
     event_type = metadata.get("event_type")
@@ -214,17 +258,18 @@ def _ont_observation_surface(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _alignment_surface(payload: dict[str, Any]) -> dict[str, Any]:
-    readiness = "ready" if int(payload["metadata"].get("ready_session_count") or 0) > 0 else "partial"
+    readiness = "ready" if int(_metadata_payload(payload).get("ready_session_count") or 0) > 0 else "partial"
     return _base_surface(payload, surface_kind="ngs", readiness=readiness)
 
 
 def _exact_ngs_member_surface(payload: dict[str, Any]) -> dict[str, Any]:
-    status = payload["metadata"].get("job_status") or payload["metadata"].get("canonical_state")
+    metadata = _metadata_payload(payload)
+    status = metadata.get("job_status") or metadata.get("canonical_state")
     return _base_surface(payload, surface_kind="ngs", readiness=_completed(status))
 
 
 def _evidence_assessment_surface(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload["metadata"]
+    metadata = _metadata_payload(payload)
     assessment = str(metadata.get("scientific_assessment") or "").strip().upper()
     acceptance_state = {
         "PASS": "passed",
@@ -319,6 +364,15 @@ async def result_surface_for_receipt(
             "reason": None,
         }
     readiness = str(details["readiness"])
+    surface_kind = str(details["surface_kind"])
+    provenance = {
+        "store_id": payload.get("store_id"),
+        "entity_revision_id": payload.get("entity_revision_id"),
+        "contract_digest": payload.get("contract_digest"),
+        "source_build_revision": payload.get("source_build_revision"),
+        "verified_at": payload.get("verified_at"),
+        "verifier_id": payload.get("verifier_id"),
+    }
     return _validate_result_surface({
         "schema": "bms.result-surface.v1",
         "receipt_id": receipt.id,
@@ -326,18 +380,12 @@ async def result_surface_for_receipt(
         "entity_id": payload["entity_id"],
         "contract_id": str(details.get("result_contract_id") or "verified_external_entity_v1"),
         "content_digest": payload["content_digest"],
-        "surface_kind": str(details["surface_kind"]),
-        "route": payload["reopen_uri"],
+        "surface_kind": surface_kind,
+        "route": None if surface_kind == "unsupported" else _reopen_route(payload),
         "readiness": readiness,
-        "native_summary": dict(payload["metadata"]),
+        "native_summary": _typed_payload("bms.result-surface.native-summary.v1", _metadata_payload(payload)),
         "scientific_acceptance": scientific_acceptance,
-        "provenance": {
-            "store_id": payload.get("store_id"),
-            "entity_revision_id": payload.get("entity_revision_id"),
-            "contract_digest": payload.get("contract_digest"),
-            "source_build_revision": payload.get("source_build_revision"),
-            "verified_at": payload.get("verified_at"),
-            "verifier_id": payload.get("verifier_id"),
-        },
-        "available_actions": ["open"],
+        "provenance": _typed_payload("bms.result-surface.provenance.v1", provenance),
+        "comparison": {"state": "not_applicable", "reason": None, "authority": None},
+        "available_actions": [] if surface_kind == "unsupported" else ["open"],
     })

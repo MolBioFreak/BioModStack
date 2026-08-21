@@ -176,15 +176,7 @@ export interface RunControlCommandDocument {
     conflict?: JsonObject;
 }
 
-export interface DomainResultSurface {
-    schema: string;
-    receipt_id: string;
-    route: string | null;
-    readiness: string;
-    surface_kind: string;
-    native_summary: JsonObject;
-    available_actions: string[];
-}
+export type DomainResultSurface = ResultSurface;
 
 export type DomainCapabilityLaunchMode = 'managed_materialization' | 'typed_launcher_handoff';
 
@@ -430,6 +422,30 @@ export interface ProjectMapEdge {
     accessible_label: string;
 }
 
+export interface InternalRoute {
+    template_id: string;
+    path: string;
+    query: Record<string, string>;
+}
+
+export function internalRouteHref(route: InternalRoute): string {
+    const query = new URLSearchParams(route.query).toString();
+    return query ? `${route.path}?${query}` : route.path;
+}
+
+export interface TypedPayload {
+    schema_id: string;
+    content_sha256: string;
+    canonical_size_bytes: number;
+    payload: JsonObject;
+}
+
+export interface ResultComparison {
+    state: 'available' | 'not_applicable' | 'incompatible' | 'unavailable';
+    reason: string | null;
+    authority: JsonObject | null;
+}
+
 export interface ResultSurface {
     schema: 'bms.result-surface.v1';
     receipt_id: string;
@@ -438,14 +454,15 @@ export interface ResultSurface {
     contract_id: string;
     content_digest: string;
     surface_kind: ResultSurfaceKind;
-    route: string | null;
+    route: InternalRoute | null;
     readiness: ResultReadiness;
-    native_summary: JsonObject;
+    native_summary: TypedPayload;
     scientific_acceptance: {
         state: ScientificAcceptanceState;
         reason: string | null;
     };
-    provenance: JsonObject;
+    provenance: TypedPayload;
+    comparison: ResultComparison;
     available_actions: string[];
 }
 
@@ -596,6 +613,11 @@ export interface AdapterSearchResult {
     adapter_version: string | number;
     items: AdapterEntityProjection[];
     next_cursor: string | null;
+}
+
+export interface AdapterReceiptIssueResult {
+    receipt_id: string;
+    receipt: JsonObject;
 }
 
 export interface AttachExistingRequest {
@@ -956,8 +978,32 @@ function parseReconciliation(value: unknown, label: string): Reconciliation {
 export function parseResultSurface(value: unknown, label = 'result surface'): ResultSurface {
     const record = exactRecord(value, label, [
         'schema', 'receipt_id', 'entity_kind', 'entity_id', 'contract_id', 'content_digest', 'surface_kind',
-        'route', 'readiness', 'native_summary', 'scientific_acceptance', 'provenance', 'available_actions',
+        'route', 'readiness', 'native_summary', 'scientific_acceptance', 'provenance', 'comparison', 'available_actions',
     ]);
+    const route = record.route === null ? null : exactRecord(record.route, `${label}.route`, ['template_id', 'path', 'query']);
+    const query = route === null ? null : exactRecord(route.query, `${label}.route.query`, Object.keys(requireJsonObject(route.query, `${label}.route.query`)));
+    const parsedQuery: Record<string, string> = {};
+    if (query) for (const [key, item] of Object.entries(query)) parsedQuery[key] = requireString(item, `${label}.route.query.${key}`);
+    const typedPayload = (input: unknown, payloadLabel: string): TypedPayload => {
+        const payload = exactRecord(input, payloadLabel, ['schema_id', 'content_sha256', 'canonical_size_bytes', 'payload']);
+        return {
+            schema_id: requireString(payload.schema_id, `${payloadLabel}.schema_id`),
+            content_sha256: requireSha256(payload.content_sha256, `${payloadLabel}.content_sha256`),
+            canonical_size_bytes: requireInteger(payload.canonical_size_bytes, `${payloadLabel}.canonical_size_bytes`),
+            payload: requireJsonObject(payload.payload, `${payloadLabel}.payload`),
+        };
+    };
+    const comparison = exactRecord(record.comparison, `${label}.comparison`, ['state', 'reason', 'authority']);
+    let comparisonAuthority: JsonObject | null = null;
+    if (comparison.authority !== null) {
+        const authority = exactRecord(comparison.authority, `${label}.comparison.authority`, ['adapter_id', 'adapter_version', 'receipt_id', 'receipt_sha256']);
+        comparisonAuthority = {
+            adapter_id: requireString(authority.adapter_id, `${label}.comparison.authority.adapter_id`),
+            adapter_version: requireString(authority.adapter_version, `${label}.comparison.authority.adapter_version`),
+            receipt_id: requireString(authority.receipt_id, `${label}.comparison.authority.receipt_id`),
+            receipt_sha256: requireSha256(authority.receipt_sha256, `${label}.comparison.authority.receipt_sha256`),
+        };
+    }
     const acceptance = exactRecord(record.scientific_acceptance, `${label}.scientific_acceptance`, ['state', 'reason']);
     return {
         schema: requireLiteral(record.schema, `${label}.schema`, ['bms.result-surface.v1']),
@@ -967,14 +1013,27 @@ export function parseResultSurface(value: unknown, label = 'result surface'): Re
         contract_id: requireString(record.contract_id, `${label}.contract_id`),
         content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
         surface_kind: requireLiteral(record.surface_kind, `${label}.surface_kind`, ['protein_design', 'molecular_dynamics', 'conformational_mapping', 'frustrampnn', 'ngs', 'molbio', 'artifact', 'unsupported']),
-        route: requireNullableString(record.route, `${label}.route`),
+        route: route === null ? null : {
+            template_id: requireString(route.template_id, `${label}.route.template_id`),
+            path: (() => {
+                const path = requireString(route.path, `${label}.route.path`);
+                if (!path.startsWith('/') || path.startsWith('//')) throw new Error(`${label}.route.path must be a same-origin path.`);
+                return path;
+            })(),
+            query: parsedQuery,
+        },
         readiness: requireLiteral(record.readiness, `${label}.readiness`, ['running', 'partial', 'ready', 'failed', 'blocked', 'unsupported']),
-        native_summary: requireJsonObject(record.native_summary, `${label}.native_summary`),
+        native_summary: typedPayload(record.native_summary, `${label}.native_summary`),
         scientific_acceptance: {
             state: requireLiteral(acceptance.state, `${label}.scientific_acceptance.state`, ['passed', 'failed', 'review', 'unavailable', 'not_applicable']),
             reason: requireNullableString(acceptance.reason, `${label}.scientific_acceptance.reason`),
         },
-        provenance: requireJsonObject(record.provenance, `${label}.provenance`),
+        provenance: typedPayload(record.provenance, `${label}.provenance`),
+        comparison: {
+            state: requireLiteral(comparison.state, `${label}.comparison.state`, ['available', 'not_applicable', 'incompatible', 'unavailable']),
+            reason: requireNullableString(comparison.reason, `${label}.comparison.reason`),
+            authority: comparisonAuthority,
+        },
         available_actions: requireArray(record.available_actions, `${label}.available_actions`, (item, itemLabel) => requireLiteral(item, itemLabel, ['open', 'download', 'compare', 'attach_evidence'])),
     };
 }
@@ -1389,6 +1448,18 @@ export async function searchAdapterEntities(adapterId: string, query: string, li
         signal,
     });
     return parseAdapterSearchResult(response.data);
+}
+
+export async function issueAdapterReceipt(adapterId: string, entityId: string, projectId: string): Promise<AdapterReceiptIssueResult> {
+    const response = await api.post<unknown>(
+        `/api/domain-adapters/${segment(adapterId)}/entities/${segment(entityId)}/receipt`,
+        { project_id: projectId },
+    );
+    const record = exactRecord(response.data, 'adapter receipt issue result', ['receipt_id', 'receipt']);
+    return {
+        receipt_id: requireString(record.receipt_id, 'adapter receipt issue result.receipt_id'),
+        receipt: requireJsonObject(record.receipt, 'adapter receipt issue result.receipt'),
+    };
 }
 
 export async function attachExistingEntity(
@@ -1909,15 +1980,18 @@ export async function cloneDomainRunIntent(
         expected_run_group_generation: number;
         source_run_id: string;
         source_attempt_id: string;
-        name: string;
+        new_workflow_name: string;
         change_summary: string;
         expected_domain_revision_id: string;
     },
 ): Promise<RunCloneReceipt> {
     return (await api.post<RunCloneReceipt>(
         `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/clone`,
-        request,
-        { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+        {
+            schema: 'bms.run-clone-request.v1',
+            ...request,
+            idempotency_key: crypto.randomUUID(),
+        },
     )).data;
 }
 

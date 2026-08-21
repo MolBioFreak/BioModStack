@@ -11,18 +11,23 @@ import {
     getDomainExperiment,
     getGlobalExperiment,
     getProject,
+    issueAdapterReceipt,
+    listDomainAdapters,
     projectManagerErrorMessage,
     restoreDomainExperiment,
     restoreGlobalExperiment,
     restoreProject,
+    searchAdapterEntities,
     updateDomainExperiment,
     updateGlobalExperiment,
     updateProject,
     upgradeGlobalExperiment,
     upgradeProject,
+    type AdapterEntityProjection,
     type JsonObject,
     type JsonValue,
     type ProjectManagerReadModel,
+    type ProteinExperimentMode,
     type RecordKind,
 } from '../../lib/projectManager';
 import { globalExperimentForNode, selectedDomainContext } from './projectManagerState';
@@ -63,6 +68,7 @@ function completeProteinDomainPayload(
     datasetMemberRefsText: string,
     entityMapReferenceText: string,
     expectedContentSha256: string,
+    experimentMode: ProteinExperimentMode,
 ): JsonObject {
     const sourceReceiptIds = sourceReceiptIdsText.split(',').map((value) => value.trim()).filter(Boolean);
     let datasetMemberRefs: JsonValue[] = [];
@@ -80,7 +86,7 @@ function completeProteinDomainPayload(
     }
     return {
         schema: 'bms.protein-in-silico-experiment.v3',
-        experiment_mode: 'design',
+        experiment_mode: experimentMode,
         scientific_objective: objective,
         targets: [{
             target_id: targetId.trim(),
@@ -128,6 +134,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [conclusion, setConclusion] = useState('');
     const [domainKind, setDomainKind] = useState<'protein_in_silico' | 'ngs_molbio'>('protein_in_silico');
     const [ngsExperimentMode, setNgsExperimentMode] = useState('analysis');
+    const [proteinExperimentMode, setProteinExperimentMode] = useState<ProteinExperimentMode>('design');
     const [proteinTargetId, setProteinTargetId] = useState('');
     const [proteinTargetLabel, setProteinTargetLabel] = useState('');
     const [proteinTargetRole, setProteinTargetRole] = useState('target');
@@ -135,6 +142,9 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const [proteinDatasetMemberRefs, setProteinDatasetMemberRefs] = useState('[]');
     const [proteinEntityMapReference, setProteinEntityMapReference] = useState('{}');
     const [proteinExpectedContentSha256, setProteinExpectedContentSha256] = useState('');
+    const [proteinSourceAdapterId, setProteinSourceAdapterId] = useState('');
+    const [proteinSourceQuery, setProteinSourceQuery] = useState('');
+    const [proteinSourceSelection, setProteinSourceSelection] = useState<AdapterEntityProjection | null>(null);
     const [recordKind, setRecordKind] = useState<RecordKind>('note');
     const [body, setBody] = useState('');
 
@@ -148,6 +158,29 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             if (selection.node_type === 'global_experiment') return getGlobalExperiment(projectId, selectionId, signal);
             if (selection.node_type === 'domain_experiment' && selectedGlobalId) return getDomainExperiment(projectId, selectedGlobalId, selectionId, signal);
             throw new Error('This selection does not support revision management.');
+        },
+    });
+    const proteinAdaptersQuery = useQuery({
+        queryKey: ['project-manager', 'protein-source-adapters'],
+        queryFn: ({ signal }) => listDomainAdapters(signal),
+        enabled: mode === 'create_domain' && domainKind === 'protein_in_silico',
+    });
+    const proteinAdapters = (proteinAdaptersQuery.data?.adapters ?? []).filter((adapter) => adapter.domain_kind === 'protein_in_silico');
+    const proteinSourceSearch = useMutation({
+        mutationFn: () => searchAdapterEntities(proteinSourceAdapterId, proteinSourceQuery, 25),
+        onSuccess: () => setProteinSourceSelection(null),
+    });
+    const proteinReceiptIssue = useMutation({
+        mutationFn: async () => {
+            if (!projectId || !proteinSourceAdapterId || !proteinSourceSelection) throw new Error('Select one verified Protein source.');
+            const result = await issueAdapterReceipt(proteinSourceAdapterId, proteinSourceSelection.entity_id, projectId);
+            const digest = result.receipt.content_digest;
+            if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) throw new Error('The verified source receipt has no exact content digest.');
+            return { result, digest };
+        },
+        onSuccess: ({ result, digest }) => {
+            setProteinSourceReceiptIds(result.receipt_id);
+            setProteinExpectedContentSha256(digest);
         },
     });
 
@@ -168,6 +201,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setConclusion('');
         setDomainKind('protein_in_silico');
         setNgsExperimentMode('analysis');
+        setProteinExperimentMode('design');
         setProteinTargetId('');
         setProteinTargetLabel('');
         setProteinTargetRole('target');
@@ -175,9 +209,17 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         setProteinDatasetMemberRefs('[]');
         setProteinEntityMapReference('{}');
         setProteinExpectedContentSha256('');
+        setProteinSourceAdapterId('');
+        setProteinSourceQuery('');
+        setProteinSourceSelection(null);
         setRecordKind('note');
         setBody('');
     }, [mode]);
+
+    useEffect(() => {
+        if (proteinSourceAdapterId || !proteinAdapters.length) return;
+        setProteinSourceAdapterId(proteinAdapters[0]?.adapter_id ?? '');
+    }, [proteinAdapters, proteinSourceAdapterId]);
 
     useEffect(() => {
         if (mode !== 'edit' || !detailQuery.data) return;
@@ -249,6 +291,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         proteinDatasetMemberRefs,
                         proteinEntityMapReference,
                         proteinExpectedContentSha256,
+                        proteinExperimentMode,
                     );
                     const datasetRevisionIds = (JSON.parse(proteinDatasetMemberRefs || '[]') as Array<{ dataset_revision_id?: unknown }>)
                         .map((reference) => typeof reference.dataset_revision_id === 'string' ? reference.dataset_revision_id : '')
@@ -501,6 +544,29 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                             {mode === 'create_domain' && domainKind === 'protein_in_silico' && (
                                 <div className="space-y-3 rounded-xl border border-border-primary bg-surface p-3">
                                     <p className="text-xs text-content-secondary">Protein v3 uses producer-native target authority. Enter IDs from existing verified receipts. The server resolves each receipt and checks every digest.</p>
+                                    <label className="block text-xs font-semibold text-content-secondary">Protein experiment mode
+                                        <select aria-label="Protein experiment mode" value={proteinExperimentMode} onChange={(event) => setProteinExperimentMode(event.target.value as ProteinExperimentMode)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-content">
+                                            {['exploration', 'design', 'redesign', 'prediction', 'validation', 'comparison', 'simulation', 'analysis'].map((value) => <option key={value} value={value}>{value}</option>)}
+                                        </select>
+                                    </label>
+                                    <div className="space-y-2 rounded-lg border border-border-primary p-3">
+                                        <p className="text-xs font-semibold text-content-secondary">Verify a producer-native source receipt</p>
+                                        <select aria-label="Protein source adapter" value={proteinSourceAdapterId} onChange={(event) => { setProteinSourceAdapterId(event.target.value); setProteinSourceSelection(null); }} className="w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content">
+                                            {proteinAdapters.map((adapter) => <option key={adapter.adapter_id} value={adapter.adapter_id}>{adapter.display_name}</option>)}
+                                        </select>
+                                        <div className="flex gap-2">
+                                            <input aria-label="Search Protein source records" value={proteinSourceQuery} onChange={(event) => setProteinSourceQuery(event.target.value)} placeholder="1UBQ or exact Job ID" className="min-w-0 flex-1 rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" />
+                                            <button type="button" disabled={!proteinSourceAdapterId || proteinSourceSearch.isPending} onClick={() => proteinSourceSearch.mutate()} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary disabled:opacity-50">Search Protein sources</button>
+                                        </div>
+                                        {(proteinSourceSearch.data?.items ?? []).map((item) => (
+                                            <label key={item.entity_id} className="flex gap-2 rounded-lg border border-border-primary p-2 text-xs text-content-secondary">
+                                                <input type="radio" name="protein-source-record" value={item.entity_id} checked={proteinSourceSelection?.entity_id === item.entity_id} disabled={!item.attachable} onChange={() => setProteinSourceSelection(item)} />
+                                                <span><strong className="text-content">{item.label}</strong><br />{item.canonical_state}{item.reason ? ` · ${item.reason}` : ''}</span>
+                                            </label>
+                                        ))}
+                                        <button type="button" disabled={!proteinSourceSelection?.attachable || proteinReceiptIssue.isPending} onClick={() => proteinReceiptIssue.mutate()} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Verify and use receipt</button>
+                                        {(proteinAdaptersQuery.isError || proteinSourceSearch.isError || proteinReceiptIssue.isError) && <p role="alert" className="text-xs text-error">{projectManagerErrorMessage(proteinAdaptersQuery.error ?? proteinSourceSearch.error ?? proteinReceiptIssue.error)}</p>}
+                                    </div>
                                     <label className="block text-xs font-semibold text-content-secondary">Target ID
                                         <input value={proteinTargetId} onChange={(event) => setProteinTargetId(event.target.value)} placeholder="target identifier" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
                                     </label>
@@ -513,7 +579,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                         </select>
                                     </label>
                                     <label className="block text-xs font-semibold text-content-secondary">Source receipt IDs
-                                        <input value={proteinSourceReceiptIds} onChange={(event) => setProteinSourceReceiptIds(event.target.value)} placeholder="comma-separated receipt IDs" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
+                                        <input aria-label="Protein source receipt IDs" value={proteinSourceReceiptIds} onChange={(event) => setProteinSourceReceiptIds(event.target.value)} placeholder="comma-separated receipt IDs" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-sm text-content" />
                                     </label>
                                     <label className="block text-xs font-semibold text-content-secondary">Dataset member references JSON
                                         <textarea value={proteinDatasetMemberRefs} onChange={(event) => setProteinDatasetMemberRefs(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" />
@@ -522,7 +588,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                         <textarea value={proteinEntityMapReference} onChange={(event) => setProteinEntityMapReference(event.target.value)} rows={4} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs text-content" />
                                     </label>
                                     <label className="block text-xs font-semibold text-content-secondary">Expected content SHA-256
-                                        <input value={proteinExpectedContentSha256} onChange={(event) => setProteinExpectedContentSha256(event.target.value)} placeholder="64 lowercase hexadecimal characters" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 font-mono text-xs text-content" />
+                                        <input aria-label="Protein expected content SHA-256" value={proteinExpectedContentSha256} onChange={(event) => setProteinExpectedContentSha256(event.target.value)} placeholder="64 lowercase hexadecimal characters" className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 font-mono text-xs text-content" />
                                     </label>
                                 </div>
                             )}

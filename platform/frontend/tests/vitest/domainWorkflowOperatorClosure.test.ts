@@ -82,7 +82,8 @@ describe('NGS/MolBio frontend closure wiring', () => {
         const workspace = readFileSync(resolve(process.cwd(), 'src/components/molbio-ngs/DomainExperimentWorkspace.tsx'), 'utf8');
 
         expect(manager).toContain("section: 'workflow-plans'");
-        expect(inspector).toContain('Select NGS/MolBio capability');
+        expect(inspector).toContain("selection.summary.schema === 'bms.protein-in-silico-experiment.v3'");
+        expect(inspector).toContain('Open Plans &amp; Runs workspace');
         expect(workspace).toContain('<DomainWorkflowOperator');
     });
 

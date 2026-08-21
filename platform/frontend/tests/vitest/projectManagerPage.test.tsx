@@ -10,6 +10,7 @@ const managerApi = vi.hoisted(() => ({
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
     searchAdapterEntities: vi.fn(),
+    issueAdapterReceipt: vi.fn(),
     attachExistingEntity: vi.fn(),
     getResultSurface: vi.fn(),
     createLaunchContext: vi.fn(),
@@ -169,7 +170,15 @@ function summaryFor(selectedNodeKey?: string) {
         canonical_identity: { store_id: 'core', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) },
         summary: {}, relationship: { parent_node_key: 'domain_experiment:domain-1' }, scientific_context: {},
         reconciliation: { state: 'current', last_verified_at: '2026-08-09T11:00:00Z', reason: null }, available_actions: ['open'],
-        canonical_surface: { schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', contract_id: 'rfd3_local_redesign_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design', route: '/designs/job-9', readiness: 'ready', native_summary: { candidates: 12 }, scientific_acceptance: { state: 'review', reason: null }, provenance: {}, available_actions: ['open'] },
+        canonical_surface: {
+            schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9',
+            contract_id: 'rfd3_local_redesign_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design',
+            route: { template_id: 'bms.route.design-result.v1', path: '/designs/job-9', query: {} }, readiness: 'ready',
+            native_summary: { schema_id: 'bms.result-summary.test.v1', content_sha256: 'c'.repeat(64), canonical_size_bytes: 17, payload: { candidates: 12 } },
+            scientific_acceptance: { state: 'review', reason: null },
+            provenance: { schema_id: 'bms.result-provenance.test.v1', content_sha256: 'd'.repeat(64), canonical_size_bytes: 2, payload: {} },
+            comparison: { state: 'not_applicable', reason: null, authority: null }, available_actions: ['open'],
+        },
     };
     return value;
 }
@@ -316,7 +325,7 @@ describe('ProjectManager', () => {
         expect(container.textContent).toContain('Source revision');
         expect(container.textContent).toContain('Content digest');
         expect(container.textContent).toContain('Already attached');
-        expect(container.querySelector<HTMLOptionElement>('option[value="clone_import_revision"]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLOptionElement>('option[value="clone_import_revision"]')?.disabled).toBe(false);
 
         const searchInput = container.querySelector<HTMLInputElement>('[aria-label="Search canonical records"]');
         expect(searchInput).not.toBeNull();
@@ -418,6 +427,53 @@ describe('ProjectManager', () => {
             'exploration', 'design', 'redesign', 'prediction', 'validation', 'comparison', 'simulation', 'analysis',
         ]);
         expect(container.textContent).not.toContain('Evaluation');
+    });
+
+    it('issues a verified producer receipt before creating the first Protein Domain', async () => {
+        managerApi.listDomainAdapters.mockResolvedValue({
+            schema: 'bms.global.adapter-registry.v1',
+            adapters: [{
+                adapter_id: 'bms.core-job.esmfold2.adapter.v1', adapter_version: 1,
+                domain_kind: 'protein_in_silico', entity_kind: 'typed_core_job_result',
+                display_name: 'Typed core Job result: esmfold2',
+            }],
+        });
+        managerApi.searchAdapterEntities.mockResolvedValue({
+            schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.core-job.esmfold2.adapter.v1', adapter_version: 1,
+            items: [{
+                adapter_id: 'bms.core-job.esmfold2.adapter.v1', entity_kind: 'typed_core_job_result',
+                entity_id: 'job-1ubq', label: 'Ubiquitin 1UBQ', canonical_state: 'completed', attachable: true,
+                reason: null, reopen_uri: '/designs/job-1ubq', metadata: { content_digest: 'd'.repeat(64) },
+            }], next_cursor: null,
+        });
+        managerApi.issueAdapterReceipt.mockResolvedValue({ receipt_id: 'receipt-1ubq', receipt: { content_digest: 'd'.repeat(64) } });
+
+        await renderAt('/projects/project-1?focus=global-1&selected=global_experiment%3Aglobal-1');
+        await waitUntil(() => expect(container.textContent).toContain('New Domain Experiment'));
+        const create = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'New Domain Experiment');
+        await act(async () => create?.click());
+        await waitUntil(() => expect(container.querySelector('[aria-label="Protein source adapter"]')).not.toBeNull());
+
+        const searchInput = container.querySelector<HTMLInputElement>('[aria-label="Search Protein source records"]');
+        await act(async () => {
+            if (searchInput) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                setter?.call(searchInput, '1UBQ');
+                searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        const search = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Search Protein sources');
+        await act(async () => search?.click());
+        await waitUntil(() => expect(container.textContent).toContain('Ubiquitin 1UBQ'));
+        const choice = container.querySelector<HTMLInputElement>('input[type="radio"][value="job-1ubq"]');
+        await act(async () => choice?.click());
+        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Verify and use receipt');
+        await act(async () => issue?.click());
+        await waitUntil(() => expect(managerApi.issueAdapterReceipt).toHaveBeenCalledWith(
+            'bms.core-job.esmfold2.adapter.v1', 'job-1ubq', 'project-1',
+        ));
+        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs"]')?.value).toBe('receipt-1ubq');
+        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256"]')?.value).toBe('d'.repeat(64));
     });
 
     it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {

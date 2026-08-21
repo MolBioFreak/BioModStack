@@ -13,6 +13,7 @@ vi.mock('../../src/lib/api', () => ({ api: transport }));
 import {
     archiveProject,
     attachExistingEntity,
+    cloneDomainRunIntent,
     createProject,
     createResearchRecord,
     getProjectSummary,
@@ -58,8 +59,12 @@ const minimalSummary = {
 const resultSurface = {
     schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'design', entity_id: 'job-9',
     contract_id: 'design-v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design',
-    route: '/designs/job-9', readiness: 'ready', native_summary: {},
-    scientific_acceptance: { state: 'review', reason: null }, provenance: {}, available_actions: ['open'],
+    route: { template_id: 'bms.route.design-result.v1', path: '/designs/job-9', query: {} }, readiness: 'ready',
+    native_summary: { schema_id: 'bms.result-summary.test.v1', content_sha256: 'c'.repeat(64), canonical_size_bytes: 2, payload: {} },
+    scientific_acceptance: { state: 'review', reason: null },
+    provenance: { schema_id: 'bms.result-provenance.test.v1', content_sha256: 'd'.repeat(64), canonical_size_bytes: 2, payload: {} },
+    comparison: { state: 'not_applicable', reason: null, authority: null },
+    available_actions: ['open'],
 };
 
 describe('Project Manager API contract', () => {
@@ -235,9 +240,31 @@ describe('Project Manager API contract', () => {
             schema: 'bms.launch-context.v1', launch_context_id: 'launch-1', project_id: 'project-1',
             global_experiment_id: 'global-1', domain_experiment_id: 'domain-1', workflow_id: null,
             workflow_revision_id: null, return_uri: '/project-manager/projects/project-1', source_receipt_id: 'receipt-1',
+            pinned_gpu: null,
             state: 'issued', issued_at: '2026-08-11T00:00:00Z', expires_at: '2026-08-11T01:00:00Z',
         };
         expect(parseLaunchContext(launch).state).toBe('issued');
         expect(() => parseLaunchContext({ ...launch, server_only: true })).toThrow(/not permitted/);
+    });
+
+    it('sends the frozen body-authoritative clone request', async () => {
+        transport.post.mockResolvedValue({ data: { clone_receipt_id: 'clone-1' } });
+        await cloneDomainRunIntent('project-1', 'global-1', 'domain-1', 'group-1', {
+            expected_run_group_generation: 3,
+            source_run_id: 'run-1',
+            source_attempt_id: 'attempt-1',
+            new_workflow_name: 'Cloned ubiquitin intent',
+            change_summary: 'Clone exact immutable intent',
+            expected_domain_revision_id: 'domain-revision-1',
+        });
+        expect(transport.post).toHaveBeenCalledWith(
+            '/api/projects/project-1/experiments/global-1/domains/domain-1/run-groups/group-1/clone',
+            expect.objectContaining({
+                schema: 'bms.run-clone-request.v1',
+                new_workflow_name: 'Cloned ubiquitin intent',
+                idempotency_key: expect.any(String),
+            }),
+        );
+        expect(transport.post.mock.calls[0]?.[1]).not.toHaveProperty('name');
     });
 });

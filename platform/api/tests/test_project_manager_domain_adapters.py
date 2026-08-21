@@ -37,13 +37,13 @@ from experiment_services import ValidationFailure
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 PROTEIN_TYPED_CORE_JOB_MODELS = {
     "boltz2", "boltz_cp_experimental", "boltzgen", "esmfold2", "ppiflow",
-    "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
+    "protein_local_redesign", "protein_modification_experimental", "protenix", "rf3", "template_antibody_denovo",
 }
 
 
 EXPECTED_ADAPTER_IDS = {
     "bms.core.protein-result-reference.adapter.v1",
-    "bms.rfd3.local-redesign-reference.adapter.v1",
+
     "bms.cm.protenix_v2.adapter.v1",
     "bms.cm.confornets.adapter.v1",
     "bms.md.result-reference.adapter.v1",
@@ -60,6 +60,18 @@ EXPECTED_ADAPTER_IDS = {
     "bms.ngs.sequence-qc-reference.adapter.v1",
     "bms.ngs.analysis-reference.adapter.v1",
     "bms.ngs.alignment-viewer-reference.adapter.v1",
+    "bms.molbio.member-molecular-revision.adapter.v1",
+    "bms.molbio.member-operation.adapter.v1",
+    "bms.molbio.pcr-experiment-revision.adapter.v1",
+    "bms.molbio.primer-revision.adapter.v1",
+    "bms.ngs-molbio.evidence-assessment.adapter.v1",
+    "bms.ngs-molbio.sample-revision.adapter.v1",
+    "bms.ngs-molbio.state-revision.adapter.v1",
+    "bms.ngs.comparison-panel.adapter.v1",
+    "bms.ngs.job-reference.adapter.v1",
+    "bms.ngs.ont-observation.adapter.v1",
+    "bms.ngs.reference-revision.adapter.v1",
+    "bms.ngs.result-manifest.adapter.v1",
 }
 
 RESULT_SURFACE_SCHEMA = json.loads(
@@ -1028,6 +1040,12 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         "molbio_revision": "molbio",
         "molbio_construct_revision": "molbio",
         "molbio_operation": "molbio",
+        "molecular_revision": "molbio",
+        "molecular_operation": "molbio",
+        "primer_revision": "molbio",
+        "pcr_experiment_revision": "molbio",
+        "sample_revision": "molbio",
+        "ngs_molbio_state_revision": "molbio",
         "ngs_expected_reference_receipt": "ngs",
         "ngs_reference_set": "ngs",
         "sequence_qc_job": "ngs",
@@ -1035,6 +1053,11 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         "ont_instrument_run": "ngs",
         "ngs_pooled_assignment_release": "ngs",
         "ngs_analysis_job": "ngs",
+        "ngs_reference_revision": "ngs",
+        "ngs_comparison_panel": "ngs",
+        "ngs_job": "ngs",
+        "ngs_result_manifest": "ngs",
+        "ngs_evidence_assessment": "ngs",
         "typed_core_job_result": "protein_design",
     }
     registered = adapter_module.registry.list()
@@ -1044,6 +1067,29 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
     for adapter in registered:
         entity_kind = adapter["entity_kind"]
         reopen_uri = f"/native/results/entity-1?adapter={adapter['adapter_id']}&view=summary%2Fdetails"
+        metadata = {
+            "canonical_state": "available",
+            "job_status": "completed",
+            "request_status": "completed",
+            "result_state": "completed",
+            "ready_session_count": 1,
+            "result_contract_id": "contract-1",
+        }
+        if entity_kind == "ont_instrument_run":
+            metadata.update({
+                "state": "available",
+                "observed_generation": 1,
+                "event_type": "status",
+                "observation_reason": "event=status; state=available; observed_generation=1",
+            })
+        elif entity_kind == "ngs_evidence_assessment":
+            metadata.update({
+                "scientific_assessment": "REVIEW",
+                "assessment_rule_id": "test-rule",
+                "job_lifecycle_state": "completed",
+                "manifest_integrity": "verified",
+                "scientific_assessment_reason": "rule=test-rule; job_lifecycle_state=completed; manifest_integrity=verified",
+            })
         acknowledgement = {
             "schema": "bms.global.external-entity-receipt.v1",
             "store_id": "core",
@@ -1056,14 +1102,7 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
             "verified_at": "2026-08-09T00:00:00Z",
             "availability": "available",
             "reopen_uri": reopen_uri,
-            "metadata": {
-                "canonical_state": "available",
-                "job_status": "completed",
-                "request_status": "completed",
-                "result_state": "completed",
-                "ready_session_count": 1,
-                "result_contract_id": "contract-1",
-            },
+            "metadata": metadata,
         }
         surface = await result_surface_for_receipt(
             _ReceiptSession(acknowledgement),
@@ -1072,13 +1111,33 @@ async def test_result_surfaces_dispatch_explicitly_for_every_adapter_entity_kind
         )
         RESULT_SURFACE_VALIDATOR.validate(surface)
         assert surface["surface_kind"] == broad_surface_kinds[entity_kind]
-        assert surface["route"] == reopen_uri
-        assert surface["native_summary"] == acknowledgement["metadata"]
+        assert surface["route"] == {
+            "template_id": "bms.route.verified-external-entity.v1",
+            "path": "/native/results/entity-1",
+            "query": {"adapter": adapter["adapter_id"], "view": "summary/details"},
+        }
+        assert surface["native_summary"]["payload"] == acknowledgement["metadata"]
 
 
 @pytest.mark.asyncio
 async def test_result_surface_fallback_states_conform_to_frozen_schema() -> None:
     for entity_kind in {item["entity_kind"] for item in adapter_module.registry.list()}:
+        metadata = {}
+        if entity_kind == "ont_instrument_run":
+            metadata = {
+                "state": "available",
+                "observed_generation": 1,
+                "event_type": "status",
+                "observation_reason": "event=status; state=available; observed_generation=1",
+            }
+        elif entity_kind == "ngs_evidence_assessment":
+            metadata = {
+                "scientific_assessment": "REVIEW",
+                "assessment_rule_id": "test-rule",
+                "job_lifecycle_state": "completed",
+                "manifest_integrity": "verified",
+                "scientific_assessment_reason": "rule=test-rule; job_lifecycle_state=completed; manifest_integrity=verified",
+            }
         acknowledgement = {
             "schema": "bms.global.external-entity-receipt.v1",
             "store_id": "core",
@@ -1091,7 +1150,7 @@ async def test_result_surface_fallback_states_conform_to_frozen_schema() -> None
             "verified_at": "2026-08-09T00:00:00Z",
             "availability": "available",
             "reopen_uri": "/native/results/entity-1?state=unknown",
-            "metadata": {},
+            "metadata": metadata,
         }
         surface = await result_surface_for_receipt(
             _ReceiptSession(acknowledgement),
@@ -1127,8 +1186,8 @@ async def test_unknown_adapter_receipt_returns_schema_valid_unsupported_descript
     RESULT_SURFACE_VALIDATOR.validate(surface)
     assert surface["surface_kind"] == "unsupported"
     assert surface["readiness"] == "unsupported"
-    assert surface["route"] == acknowledgement["reopen_uri"]
-    assert surface["native_summary"] == acknowledgement["metadata"]
+    assert surface["route"] is None
+    assert surface["native_summary"]["payload"] == acknowledgement["metadata"]
     assert surface["scientific_acceptance"]["state"] == "not_applicable"
     assert 0 < len(surface["scientific_acceptance"]["reason"]) <= 256
-    assert surface["available_actions"] == ["open"]
+    assert surface["available_actions"] == []
