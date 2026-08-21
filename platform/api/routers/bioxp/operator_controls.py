@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTransportError
@@ -35,6 +35,55 @@ from services.bioxp.runtime import BioXpRuntime
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter()
+
+
+def _report_params(
+    *,
+    status: str | None = None,
+    operation: str | None = None,
+    action: str | None = None,
+    channel: int | None = None,
+    event_kind: str | None = None,
+    start: float | None = None,
+    end: float | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    values = {
+        "status": status,
+        "operation": operation,
+        "action": action,
+        "channel": channel,
+        "event_kind": event_kind,
+        "start": start,
+        "end": end,
+        "limit": limit,
+        "cursor": cursor,
+    }
+    return {key: value for key, value in values.items() if value is not None}
+
+
+async def _proxy_operator_report(
+    runtime: BioXpRuntime,
+    route_name: str,
+    *,
+    params: dict[str, Any] | None = None,
+    path_params: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    try:
+        snapshot = runtime.connection.snapshot()
+        payload = await runtime.connection.request_active_query(
+            route_name,
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+            params=params,
+            path_params=path_params,
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid report contract")
+    return payload
 
 
 def _quarantine_catalog_payload(payload: Any) -> Any:
@@ -457,3 +506,156 @@ async def assess_operator_action(
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched assessed receipt")
     return receipt
+
+
+@router.get("/operator-controls/reports/summary")
+async def operator_report_summary(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    status: str | None = None,
+    operation: str | None = None,
+    action: str | None = None,
+    channel: int | None = Query(default=None, ge=0, le=3),
+    start: float | None = None,
+    end: float | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(
+        runtime,
+        "operator_report_summary",
+        params=_report_params(status=status, operation=operation, action=action, channel=channel, start=start, end=end),
+    )
+
+
+@router.get("/operator-controls/reports/commands")
+async def operator_report_commands(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    status: str | None = None,
+    operation: str | None = None,
+    action: str | None = None,
+    channel: int | None = Query(default=None, ge=0, le=3),
+    start: float | None = None,
+    end: float | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(
+        runtime,
+        "operator_report_commands",
+        params=_report_params(status=status, operation=operation, action=action, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+    )
+
+
+@router.get("/operator-controls/reports/commands/{command_id}")
+async def operator_report_command_detail(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_command_detail", path_params={"command_id": command_id})
+
+
+@router.get("/operator-controls/reports/commands/{command_id}/transitions")
+async def operator_report_command_transitions(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_command_transitions", path_params={"command_id": command_id})
+
+
+@router.get("/operator-controls/reports/pipette")
+async def operator_report_pipette(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    status: str | None = None,
+    operation: str | None = None,
+    channel: int | None = Query(default=None, ge=0, le=3),
+    start: float | None = None,
+    end: float | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(
+        runtime,
+        "operator_report_pipette",
+        params=_report_params(status=status, operation=operation, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+    )
+
+
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}")
+async def operator_report_pipette_detail(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pipette_detail", path_params={"pipette_operation_id": pipette_operation_id})
+
+
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/channels")
+async def operator_report_pipette_channels(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pipette_channels", path_params={"pipette_operation_id": pipette_operation_id})
+
+
+@router.get("/operator-controls/reports/pipette/{pipette_operation_id}/exchanges")
+async def operator_report_pipette_exchanges(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pipette_exchanges", path_params={"pipette_operation_id": pipette_operation_id})
+
+
+@router.get("/operator-controls/reports/events")
+async def operator_report_events(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    event_kind: str | None = None,
+    channel: int | None = Query(default=None, ge=0, le=3),
+    start: float | None = None,
+    end: float | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(
+        runtime,
+        "operator_report_events",
+        params=_report_params(event_kind=event_kind, channel=channel, start=start, end=end, limit=limit, cursor=cursor),
+    )
+
+
+@router.get("/operator-controls/reports/events/{event_id}")
+async def operator_report_event_detail(event_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_event_detail", path_params={"event_id": event_id})
+
+
+@router.get("/operator-controls/reports/pressure-streams")
+async def operator_report_pressure_streams(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    channel: int | None = Query(default=None, ge=0, le=3),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pressure_streams", params=_report_params(channel=channel, limit=limit, cursor=cursor))
+
+
+@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}")
+async def operator_report_pressure_detail(stream_session_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pressure_detail", path_params={"stream_session_id": stream_session_id})
+
+
+@router.get("/operator-controls/reports/pressure-streams/{stream_session_id}/samples")
+async def operator_report_pressure_samples(
+    stream_session_id: str,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_pressure_samples", params=_report_params(limit=limit, cursor=cursor), path_params={"stream_session_id": stream_session_id})
+
+
+@router.get("/operator-controls/audit-health")
+async def operator_report_audit_health(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_audit_health")
+
+
+@router.post("/operator-controls/reports/exports")
+async def operator_report_export_create(body: dict[str, Any] = Body(default_factory=dict), runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    try:
+        snapshot = runtime.connection.snapshot()
+        payload = await runtime.connection.request_active(
+            "operator_report_export_create",
+            expected_generation=snapshot.generation,
+            require_fresh=True,
+            json_data=body,
+        )
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid export contract")
+    return payload
+
+
+@router.get("/operator-controls/reports/exports/{export_id}")
+async def operator_report_export_detail(export_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str, Any]:
+    return await _proxy_operator_report(runtime, "operator_report_export_detail", path_params={"export_id": export_id})

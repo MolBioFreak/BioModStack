@@ -24,6 +24,7 @@ import { BioXpCameraPanel } from './BioXpCameraPanel';
 import { BioXpOperatorControlTabs } from './BioXpOperatorControlTabs';
 import { BioXpPipetteControlPanel } from './BioXpPipetteControlPanel';
 import { BioXpQuickDashboard } from './BioXpQuickDashboard';
+import { BioXpOperatorReports } from './BioXpOperatorReports';
 
 
 type Axis = 'x' | 'y' | 'z' | 'g' | 'door';
@@ -573,6 +574,8 @@ export function BioXpCockpit() {
                 {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
                 {catalogV2Query.isError && <p className="mt-2 text-xs text-amber-200">Y catalog unavailable. Controls remain disabled until the robot publishes v2 authority.</p>}
             </section>
+
+            <BioXpOperatorReports generation={generation} connected={linkConnected} />
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>

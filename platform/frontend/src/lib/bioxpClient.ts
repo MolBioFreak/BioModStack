@@ -774,6 +774,26 @@ const operatorHistoryKey = ['bioxp', 'operator-controls', 'history'] as const;
 const operatorV2DashboardKey = ['bioxp', 'operator-controls', 'v2', 'dashboard'] as const;
 const operatorV2CatalogKey = ['bioxp', 'operator-controls', 'v2', 'catalog'] as const;
 
+export interface BioXpOperatorReportSummary {
+    schema_version?: string;
+    filters?: Record<string, unknown>;
+    commands?: { total?: number; by_status?: Record<string, number> };
+    pipette_operations?: { total?: number; by_status?: Record<string, number> };
+    runtime_events?: { total?: number; by_kind?: Record<string, number> };
+    [key: string]: unknown;
+}
+
+export interface BioXpOperatorReportCommands {
+    rows?: Array<Record<string, unknown>>;
+    commands?: Array<Record<string, unknown>>;
+    has_more?: boolean;
+    next_cursor?: string | null;
+    [key: string]: unknown;
+}
+
+const operatorReportSummaryKey = ['bioxp', 'operator-reports', 'summary'] as const;
+const operatorReportCommandsKey = ['bioxp', 'operator-reports', 'commands'] as const;
+
 function cameraImageFromResponse(response: {
     data: Blob;
     headers: Record<string, unknown>;
@@ -1020,6 +1040,24 @@ export const useBioXpOperatorActionHistory = (
     gcTime: 0,
     retry: false,
     refetchInterval: (query) => bioXpReceiptIsNonTerminal(query.state.data?.receipts?.[0] ?? null) ? 400 : false,
+});
+
+export const useBioXpOperatorReportSummary = (connectionGeneration: number, enabled = true) => useQuery({
+    queryKey: [...operatorReportSummaryKey, connectionGeneration, enabled],
+    queryFn: async () => (await api.get<BioXpOperatorReportSummary>('/api/bioxp/operator-controls/reports/summary')).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
+});
+
+export const useBioXpOperatorReportCommands = (connectionGeneration: number, enabled = true, limit = 25) => useQuery({
+    queryKey: [...operatorReportCommandsKey, connectionGeneration, enabled, limit],
+    queryFn: async () => (await api.get<BioXpOperatorReportCommands>('/api/bioxp/operator-controls/reports/commands', {
+        params: { limit },
+    })).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
 });
 
 export const useBioXpCameraStatus = (

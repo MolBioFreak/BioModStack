@@ -61,6 +61,23 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
     "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 10.0),
     "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
+    "operator_report_summary": ("GET", "/operator/reports/summary", 10.0),
+    "operator_report_commands": ("GET", "/operator/reports/commands", 10.0),
+    "operator_report_command_detail": ("GET", "/operator/reports/commands/{command_id}", 10.0),
+    "operator_report_command_transitions": ("GET", "/operator/reports/commands/{command_id}/transitions", 10.0),
+    "operator_report_pipette": ("GET", "/operator/reports/pipette", 10.0),
+    "operator_report_pipette_detail": ("GET", "/operator/reports/pipette/{pipette_operation_id}", 10.0),
+    "operator_report_pipette_channels": ("GET", "/operator/reports/pipette/{pipette_operation_id}/channels", 10.0),
+    "operator_report_pipette_exchanges": ("GET", "/operator/reports/pipette/{pipette_operation_id}/exchanges", 10.0),
+    "operator_report_events": ("GET", "/operator/reports/events", 10.0),
+    "operator_report_event_detail": ("GET", "/operator/reports/events/{event_id}", 10.0),
+    "operator_report_pressure_streams": ("GET", "/operator/reports/pressure-streams", 10.0),
+    "operator_report_pressure_detail": ("GET", "/operator/reports/pressure-streams/{stream_session_id}", 10.0),
+    "operator_report_pressure_samples": ("GET", "/operator/reports/pressure-streams/{stream_session_id}/samples", 10.0),
+    "operator_report_audit_health": ("GET", "/operator/audit-health", 10.0),
+    "operator_report_export_create": ("POST", "/operator/reports/exports", 30.0),
+    "operator_report_export_detail": ("GET", "/operator/reports/exports/{export_id}", 10.0),
+    "operator_report_export_download": ("GET", "/operator/reports/exports/{export_id}/download", 30.0),
 }
 
 _ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
