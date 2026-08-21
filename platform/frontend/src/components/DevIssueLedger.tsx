@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { buildIdentity } from '../lib/buildIdentity';
 
-type DevIssueStatus = 'open' | 'resolved';
+type DevIssueStatus = 'open' | 'in_progress' | 'cleared';
 
 type DevIssue = {
     id: number;
@@ -20,13 +20,13 @@ type DevIssue = {
     frontend_revision: string | null;
     api_revision: string;
     created_at: string;
-    resolved_at: string | null;
+    cleared_at: string | null;
     resolution_note: string | null;
 };
 
 type DevIssueList = {
     items: DevIssue[];
-    open_count: number;
+    active_count: number;
     available: boolean;
 };
 
@@ -77,10 +77,10 @@ function resolveIssueScope(pathname: string, search: string): IssueScope {
 }
 
 async function fetchIssues(scopeKey: string, allOpen: boolean): Promise<DevIssueList> {
-    const params = new URLSearchParams({ status: allOpen ? 'open' : 'all', limit: '100' });
+    const params = new URLSearchParams({ status: allOpen ? 'active' : 'all', limit: '100' });
     if (!allOpen) params.set('scope_key', scopeKey);
     const response = await fetch(`/api/dev/issues?${params.toString()}`, { cache: 'no-store' });
-    if (response.status === 404) return { items: [], open_count: 0, available: false };
+    if (response.status === 404) return { items: [], active_count: 0, available: false };
     if (!response.ok) throw new Error(`Issues unavailable (${response.status})`);
     const payload = await response.json() as Omit<DevIssueList, 'available'>;
     return { ...payload, available: true };
@@ -173,8 +173,8 @@ export function DevIssueLedger() {
 
     const items = issuesQuery.data?.items ?? [];
     const currentOpenCount = allOpen
-        ? items.filter((issue) => issue.scope_key === scope.key && issue.status === 'open').length
-        : issuesQuery.data?.open_count ?? 0;
+        ? items.filter((issue) => issue.scope_key === scope.key && issue.status !== 'cleared').length
+        : issuesQuery.data?.active_count ?? 0;
 
     const save = () => {
         if (!body.trim() || createMutation.isPending) return;
@@ -219,7 +219,7 @@ export function DevIssueLedger() {
                             </div>
                             <div className="mt-3 flex gap-2">
                                 <button type="button" onClick={() => setAllOpen(false)} className={`rounded px-3 py-1.5 text-xs font-medium ${!allOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>Current scope</button>
-                                <button type="button" onClick={() => setAllOpen(true)} className={`rounded px-3 py-1.5 text-xs font-medium ${allOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>All open</button>
+                                <button type="button" onClick={() => setAllOpen(true)} className={`rounded px-3 py-1.5 text-xs font-medium ${allOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>All active</button>
                             </div>
                         </header>
 
@@ -232,12 +232,6 @@ export function DevIssueLedger() {
                                     rows={4}
                                     autoFocus
                                     onChange={(event) => setBody(event.target.value)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                                            event.preventDefault();
-                                            save();
-                                        }
-                                    }}
                                     placeholder="What is missing or broken?"
                                     className="mt-1.5 w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
                                 />
@@ -252,10 +246,9 @@ export function DevIssueLedger() {
                                     className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
                                 />
                             </label>
-                            <div className="mt-3 flex items-center justify-between gap-3">
-                                <span className="text-[11px] text-slate-500">Ctrl+Enter to save</span>
+                            <div className="mt-3 flex justify-end">
                                 <button type="button" disabled={!body.trim() || createMutation.isPending} onClick={save} className="rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">
-                                    {createMutation.isPending ? 'Saving…' : 'Save issue'}
+                                    {createMutation.isPending ? 'Saving…' : 'Save'}
                                 </button>
                             </div>
                             {createMutation.error && <p role="alert" className="mt-2 text-xs text-red-300">{createMutation.error.message}</p>}
@@ -273,21 +266,42 @@ export function DevIssueLedger() {
                                                 <span className="font-mono text-xs text-amber-300">{issue.issue_key}</span>
                                                 <span className="ml-2 text-[11px] uppercase tracking-wide text-slate-500">{issue.author_kind}</span>
                                             </div>
-                                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${issue.status === 'open' ? 'bg-amber-400/15 text-amber-200' : 'bg-emerald-400/15 text-emerald-200'}`}>{issue.status}</span>
+                                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${issue.status === 'open' ? 'bg-amber-400/15 text-amber-200' : issue.status === 'in_progress' ? 'bg-sky-400/15 text-sky-200' : 'bg-emerald-400/15 text-emerald-200'}`}>{issue.status.replace('_', ' ')}</span>
                                         </div>
                                         <p className="mt-2 whitespace-pre-wrap text-sm leading-5 text-slate-200">{issue.body}</p>
                                         {issue.component_hint && <p className="mt-2 text-xs text-slate-400"><span className="text-slate-500">Component:</span> {issue.component_hint}</p>}
                                         {allOpen && <p className="mt-2 text-xs text-slate-500">{issue.page_label}</p>}
                                         <p className="mt-2 text-[11px] text-slate-600">{formatDate(issue.created_at)}</p>
-                                        <div className="mt-3 flex justify-end">
-                                            <button
-                                                type="button"
-                                                disabled={statusMutation.isPending}
-                                                onClick={() => statusMutation.mutate({ issueId: issue.id, status: issue.status === 'open' ? 'resolved' : 'open' })}
-                                                className="rounded border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:opacity-40"
-                                            >
-                                                {issue.status === 'open' ? 'Resolve' : 'Reopen'}
-                                            </button>
+                                        <div className="mt-3 flex justify-end gap-2">
+                                            {issue.status === 'open' && (
+                                                <button
+                                                    type="button"
+                                                    disabled={statusMutation.isPending}
+                                                    onClick={() => statusMutation.mutate({ issueId: issue.id, status: 'in_progress' })}
+                                                    className="rounded border border-sky-500/60 px-2.5 py-1 text-xs text-sky-200 hover:border-sky-300 hover:text-white disabled:opacity-40"
+                                                >
+                                                    Mark in progress
+                                                </button>
+                                            )}
+                                            {issue.status !== 'cleared' ? (
+                                                <button
+                                                    type="button"
+                                                    disabled={statusMutation.isPending}
+                                                    onClick={() => statusMutation.mutate({ issueId: issue.id, status: 'cleared' })}
+                                                    className="rounded border border-emerald-500/60 px-2.5 py-1 text-xs text-emerald-200 hover:border-emerald-300 hover:text-white disabled:opacity-40"
+                                                >
+                                                    Clear
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    disabled={statusMutation.isPending}
+                                                    onClick={() => statusMutation.mutate({ issueId: issue.id, status: 'open' })}
+                                                    className="rounded border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-white disabled:opacity-40"
+                                                >
+                                                    Reopen
+                                                </button>
+                                            )}
                                         </div>
                                     </article>
                                 ))}

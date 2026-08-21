@@ -29,7 +29,7 @@ class DevIssueCreate(BaseModel):
 
 
 class DevIssueUpdate(BaseModel):
-    status: Literal["open", "resolved"]
+    status: Literal["open", "in_progress", "cleared"]
     resolution_note: str | None = Field(default=None, max_length=4000)
 
 
@@ -37,7 +37,7 @@ class DevIssue(BaseModel):
     id: int
     issue_key: str
     body: str
-    status: Literal["open", "resolved"]
+    status: Literal["open", "in_progress", "cleared"]
     scope_kind: str
     scope_key: str
     page_label: str
@@ -47,13 +47,13 @@ class DevIssue(BaseModel):
     frontend_revision: str | None
     api_revision: str
     created_at: str
-    resolved_at: str | None
+    cleared_at: str | None
     resolution_note: str | None
 
 
 class DevIssueList(BaseModel):
     items: list[DevIssue]
-    open_count: int
+    active_count: int
 
 
 def dev_issue_ledger_enabled() -> bool:
@@ -81,7 +81,7 @@ def _connect() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS dev_issues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 4000),
-            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved')),
+            status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'cleared')),
             scope_kind TEXT NOT NULL,
             scope_key TEXT NOT NULL,
             page_label TEXT NOT NULL,
@@ -91,11 +91,52 @@ def _connect() -> sqlite3.Connection:
             frontend_revision TEXT,
             api_revision TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            resolved_at TEXT,
+            cleared_at TEXT,
             resolution_note TEXT
         )
         """
     )
+    table_sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dev_issues'"
+    ).fetchone()[0]
+    if "in_progress" not in table_sql:
+        connection.execute("ALTER TABLE dev_issues RENAME TO dev_issues_legacy")
+        connection.execute(
+            """
+            CREATE TABLE dev_issues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 4000),
+                status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'cleared')),
+                scope_kind TEXT NOT NULL,
+                scope_key TEXT NOT NULL,
+                page_label TEXT NOT NULL,
+                route TEXT NOT NULL,
+                component_hint TEXT,
+                author_kind TEXT NOT NULL CHECK(author_kind IN ('operator', 'ai')),
+                frontend_revision TEXT,
+                api_revision TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                cleared_at TEXT,
+                resolution_note TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO dev_issues (
+                id, body, status, scope_kind, scope_key, page_label, route,
+                component_hint, author_kind, frontend_revision, api_revision,
+                created_at, cleared_at, resolution_note
+            )
+            SELECT id, body,
+                   CASE status WHEN 'resolved' THEN 'cleared' ELSE status END,
+                   scope_kind, scope_key, page_label, route, component_hint,
+                   author_kind, frontend_revision, api_revision, created_at,
+                   resolved_at, resolution_note
+              FROM dev_issues_legacy
+            """
+        )
+        connection.execute("DROP TABLE dev_issues_legacy")
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_issues_scope_status ON dev_issues(scope_key, status, id DESC)"
     )
@@ -136,13 +177,15 @@ def _to_issue(row: sqlite3.Row) -> DevIssue:
 
 @router.get("", response_model=DevIssueList)
 def list_dev_issues(
-    status: Literal["open", "resolved", "all"] = "open",
+    status: Literal["open", "in_progress", "cleared", "active", "all"] = "active",
     scope_key: str | None = Query(default=None, max_length=256),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> DevIssueList:
     filters: list[str] = []
     values: list[object] = []
-    if status != "all":
+    if status == "active":
+        filters.append("status IN ('open', 'in_progress')")
+    elif status != "all":
         filters.append("status = ?")
         values.append(status)
     if scope_key:
@@ -155,12 +198,12 @@ def list_dev_issues(
             f"SELECT * FROM dev_issues{where} ORDER BY id DESC LIMIT ?",
             (*values, limit),
         ).fetchall()
-        open_count = connection.execute(
-            "SELECT COUNT(*) FROM dev_issues WHERE status = 'open'"
+        active_count = connection.execute(
+            "SELECT COUNT(*) FROM dev_issues WHERE status IN ('open', 'in_progress')"
             + (" AND scope_key = ?" if scope_key else ""),
             (scope_key,) if scope_key else (),
         ).fetchone()[0]
-    return DevIssueList(items=[_to_issue(row) for row in rows], open_count=int(open_count))
+    return DevIssueList(items=[_to_issue(row) for row in rows], active_count=int(active_count))
 
 
 @router.get("/{issue_id}", response_model=DevIssue)
@@ -207,16 +250,16 @@ def create_dev_issue(payload: DevIssueCreate) -> DevIssue:
 
 @router.patch("/{issue_id}", response_model=DevIssue)
 def update_dev_issue(issue_id: int, payload: DevIssueUpdate) -> DevIssue:
-    resolved_at = _utc_now() if payload.status == "resolved" else None
-    resolution_note = _clean_optional(payload.resolution_note) if payload.status == "resolved" else None
+    cleared_at = _utc_now() if payload.status == "cleared" else None
+    resolution_note = _clean_optional(payload.resolution_note) if payload.status == "cleared" else None
     with closing(_connect()) as connection:
         cursor = connection.execute(
             """
             UPDATE dev_issues
-               SET status = ?, resolved_at = ?, resolution_note = ?
+               SET status = ?, cleared_at = ?, resolution_note = ?
              WHERE id = ?
             """,
-            (payload.status, resolved_at, resolution_note, issue_id),
+            (payload.status, cleared_at, resolution_note, issue_id),
         )
         if cursor.rowcount != 1:
             raise HTTPException(status_code=404, detail="development issue not found")
