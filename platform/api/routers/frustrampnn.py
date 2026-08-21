@@ -5,6 +5,8 @@ Provides endpoint for running FrustraMPNN on PDB structures.
 Returns per-residue frustration profiles for all amino acid mutations.
 """
 
+import base64
+import copy
 import hashlib
 import json
 import logging
@@ -34,6 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from PIL import Image, UnidentifiedImageError
 
 from database import (
+    ConformationalMappingArtifact,
+    ConformationalMappingRequest,
     FrustraMPNNArtifact,
     FrustraMPNNComparison,
     FrustraMPNNComparisonRow,
@@ -71,6 +75,7 @@ from services.frustrampnn.contracts import (
     load_schema,
     validate_schema,
 )
+from services.conformational_mapping.contracts import validate_schema as validate_cm_schema
 from services.frustrampnn.configuration import (
     FrustraMPNNExecutionConfigurationV2,
     execution_configuration,
@@ -1934,6 +1939,272 @@ def _source_descriptor(filename: str | None, media_type: str | None) -> tuple[st
     return suffix, observed_media
 
 
+async def _cm_owned_source_bytes(
+    *,
+    job: Job,
+    result: FrustraMPNNResult,
+    invocation_id: str,
+    manifest: Mapping[str, Any],
+    session: AsyncSession,
+) -> tuple[bytes, str]:
+    """Load a CM-owned retry source through its persisted v2 result closure."""
+
+    if (
+        job.model_id != "conformational_mapping"
+        or not isinstance(job.output_dir, str)
+        or job.status != "completed"
+        or job.queue_status != "completed"
+        or job.current_stage != "Complete"
+        or (job.params or {}).get("run_frustrampnn") is not True
+    ):
+        raise HTTPException(409, "CM result source lineage authority is unavailable")
+    root = Path(job.output_dir)
+
+    typed_request_rows = (
+        await session.execute(
+            select(ConformationalMappingRequest).where(
+                ConformationalMappingRequest.job_id == job.id,
+            )
+        )
+    ).scalars().all()
+    if len(typed_request_rows) != 1:
+        raise HTTPException(409, "CM typed request authority is unavailable")
+    typed_request = typed_request_rows[0]
+    if typed_request.status != "completed" or typed_request.backend != "confornets":
+        raise HTTPException(409, "CM typed request is not a completed ConforNets request")
+    cm_request_path_value = (job.params or {}).get("cm_request_path")
+    if not isinstance(cm_request_path_value, str):
+        raise HTTPException(409, "CM typed request path authority is unavailable")
+
+    request_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "component_request",
+            )
+        )
+    ).scalars().all()
+    authority_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "identity_authority",
+            )
+        )
+    ).scalars().all()
+    map_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "structure_map",
+            )
+        )
+    ).scalars().all()
+    if len(request_rows) != 1 or len(authority_rows) != 1 or len(map_rows) != 1:
+        raise HTTPException(409, "CM result authority artifact closure is unavailable")
+    request_artifact = request_rows[0]
+    authority_artifact = authority_rows[0]
+    map_artifact = map_rows[0]
+
+    source_registry_rows = (
+        await session.execute(
+            select(ConformationalMappingArtifact).where(
+                ConformationalMappingArtifact.request_id == typed_request.request_id,
+                ConformationalMappingArtifact.candidate_id == result.candidate_id,
+                ConformationalMappingArtifact.role == "authoritative_cif",
+            )
+        )
+    ).scalars().all()
+    if len(source_registry_rows) != 1:
+        raise HTTPException(409, "CM authoritative source registry row is unavailable")
+    source_registry = source_registry_rows[0]
+
+    def manifest_record(artifact: FrustraMPNNArtifact) -> dict[str, Any]:
+        records = [
+            record
+            for record in manifest.get("artifacts", [])
+            if isinstance(record, dict)
+            and record.get("relative_path") == artifact.relative_path
+        ]
+        if len(records) != 1:
+            raise ValueError("CM artifact is not manifest-attested")
+        record = records[0]
+        if (
+            record.get("sha256") != artifact.content_sha256
+            or record.get("bytes") != artifact.size_bytes
+        ):
+            raise ValueError("CM artifact identity is inconsistent")
+        return record
+
+    try:
+        request_record = manifest_record(request_artifact)
+        authority_record = manifest_record(authority_artifact)
+        map_record = manifest_record(map_artifact)
+        request_path = _owned_manifest_artifact_path(
+            root,
+            request_artifact.storage_path,
+            request_artifact.relative_path,
+        )
+        authority_path = _owned_manifest_artifact_path(
+            root,
+            authority_artifact.storage_path,
+            authority_artifact.relative_path,
+        )
+        map_path = _owned_manifest_artifact_path(
+            root,
+            map_artifact.storage_path,
+            map_artifact.relative_path,
+        )
+        request_bytes = _verified_bytes(
+            request_path,
+            expected_sha256=request_artifact.content_sha256,
+            expected_size=request_artifact.size_bytes,
+            max_bytes=4 * 1024 * 1024,
+        )
+        request_payload = canonical_json_loads(request_bytes)
+        if canonical_json_bytes(request_payload) != request_bytes:
+            raise ValueError("CM component request is not canonical JSON")
+        if (
+            request_payload.get("parent_job_id") != str(job.id)
+            or request_payload.get("invocation_id") != invocation_id
+            or request_payload.get("candidate_id") != result.candidate_id
+            or result.request_sha256 != request_artifact.content_sha256
+        ):
+            raise ValueError("CM component request identity is not cross-bound")
+
+        cm_request_path = Path(cm_request_path_value)
+        if (
+            not cm_request_path.is_absolute()
+            or cm_request_path != root / "cm_request_v1.json"
+        ):
+            raise ValueError("CM typed request path is not bound to the job root")
+        cm_request_bytes = read_structure_bytes(
+            cm_request_path,
+            max_bytes=4 * 1024 * 1024,
+        )
+        cm_request_payload = canonical_json_loads(cm_request_bytes)
+        if canonical_json_bytes(cm_request_payload) != cm_request_bytes:
+            raise ValueError("CM typed request is not canonical JSON")
+        validate_cm_schema("cm_request_v1", cm_request_payload)
+        persisted_cm_request = typed_request.request_json
+        if isinstance(persisted_cm_request, str):
+            persisted_cm_request = canonical_json_loads(persisted_cm_request.encode())
+        if (
+            canonical_json_bytes(persisted_cm_request) != cm_request_bytes
+            or cm_request_payload.get("request_id") != typed_request.request_id
+            or cm_request_payload.get("request_sha256") != typed_request.request_sha256
+        ):
+            raise ValueError("CM typed request bytes are not cross-bound")
+
+        identity_payload = request_payload.get("identity_authority_artifact")
+        if not isinstance(identity_payload, dict):
+            raise ValueError("CM identity authority envelope is unavailable")
+        encoded_authority = identity_payload.get("canonical_json_base64")
+        if not isinstance(encoded_authority, str):
+            raise ValueError("CM identity authority bytes are unavailable")
+        authority_bytes = base64.b64decode(encoded_authority, validate=True)
+        if (
+            not authority_bytes
+            or canonical_json_bytes(canonical_json_loads(authority_bytes)) != authority_bytes
+            or hashlib.sha256(authority_bytes).hexdigest() != identity_payload.get("sha256")
+            or identity_payload.get("relative_path") != authority_artifact.relative_path
+            or identity_payload.get("media_type") != "application/json"
+            or len(authority_bytes) != authority_artifact.size_bytes
+            or authority_artifact.content_sha256 != identity_payload.get("sha256")
+        ):
+            raise ValueError("CM identity authority bytes are not cross-bound")
+        persisted_authority_bytes = _verified_bytes(
+            authority_path,
+            expected_sha256=authority_artifact.content_sha256,
+            expected_size=authority_artifact.size_bytes,
+            max_bytes=4 * 1024 * 1024,
+        )
+        if persisted_authority_bytes != authority_bytes:
+            raise ValueError("CM identity authority artifact differs from request bytes")
+
+        try:
+            validate_schema("workflow_component_request_v2", request_payload)
+        except ContractValidationError as exc:
+            legacy_reseal = (
+                identity_payload.get("bytes") is None
+                and str(exc)
+                == "workflow_component_request_v2 rejected $['identity_authority_artifact']: 'bytes' is a required property"
+                and manifest.get("artifact_count") == 11
+                and len(manifest.get("artifacts", [])) == 11
+                and authority_artifact.relative_path == "authority_artifact_v1.json"
+                and persisted_authority_bytes == authority_bytes
+            )
+            if not legacy_reseal:
+                raise
+            request_for_validation = copy.deepcopy(request_payload)
+            request_for_validation["identity_authority_artifact"]["bytes"] = len(authority_bytes)
+            validate_schema("workflow_component_request_v2", request_for_validation)
+
+        source_authority = request_payload.get("source_artifact")
+        if not isinstance(source_authority, dict):
+            raise ValueError("CM original source authority is unavailable")
+        source_relative = source_authority.get("relative_path")
+        source_sha256 = source_authority.get("sha256")
+        if (
+            source_authority.get("artifact_id") != result.candidate_id
+            or source_authority.get("producer_stage") != "conformational_mapping:confornets"
+            or source_sha256 != result.source_artifact_sha256
+            or source_sha256 != request_payload.get("source_artifact", {}).get("sha256")
+            or result.source_artifact_id != source_registry.candidate_id
+            or source_authority.get("artifact_id") != source_registry.candidate_id
+            or source_authority.get("relative_path") != source_registry.relative_path
+            or source_sha256 != source_registry.content_sha256
+            or source_authority.get("media_type") != source_registry.media_type
+        ):
+            raise ValueError("CM original source authority is not cross-bound")
+        suffix, _ = _source_descriptor(
+            source_relative,
+            source_authority.get("media_type"),
+        )
+        source_path = _owned_manifest_artifact_path(
+            root,
+            source_registry.storage_path,
+            source_registry.relative_path,
+        )
+        source_bytes = _verified_bytes(
+            source_path,
+            expected_sha256=source_registry.content_sha256,
+            expected_size=source_registry.size_bytes,
+            max_bytes=_MAX_MULTIPART_STRUCTURE_BYTES,
+        )
+        if hashlib.sha256(source_bytes).hexdigest() != source_sha256:
+            raise ValueError("CM original source bytes do not match persisted authority")
+
+        map_bytes = _verified_bytes(
+            map_path,
+            expected_sha256=map_artifact.content_sha256,
+            expected_size=map_artifact.size_bytes,
+            max_bytes=16 * 1024 * 1024,
+        )
+        structure_map = canonical_json_loads(map_bytes)
+        if canonical_json_bytes(structure_map) != map_bytes:
+            raise ValueError("CM structure map is not canonical JSON")
+        validate_schema("frustrampnn_structure_map_v1", structure_map)
+        if (
+            structure_map.get("parent_job_id") != str(job.id)
+            or structure_map.get("candidate_id") != result.candidate_id
+            or structure_map.get("source_sha256") != source_sha256
+            or structure_map.get("source_sha256") != hashlib.sha256(source_bytes).hexdigest()
+            or structure_map.get("identity_authority") != "producer_manifest_v1"
+            or structure_map.get("authority_artifact_sha256") != authority_artifact.content_sha256
+            or canonical_sha256(structure_map) != request_payload.get("structure_map_sha256")
+        ):
+            raise ValueError("CM structure map authority is not cross-bound")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(409, "CM owned source artifact byte identity is unavailable") from exc
+    return source_bytes, suffix
+
+
 async def _owned_source_bytes(
     *,
     job_id: str,
@@ -1965,6 +2236,14 @@ async def _owned_source_bytes(
         raise HTTPException(409, "result manifest identity does not match persisted result")
 
     job = await session.get(Job, job_id)
+    if job is not None and job.model_id == "conformational_mapping":
+        return await _cm_owned_source_bytes(
+            job=job,
+            result=result,
+            invocation_id=invocation_id,
+            manifest=manifest,
+            session=session,
+        )
     envelope = (job.params or {}).get("_frustrampnn_child_v1") if job else None
     if (
         job is None
