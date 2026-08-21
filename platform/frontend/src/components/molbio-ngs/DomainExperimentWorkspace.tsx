@@ -21,6 +21,11 @@ import { useGlobalExperimentContext } from '../experiments/GlobalExperimentConte
 import DomainDatasetOperator from './DomainDatasetOperator';
 import DomainWorkflowOperator from './DomainWorkflowOperator';
 import ExperimentReferenceLibrary from './ExperimentReferenceLibrary';
+import {
+    DomainEvidenceMutationPanel,
+    DomainReferenceMutationPanel,
+    DomainSampleMutationPanel,
+} from './DomainScientificMutationPanels';
 
 const SECTIONS = [
     ['overview', 'Overview'],
@@ -269,6 +274,14 @@ export default function DomainExperimentWorkspace() {
             retry: false,
         })),
     });
+    const sampleRows = (samplesQuery.data ?? []).map((sample, index) => ({
+        sample,
+        revision: sampleRevisionQueries[index]?.data,
+    }));
+    const referenceRows = (referencesQuery.data ?? []).map((reference, index) => ({
+        reference,
+        revision: referenceRevisionQueries[index]?.data,
+    }));
 
     const members = selectedRevisionQuery.data?.members ?? [];
     const molecularMembers = members.filter((member) => member.entity_kind === 'molecular_revision');
@@ -337,9 +350,7 @@ export default function DomainExperimentWorkspace() {
         stateQuery.error,
     ]);
 
-    const disabledMutationReason = availability.canMutateDomain
-        ? 'Reference mutation forms are intentionally not exposed in this read/reopen foundation.'
-        : availability.reason;
+    const mutationBlocker = availability.canMutateDomain ? null : availability.reason;
 
     const renderOverview = () => (
         <div className="grid gap-4 xl:grid-cols-3">
@@ -393,6 +404,12 @@ export default function DomainExperimentWorkspace() {
 
     const renderSamples = () => (
         <Panel title="Domain samples">
+            <DomainSampleMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                rows={sampleRows}
+            />
             <ErrorNotice error={samplesQuery.error} />
             {(samplesQuery.data ?? []).length === 0 ? <Empty>No samples belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -487,24 +504,13 @@ export default function DomainExperimentWorkspace() {
     );
 
     const renderReferences = () => (
-        <Panel
-            title="Managed reference revisions"
-            action={(
-                <div className="flex flex-wrap gap-2" title={disabledMutationReason}>
-                    {['Create', 'Import', 'Archive'].map((label) => (
-                        <button
-                            key={label}
-                            type="button"
-                            disabled
-                            className="cursor-not-allowed rounded-md border border-border-primary bg-surface px-2.5 py-1.5 text-xs text-content-muted opacity-60"
-                        >
-                            {label}
-                        </button>
-                    ))}
-                </div>
-            )}
-        >
-            <p className="mb-3 text-xs text-content-muted">Reference mutations disabled: {disabledMutationReason}</p>
+        <Panel title="Managed reference revisions">
+            <DomainReferenceMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                rows={referenceRows}
+            />
             <ErrorNotice error={referencesQuery.error} />
             {(referencesQuery.data ?? []).length === 0 ? <Empty>No managed references belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -660,6 +666,15 @@ export default function DomainExperimentWorkspace() {
 
     const renderEvidence = () => (
         <Panel title="Immutable scientific evidence assessments">
+            <DomainEvidenceMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                stateRevisionId={selectedStateRevisionId}
+                stateRevisions={historyQuery.data ?? []}
+                members={members}
+                sampleRows={sampleRows}
+            />
             <ErrorNotice error={evidenceQuery.error} />
             {(evidenceQuery.data ?? []).length === 0 ? <Empty>No evidence assessments belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">

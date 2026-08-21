@@ -890,9 +890,12 @@ def _verify_protein_domain_semantics(value: dict[str, Any]) -> None:
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
     _inventory, schemas, reference_registry, _documents = _loaded()
+    schema_id = value.get("schema")
+    if schema_id not in {"bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}:
+        raise NgsMolBioCapabilityError("unsupported Domain Experiment schema")
     _validate(
         value,
-        schemas["bms.domain-experiment.v2"],
+        schemas[schema_id],
         "domain experiment",
         reference_registry,
     )

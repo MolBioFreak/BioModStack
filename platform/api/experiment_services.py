@@ -1187,6 +1187,14 @@ def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) ->
         domain_kind = payload.get("domain_kind")
         if domain_kind not in DOMAIN_KINDS:
             raise ValidationFailure("domain_kind must be protein_in_silico or ngs_molbio")
+        if payload.get("domain_contract_version") == "3":
+            if payload.get("schema") != "bms.domain-experiment.v4":
+                raise ValidationFailure("Domain v3 requires bms.domain-experiment.v4")
+            try:
+                validate_domain_experiment(payload)
+            except NgsMolBioCapabilityError as exc:
+                raise ValidationFailure(str(exc)) from exc
+            return
         if payload.get("domain_contract_version") == "2":
             if payload.get("schema") != "bms.domain-experiment.v2":
                 raise ValidationFailure("Domain v2 requires bms.domain-experiment.v2")
@@ -1273,7 +1281,7 @@ def _hierarchy_reference_ids(
             source=payload,
         )
         collect("shared_dataset_ids", role="shared_dataset", target=dataset_references, source=payload)
-    elif schema in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}:
+    elif schema in {"bms.domain-experiment.v1", "bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}:
         collect("source_receipt_ids", role="source_receipt", target=receipt_references, source=payload)
         if schema == "bms.domain-experiment.v1":
             collect("dataset_ids", role="dataset", target=dataset_references, source=payload)
@@ -1309,7 +1317,7 @@ async def _resolve_hierarchy_references(
 ) -> list[dict[str, str | int]]:
     receipt_references, dataset_references, dataset_revision_references = _hierarchy_reference_ids(payload)
     bindings: list[dict[str, str | int]] = []
-    exact_v2_authority = payload.get("schema") == "bms.domain-experiment.v2"
+    exact_v2_authority = payload.get("schema") in {"bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}
     allowed_authority_ids = {workspace_id, aggregate_id}
     if parent_id is not None:
         allowed_authority_ids.add(parent_id)
@@ -1475,6 +1483,12 @@ def _validate_lifecycle_transition(
                 f"invalid lifecycle transition for {aggregate_kind}: {current_status} -> {requested_status}"
             )
         return
+    if lifecycle_operation == "domain_contract_upgrade":
+        if aggregate_kind != "domain_experiment" or current_status == "archived" or requested_status != current_status:
+            raise ValidationFailure(
+                f"invalid Domain contract upgrade lifecycle: {current_status} -> {requested_status}"
+            )
+        return
     if lifecycle_operation is not None:
         raise ValidationFailure(f"unsupported lifecycle operation: {lifecycle_operation}")
     transitions = (
@@ -1539,9 +1553,19 @@ async def _save_revision(
             if current_payload.get("domain_kind") != payload.get("domain_kind"):
                 raise ValidationFailure("domain_kind is immutable; create a new Domain Experiment")
             if current_payload.get("schema") != payload.get("schema"):
-                raise ValidationFailure("Domain Experiment schema is immutable")
+                if not (
+                    lifecycle_operation == "domain_contract_upgrade"
+                    and current_payload.get("schema") in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}
+                    and payload.get("schema") == "bms.domain-experiment.v4"
+                ):
+                    raise ValidationFailure("Domain Experiment schema is immutable")
             if current_payload.get("domain_contract_version") != payload.get("domain_contract_version"):
-                raise ValidationFailure("Domain Experiment contract version is immutable")
+                if not (
+                    lifecycle_operation == "domain_contract_upgrade"
+                    and current_payload.get("domain_contract_version") in {"1", "2"}
+                    and payload.get("domain_contract_version") == "3"
+                ):
+                    raise ValidationFailure("Domain Experiment contract version is immutable")
         if payload.get("status") == "archived" and lifecycle_operation != "archive":
             raise ValidationFailure("archival is a lifecycle operation; use the archive route")
         if head.lifecycle_state == "archived" and lifecycle_operation != "restore":
@@ -1581,6 +1605,8 @@ async def _save_revision(
                 schema_version=(
                     str(payload.get("contract_version") or "1")
                     if aggregate_kind == "workflow"
+                    else str(payload.get("domain_contract_version") or "1")
+                    if aggregate_kind == "domain_experiment"
                     else "1"
                 ),
                 canonical_payload=payload_json,
@@ -1888,6 +1914,7 @@ async def save_hierarchy_revision(
     payload: dict[str, Any],
     *,
     expected_head_generation: int,
+    lifecycle_operation: str | None = None,
 ) -> ExperimentRevision:
     if aggregate_kind not in {"workspace", "experiment", "domain_experiment"}:
         raise ValidationFailure("unsupported hierarchy aggregate kind")
@@ -1897,6 +1924,7 @@ async def save_hierarchy_revision(
         aggregate_kind=aggregate_kind,
         payload=payload,
         expected_head_generation=expected_head_generation,
+        lifecycle_operation=lifecycle_operation,
     )
 
 

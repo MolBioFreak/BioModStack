@@ -139,9 +139,7 @@
     "change_summary",
     "domain_payload",
     "domain_payload_canonical_size_bytes",
-    "canonical_size_bytes",
-    "semantic_validator_id",
-    "semantic_validator_contract_sha256"
+    "canonical_size_bytes"
   ],
   "properties": {
     "schema": {
@@ -154,7 +152,7 @@
       ]
     },
     "domain_contract_version": {
-      "const": "4"
+      "const": "3"
     },
     "name": {
       "type": "string",
@@ -238,13 +236,6 @@
       "minimum": 2,
       "maximum": 917504,
       "description": "Server-derived UTF-8 byte length of RFC 8785 canonical complete revision JSON with only canonical_size_bytes omitted."
-    },
-    "semantic_validator_id": {
-      "const": "bms.project-manager.semantic-validator.v2"
-    },
-    "semantic_validator_contract_sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
     }
   }
 }

@@ -10,6 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+import rfc8785
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,12 +247,26 @@ class DomainExperimentV2CreateRequest(StrictRequestModel):
     domain_payload: ProteinInSilicoV2Payload | NgsMolBioV2Payload
 
 
-DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest
+class DomainExperimentV4CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.domain-experiment.v4"] = Field(alias="schema")
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
+    domain_contract_version: Literal["3"]
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(max_length=8192)
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"]
+    tags: list[str] = Field(max_length=64)
+    source_receipt_ids: list[str] = Field(max_length=256)
+    dataset_revision_ids: list[str] = Field(max_length=128)
+    change_summary: str = Field(min_length=1, max_length=1024)
+    domain_payload: dict[str, Any]
+
+
+DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest
 
 
 class DomainExperimentPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.domain-experiment.v1", "bms.domain-experiment.v2"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.domain-experiment.v1", "bms.domain-experiment.v2", "bms.domain-experiment.v4"] | None = Field(default=None, alias="schema")
     domain_contract_version: str | None = Field(default=None, min_length=1)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     objective: str | None = None
@@ -261,7 +276,11 @@ class DomainExperimentPatchRequest(StrictRequestModel):
     dataset_ids: list[str] | None = None
     dataset_revision_ids: list[str] | None = None
     change_summary: str | None = None
-    domain_payload: ProteinInSilicoPayload | ProteinInSilicoV2Payload | NgsMolBioPayload | NgsMolBioV2Payload | None = None
+    domain_payload: ProteinInSilicoPayload | ProteinInSilicoV2Payload | NgsMolBioPayload | NgsMolBioV2Payload | dict[str, Any] | None = None
+
+
+class DomainExperimentUpgradeRequest(DomainExperimentV4CreateRequest):
+    expected_head_generation: int = Field(ge=0)
 
 
 class BindingInitializeRequest(StrictRequestModel):
@@ -650,6 +669,20 @@ async def _merge_patch(
     updates.pop("expected_head_generation", None)
     current.update(updates)
     return current
+
+
+def _complete_domain_v4_attestations(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("schema") != "bms.domain-experiment.v4":
+        return payload
+    domain_payload = payload.get("domain_payload")
+    if not isinstance(domain_payload, dict):
+        raise ValidationFailure("Domain v4 domain_payload must be an object")
+    payload = dict(payload)
+    payload["domain_payload_canonical_size_bytes"] = len(rfc8785.dumps(domain_payload))
+    without_size = dict(payload)
+    without_size.pop("canonical_size_bytes", None)
+    payload["canonical_size_bytes"] = len(rfc8785.dumps(without_size))
+    return payload
 
 
 @router.get("")
@@ -1263,9 +1296,10 @@ async def create_domain_experiment_route(
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
         await _global_experiment(session, project_id, experiment_id)
         domain_payload = payload.model_dump(mode="json", by_alias=True)
-        if domain_payload.get("domain_contract_version") != "2":
-            raise ValidationFailure("new Domain Experiments require the frozen v2 contract")
+        if domain_payload.get("domain_contract_version") not in {"2", "3"}:
+            raise ValidationFailure("new Domain Experiments require the frozen v2 or v4 contract")
         domain_payload["created_by"] = actor
+        domain_payload = _complete_domain_v4_attestations(domain_payload)
         head = await create_domain_experiment(
             session,
             project_id,
@@ -1504,6 +1538,63 @@ async def reverify_ngs_molbio_binding(
     )
 
 
+@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/upgrade")
+async def upgrade_domain_experiment(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    payload: DomainExperimentUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    try:
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        current_payload = await _payload(session, head)
+        if current_payload.get("schema") not in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}:
+            raise HTTPException(status_code=409, detail={"code": "domain_contract_upgrade_not_required", "message": "Domain head is already on the current contract"})
+        if current_payload.get("domain_kind") != payload.domain_kind:
+            raise HTTPException(status_code=409, detail={"code": "domain_kind_mismatch", "message": "Domain kind is immutable"})
+        successor = payload.model_dump(mode="json", by_alias=True, exclude={"expected_head_generation"})
+        successor["created_by"] = actor
+        successor = _complete_domain_v4_attestations(successor)
+        revision = await save_hierarchy_revision(
+            session,
+            domain_id,
+            "domain_experiment",
+            successor,
+            expected_head_generation=payload.expected_head_generation,
+            lifecycle_operation="domain_contract_upgrade",
+        )
+        command = None
+        if successor.get("domain_kind") == "ngs_molbio":
+            command = await _issue_domain_revision_reverification(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                domain_revision_id=revision.resource_id,
+                idempotency_key=f"domain-upgrade:{domain_id}:{revision.resource_id}",
+            )
+        await session.commit()
+        refreshed = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        result = await _head_json(
+            session,
+            refreshed,
+            exposed_kind="domain_experiment",
+            storage_kind="domain_experiment",
+            parent_id=experiment_id,
+        )
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
 async def patch_domain_experiment(
     project_id: str,
@@ -1521,7 +1612,7 @@ async def patch_domain_experiment(
             session,
             domain_id,
             "domain_experiment",
-            await _merge_patch(session, head, payload),
+            _complete_domain_v4_attestations(await _merge_patch(session, head, payload)),
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
