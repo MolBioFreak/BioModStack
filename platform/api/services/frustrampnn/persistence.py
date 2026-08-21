@@ -13,12 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
+    ConformationalMappingRequest,
     Design,
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
 )
+from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
 from .contracts import canonical_json_bytes, canonical_json_loads
 from .manifests import (
     MANIFEST_PATH,
@@ -528,10 +530,43 @@ async def _exact_design_link(
     source_artifact_sha256: str,
     normalized_source_sha256: str,
     parent_job_id: str,
+    parent_workflow_id: str,
+    candidate_id: str,
 ) -> Design | None:
     job = await session.get(Job, parent_job_id)
     if job is None:
         raise FrustraMPNNPersistenceError("FrustraMPNN current parent job does not exist")
+    if parent_workflow_id == "conformational_mapping":
+        request = (
+            await session.execute(
+                select(ConformationalMappingRequest).where(
+                    ConformationalMappingRequest.job_id == parent_job_id,
+                    ConformationalMappingRequest.request_id == job.lineage_root_job_id,
+                    ConformationalMappingRequest.status.in_(("queued", "running")),
+                )
+            )
+        ).scalar_one_or_none()
+        coordinates = (
+            request.coordinate_plan_json.get("coordinates")
+            if request is not None and isinstance(request.coordinate_plan_json, Mapping)
+            else None
+        )
+        expected_candidates = (
+            {cm_candidate_id(coordinate) for coordinate in coordinates}
+            if isinstance(coordinates, list)
+            and all(isinstance(item, Mapping) for item in coordinates)
+            else set()
+        )
+        if (
+            job.model_id != "conformational_mapping"
+            or job.stage_family != "conformational_mapping"
+            or source_artifact_id != candidate_id
+            or candidate_id not in expected_candidates
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN CM source is not bound to the current typed request coordinate plan"
+            )
+        return None
     child_envelope = (job.params or {}).get("_frustrampnn_child_v1")
     if job.model_id == "frustrampnn" and isinstance(child_envelope, dict):
         selections = child_envelope.get("selection")
@@ -763,6 +798,10 @@ async def ingest_result_bundle(
                 "FrustraMPNN current parent job does not exist"
             )
         source_artifact_id = bundle.request["source_artifact"].get("artifact_id")
+        if bundle.request["parent_workflow_id"] == "conformational_mapping" and commit:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN CM results require caller-owned atomic persistence"
+            )
         artifact_values = _artifact_values(bundle)
         landscape_values = _landscape_values(bundle)
         design = await _exact_design_link(
@@ -779,6 +818,8 @@ async def ingest_result_bundle(
                 else bundle.request["normalized_pdb_sha256"]
             ),
             parent_job_id=parent_job_id,
+            parent_workflow_id=bundle.request["parent_workflow_id"],
+            candidate_id=bundle.manifest["candidate_id"],
         )
         existing = await session.get(
             FrustraMPNNResult,

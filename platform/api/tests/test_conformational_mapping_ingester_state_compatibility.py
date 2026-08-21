@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -662,6 +663,159 @@ async def test_cm_result_ingester_accepts_legacy_derived_index_that_omits_state_
         await _register(session, request, bundle)
         await session.commit()
         assert await ingest_job_results(request["request_id"], str(output), session) == 1
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_result_ingester_resolves_retry_through_canonical_lineage_root(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "retry-output"
+    result_root = output / "canonical_protenix"
+    result_root.mkdir(parents=True)
+    request, bundle = _no_authority_bundle(result_root)
+    (result_root / "cm_ensemble_v1.json").write_text(json.dumps(bundle["cm_ensemble_v1"]))
+    (result_root / "cm_native_artifacts_v1.json").write_text(json.dumps(bundle["cm_native_artifacts_v1"]))
+    index_without_hash = {
+        "schema_name": "cm_derived_index", "schema_version": 1,
+        "request_id": request["request_id"],
+        "source_ensemble_sha256": canonical_sha256(bundle["cm_ensemble_v1"]),
+        "records": [],
+        "structure_maps": bundle["cm_structure_maps"],
+        "landscapes": bundle["cm_frustration_landscapes"],
+        "analysis": bundle["cm_analysis_v1"],
+        "lineage": None, "support": None, "missingness": None, "resampling": None,
+    }
+    (result_root / "cm_derived_index_v1.json").write_text(json.dumps({
+        **index_without_hash,
+        "index_sha256": canonical_sha256(index_without_hash),
+    }))
+    session, engine = await _session(tmp_path)
+    retry_job_id = "cm-retry-job"
+    try:
+        record = await _register(session, request, bundle)
+        session.add(Job(
+            id=retry_job_id,
+            name="CM retry",
+            model_id="conformational_mapping",
+            mode="map",
+            status="running",
+            queue_status="running",
+            params={},
+            output_dir=str(output),
+            lineage_root_job_id=request["request_id"],
+            stage_family="conformational_mapping",
+            created_at=datetime.utcnow(),
+        ))
+        await session.flush()
+        record.job_id = retry_job_id
+        await session.commit()
+
+        assert await ingest_job_results(retry_job_id, str(output), session) == 1
+        await session.refresh(record)
+        assert record.status == "completed"
+        assert record.job_id == retry_job_id
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intermediate_symlink", [False, True])
+async def test_cm_result_ingester_persists_sealed_referenced_global_results_before_cm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    intermediate_symlink: bool,
+) -> None:
+    from services import result_ingester
+
+    output = tmp_path / "global-output"
+    result_root = output / "canonical_protenix"
+    result_root.mkdir(parents=True)
+    request, bundle, reference, result_values = _global_bundle(result_root)
+    candidate_id_value = reference["candidate_id"]
+    bundle_relative = Path(reference["bundle_relative_path"])
+    if intermediate_symlink:
+        real_prefix = result_root / "real-frustrampnn"
+        real_prefix.mkdir()
+        (result_root / bundle_relative.parts[0]).symlink_to(
+            real_prefix.name,
+            target_is_directory=True,
+        )
+        bundle_root = real_prefix.joinpath(*bundle_relative.parts[1:])
+    else:
+        bundle_root = result_root / bundle_relative
+    bundle_root.mkdir(parents=True)
+    manifest_bytes = canonical_json_bytes({"schema_name": "frustrampnn_result_manifest", "schema_version": 2})
+    landscape_bytes = canonical_json_bytes(bundle["frustrampnn_landscapes"][0])
+    structure_map_bytes = canonical_json_bytes(bundle["frustrampnn_structure_maps"][0])
+    (bundle_root / "frustrampnn_result_manifest_v2.json").write_bytes(manifest_bytes)
+    (bundle_root / "frustrampnn_landscape_v2.json").write_bytes(landscape_bytes)
+    (bundle_root / "frustrampnn_structure_map_v1.json").write_bytes(structure_map_bytes)
+    (bundle_root / "workflow_component_result_v2.json").write_text("{}")
+    reference.update({
+        "result_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "landscape_sha256": hashlib.sha256(landscape_bytes).hexdigest(),
+        "structure_map_sha256": hashlib.sha256(structure_map_bytes).hexdigest(),
+    })
+    (result_root / "cm_ensemble_v1.json").write_text(json.dumps(bundle["cm_ensemble_v1"]))
+    (result_root / "cm_native_artifacts_v1.json").write_text(json.dumps(bundle["cm_native_artifacts_v1"]))
+    (result_root / "cm_complex_snapshots_v1.json").write_text(json.dumps(bundle["cm_complex_snapshots"]))
+    index_without_hash = {
+        "schema_name": "cm_derived_index", "schema_version": 1,
+        "request_id": request["request_id"],
+        "source_ensemble_sha256": canonical_sha256(bundle["cm_ensemble_v1"]),
+        "records": [],
+        "frustrampnn_result_references": bundle["cm_frustrampnn_result_references"],
+        "analysis": bundle["cm_analysis_v1"],
+        "lineage": None, "support": None, "missingness": None, "resampling": None,
+    }
+    (result_root / "cm_derived_index_v1.json").write_text(json.dumps({
+        **index_without_hash,
+        "index_sha256": canonical_sha256(index_without_hash),
+    }))
+    validated_bundle = SimpleNamespace(
+        manifest={
+            "invocation_id": reference["invocation_id"],
+            "candidate_id": candidate_id_value,
+        },
+        request={"parent_workflow_id": "conformational_mapping"},
+    )
+
+    monkeypatch.setattr(result_ingester, "_read_explicit_terminal_envelope", lambda *_args: {})
+    monkeypatch.setattr(
+        result_ingester,
+        "validate_frustrampnn_result_bundle",
+        lambda *_args, **_kwargs: validated_bundle,
+    )
+
+    async def persist_global(ingest_session, *_args, **_kwargs) -> None:
+        ingest_session.add(FrustraMPNNResult(**result_values))
+        await ingest_session.flush()
+
+    async def persist_cm(ingest_session, cm_request, **_kwargs) -> None:
+        persisted = await ingest_session.get(
+            FrustraMPNNResult,
+            (request["request_id"], reference["invocation_id"]),
+        )
+        assert persisted is not None, "referenced global result was not persisted before CM"
+        cm_request.status = "completed"
+        await ingest_session.commit()
+
+    monkeypatch.setattr(result_ingester, "ingest_frustrampnn_result_bundle", persist_global)
+    monkeypatch.setattr(result_ingester, "_persist_cm_bundle_atomically", persist_cm)
+
+    session, engine = await _session(tmp_path)
+    try:
+        await _register(session, request, bundle)
+        await session.commit()
+        if intermediate_symlink:
+            with pytest.raises(ConformationalPersistenceError, match="unsafe"):
+                await ingest_job_results(request["request_id"], str(output), session)
+        else:
+            assert await ingest_job_results(request["request_id"], str(output), session) == 1
     finally:
         await session.close()
         await engine.dispose()

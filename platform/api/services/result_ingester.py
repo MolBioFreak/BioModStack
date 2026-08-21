@@ -16,6 +16,7 @@ import stat
 import uuid
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Optional, Dict, List, Any, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -3814,7 +3815,7 @@ def _assert_protein_design_metadata_replay(
 
 
 async def _ingest_explicit_frustrampnn_results(
-    current_job: Job | None,
+    current_job: Job | SimpleNamespace | None,
     output_path: Path,
     session: AsyncSession,
     *,
@@ -4218,9 +4219,14 @@ async def ingest_job_results(
     if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
         return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
-        cm_request = await get_cm_request(session, job_id)
+        canonical_request_id = str(current_job.lineage_root_job_id or job_id)
+        cm_request = await get_cm_request(session, canonical_request_id)
         if cm_request is None:
             raise ConformationalPersistenceError("canonical job has no typed request record")
+        if str(cm_request.job_id) != str(current_job.id):
+            raise ConformationalPersistenceError(
+                "canonical typed request is not bound to the current job attempt"
+            )
         backend_directory = {
             "protenix_v2_ensemble": "canonical_protenix",
             "confornets": "canonical_confornets",
@@ -4338,6 +4344,7 @@ async def ingest_job_results(
                         )
                     global_maps: list[dict[str, Any]] = []
                     global_landscapes: list[dict[str, Any]] = []
+                    referenced_stage_paths: list[str] = []
                     for reference in references["results"]:
                         if not isinstance(reference, dict):
                             raise ConformationalPersistenceError(
@@ -4355,10 +4362,18 @@ async def ingest_job_results(
                                 "canonical FrustraMPNN result reference path is unsafe"
                             )
                         unresolved_bundle_root = result_root / relative
-                        if unresolved_bundle_root.is_symlink():
+                        current_bundle_path = result_root
+                        try:
+                            for part in relative.parts:
+                                current_bundle_path = current_bundle_path / part
+                                if stat.S_ISLNK(os.lstat(current_bundle_path).st_mode):
+                                    raise ConformationalPersistenceError(
+                                        "canonical FrustraMPNN result bundle path is unsafe: contains a symlink"
+                                    )
+                        except OSError as exc:
                             raise ConformationalPersistenceError(
-                                "canonical FrustraMPNN result bundle is unsafe"
-                            )
+                                "canonical FrustraMPNN result bundle is unavailable"
+                            ) from exc
                         bundle_root = unresolved_bundle_root.resolve(strict=True)
                         bundle_root.relative_to(result_root.resolve())
                         if not bundle_root.is_dir():
@@ -4373,6 +4388,11 @@ async def ingest_job_results(
                                 raise ConformationalPersistenceError(
                                     "canonical FrustraMPNN result artifact is unsafe"
                                 )
+                        terminal_path = bundle_root / "workflow_component_result_v2.json"
+                        if terminal_path.is_symlink() or not terminal_path.is_file():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN terminal result is unsafe"
+                            )
                         if (
                             hashlib.sha256(manifest_path.read_bytes()).hexdigest()
                             != reference.get("result_manifest_sha256")
@@ -4396,6 +4416,23 @@ async def ingest_job_results(
                             )
                         global_landscapes.append(landscape)
                         global_maps.append(structure_map)
+                        referenced_stage_paths.extend(
+                            (os.fspath(manifest_path), os.fspath(terminal_path))
+                        )
+                    referenced_count = await _ingest_explicit_frustrampnn_results(
+                        SimpleNamespace(
+                            id=current_job.id,
+                            provenance=current_job.provenance,
+                            stage_outputs={"frustrampnn": referenced_stage_paths},
+                        ),
+                        result_root,
+                        session,
+                        commit=False,
+                    )
+                    if referenced_count != len(references["results"]):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN referenced result persistence is incomplete"
+                        )
                     bundle["cm_frustrampnn_result_references"] = references
                     bundle["cm_complex_snapshots"] = snapshots
                     bundle["frustrampnn_structure_maps"] = global_maps

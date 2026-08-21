@@ -465,9 +465,13 @@ async def finalize_successful_job(
             job = await session.get(Job, job_id)
             state = "cancelled" if job is not None and job.status == "cancelled" else "awaiting_input"
             return FinalizationResult(False, count, state)
+        from services.conformational_mapping.persistence import (
+            terminalize_failed_request_for_job as terminalize_failed_cm_request,
+        )
         from services.rfd3_local_redesign import terminalize_failed_request_for_job
 
         await terminalize_failed_request_for_job(session, job_id=job_id)
+        await terminalize_failed_cm_request(session, job_id=job_id)
         await session.commit()
         await session.refresh(job)
         return FinalizationResult(False, count, "no_candidates" if no_candidates else "ingestion_failed")

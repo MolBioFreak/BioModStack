@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import (
     Base,
+    ConformationalMappingRequest,
     Design,
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
@@ -29,6 +30,7 @@ from services.frustrampnn.contracts import (
     canonical_json_loads,
 )
 from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
+from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
 
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -275,6 +277,65 @@ async def _seed_job(
                 )
             )
         await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_exact_source_link_accepts_typed_cm_candidate_without_design(db) -> None:
+    persistence = _persistence()
+    request_id = "cm-request"
+    job_id = "cm-retry-job"
+    coordinate = {
+        "backend": "confornets",
+        "target_id": "target-a",
+        "task": "diversity",
+        "test_case_id": "case-a",
+        "run_index": 0,
+        "sample_index": 0,
+        "saved_step": 0,
+        "confornet_index": 0,
+        "reference_id": None,
+    }
+    candidate_id = cm_candidate_id(coordinate)
+    async with db() as session:
+        job = Job(
+            id=job_id,
+            name="CM retry",
+            status="running",
+            queue_status="running",
+            model_id="conformational_mapping",
+            mode="map",
+            params={},
+            lineage_root_job_id=request_id,
+            stage_family="conformational_mapping",
+        )
+        request = ConformationalMappingRequest(
+            request_id=request_id,
+            job_id=job_id,
+            principal_id="alice",
+            backend="confornets",
+            status="queued",
+            request_sha256="1" * 64,
+            coordinate_plan_sha256="2" * 64,
+            resume_key="3" * 64,
+            result_contract_id="conformational_mapping_confornets_v1",
+            request_json={},
+            coordinate_plan_json={"coordinates": [coordinate], "expected_cardinality": 1},
+            progress_json={"phase": "queued"},
+        )
+        session.add(job)
+        await session.flush()
+        session.add(request)
+        await session.commit()
+
+        assert await persistence._exact_design_link(
+            session,
+            source_artifact_id=candidate_id,
+            source_artifact_sha256="4" * 64,
+            normalized_source_sha256="5" * 64,
+            parent_job_id=job_id,
+            parent_workflow_id="conformational_mapping",
+            candidate_id=candidate_id,
+        ) is None
 
 
 async def _seed_v2_child_job(sessions: async_sessionmaker, root: Path) -> None:
