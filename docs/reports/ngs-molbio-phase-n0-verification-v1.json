@@ -1,7 +1,7 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "0a9657f2aa8bed45b8fe463537eb99f8ba74abb0fcf9ea8ab68c1d7e4132d912",
+  "content_sha256": "b78d7e6efa65ea08a01549db2ebc7344dc6e447d8d4320a138ed39e7856055dc",
   "environment": {
     "git": "not invoked during deterministic reseal",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
@@ -456,7 +456,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "58868a1bd5fc176c54cbd71984ef13463c4d45d89af9d6a5012bdfbedc558581",
+  "payload_fingerprint_sha256": "1a76880104e90071bcd0fb5fd61efbfcd1ce37728a36d0667c6000ae48085049",
   "result": {
     "adapters": 27,
     "capabilities": 21,
