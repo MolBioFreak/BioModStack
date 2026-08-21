@@ -81,6 +81,7 @@ _V1_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
 }
 _V2_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
     "workflow_component_request_v2.json": ("component_request", "application/json"),
+    "authority_artifact_v1.json": ("identity_authority", "application/json"),
     "normalized_input.pdb": ("normalized_input", "chemical/x-pdb"),
     "frustrampnn_structure_map_v1.json": ("structure_map", "application/json"),
     "raw_frustrampnn.csv": ("raw_csv", "text/csv"),
@@ -194,6 +195,7 @@ def load_and_validate_result_bundle(
     *,
     expected_parent_job_id: str,
     terminal_envelope: Mapping[str, Any],
+    allow_legacy_v2_external_authority: bool = False,
 ) -> ValidatedResultBundle:
     """Load and retain one exact manifest-validated v1 or v2 bundle snapshot."""
 
@@ -218,7 +220,14 @@ def load_and_validate_result_bundle(
             "FrustraMPNN result manifest path contradicts its explicit schema generation"
         )
     try:
-        payloads = validate_result_manifest(root, manifest)
+        if allow_legacy_v2_external_authority:
+            payloads = validate_result_manifest(
+                root,
+                manifest,
+                allow_legacy_v2_external_authority=True,
+            )
+        else:
+            payloads = validate_result_manifest(root, manifest)
     except ManifestValidationError as exc:
         raise FrustraMPNNPersistenceError(
             f"FrustraMPNN result manifest validation failed: {exc}"
@@ -289,7 +298,14 @@ def load_and_validate_result_bundle(
         )
 
     try:
-        final_payloads = validate_result_manifest(root, manifest)
+        if allow_legacy_v2_external_authority:
+            final_payloads = validate_result_manifest(
+                root,
+                manifest,
+                allow_legacy_v2_external_authority=True,
+            )
+        else:
+            final_payloads = validate_result_manifest(root, manifest)
     except ManifestValidationError as exc:
         raise FrustraMPNNPersistenceError(
             f"FrustraMPNN result bundle changed after validated ingestion snapshot: {exc}"

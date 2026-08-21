@@ -37,6 +37,11 @@ V2_MANIFEST_ARTIFACT_PATHS = (
     "frustrampnn_statistics_v1.json",
 )
 AUTHORITY_ARTIFACT_PATH = "authority_artifact_v1.json"
+V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v2.json",
+    AUTHORITY_ARTIFACT_PATH,
+    *V2_MANIFEST_ARTIFACT_PATHS[1:],
+)
 EXTERNAL_SUCCESS_RESULT_ARTIFACT_PATHS = (
     AUTHORITY_ARTIFACT_PATH,
     *SUCCESS_RESULT_ARTIFACT_PATHS,
@@ -865,12 +870,16 @@ def _validate_manifest_v2(instance: Mapping[str, Any]) -> None:
     _validate_manifest(instance)
     records = instance["artifacts"]
     paths = [record["relative_path"] for record in records]
-    if paths != list(V2_MANIFEST_ARTIFACT_PATHS):
+    if paths not in (
+        list(V2_MANIFEST_ARTIFACT_PATHS),
+        list(V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS),
+    ):
         raise ContractValidationError(
             "v2 manifest artifact paths are not the exact canonical generation"
         )
     expected = {
         "workflow_component_request_v2.json": ("workflow_component_request", 2, None),
+        AUTHORITY_ARTIFACT_PATH: ("producer_manifest", 1, ("records",)),
         "normalized_input.pdb": (None, None, ("residues",)),
         "frustrampnn_structure_map_v1.json": (
             "frustrampnn_structure_map", 1, ("residues",)

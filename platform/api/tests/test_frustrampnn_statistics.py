@@ -391,6 +391,7 @@ def _fixture(
         request["identity_authority_artifact"] = {
             "relative_path": "authority_artifact_v1.json",
             "media_type": "application/json",
+            "bytes": len(authority_payload),
             "sha256": hashlib.sha256(authority_payload).hexdigest(),
             "canonical_json_base64": base64.b64encode(authority_payload).decode("ascii"),
             "cm_complex_snapshot_sha256": "6" * 64,
