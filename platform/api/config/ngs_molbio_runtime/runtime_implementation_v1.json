@@ -5,11 +5,11 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "531314776392082f173b4c1d334e233055ccbaa95f851c91b19bcc724cf78aad",
+  "content_sha256": "73942dc6b3428df9c5545e952df5c541b82e36939cf7032f0f506bc27130a424",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
-  "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
-  "n0_receipt_content_sha256": "6e7134a32d2b13e6e24548056c92ddf48576997494bfc921013d19fab003782d",
+  "n0_package_fingerprint": "7a9f25658be7d870c2df96479a147aabd965da38e9b30524f907b4a329bce218",
+  "n0_receipt_content_sha256": "8e7f78147c69a8ce54da49c7c39a08f67a461d3333df226c83e44f34d2367117",
   "payload_scanner_runtime_state": "implemented_unverified",
   "phases": [
     {
@@ -304,8 +304,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/result_surfaces.py",
-      "sha256": "4844ef9c13a29d6083e16f1479bd42d30348e6f68bd368b23435bf9694e29ada",
-      "size_bytes": 15518
+      "sha256": "a316763535e0372d676af11c23735806541c1f33ecb75d5adeeebf5181eaa3b1",
+      "size_bytes": 17671
     },
     {
       "path": "platform/api/services/global_experiments/worker.py",
@@ -479,8 +479,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
-      "sha256": "f28354322660450df0f2adefe36f556d79b3afd616dd5907c29aaea4ef0c94ec",
-      "size_bytes": 129851
+      "sha256": "cf17b65d1a7fcdb162e8d85c3916b868bd99fe34940e4b3b52bdb148545ec23c",
+      "size_bytes": 129906
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
@@ -514,13 +514,13 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
-      "sha256": "60636eafa4c80514098eb44a30ea74133c819a8b3f71216595dbb5d3a5ef4639",
-      "size_bytes": 40055
+      "sha256": "86c13c2862ad1908fa3e4edb92c96b90f5fde1ec3004394914f386964ed3c28f",
+      "size_bytes": 46348
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
-      "sha256": "c9c2ab589fc25c83c3ac86fcd60a84d775ffc99d2582b5a0869fcf319bfa0957",
-      "size_bytes": 11762
+      "sha256": "f718c11da3369c7aab1fa947a33c5f811344e29a1ddb9c1b740967dd4104883f",
+      "size_bytes": 11848
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
@@ -544,13 +544,13 @@
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
-      "sha256": "4f2c1c1198a11070b6dfc62774355a1c2aebdfd47f1d78b1fe9de3f4dba0f975",
-      "size_bytes": 89511
+      "sha256": "829f3225e81d2733dd008ce856a2d62b19722d5e662fae5e16f1b5393856eb7c",
+      "size_bytes": 93497
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "1e04a8eaa2cf5362ceb432bb4329df6142a0c4ae89656becd7a3105560a1c63d",
-      "size_bytes": 44849
+      "sha256": "5a49dda970566f7d8a3115e0f1ba311678a8ab4ccef030f192d1c93eb453fd89",
+      "size_bytes": 44809
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -564,7 +564,7 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
-      "sha256": "5b7f47c470072cb675a05469d62bf119eab0c88c7e07d163cfc292016663e2ac",
+      "sha256": "1ccf8e7ff388dff7cbe4d2be928644e6dc67572a0373259743e1f2c544366926",
       "size_bytes": 4091
     },
     {
@@ -584,8 +584,8 @@
     },
     {
       "path": "scripts/build_ngs_molbio_runtime_implementation_record.py",
-      "sha256": "271b532a64a2d2ccac2ff605bea4de63b0136b39073cb98a924ab1becfd453bc",
-      "size_bytes": 9675
+      "sha256": "7737c3e1ebd5c8724c953d91d93caf266832b3a2e2ad264035d3661dd0d1a7be",
+      "size_bytes": 10747
     },
     {
       "path": "scripts/build_ont_raw_signal_runtime.sh",
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "daac2fd3d418bf79ea995e575e6740dc56964b08",
-  "successor_source_tree": "c416f170f28496ceb74517169f66a11d35bf35b2",
+  "successor_source_commit": "4fd55906ee8f598db12e67812d07cb35b17f5255",
+  "successor_source_tree": "df84a0e3438d950b5c0339b9236850b2c3a4888c",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
