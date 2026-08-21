@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from typing import Optional, Dict, List, Any, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -4419,7 +4419,7 @@ async def ingest_job_results(
                         referenced_stage_paths.extend(
                             (os.fspath(manifest_path), os.fspath(terminal_path))
                         )
-                    referenced_count = await _ingest_explicit_frustrampnn_results(
+                    await _ingest_explicit_frustrampnn_results(
                         SimpleNamespace(
                             id=current_job.id,
                             provenance=current_job.provenance,
@@ -4429,7 +4429,28 @@ async def ingest_job_results(
                         session,
                         commit=False,
                     )
-                    if referenced_count != len(references["results"]):
+                    referenced_invocation_ids = {
+                        str(reference.get("invocation_id") or "")
+                        for reference in references["results"]
+                    }
+                    if "" in referenced_invocation_ids or len(referenced_invocation_ids) != len(
+                        references["results"]
+                    ):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN referenced result identities are incomplete"
+                        )
+                    referenced_count = int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(FrustraMPNNResult)
+                            .where(
+                                FrustraMPNNResult.parent_job_id == str(current_job.id),
+                                FrustraMPNNResult.invocation_id.in_(referenced_invocation_ids),
+                            )
+                        )
+                        or 0
+                    )
+                    if referenced_count != len(referenced_invocation_ids):
                         raise ConformationalPersistenceError(
                             "canonical FrustraMPNN referenced result persistence is incomplete"
                         )

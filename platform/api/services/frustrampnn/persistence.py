@@ -542,7 +542,7 @@ async def _exact_design_link(
                 select(ConformationalMappingRequest).where(
                     ConformationalMappingRequest.job_id == parent_job_id,
                     ConformationalMappingRequest.request_id == job.lineage_root_job_id,
-                    ConformationalMappingRequest.status.in_(("queued", "running")),
+                    ConformationalMappingRequest.status.in_(("queued", "running", "completed")),
                 )
             )
         ).scalar_one_or_none()

@@ -246,8 +246,51 @@ def _global_bundle(root: Path) -> tuple[dict, dict, dict, dict]:
     }
     bundle.pop("cm_structure_maps")
     bundle.pop("cm_frustration_landscapes")
-    global_map = copy.deepcopy(fixture["cm_structure_map_v1"])
-    global_map["schema_name"] = "frustrampnn_structure_map"
+    legacy_map = copy.deepcopy(fixture["cm_structure_map_v1"])
+    snapshot_mapping_by_instance = {
+        item["source_instance_id"]: item
+        for item in snapshot["instance_mappings"]
+    }
+    global_map = {
+        "schema_name": "frustrampnn_structure_map",
+        "schema_version": 1,
+        "target_id": legacy_map["target_id"],
+        "parent_job_id": request["request_id"],
+        "candidate_id": legacy_map["candidate_id"],
+        "source_format": legacy_map["source_format"],
+        "source_sha256": legacy_map["source_sha256"],
+        "source_bytes": legacy_map["source_bytes"],
+        "normalized_pdb_sha256": legacy_map["normalized_pdb_sha256"],
+        "selected_source_model": legacy_map["selected_source_model"],
+        "altloc_policy": legacy_map["altloc_policy"],
+        "rows": [
+            {
+                "entity_instance_id": row["entity_instance_id"],
+                "source_entity_id": snapshot_mapping_by_instance[
+                    row["entity_instance_id"]
+                ]["output_entity_id"],
+                "label_asym_id": row["label_asym_id"],
+                "auth_asym_id": row["auth_asym_id"],
+                "label_seq_id": row["label_seq_id"],
+                "auth_seq_id": row["auth_seq_id"],
+                "insertion_code": row["insertion_code"],
+                "residue_name": row["residue_name"],
+                "sequence_index": row["sequence_index"],
+                "pdb_chain_id": row["pdb_chain_id"],
+                "pdb_residue_id": row["pdb_residue_id"],
+                "pdb_insertion_code": row["pdb_insertion_code"],
+                "backbone_atoms": {
+                    atom: f"cif:{source_id}" if source_id is not None else None
+                    for atom, source_id in row["backbone_atoms"].items()
+                },
+                "selected_altloc": row["selected_altloc"],
+                "selected_model": row["source_model"],
+                "status": row["status"],
+                "reason": row["reason"],
+            }
+            for row in legacy_map["rows"]
+        ],
+    }
     global_landscape = copy.deepcopy(fixture["cm_frustration_landscape_v1"])
     global_landscape["schema_name"] = "frustrampnn_landscape"
     global_landscape["schema_version"] = 2
@@ -461,6 +504,42 @@ async def test_cm_global_landscape_query_uses_only_referenced_invocations(
         assert [(row.candidate_id, row.score) for row in rows] == [
             (result_values["candidate_id"], 1.0),
         ]
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cm_global_ingest_persists_candidate_structure_map_presentations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.conformational_mapping import persistence as cm_persistence
+
+    root = tmp_path / "global-map-presentations"
+    root.mkdir()
+    request, bundle, _reference, result_values = _global_bundle(root)
+    projected = cm_persistence.project_cm_structure_map(
+        bundle["frustrampnn_structure_maps"][0],
+        bundle["cm_complex_snapshots"][0],
+    )
+
+    monkeypatch.setattr(cm_persistence, "validate_frustrampnn_schema", lambda *_args: None)
+    session, engine = await _session(tmp_path)
+    try:
+        record = await _register(session, request, bundle)
+        session.add(FrustraMPNNResult(**result_values))
+        await session.flush()
+        await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        rows = list((await session.execute(
+            select(ConformationalMappingRecord).where(
+                ConformationalMappingRecord.request_id == request["request_id"],
+                ConformationalMappingRecord.record_type == "structure_map",
+            )
+        )).scalars().all())
+        assert [(row.record_key, row.payload_json) for row in rows] == [
+            (result_values["candidate_id"], projected),
+        ]
+        assert await session.scalar(select(ConformationalMappingLandscapeRow)) is None
     finally:
         await session.close()
         await engine.dispose()
@@ -792,8 +871,13 @@ async def test_cm_result_ingester_persists_sealed_referenced_global_results_befo
     )
 
     async def persist_global(ingest_session, *_args, **_kwargs) -> None:
-        ingest_session.add(FrustraMPNNResult(**result_values))
-        await ingest_session.flush()
+        existing = await ingest_session.get(
+            FrustraMPNNResult,
+            (request["request_id"], reference["invocation_id"]),
+        )
+        if existing is None:
+            ingest_session.add(FrustraMPNNResult(**result_values))
+            await ingest_session.flush()
 
     async def persist_cm(ingest_session, cm_request, **_kwargs) -> None:
         persisted = await ingest_session.get(
@@ -815,6 +899,7 @@ async def test_cm_result_ingester_persists_sealed_referenced_global_results_befo
             with pytest.raises(ConformationalPersistenceError, match="unsafe"):
                 await ingest_job_results(request["request_id"], str(output), session)
         else:
+            assert await ingest_job_results(request["request_id"], str(output), session) == 1
             assert await ingest_job_results(request["request_id"], str(output), session) == 1
     finally:
         await session.close()

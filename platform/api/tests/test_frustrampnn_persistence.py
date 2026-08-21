@@ -280,7 +280,10 @@ async def _seed_job(
 
 
 @pytest.mark.asyncio
-async def test_exact_source_link_accepts_typed_cm_candidate_without_design(db) -> None:
+@pytest.mark.parametrize("request_status", ["queued", "completed"])
+async def test_exact_source_link_accepts_typed_cm_candidate_without_design(
+    db, request_status: str,
+) -> None:
     persistence = _persistence()
     request_id = "cm-request"
     job_id = "cm-retry-job"
@@ -313,7 +316,7 @@ async def test_exact_source_link_accepts_typed_cm_candidate_without_design(db) -
             job_id=job_id,
             principal_id="alice",
             backend="confornets",
-            status="queued",
+            status=request_status,
             request_sha256="1" * 64,
             coordinate_plan_sha256="2" * 64,
             resume_key="3" * 64,

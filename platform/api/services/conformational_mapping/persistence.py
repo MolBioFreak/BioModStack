@@ -41,7 +41,7 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
-from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes
+from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes, project_cm_structure_map
 from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
@@ -683,11 +683,11 @@ async def ingest_result_bundle(
     candidate_snapshot_bindings_by_path: dict[
         str, list[tuple[str, Mapping[str, Any]]]
     ] = {}
+    snapshot_by_target: dict[str, Mapping[str, Any]] = {}
     if canonical_global_mode:
         snapshots = bundle.get("cm_complex_snapshots")
         if not isinstance(snapshots, list) or not snapshots:
             raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
-        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
         try:
             for snapshot in snapshots:
                 if not isinstance(snapshot, Mapping):
@@ -804,6 +804,10 @@ async def ingest_result_bundle(
                 validate_frustrampnn_schema("frustrampnn_structure_map_v1", value)
             for value in landscapes:
                 validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+            cm_structure_maps_for_persistence = [
+                project_cm_structure_map(value, snapshot_by_target[str(value["target_id"])])
+                for value in structure_maps
+            ]
         except Exception as exc:
             raise ConformationalPersistenceError(
                 "canonical global FrustraMPNN result payload is invalid"
@@ -815,6 +819,7 @@ async def ingest_result_bundle(
             )
         structure_maps = bundle.get("cm_structure_maps") or []
         landscapes = bundle.get("cm_frustration_landscapes") or []
+        cm_structure_maps_for_persistence = structure_maps
     structure_map_ids = {
         str(value.get("candidate_id")) for value in structure_maps
         if isinstance(value, Mapping)
@@ -959,7 +964,11 @@ async def ingest_result_bundle(
 
     validated_optional_records: list[tuple[str, str, Mapping[str, Any]]] = []
     for bundle_key, record_type in optional_records.items():
-        value = bundle.get(bundle_key)
+        value = (
+            cm_structure_maps_for_persistence
+            if bundle_key == "cm_structure_maps"
+            else bundle.get(bundle_key)
+        )
         if value is None:
             continue
         records = value if isinstance(value, list) else [value]
