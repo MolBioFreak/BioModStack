@@ -317,7 +317,9 @@ export default function StructureViewerPane({
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
-    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(true);
+    // The molecular structure is the primary scientific result. Keep auxiliary
+    // metric/export controls collapsed until the operator asks for them.
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -2940,8 +2942,8 @@ export default function StructureViewerPane({
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
                                 showComplexWorkbench={false}
-                                showM6Workbench={!shapeMetrics}
-                                showMeasurements={!shapeMetrics}
+                                showM6Workbench={!shapeMetrics && metricWorkbenchOpen}
+                                showMeasurements={!shapeMetrics && metricWorkbenchOpen}
                                 jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
                                 artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
                                 structureDocumentId={governedWorkbenchContext?.structureDocumentId}
@@ -2949,7 +2951,7 @@ export default function StructureViewerPane({
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}
                                 onMetricWorkbenchVisibilityChange={shapeMetrics ? undefined : setMetricWorkbenchOpen}
-                                showSequenceTrack={!shapeMetrics}
+                                showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
                                 height="100%"
                                 backgroundColor={themeColors.bgPrimary}
                             />
@@ -3000,7 +3002,7 @@ export default function StructureViewerPane({
                                             showM6Workbench={!shapeMetrics}
                                             showMeasurements={!shapeMetrics}
                                             showMetricWorkbench={!shapeMetrics}
-                                            showSequenceTrack={!shapeMetrics}
+                                            showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
                                             height="100%"
                                             backgroundColor={themeColors.bgSecondary}
                                             label={selectedReference.name}

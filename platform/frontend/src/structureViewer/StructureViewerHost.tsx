@@ -378,7 +378,7 @@ export default function StructureViewerHost({
                     Show metrics
                 </button>
             )}
-            {(showMetricWorkbench || showLinkedSequence || showM6Workbench) && hasWorkbenchContent && (
+            {(showMetricWorkbench || showLinkedSequence || (showM6Workbench && !onMetricWorkbenchVisibilityChange)) && hasWorkbenchContent && (
                 <aside className="absolute bottom-2 right-2 z-30 max-h-[55%] w-[min(28rem,calc(100%-1rem))] space-y-2 overflow-auto rounded bg-slate-950/90 p-2 shadow-xl" aria-label={showMetricWorkbench ? 'Structure metric workbench' : showM6Workbench ? 'Structure reproducibility workbench' : 'Linked sequence overlay'}>
                     {showMetricWorkbench && (
                         <div className="flex items-center justify-between border-b border-slate-700/70 pb-2 text-xs font-semibold text-slate-200">
