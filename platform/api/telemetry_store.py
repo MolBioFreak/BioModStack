@@ -240,6 +240,11 @@ class TelemetryStore:
                 connection.execute(
                     "ALTER TABLE scientific_artifact_receipts ADD COLUMN storage_root TEXT NOT NULL DEFAULT 'scientific_artifact_root'"
                 )
+            ledger_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_payload_migrations)")}
+            if "attempt_count" not in ledger_columns:
+                connection.execute(
+                    "ALTER TABLE scientific_payload_migrations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+                )
             for table in ("raw_samples", "minute_aggregates"):
                 existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
                 additions = {
