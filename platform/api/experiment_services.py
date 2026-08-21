@@ -19,6 +19,11 @@ from services.ngs_molbio_capabilities import (
     capability_record,
     validate_domain_experiment,
 )
+from services.protein_project_capabilities import (
+    CAPABILITY_ID as PROTEIN_ESMFOLD2_CAPABILITY_ID,
+    protein_capability_record,
+    protein_parameter_schema,
+)
 from model_registry import get_registry
 from scripts.rfd3_local_redesign.contract import ContractError
 from services.rfd3_local_redesign import (
@@ -247,9 +252,13 @@ def _validate_input_receipt_contract_authority(
 def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
     """Build the exact server-owned capability contract pinned by a new Plan."""
     try:
-        capability = capability_record(capability_id)
-        parameter_schema = capability_parameter_schema(capability_id)
-    except NgsMolBioCapabilityError as exc:
+        if capability_id == PROTEIN_ESMFOLD2_CAPABILITY_ID:
+            capability = protein_capability_record(capability_id)
+            parameter_schema = protein_parameter_schema(capability_id)
+        else:
+            capability = capability_record(capability_id)
+            parameter_schema = capability_parameter_schema(capability_id)
+    except (NgsMolBioCapabilityError, ValueError) as exc:
         raise ValidationFailure(str(exc)) from exc
     if capability.get("plannable") is not True or capability.get("exposure_state") != "accepted":
         raise ValidationFailure("capability is not accepted for Workflow Plan launch")
@@ -283,6 +292,59 @@ def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
         "allowed_model_modes": _capability_model_modes(capability),
     }
     return json.loads(canonical_json(contract))
+
+
+def initial_workflow_plan_payload(
+    *,
+    plan_name: str,
+    capability_contract: dict[str, Any],
+    domain_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one editable server-owned draft from pinned capability authority."""
+    capability = capability_contract["capability"]
+    if capability.get("workflow_family") != "typed_core_job":
+        raise ValidationFailure("server-owned initial Plan drafts require typed core Job authority")
+    parameter_schema = capability_contract["parameter_schema"]
+    properties = parameter_schema.get("properties")
+    if not isinstance(properties, dict):
+        raise ValidationFailure("initial Plan parameter schema is unavailable")
+    parameters: dict[str, Any] = {}
+    for name, raw_schema in properties.items():
+        if not isinstance(raw_schema, dict):
+            raise ValidationFailure("initial Plan parameter schema is malformed")
+        if "const" in raw_schema:
+            parameters[name] = copy.deepcopy(raw_schema["const"])
+        elif "default" in raw_schema:
+            parameters[name] = copy.deepcopy(raw_schema["default"])
+    raw_domain = domain_payload.get("domain_payload")
+    target = raw_domain.get("target") if isinstance(raw_domain, dict) else None
+    source_receipt_ids = target.get("source_receipt_ids") if isinstance(target, dict) else []
+    if not isinstance(source_receipt_ids, list) or any(
+        not isinstance(receipt_id, str) or not receipt_id for receipt_id in source_receipt_ids
+    ):
+        raise ValidationFailure("Protein Domain target source receipt authority is malformed")
+    allowed = capability_contract["allowed_model_modes"]
+    if not isinstance(allowed, list) or len(allowed) != 1:
+        raise ValidationFailure("initial Plan requires one exact model/mode authority")
+    model_mode = allowed[0]
+    adapter_id = str(capability["workflow_adapter_id"])
+    return {
+        "schema": "bms.workflow.typed_core_job.v1",
+        "workflow_family": "typed_core_job",
+        "contract_version": "1",
+        "adapter_id": adapter_id,
+        "nodes": [{"id": "native_job", "kind": "typed_core_job", "adapter_id": adapter_id}],
+        "edges": [],
+        "parameters": parameters,
+        "scheduler": {
+            "name": plan_name,
+            "model_id": model_mode["model_id"],
+            "mode": model_mode["mode"],
+            "params": {**parameters, "workflow_adapter": adapter_id},
+        },
+        "source_receipt_ids": list(source_receipt_ids),
+        "expected_cardinality": 1,
+    }
 
 
 def decode_workflow_plan_capability_contract(
@@ -420,6 +482,22 @@ async def persist_workflow_plan_authority(
         created_at=now(),
     )
     session.add(authority)
+    await session.flush()
+    draft = await session.scalar(
+        select(ExperimentWorkflowDraft).where(ExperimentWorkflowDraft.workflow_id == workflow_id)
+    )
+    if draft is None or draft.canonical_payload != "{}":
+        raise ValidationFailure("new Workflow Plan draft authority is unavailable")
+    try:
+        decoded_domain_payload = json.loads(revision.canonical_payload)
+    except json.JSONDecodeError as exc:
+        raise ValidationFailure("Workflow Plan Domain revision authority is malformed") from exc
+    draft.canonical_payload = canonical_json(initial_workflow_plan_payload(
+        plan_name=head.display_name,
+        capability_contract=contract,
+        domain_payload=decoded_domain_payload,
+    ))
+    draft.updated_at = now()
     await session.flush()
     return authority, contract
 

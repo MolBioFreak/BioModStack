@@ -462,6 +462,28 @@ async def publish_launch_context_binding(
     await core_session.refresh(job)
 
 
+def normalize_bound_job_params(
+    *,
+    supplied_params: dict[str, Any],
+    expected_params: dict[str, Any],
+) -> dict[str, Any]:
+    expected_adapter = expected_params.get("workflow_adapter")
+    supplied_adapter = supplied_params.get("workflow_adapter")
+    if not isinstance(expected_adapter, str) or not expected_adapter:
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Bound Workflow Revision has no workflow adapter authority.",
+            status_code=409,
+        )
+    if supplied_adapter not in (None, expected_adapter):
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Native workflow adapter does not match the bound Workflow Revision.",
+            status_code=409,
+        )
+    return {**supplied_params, "workflow_adapter": expected_adapter}
+
+
 async def validate_bound_job_request(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -519,10 +541,16 @@ async def validate_bound_job_request(
             "Job model or mode does not match the bound Workflow Revision.",
             status_code=409,
         )
-    prepared_params = dict(params)
-    params_match = _canonical_json(params) == _canonical_json(expected_params)
+    prepared_params = normalize_bound_job_params(
+        supplied_params=params,
+        expected_params=expected_params,
+    )
+    params_match = _canonical_json(prepared_params) == _canonical_json(expected_params)
     if model_id == "nanopore":
-        params_match = all(key in params and params[key] == value for key, value in expected_params.items())
+        params_match = all(
+            key in prepared_params and prepared_params[key] == value
+            for key, value in expected_params.items()
+        )
     if model_id == "protein_local_redesign":
         supplied_adapter = params.get("workflow_adapter")
         if supplied_adapter not in (None, expected_adapter):

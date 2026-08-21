@@ -1,5 +1,5 @@
 {
-  "schema": "bms.ngs-molbio.runtime-source-denominator.v1",
+  "content_sha256": "e92ddeaceb095329cee24d0df61588eac2519b25ec6878c7985cdbba0d375afc",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -76,6 +76,7 @@
     "platform/api/services/ont_signal_workbench.py",
     "platform/api/services/ont_signal_worker.py",
     "platform/api/services/payload_ownership_audit.py",
+    "platform/api/services/protein_project_capabilities.py",
     "platform/api/services/resource_usage_evidence.py",
     "platform/api/services/workflow_adapter.py",
     "platform/api/workflow_job_runner.py",
@@ -115,5 +116,5 @@
     "scripts/ont_signal_runtime.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py"
   ],
-  "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec"
+  "schema": "bms.ngs-molbio.runtime-source-denominator.v1"
 }

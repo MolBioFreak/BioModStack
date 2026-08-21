@@ -1658,7 +1658,14 @@ export default function DomainWorkflowOperator({
             ) {
                 throw new Error('Workflow draft readback lacks the closed server-authored workflow envelope.');
             }
-            const payload = { ...draft, parameters: parameterValues } as JsonObject;
+            const payload = {
+                ...draft,
+                parameters: parameterValues,
+                scheduler: {
+                    ...((isObject(draft.scheduler) ? draft.scheduler : {}) as JsonObject),
+                    params: { ...parameterValues, workflow_adapter: draft.adapter_id },
+                },
+            } as JsonObject;
             return replaceDomainWorkflowPlanDraft(
                 ...scope,
                 selectedPlanId,

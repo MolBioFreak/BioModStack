@@ -81,6 +81,7 @@ from services.global_experiments.receipts import attach_verified_entity
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 from services.ngs_molbio_connector import exact_local_launch_authority
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, capability_inventory
+from services.protein_project_capabilities import protein_capability_inventory
 from services.ngs_molbio_n5 import (
     ResourceAdmissionDenied,
     persist_admission_refusal,
@@ -692,21 +693,20 @@ def _domain_capability_authority(
         payload = json.loads(revision.canonical_payload)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValidationFailure("current Domain revision authority is malformed") from exc
-    if not isinstance(payload, dict) or payload.get("domain_kind") != "ngs_molbio":
-        raise HTTPException(
-            503,
-            detail={
-                "code": "protein_capability_authority_unavailable",
-                "message": "accepted Protein capability authority is not installed",
-            },
-        )
+    if not isinstance(payload, dict) or payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}:
+        raise ValidationFailure("current Domain kind has no capability authority")
     raw_domain_payload = payload.get("domain_payload")
     if not isinstance(raw_domain_payload, dict):
         raise ValidationFailure("current Domain revision has no exact domain payload authority")
     experiment_mode = raw_domain_payload.get("experiment_mode")
     if not isinstance(experiment_mode, str) or not experiment_mode:
         raise ValidationFailure("current Domain revision has no exact experiment_mode authority")
-    return experiment_mode, capability_inventory()
+    inventory = (
+        protein_capability_inventory()
+        if payload["domain_kind"] == "protein_in_silico"
+        else capability_inventory()
+    )
+    return experiment_mode, inventory
 
 
 def _capability_is_allowed_for_domain(capability: dict[str, Any], experiment_mode: str) -> bool:

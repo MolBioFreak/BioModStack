@@ -97,6 +97,7 @@ describe('NGS/MolBio frontend closure wiring', () => {
         expect(operator).toContain('requested={selection.preparation.requested_settings}');
         expect(operator).toContain('effective={selection.preparation.effective_settings}');
         expect(operator).toContain('launch_context_id: launchContextId');
+        expect(operator).toContain('params: { ...parameterValues, workflow_adapter: draft.adapter_id }');
         expect(operator).not.toContain("appendLaunchContext('/molbio'");
         expect(operator).not.toContain("appendLaunchContext('/ngs'");
     });
