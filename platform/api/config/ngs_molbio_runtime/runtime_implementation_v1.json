@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "70a24198e3b38a381c65587f918cb9a2d6dc5dfa1d9e4a2e96f77b3e5e40689f",
+  "content_sha256": "e76a1cb29ecc25511246e232c217de8025316e8c61f7ef8b63e635f2c3e748d6",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5ac2aedad42e1e93c5b22186090860ab32404944c6b7b3496cd06e9562952a8c",
@@ -109,8 +109,8 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "569ec27a31b29a57a5849dbfa863de4dbe45debd9bdf68b2f95326c28c9dba48",
-      "size_bytes": 24901
+      "sha256": "daa577503d128b0ad24a01e6274122fec4ead39435c179376dafa8a721874da1",
+      "size_bytes": 26539
     },
     {
       "path": "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
@@ -144,8 +144,8 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "f9bdc5a1066d2c8cbd1921d6147a5243d1a0fa4255e9486f44da006698ab41f0",
-      "size_bytes": 260254
+      "sha256": "a9a9807f1511e329818def6b53225cdaa9ea9f63f943c71a18d0d2df2e18b1a5",
+      "size_bytes": 261933
     },
     {
       "path": "platform/api/main.py",
@@ -254,8 +254,8 @@
     },
     {
       "path": "platform/api/routers/projects.py",
-      "sha256": "2afd847dbfad641a417a67ab162083a995d02ef87d5995d7892b8b6ed645ff11",
-      "size_bytes": 73565
+      "sha256": "e11ccb881fead32b47196a82c259de7225c17cf6e9b2a0f77182ac885a320307",
+      "size_bytes": 77926
     },
     {
       "path": "platform/api/routers/queue.py",
@@ -354,8 +354,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "e58a37f0e3bc405f8310fb542c87bf30897836b1c0cee8fe741f122a309a5180",
-      "size_bytes": 40265
+      "sha256": "f50cfd835e7ca0a535448acb6eb40da63abcb6d303af9a38ea41cb8f58586b63",
+      "size_bytes": 40473
     },
     {
       "path": "platform/api/services/ngs_molbio_connector.py",
@@ -474,8 +474,8 @@
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainExperimentWorkspace.tsx",
-      "sha256": "9cf942ed06fef3d105f03b3c259d52798b8d068f9ca0c549f6e3d770d5b988a1",
-      "size_bytes": 50318
+      "sha256": "b22d2163b999611f4a52e220a92ce4f76dfc74878e1fffd0f9e4f556595078c2",
+      "size_bytes": 50827
     },
     {
       "path": "platform/frontend/src/components/molbio-ngs/DomainWorkflowOperator.tsx",
@@ -622,8 +622,8 @@
     "content_sha256": "dce7ba145daa72a2ef5bda759c1e729c28e40f95dc4e1a5bf2fa3f467e9357ec",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "0a69976c86fc447360ef9a172435446e2b3c3fd2",
-  "successor_source_tree": "d9617f2a47a4961bf41b2b4d82aa54ccac846303",
+  "successor_source_commit": "259132ed58534b2dcc7c6447ab6f64e3692aba27",
+  "successor_source_tree": "95a135937ba12fb0bf8bfc65b4e7a0e6887c3a02",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
