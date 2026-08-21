@@ -54,6 +54,9 @@ from migrations.seal_ont_external_source_identity import (
     migrate as seal_ont_external_source_identity,
 )
 from migrations.add_ont_signal_workbench import migrate as migrate_ont_signal_workbench
+from migrations.add_ont_external_move_bam_receipts import (
+    migrate as migrate_ont_external_move_bam_receipts,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -105,6 +108,7 @@ MIGRATIONS: List[Migration] = [
     Migration(30, "enforce_ont_external_registration_immutability", migrate_ont_external_registration_immutability),
     Migration(31, "seal_ont_external_source_identity", seal_ont_external_source_identity),
     Migration(32, "add_ont_signal_workbench", migrate_ont_signal_workbench),
+    Migration(33, "add_ont_external_move_bam_receipts", migrate_ont_external_move_bam_receipts),
 ]
 
 
