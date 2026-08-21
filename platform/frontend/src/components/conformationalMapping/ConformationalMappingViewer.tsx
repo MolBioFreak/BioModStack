@@ -348,18 +348,21 @@ export function ConformationalMappingViewer({
     const projectAdapterId = status.data?.backend === 'confornets'
         ? 'bms.cm.confornets.adapter.v1'
         : 'bms.cm.protenix_v2.adapter.v1';
-    const frustraMpnnJob: Job = job ?? {
-        id: requestId,
-        name: title,
-        status: statusLabel === 'failed' || statusLabel === 'cancelled' || statusLabel === 'running' || statusLabel === 'queued'
-            ? statusLabel
-            : 'completed',
-        model_id: 'conformational_mapping',
-        mode: 'analysis',
-        params: { run_frustrampnn: true },
-        created_at: '',
-        design_count: 0,
-        output_dir: null,
+    const frustraMpnnJob: Job = {
+        ...(job ?? {
+            id: requestId,
+            name: title,
+            status: statusLabel === 'failed' || statusLabel === 'cancelled' || statusLabel === 'running' || statusLabel === 'queued'
+                ? statusLabel
+                : 'completed',
+            model_id: 'conformational_mapping',
+            mode: 'analysis',
+            params: { run_frustrampnn: true },
+            created_at: '',
+            design_count: 0,
+            output_dir: null,
+        }),
+        id: status.data?.job_id || job?.id || requestId,
     };
 
     return (

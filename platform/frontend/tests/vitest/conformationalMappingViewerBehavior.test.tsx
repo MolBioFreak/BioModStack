@@ -76,9 +76,14 @@ const mount = async (candidateCount: number) => {
         captured.push({ primary: props.structureUrl, overlays: props.overlayStructures || [] });
         return <div data-workbench="stub" data-primary={props.structureUrl} data-overlays={JSON.stringify(props.overlayStructures || [])} />;
     };
+    const frustraCaptured: Array<{ jobId: string; invocationId?: string }> = [];
+    const FrustraWorkbench = (props: { job: { id: string }; preferredInvocationId?: string }) => {
+        frustraCaptured.push({ jobId: props.job.id, invocationId: props.preferredInvocationId });
+        return <div data-frustra-workbench="stub" data-job-id={props.job.id} data-invocation-id={props.preferredInvocationId} />;
+    };
     const services = {
         getStatus: async () => ({
-            request_id: 'request-viewer', status: 'completed', job_id: null, job_status: 'completed',
+            request_id: 'request-viewer', status: 'completed', job_id: 'retry-job', job_status: 'completed',
             result_contract_id: 'conformational_mapping_protenix_v1', retry_eligible: false,
             progress: { phase: 'completed', completed_coordinates: candidateCount, expected_coordinates: candidateCount },
             failure_receipt: null,
@@ -96,12 +101,12 @@ const mount = async (candidateCount: number) => {
     await act(async () => {
         renderer = create(
             <MemoryRouter><QueryClientProvider client={client}>
-                <ConformationalMappingViewer requestId="request-viewer" services={services} Workbench={Workbench as never} />
+                <ConformationalMappingViewer requestId="request-viewer" services={services} Workbench={Workbench as never} FrustraWorkbench={FrustraWorkbench as never} />
             </QueryClientProvider></MemoryRouter>,
         );
     });
     await flush();
-    return { renderer: renderer!, client, captured };
+    return { renderer: renderer!, client, captured, frustraCaptured };
 };
 
 test('mounted viewer manages governed alternative overlays across candidate cardinalities', async () => {
@@ -155,4 +160,23 @@ test('mounted viewer manages governed alternative overlays across candidate card
     assert.match(alerts, /validation failed closed|candidate|cardinality/i);
     await act(async () => zero.renderer.unmount());
     zero.client.clear();
+});
+
+test('mounted exact-20 workbench uses the current retry job identity', async () => {
+    const mounted = await mount(3);
+    const candidateThree = mounted.renderer.root.findAllByType('button').find((node) => text(node).includes('Candidate 3'));
+    assert.ok(candidateThree);
+    await act(async () => candidateThree.props.onClick());
+    const landscape = mounted.renderer.root.findAllByType('button').find((node) => text(node) === 'Exact-20 landscape');
+    assert.ok(landscape);
+    await act(async () => landscape.props.onClick());
+    await flush();
+    const workbench = mounted.renderer.root.findByProps({ 'data-frustra-workbench': 'stub' });
+    assert.equal(workbench.props['data-job-id'], 'retry-job');
+    assert.equal(
+        workbench.props['data-invocation-id'],
+        'frustrampnn:retry-job:candidate-3',
+    );
+    await act(async () => mounted.renderer.unmount());
+    mounted.client.clear();
 });
