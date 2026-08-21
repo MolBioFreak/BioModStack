@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "948a3c64e209477a47833509951124041632524b0f1c19f2adc4bc4453823793",
+  "content_sha256": "a04000257fbf42f7af8987df00426c44ccad9b6668ab0307287d579c23d2565d",
   "entries": [
     {
       "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
@@ -107,9 +107,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-molbio-experiment-v2.schema.json",
-      "schema_canonical_sha256": "e44295b0a16659f1f3961682c18c6abba8ef6bd3faeb6363911b33b0d1659ac1",
+      "schema_canonical_sha256": "12737231a09e2c1638ed054d908cb3c7483d8bd909e67f6111fe7848c2428679",
       "schema_id": "bms.ngs-molbio-experiment.v2",
-      "schema_sha256": "c56e4536b7024d4865786dacc06ba860130dc69c3db8f2877e850aef22bb92b5"
+      "schema_sha256": "2ea3f77497191331e440359a7ba94f64fe435b0904936776cc6d5c3e521a605f"
     },
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -422,6 +422,18 @@
       "schema_canonical_sha256": "04effa7930ad42242289146b7edca6056e027187a6e0405d4289413597f378c4",
       "schema_id": "bms.workflow-parameters.ngs.ont.pooled_reference_assignment.v1",
       "schema_sha256": "89724f1e39dbd09c42f8686ae866d0bda058cdda9c1cc0b43185b6ee00daee78"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-v2.schema.json",
+      "schema_canonical_sha256": "b22e8dd030388012fcfaf39bdf878149e64c41bab268fa58c25a36e88e44808a",
+      "schema_id": "bms.evidence-requirement.v2",
+      "schema_sha256": "7807803e4010b767ad81ede5638cf37dc12caada2d408daa241169e676bda3ed"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-v2.schema.json",
+      "schema_canonical_sha256": "45c8949cedd9f76f19bc1cc955974f33835576b02716f44c76d75be3f291e40c",
+      "schema_id": "bms.scientific-criterion.v2",
+      "schema_sha256": "3d629379925203ee50568d0f59548473cea4781b927e7a6e2b4054843c981948"
     }
   ],
   "schema": "bms.ngs-molbio.schema-registry.v1"
