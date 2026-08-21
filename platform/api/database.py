@@ -23,6 +23,7 @@ DATABASE_URL = get_db_url()
 current_launch_context_id: ContextVar[str | None] = ContextVar("bms_launch_context_id", default=None)
 LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY = "launch_context_binding"
 LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA = "bms.launch-context-core-binding.v1"
+_SCIENTIFIC_JSON_INLINE_LIMIT = 256 * 1024
 
 
 def launch_context_binding_ready(job: object) -> bool:
@@ -1015,8 +1016,16 @@ class ScientificArtifactJSON(TypeDecorator):
     cache_ok = True
 
     def process_bind_param(self, value, dialect):
-        if value is None or isinstance(value, dict):
+        if value is None:
             return value
+        if isinstance(value, dict) and value.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            return value
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True).encode("utf-8")
+        if len(encoded) > _SCIENTIFIC_JSON_INLINE_LIMIT:
+            raise ValueError("oversized scientific JSON must be published as a governed artifact reference")
         return value
 
     def process_result_value(self, value, dialect):
@@ -1365,7 +1374,7 @@ _DESIGN_ARTIFACT_FIELDS = (
     "frustration_residues", "rfa_design_loops", "rfa_hotspots", "ppiflow_loop_metrics",
     "metric_provenance", "metric_completeness", "pair_chains_iptm", "chains_ptm",
 )
-_DESIGN_INLINE_LIMIT = 256 * 1024
+_DESIGN_INLINE_LIMIT = _SCIENTIFIC_JSON_INLINE_LIMIT
 
 
 @event.listens_for(Session, "before_flush")
@@ -1383,10 +1392,10 @@ def _externalize_large_design_payloads(session, _flush_context, _instances):
             continue
         for field_name in _DESIGN_ARTIFACT_FIELDS:
             value = getattr(target, field_name, None)
-            if not isinstance(value, dict) or value.get("schema") in {
+            if value is None or (isinstance(value, dict) and value.get("schema") in {
                 "bms.scientific-artifact-reference.v1",
                 "bms.scientific-artifact-row-reference.v1",
-            }:
+            }):
                 continue
             encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True)
             if len(encoded.encode("utf-8")) <= _DESIGN_INLINE_LIMIT:
