@@ -147,6 +147,7 @@ class _CameraStreamResponse(BaseModel):
     state: Literal["off", "starting", "live", "error"]
     active: StrictBool
     stream_id: str | None = None
+    stopped_session_id: str | None = None
     camera_ownership_epoch: StrictInt = Field(ge=0)
     device: str | None = None
     fps: StrictInt | None = Field(default=None, ge=1, le=30)
@@ -381,7 +382,7 @@ class BioXpRobotClient:
             stream = _CameraStreamResponse.model_validate(payload)
             return stream.model_dump(
                 mode="json",
-                exclude={"device", "mjpeg_url", "session", "freshness", "provenance"},
+                exclude={"device", "mjpeg_url", "session", "freshness", "provenance", "stopped_session_id"},
             )
         except RobotResponseError:
             raise
