@@ -54,6 +54,7 @@ export function ProjectInspector({
     const canOpen = actions.has('open') || Boolean(surface?.available_actions.includes('open'));
     const isWorkflowDomain = selection.node_type === 'domain_experiment'
         && (selection.summary.schema === 'bms.protein-in-silico-experiment.v3'
+            || selection.summary.schema === 'bms.domain-experiment.v4'
             || selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
             || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
             || Array.isArray(selection.summary.planned_capability_ids));
