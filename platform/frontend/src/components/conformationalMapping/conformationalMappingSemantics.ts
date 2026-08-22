@@ -194,8 +194,18 @@ export const requireApprovedCmResults = (results: CmResults): CmResults => {
     }
     const recordIdentities = new Set<string>();
     results.records.forEach((item) => {
-        if (!item || typeof item.type !== 'string' || typeof item.key !== 'string' || !SHA256.test(item.sha256) || !item.payload) {
+        if (!item || typeof item.type !== 'string' || typeof item.key !== 'string' || !SHA256.test(item.sha256)) {
             throw new Error('Malformed canonical record identity');
+        }
+        if (item.payload !== undefined && (!item.payload || typeof item.payload !== 'object' || Array.isArray(item.payload))) {
+            throw new Error('Malformed canonical record payload');
+        }
+        if (item.artifact !== undefined && item.artifact !== null
+            && (!item.artifact.artifact_id || !SHA256.test(item.artifact.content_sha256)
+                || !Number.isInteger(item.artifact.size_bytes) || item.artifact.size_bytes < 0
+                || !Number.isInteger(item.artifact.row_count) || item.artifact.row_count < 0
+                || !item.artifact.relative_path || item.artifact.relative_path.startsWith('/'))) {
+            throw new Error('Malformed canonical record artifact identity');
         }
         const identity = `${item.type}\u0000${item.key}`;
         if (recordIdentities.has(identity)) throw new Error('Duplicate canonical record identity');
@@ -295,7 +305,12 @@ export const candidateStructureMap = (results: CmResults, candidateId: string): 
     string(payload.source_format, 'Structure-map source format is missing');
     string(payload.normalizer_version, 'Structure-map normalizer identity is missing');
     string(payload.altloc_policy, 'Structure-map alternate-location policy is missing');
-    payload.rows.forEach((value) => {
+    validateStructureMapRows(payload.rows);
+    return payload as unknown as CmStructureMap;
+};
+
+export const validateStructureMapRows = (values: unknown[]): CmStructureMapRow[] => {
+    values.forEach((value) => {
         const row = object(value, 'Structure-map row is malformed');
         string(row.entity_instance_id, 'Structure-map entity instance is missing');
         string(row.label_asym_id, 'Structure-map label chain is missing');
@@ -305,7 +320,7 @@ export const candidateStructureMap = (results: CmResults, candidateId: string): 
             throw new Error('Structure-map row status is unknown');
         }
     });
-    return payload as unknown as CmStructureMap;
+    return values as CmStructureMapRow[];
 };
 
 export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
@@ -321,7 +336,12 @@ export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
         || !payload.ranking_policy || typeof payload.ranking_policy !== 'object' || Array.isArray(payload.ranking_policy)) {
         throw new Error('Canonical analysis contract is malformed');
     }
-    payload.results.forEach((value) => {
+    validateCanonicalAnalysisRows(payload.results);
+    return payload as unknown as CmAnalysis;
+};
+
+export const validateCanonicalAnalysisRows = (values: unknown[]): CmAnalysisResult[] => {
+    values.forEach((value) => {
         const row = object(value, 'Analysis result is malformed');
         if (!['robust', 'conditional', 'insufficient_support'].includes(String(row.status))
             || typeof row.components !== 'object' || typeof row.sort_keys !== 'object') throw new Error('Analysis result contract is malformed');
@@ -335,7 +355,7 @@ export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
         integer(row.expected_coordinate_count, 'Analysis expected support is malformed', 1);
         integer(row.valid_coordinate_count, 'Analysis valid support is malformed', 0);
     });
-    return payload as unknown as CmAnalysis;
+    return values as CmAnalysisResult[];
 };
 
 export const recordsByType = (results: CmResults, type: string): CmRecord[] =>

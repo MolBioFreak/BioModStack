@@ -13,8 +13,10 @@ from services.scientific_artifacts import (
     artifact_row_reference,
     envelope_rows,
     install_parquet_rows,
+    query_json_envelope_page,
     query_rows,
     reconstruct_envelope,
+    resolve_json_envelope_fields,
     resolve_json_value,
     verify_artifact,
 )
@@ -53,6 +55,56 @@ def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):
         root=str(tmp_path),
     )
     assert reconstruct_envelope(rows) == payload
+
+
+def test_json_envelope_projection_and_collection_page_are_bounded(tmp_path):
+    payload = {
+        "schema_name": "cm_analysis",
+        "schema_version": 1,
+        "analysis_id": "analysis-1",
+        "expected_strata": ["a", "b"],
+        "results": [{"source_row_key": f"row-{index}"} for index in range(5)],
+    }
+    schema = pa.schema(
+        [
+            ("key", pa.string()),
+            ("item_index", pa.int64()),
+            ("payload_json", pa.string()),
+        ]
+    )
+    installed = install_parquet_rows(
+        root=tmp_path,
+        owner_kind="cm_record",
+        owner_id="request/one",
+        role="payload",
+        schema_id="bms.json-envelope.v1",
+        schema_version=1,
+        source_sha256="a" * 64,
+        rows=envelope_rows(payload),
+        schema=schema,
+    )
+
+    assert resolve_json_envelope_fields(
+        installed.reference(),
+        keys=["schema_name", "schema_version", "analysis_id", "expected_strata"],
+        root=tmp_path,
+    ) == {
+        "schema_name": "cm_analysis",
+        "schema_version": 1,
+        "analysis_id": "analysis-1",
+        "expected_strata": ["a", "b"],
+    }
+    first = query_json_envelope_page(
+        installed.reference(), key="results", offset=0, limit=2, root=tmp_path,
+    )
+    assert first["total_count"] == 5
+    assert first["next_offset"] == 2
+    assert [row["source_row_key"] for row in first["rows"]] == ["row-0", "row-1"]
+    last = query_json_envelope_page(
+        installed.reference(), key="results", offset=4, limit=2, root=tmp_path,
+    )
+    assert last["next_offset"] is None
+    assert [row["source_row_key"] for row in last["rows"]] == ["row-4"]
 
 
 def test_row_reference_is_compact_and_resolves_value(tmp_path):

@@ -229,7 +229,45 @@ export interface CmRecord {
     type: string;
     key: string;
     sha256: string;
-    payload: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+    artifact?: CmRecordArtifact | null;
+    pages?: Record<string, CmRecordPageDescriptor>;
+}
+
+export interface CmRecordArtifact {
+    artifact_id: string;
+    owner_kind: string;
+    owner_id: string;
+    role: string;
+    schema_id: string;
+    schema_version: number;
+    content_sha256: string;
+    size_bytes: number;
+    row_count: number;
+    relative_path: string;
+    media_type: string;
+}
+
+export interface CmRecordPageDescriptor {
+    offset: number;
+    limit: number;
+    total_count: number;
+    next_offset: number | null;
+}
+
+export interface CmRecordCollectionPage {
+    request_id: string;
+    record_type: string;
+    record_key: string;
+    sha256: string;
+    collection: string;
+    artifact: CmRecordArtifact;
+    key: string;
+    offset: number;
+    limit: number;
+    total_count: number;
+    next_offset: number | null;
+    rows: unknown[];
 }
 
 export type CmStateLandscapeComparisonMode = 'pairwise' | 'reference';
@@ -601,6 +639,19 @@ export const getCmLogs = async (jobId: string): Promise<JobLogs> =>
 
 export const getCmResults = async (requestId: string): Promise<CmResults> =>
     (await api.get<CmResults>(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/results`)).data;
+
+export const getCmRecordPage = async (
+    requestId: string,
+    recordType: string,
+    recordKey: string,
+    collection: string,
+    offset = 0,
+    limit = 100,
+): Promise<CmRecordCollectionPage> =>
+    (await api.get<CmRecordCollectionPage>(
+        `/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/records/${encodeURIComponent(recordType)}/${encodeURIComponent(recordKey)}/page`,
+        { params: { collection, offset, limit } },
+    )).data;
 
 export const getCmLandscape = async (
     requestId: string,
