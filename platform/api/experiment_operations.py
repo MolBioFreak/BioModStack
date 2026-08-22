@@ -868,8 +868,9 @@ async def register_external_entity_receipt(
             raise IdempotencyConflict("external entity identity already exists under another verification authority")
         if existing.content_digest != content_digest or existing.generation_or_revision != generation_or_revision:
             raise IdempotencyConflict("external entity identity already exists with different content")
-        if existing.acknowledgement_json == _canonical(effective_acknowledgement):
-            return existing
+        # The receipt identity is immutable. Volatile acknowledgement fields such as
+        # verified_at and source_build_revision must not create a duplicate row.
+        return existing
     resource_id = new_id("external-receipt")
     session.add(ExperimentResource(id=resource_id, kind="external_entity_receipt", workspace_id=workspace_id, lifecycle_owner_id=workspace_id, created_at=now()))
     await session.flush()
