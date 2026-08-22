@@ -9,11 +9,12 @@ from .contracts import (
     envelope_rows,
     is_artifact_reference,
     reconstruct_envelope,
+    require_artifact_reference,
     require_row_reference,
 )
 from .persistence import publish_json_payload, publish_table_rows
-from .query import query_rows
-from .resolve import resolve_json_value
+from .query import count_rows, query_rows
+from .resolve import query_json_envelope_page, resolve_json_envelope_fields, resolve_json_value
 from .writer import (
     InstalledArtifact,
     ScientificArtifactError,
@@ -33,15 +34,19 @@ __all__ = [
     "artifact_root",
     "canonical_json_bytes",
     "canonical_sha256",
+    "count_rows",
     "envelope_rows",
     "install_parquet_rows",
     "is_artifact_reference",
     "publish_json_payload",
     "publish_table_rows",
     "query_rows",
+    "query_json_envelope_page",
     "read_rows",
     "require_row_reference",
     "resolve_json_value",
+    "resolve_json_envelope_fields",
+    "require_artifact_reference",
     "reconstruct_envelope",
     "verify_artifact",
 ]
