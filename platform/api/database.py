@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 from contextvars import ContextVar
+import asyncio
 import json
+import sqlite3
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
@@ -367,14 +369,65 @@ class OntRawSignalLookup(Base):
     completed_at = Column(LenientSQLiteDateTime, nullable=True)
 
 
+class OntExternalMoveBamRegistrationReceipt(Base):
+    """Immutable server-only locator and byte authority for one external BAM intake."""
+
+    __tablename__ = "ont_external_move_bam_registration_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "observed_generation", "raw_representation_id", "candidate_id", "molecule_type",
+            name="uq_ont_external_move_bam_registration",
+        ),
+        CheckConstraint("artifact_size_bytes > 0", name="ck_ont_external_move_bam_nonempty"),
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_external_move_bam_molecule"),
+    )
+
+    id = Column(String(128), primary_key=True)
+    candidate_id = Column(String(64), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    server_relative_path = Column(Text, nullable=False)
+    root_device = Column(Integer, nullable=False)
+    root_inode = Column(Integer, nullable=False)
+    file_device = Column(Integer, nullable=False)
+    file_inode = Column(Integer, nullable=False)
+    file_mtime_ns = Column(Integer, nullable=False)
+    file_ctime_ns = Column(Integer, nullable=False)
+    artifact_sha256 = Column(String(64), nullable=False)
+    artifact_size_bytes = Column(Integer, nullable=False)
+    molecule_type = Column(String(16), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class OntMoveTableSource(Base):
     """Immutable, fully validated move-tag BAM authority for one run generation."""
 
     __tablename__ = "ont_move_table_sources"
     __table_args__ = (
-        UniqueConstraint("run_id", "observed_generation", "artifact_sha256", name="uq_ont_move_source_artifact"),
+        UniqueConstraint(
+            "run_id",
+            "observed_generation",
+            "artifact_sha256",
+            "attempt_number",
+            name="uq_ont_move_source_artifact_attempt",
+        ),
+        UniqueConstraint(
+            "predecessor_move_source_id",
+            name="uq_ont_move_source_predecessor",
+        ),
         CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_move_source_molecule"),
         CheckConstraint("validation_state IN ('requested','running','ready','failed')", name="ck_ont_move_source_state"),
+        CheckConstraint("attempt_number >= 1", name="ck_ont_move_source_attempt_positive"),
+        CheckConstraint(
+            "(attempt_number = 1 AND predecessor_move_source_id IS NULL) OR "
+            "(attempt_number > 1 AND predecessor_move_source_id IS NOT NULL)",
+            name="ck_ont_move_source_attempt_lineage",
+        ),
+        CheckConstraint(
+            "(source_job_id IS NULL) != (external_registration_receipt_id IS NULL)",
+            name="ck_ont_move_source_exact_producer_authority",
+        ),
     )
 
     id = Column(String(96), primary_key=True)
@@ -403,6 +456,13 @@ class OntMoveTableSource(Base):
     lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
     created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
     validated_at = Column(LenientSQLiteDateTime, nullable=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    predecessor_move_source_id = Column(
+        String(96),
+        ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
 
 
 class OntSignalCalibrationArtifact(Base):
@@ -2329,13 +2389,115 @@ class MdReconcilerLease(Base):
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
+def _attest_sqlite_migration_33(db_path: str) -> None:
+    """Prove migration 33 ledger and schema authority without synthesizing history."""
+    from migrations.add_ont_external_move_bam_receipts import (
+        MIGRATION_33_TRIGGER_SQL_DIGESTS,
+        migration_33_trigger_sql_digest,
+    )
+    from migrations import runner as migration_runner
+
+    with sqlite3.connect(db_path) as connection:
+        ledger_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+        ).fetchone()
+        ledger_has_history = ledger_exists and connection.execute(
+            "SELECT 1 FROM schema_migrations LIMIT 1"
+        ).fetchone()
+    if not ledger_has_history:
+        raise RuntimeError(
+            "migration 33 authority is absent; metadata bootstrap cannot substitute for migration history"
+        )
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 33)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=33"
+        ).fetchone()
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        trigger_sql_digests = {
+            str(row[0]): migration_33_trigger_sql_digest(str(row[1] or ""))
+            for row in connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
+            )
+            if str(row[0]) in MIGRATION_33_TRIGGER_SQL_DIGESTS
+        }
+        receipt_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info('ont_external_move_bam_registration_receipts')"
+            )
+        }
+        source_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info('ont_move_table_sources')")
+        }
+    if (
+        ledger != ("add_ont_external_move_bam_receipts", expected_checksum)
+        or not {
+            "ont_external_move_bam_registration_receipts",
+            "ont_move_table_sources",
+        }.issubset(tables)
+        or trigger_sql_digests != MIGRATION_33_TRIGGER_SQL_DIGESTS
+        or not {
+            "candidate_id",
+            "server_relative_path",
+            "artifact_sha256",
+            "artifact_size_bytes",
+        }.issubset(receipt_columns)
+        or not {"source_job_id", "external_registration_receipt_id"}.issubset(
+            source_columns
+        )
+    ):
+        raise RuntimeError("migration 33 startup attestation failed")
+
+
+def _attest_sqlite_migration_34(db_path: str) -> None:
+    """Prove move-source attempt lineage and its sealed migration ledger."""
+    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations import runner as migration_runner
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 34)
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=34"
+        ).fetchone()
+        if ledger != ("add_ont_move_source_attempt_lineage", expected_checksum):
+            raise RuntimeError("migration 34 startup attestation failed")
+        try:
+            attest(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 34 startup attestation failed") from exc
+
+
 async def init_db():
-    """Create all tables if they don't exist."""
+    """Bootstrap metadata, then attest migration authority before operational use."""
     async with engine.begin() as conn:
         if engine.dialect.name == "sqlite":
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA busy_timeout=30000"))
         await conn.run_sync(Base.metadata.create_all)
+
+    if engine.dialect.name == "sqlite":
+        db_path = engine.url.database
+        if not db_path or db_path == ":memory:":
+            raise RuntimeError(
+                "SQLite startup migrations require a durable filesystem database path"
+            )
+        await asyncio.to_thread(_attest_sqlite_migration_33, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
+
+    async with engine.begin() as conn:
         await _ensure_schema(conn)
 
 

@@ -4852,6 +4852,13 @@ export interface OntSignalCapabilityAuthority {
     reference_revision_id: string;
 }
 
+export interface OntExternalMoveBamCandidate {
+    candidate_id: string;
+    display_name: string;
+    size_bytes: number;
+    modified_at_ns: number;
+}
+
 export interface OntMoveTableSource {
     move_source_id: string;
     run_id: string;
@@ -5137,6 +5144,20 @@ export const fetchOntSignalWorkbenchCapabilities = (
 ));
 export const fetchOntMoveSources = (runId: string, observedGeneration: number) =>
     apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`));
+export const fetchOntExternalMoveBamCandidates = () =>
+    apiData(api.get<{ items: OntExternalMoveBamCandidate[] }>(`${signalWorkbenchRoot}/external-move-bam-candidates`));
+export const registerOntExternalMoveBamCandidate = (
+    runId: string,
+    observedGeneration: number,
+    request: {
+        candidate_id: string;
+        raw_representation_id: string;
+        molecule_type: 'dna' | 'rna';
+    },
+) => apiData(api.post<OntMoveTableSource>(
+    `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/external-move-bam-candidates/register`,
+    request,
+));
 export const registerOntMoveSource = (runId: string, observedGeneration: number, request: {
     raw_representation_id: string;
     input_file_id: string;

@@ -10,6 +10,7 @@ import {
     createOntSignalMappingProfile,
     createOntSignalView,
     createOntSignalViewerSession,
+    fetchOntExternalMoveBamCandidates,
     fetchOntMoveSources,
     fetchOntSignalCalibration,
     fetchOntSignalMapping,
@@ -17,7 +18,9 @@ import {
     fetchOntSignalView,
     fetchOntSignalViewArtifact,
     fetchOntSignalWorkbenchCapabilities,
+    registerOntExternalMoveBamCandidate,
     updateOntSignalViewerSession,
+    type OntExternalMoveBamCandidate,
     type OntMoveTableSource,
     type OntSignalCalibrationJob,
     type OntSignalMappingJob,
@@ -138,6 +141,10 @@ export function ReadAndSignalWorkbench({
     const viewerCreateKeyRef = useRef('');
     const artifactUrlRef = useRef<string | null>(null);
     const [capabilities, setCapabilities] = useState<OntSignalWorkbenchCapabilities | null>(null);
+    const [externalMoveBamCandidates, setExternalMoveBamCandidates] = useState<OntExternalMoveBamCandidate[]>([]);
+    const [externalMoveBamCandidateId, setExternalMoveBamCandidateId] = useState('');
+    const [externalMoveBamMoleculeType, setExternalMoveBamMoleculeType] = useState<'dna' | 'rna'>('dna');
+    const [externalMoveBamAvailability, setExternalMoveBamAvailability] = useState<string | null>(null);
     const [moveSources, setMoveSources] = useState<OntMoveTableSource[]>([]);
     const [profiles, setProfiles] = useState<OntSignalMappingProfile[]>([]);
     const [calibration, setCalibration] = useState<OntSignalCalibrationJob | null>(null);
@@ -195,7 +202,7 @@ export function ReadAndSignalWorkbench({
 
     const refreshAuthorities = useCallback(async () => {
         const generation = identityRef.current;
-        const [nextCapabilities, sourcePayload, profilePayload] = await Promise.all([
+        const [nextCapabilities, sourcePayload, profilePayload, externalCandidateResult] = await Promise.all([
             fetchOntSignalWorkbenchCapabilities(
                 runId,
                 observedGeneration,
@@ -207,11 +214,22 @@ export function ReadAndSignalWorkbench({
             ),
             fetchOntMoveSources(runId, observedGeneration),
             fetchOntSignalMappingProfiles(),
+            fetchOntExternalMoveBamCandidates().then(
+                (payload) => ({ payload, unavailable: null }),
+                () => ({ payload: { items: [] as OntExternalMoveBamCandidate[] }, unavailable: 'External move-BAM source is unavailable.' }),
+            ),
         ]);
         if (generation !== identityRef.current) return;
         setCapabilities(nextCapabilities);
         setMoveSources(sourcePayload.items);
         setProfiles(profilePayload.items);
+        setExternalMoveBamCandidates(externalCandidateResult.payload.items);
+        setExternalMoveBamAvailability(externalCandidateResult.unavailable);
+        setExternalMoveBamCandidateId((current) => (
+            externalCandidateResult.payload.items.some((item) => item.candidate_id === current)
+                ? current
+                : externalCandidateResult.payload.items[0]?.candidate_id || ''
+        ));
         const resolvedMatchesPersistedAuthority = !viewerSession || (
             nextCapabilities.resolved.raw_representation_id === viewerSession.raw_representation_id
             && nextCapabilities.resolved.move_source_id === viewerSession.move_source_id
@@ -303,6 +321,10 @@ export function ReadAndSignalWorkbench({
     useEffect(() => {
         identityRef.current += 1;
         setCapabilities(null);
+        setExternalMoveBamCandidates([]);
+        setExternalMoveBamCandidateId('');
+        setExternalMoveBamMoleculeType('dna');
+        setExternalMoveBamAvailability(null);
         setMoveSources([]);
         setProfiles([]);
         setCalibration(null);
@@ -408,6 +430,39 @@ export function ReadAndSignalWorkbench({
             }
         });
     }, [alignmentJobId, alignmentSession?.ready, alignmentSession?.session_id, currentLocus?.contig, currentLocus?.end, currentLocus?.start, datasetId, identityKey, igvState, mode, observedGeneration, onViewerSessionChange, readId, readMapping?.mapping_job_id, referenceMapping?.mapping_job_id, referenceRevisionId, renderParams, runId, viewJob?.view_job_id, viewerAlignmentSessionId, viewerReferenceRevisionId, viewerSession]);
+
+    useEffect(() => {
+        const externalSource = moveSources.find((item) => (
+            item.external_registration_receipt_id
+            && (item.state === 'requested' || item.state === 'running')
+        ));
+        if (!externalSource) return undefined;
+        const generation = identityRef.current;
+        const moveSourceId = externalSource.move_source_id;
+        const handle = window.setInterval(() => {
+            void fetchOntMoveSources(runId, observedGeneration).then((payload) => {
+                if (generation !== identityRef.current) return;
+                const next = payload.items.find((item) => item.move_source_id === moveSourceId);
+                setMoveSources(payload.items);
+                if (next && TERMINAL_STATES.has(next.state)) {
+                    window.clearInterval(handle);
+                    if (next.state === 'ready') {
+                        void refreshAuthorities().catch((reason) => {
+                            if (generation === identityRef.current) setError(message(reason));
+                        });
+                    }
+                }
+            }).catch((reason) => {
+                if (generation === identityRef.current) setError(message(reason));
+            });
+        }, 1500);
+        return () => window.clearInterval(handle);
+    }, [
+        moveSources,
+        observedGeneration,
+        refreshAuthorities,
+        runId,
+    ]);
 
     const pollMapping = useCallback((mapping: OntSignalMappingJob | null, setter: (value: OntSignalMappingJob) => void) => {
         if (!mapping || TERMINAL_STATES.has(mapping.state)) return undefined;
@@ -530,6 +585,35 @@ export function ReadAndSignalWorkbench({
                 && item.calibration_artifact_id === calibration.artifact.calibration_artifact_id))
             || null;
     }, [calibration?.artifact, capabilities?.resolved.mapping_profile_id, compatibleSource, profiles, readMapping?.mapping_profile_id, referenceMapping?.mapping_profile_id, viewerSession?.mapping_profile_id, viewerSession?.viewer_session_id]);
+
+    const registerExternalMoveBam = async () => {
+        if (!activeRawRepresentationId || !externalMoveBamCandidateId) {
+            setError('Select one path-opaque external move BAM and an exact ready indexed BLOW5 authority.');
+            return;
+        }
+        const generation = identityRef.current;
+        setBusy(true);
+        setError(null);
+        try {
+            const created = await registerOntExternalMoveBamCandidate(runId, observedGeneration, {
+                candidate_id: externalMoveBamCandidateId,
+                raw_representation_id: activeRawRepresentationId,
+                molecule_type: externalMoveBamMoleculeType,
+            });
+            if (generation !== identityRef.current) return;
+            setMoveSources((current) => [
+                ...current.filter((item) => item.move_source_id !== created.move_source_id),
+                created,
+            ]);
+            if (created.state === 'ready') {
+                await refreshAuthorities();
+            }
+        } catch (reason) {
+            if (generation === identityRef.current) setError(message(reason));
+        } finally {
+            if (generation === identityRef.current) setBusy(false);
+        }
+    };
 
     const prepareMapping = async (mappingMode: OntSignalMappingMode) => {
         const rawRepresentationId = activeRawRepresentationId;
@@ -860,6 +944,55 @@ export function ReadAndSignalWorkbench({
                             <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'} · {selectedRead.cigar || 'no CIGAR'} · model {compatibleSource?.basecall_model_id || 'unresolved'} · raw signal {capabilities?.modes.raw_waveform.state || 'loading'}
                         </div>
                     )}
+                </section>
+
+                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-xs font-semibold">External move-BAM intake</h3>
+                        <span className="text-[10px] text-[var(--text-secondary)]">Server-governed candidates only</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-[1fr_80px_auto] gap-1 text-[10px]">
+                        <select
+                            aria-label="External move BAM candidate"
+                            value={externalMoveBamCandidateId}
+                            onChange={(event) => setExternalMoveBamCandidateId(event.target.value)}
+                            disabled={busy || externalMoveBamCandidates.length === 0}
+                            className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            {externalMoveBamCandidates.length === 0 && <option value="">No candidates</option>}
+                            {externalMoveBamCandidates.map((candidate) => (
+                                <option key={candidate.candidate_id} value={candidate.candidate_id}>
+                                    {candidate.display_name} ({candidate.size_bytes} bytes)
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            aria-label="External move BAM molecule type"
+                            value={externalMoveBamMoleculeType}
+                            onChange={(event) => setExternalMoveBamMoleculeType(event.target.value as 'dna' | 'rna')}
+                            disabled={busy}
+                            className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            <option value="dna">DNA</option>
+                            <option value="rna">RNA</option>
+                        </select>
+                        <button
+                            type="button"
+                            onClick={() => void registerExternalMoveBam()}
+                            disabled={busy || !activeRawRepresentationId || !externalMoveBamCandidateId}
+                            className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                        >
+                            Register external move BAM
+                        </button>
+                    </div>
+                    <div className="text-[10px] text-[var(--text-secondary)]">
+                        {externalMoveBamAvailability || 'Selection binds immutable bytes to this exact run, generation, and raw representation before independent move-tag validation.'}
+                    </div>
+                    {moveSources.filter((item) => item.external_registration_receipt_id).map((item) => (
+                        <div key={item.move_source_id} className="break-all text-[10px] text-[var(--text-secondary)]">
+                            External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}
+                        </div>
+                    ))}
                 </section>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">

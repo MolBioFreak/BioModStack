@@ -2349,66 +2349,359 @@ async def close_source_identity(
     return source
 
 
-async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, commands: dict[str, Any]) -> OntRawSignalRepresentation:
-    stage = Path(commands["stage"])
-    publish_root = Path(os.getenv(BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT)).parent / "ont-raw-signal" / job.run_id / str(job.observed_generation)
-    final_directory = publish_root / job.id
-    if final_directory.is_dir() and not stage.exists():
-        outputs = final_directory / "outputs"
-        routing_path = final_directory / "routing.json"
-        semantic_receipt = final_directory / "semantic-receipt.json"
-        recovering_atomic_publication = True
-    else:
-        outputs = Path(commands["outputs"])
-        routing_path = Path(commands["routing"])
-        semantic_receipt = stage / "semantic-receipt.json"
-        recovering_atomic_publication = False
-    if not outputs.is_dir() or not routing_path.is_file() or not semantic_receipt.is_file():
-        raise ValueError("validated BLOW5 publication unit is incomplete")
-    semantic = json.loads(semantic_receipt.read_text(encoding="utf-8"))
-    partition_counts = semantic.get("partition_counts")
-    if (
-        semantic.get("status") != "passed"
-        or semantic.get("duplicate_read_ids") not in (0, False)
-        or not isinstance(partition_counts, dict)
-        or not partition_counts
-        or semantic.get("routing_sha256") != hashlib.sha256(routing_path.read_bytes()).hexdigest()
-    ):
-        raise ValueError("exhaustive semantic validation receipt did not pass")
-    for fingerprint, read_count in partition_counts.items():
-        if not _is_sha256(fingerprint) or int(read_count) < 1:
-            raise ValueError("semantic receipt contains an invalid conversion partition")
-        if not (outputs / f"{fingerprint}.blow5").is_file() or not (outputs / f"{fingerprint}.blow5.idx").is_file():
-            raise ValueError("semantic receipt names an incomplete conversion partition")
-    publish_root.mkdir(parents=True, exist_ok=True)
-    if not recovering_atomic_publication:
-        if final_directory.exists():
-            raise ValueError("raw-signal publication destination already exists")
-        for path in (*sorted(outputs.iterdir()), routing_path, semantic_receipt):
-            with path.open("rb") as handle:
-                os.fsync(handle.fileno())
-        for directory in (outputs, stage):
-            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        os.replace(stage, final_directory)
-        outputs = final_directory / "outputs"
-        routing_path = final_directory / "routing.json"
-    directory_fd = os.open(publish_root, os.O_RDONLY | os.O_DIRECTORY)
+def _publication_component(value: str, *, authority: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or "\x00" in value:
+        raise ValueError(f"raw-signal publication {authority} is invalid")
+    return value
+
+
+def _open_relative_directory(
+    root_fd: int,
+    components: tuple[str, ...],
+    *,
+    create: bool = False,
+) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    current_fd = os.dup(root_fd)
     try:
-        os.fsync(directory_fd)
+        for raw_component in components:
+            component = _publication_component(
+                raw_component, authority="directory component"
+            )
+            if create:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+            next_fd = os.open(component, flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _open_publication_regular(directory_fd: int, name: str) -> int:
+    component = _publication_component(name, authority="file component")
+    fd = os.open(
+        component,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=directory_fd,
+    )
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        os.close(fd)
+        raise ValueError("raw-signal publication member is not a regular file")
+    return fd
+
+
+def _read_publication_bytes(fd: int, *, maximum: int) -> bytes:
+    before = os.fstat(fd)
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    size = 0
+    while chunk := os.read(fd, min(1024 * 1024, maximum + 1 - size)):
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > maximum:
+            raise ValueError("raw-signal publication member exceeds bounded policy")
+    after = os.fstat(fd)
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if tuple(getattr(before, field) for field in identity_fields) != tuple(
+        getattr(after, field) for field in identity_fields
+    ):
+        raise ValueError("raw-signal publication member changed while being read")
+    return b"".join(chunks)
+
+
+def _assert_publication_directory_identity(
+    path: Path,
+    retained_fd: int,
+    *,
+    authority: str,
+) -> None:
+    expected = os.fstat(retained_fd)
+    reopened_fd = -1
+    try:
+        reopened_fd = _open_absolute_directory_nofollow(path)
+        observed = os.fstat(reopened_fd)
+    except OSError as exc:
+        raise ValueError(
+            f"raw-signal publication {authority} left descriptor confinement"
+        ) from exc
     finally:
-        os.close(directory_fd)
-    artifacts: list[dict[str, Any]] = []
-    for fingerprint, read_count in sorted(partition_counts.items()):
-        blow5_artifact = _file_artifact(outputs / f"{fingerprint}.blow5", _id("ont-artifact"), kind="blow5")
-        index_artifact = _file_artifact(outputs / f"{fingerprint}.blow5.idx", _id("ont-artifact"), kind="blow5_index")
-        blow5_artifact.update({"partition_fingerprint": fingerprint, "read_count": int(read_count)})
-        index_artifact.update({"partition_fingerprint": fingerprint})
-        artifacts.extend((blow5_artifact, index_artifact))
-    artifacts.append(_file_artifact(routing_path, _id("ont-artifact"), kind="read_routing"))
+        if reopened_fd >= 0:
+            os.close(reopened_fd)
+    if (observed.st_dev, observed.st_ino) != (expected.st_dev, expected.st_ino):
+        raise ValueError(f"raw-signal publication {authority} identity changed")
+
+
+async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJob, source: OntRawSignalRepresentation, commands: dict[str, Any]) -> OntRawSignalRepresentation:
+    configured_value = os.getenv(
+        BLOW5_STAGING_ROOT_ENV, BLOW5_DEFAULT_STAGING_ROOT
+    )
+    configured_root = Path(configured_value).expanduser()
+    if not configured_root.is_absolute() or ".." in configured_root.parts:
+        raise ValueError("raw-signal publication staging root must be absolute and lexical")
+    configured_root = Path(os.path.abspath(configured_root))
+    snapshot = job.resource_snapshot if isinstance(job.resource_snapshot, dict) else {}
+    expected_stage = configured_root / _publication_component(
+        str(job.id), authority="job ID"
+    ) / f"attempt-{int(job.attempt)}"
+    expected_outputs = expected_stage / "outputs"
+    expected_routing = expected_stage / "routing.json"
+    if (
+        snapshot.get("staging_root") != str(configured_root)
+        or commands.get("stage") != str(expected_stage)
+        or commands.get("outputs") != str(expected_outputs)
+        or commands.get("routing") != str(expected_routing)
+    ):
+        raise ValueError("raw-signal publication path authority diverged")
+
+    configured_parent = configured_root.parent
+    publish_base = configured_parent / "ont-raw-signal"
+    publish_root = publish_base / _publication_component(
+        str(job.run_id), authority="run ID"
+    ) / str(int(job.observed_generation))
+    final_directory = publish_root / str(job.id)
+    parent_fd = staging_root_fd = stage_parent_fd = stage_fd = -1
+    publish_base_fd = publish_root_fd = final_fd = outputs_fd = -1
+    recovering_atomic_publication = False
+    renamed = False
+    try:
+        parent_fd = _open_absolute_directory_nofollow(configured_parent)
+        staging_root_fd = _open_relative_directory(
+            parent_fd, (configured_root.name,)
+        )
+        stage_parent_fd = _open_relative_directory(
+            staging_root_fd, (str(job.id),)
+        )
+        try:
+            stage_fd = _open_relative_directory(
+                stage_parent_fd, (f"attempt-{int(job.attempt)}",)
+            )
+        except FileNotFoundError:
+            stage_fd = -1
+
+        publish_base_fd = _open_relative_directory(
+            parent_fd, ("ont-raw-signal",), create=True
+        )
+        publish_root_fd = _open_relative_directory(
+            publish_base_fd,
+            (str(job.run_id), str(int(job.observed_generation))),
+            create=True,
+        )
+        try:
+            final_fd = _open_relative_directory(publish_root_fd, (str(job.id),))
+        except FileNotFoundError:
+            final_fd = -1
+
+        if stage_fd < 0:
+            if final_fd < 0:
+                raise ValueError("validated BLOW5 publication unit is incomplete")
+            recovering_atomic_publication = True
+            unit_fd = final_fd
+        else:
+            if final_fd >= 0:
+                raise ValueError("raw-signal publication destination already exists")
+            unit_fd = stage_fd
+
+        outputs_fd = _open_relative_directory(unit_fd, ("outputs",))
+        routing_fd = semantic_fd = -1
+        try:
+            routing_fd = _open_publication_regular(unit_fd, "routing.json")
+            semantic_fd = _open_publication_regular(
+                unit_fd, "semantic-receipt.json"
+            )
+            routing_bytes = _read_publication_bytes(
+                routing_fd, maximum=16 * 1024 * 1024
+            )
+            semantic_bytes = _read_publication_bytes(
+                semantic_fd, maximum=16 * 1024 * 1024
+            )
+            semantic = json.loads(semantic_bytes.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("validated BLOW5 publication unit is incomplete") from exc
+        finally:
+            for descriptor in (semantic_fd, routing_fd):
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+        partition_counts = semantic.get("partition_counts")
+        if (
+            semantic.get("status") != "passed"
+            or semantic.get("duplicate_read_ids") not in (0, False)
+            or not isinstance(partition_counts, dict)
+            or not partition_counts
+            or semantic.get("routing_sha256")
+            != hashlib.sha256(routing_bytes).hexdigest()
+        ):
+            raise ValueError("exhaustive semantic validation receipt did not pass")
+        for fingerprint, read_count in partition_counts.items():
+            if not _is_sha256(fingerprint) or int(read_count) < 1:
+                raise ValueError("semantic receipt contains an invalid conversion partition")
+            for suffix in (".blow5", ".blow5.idx"):
+                descriptor = -1
+                try:
+                    descriptor = _open_publication_regular(
+                        outputs_fd, f"{fingerprint}{suffix}"
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        "semantic receipt names an incomplete conversion partition"
+                    ) from exc
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+
+        if not recovering_atomic_publication:
+            with os.scandir(outputs_fd) as entries:
+                output_names = [entry.name for entry in entries]
+            for name in output_names:
+                descriptor = _open_publication_regular(outputs_fd, name)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            for name in ("routing.json", "semantic-receipt.json"):
+                descriptor = _open_publication_regular(stage_fd, name)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            os.fsync(outputs_fd)
+            os.fsync(stage_fd)
+            if os.fstat(stage_parent_fd).st_dev != os.fstat(publish_root_fd).st_dev:
+                raise ValueError("raw-signal publication is not on one atomic filesystem")
+            _assert_publication_directory_identity(
+                configured_parent, parent_fd, authority="configured parent"
+            )
+            _assert_publication_directory_identity(
+                configured_root, staging_root_fd, authority="staging root"
+            )
+            _assert_publication_directory_identity(
+                publish_base, publish_base_fd, authority="publication root"
+            )
+            _assert_publication_directory_identity(
+                publish_root, publish_root_fd, authority="publication generation"
+            )
+            try:
+                os.rename(
+                    f"attempt-{int(job.attempt)}",
+                    str(job.id),
+                    src_dir_fd=stage_parent_fd,
+                    dst_dir_fd=publish_root_fd,
+                )
+                renamed = True
+                os.fsync(publish_root_fd)
+                _assert_publication_directory_identity(
+                    configured_parent, parent_fd, authority="configured parent"
+                )
+                _assert_publication_directory_identity(
+                    configured_root, staging_root_fd, authority="staging root"
+                )
+                _assert_publication_directory_identity(
+                    publish_base, publish_base_fd, authority="publication root"
+                )
+                _assert_publication_directory_identity(
+                    publish_root, publish_root_fd, authority="publication generation"
+                )
+            except BaseException:
+                if renamed:
+                    try:
+                        os.rename(
+                            str(job.id),
+                            f"attempt-{int(job.attempt)}",
+                            src_dir_fd=publish_root_fd,
+                            dst_dir_fd=stage_parent_fd,
+                        )
+                        os.fsync(stage_parent_fd)
+                        os.fsync(publish_root_fd)
+                    except OSError:
+                        pass
+                raise
+        else:
+            _assert_publication_directory_identity(
+                configured_parent, parent_fd, authority="configured parent"
+            )
+            _assert_publication_directory_identity(
+                configured_root, staging_root_fd, authority="staging root"
+            )
+            _assert_publication_directory_identity(
+                publish_base, publish_base_fd, authority="publication root"
+            )
+            _assert_publication_directory_identity(
+                publish_root, publish_root_fd, authority="publication generation"
+            )
+
+        governed_fd = unit_fd
+        artifacts: list[dict[str, Any]] = []
+        for fingerprint, read_count in sorted(partition_counts.items()):
+            blow5_name = f"{fingerprint}.blow5"
+            index_name = f"{fingerprint}.blow5.idx"
+            blow5_fd = _open_publication_regular(outputs_fd, blow5_name)
+            try:
+                blow5_artifact = _file_artifact(
+                    final_directory / "outputs" / blow5_name,
+                    _id("ont-artifact"),
+                    kind="blow5",
+                    opened_fd=blow5_fd,
+                    governed_root_path=final_directory,
+                    governed_root_fd=governed_fd,
+                    governed_relative_path=f"outputs/{blow5_name}",
+                )
+            finally:
+                os.close(blow5_fd)
+            index_fd = _open_publication_regular(outputs_fd, index_name)
+            try:
+                index_artifact = _file_artifact(
+                    final_directory / "outputs" / index_name,
+                    _id("ont-artifact"),
+                    kind="blow5_index",
+                    opened_fd=index_fd,
+                    governed_root_path=final_directory,
+                    governed_root_fd=governed_fd,
+                    governed_relative_path=f"outputs/{index_name}",
+                )
+            finally:
+                os.close(index_fd)
+            blow5_artifact.update({"partition_fingerprint": fingerprint, "read_count": int(read_count)})
+            index_artifact.update({"partition_fingerprint": fingerprint})
+            artifacts.extend((blow5_artifact, index_artifact))
+        routing_fd = _open_publication_regular(governed_fd, "routing.json")
+        try:
+            artifacts.append(
+                _file_artifact(
+                    final_directory / "routing.json",
+                    _id("ont-artifact"),
+                    kind="read_routing",
+                    opened_fd=routing_fd,
+                    governed_root_path=final_directory,
+                    governed_root_fd=governed_fd,
+                    governed_relative_path="routing.json",
+                )
+            )
+        finally:
+            os.close(routing_fd)
+    except OSError as exc:
+        raise ValueError(
+            "raw-signal publication left descriptor confinement or used symbolic links"
+        ) from exc
+    finally:
+        for descriptor in (
+            outputs_fd,
+            final_fd,
+            stage_fd,
+            publish_root_fd,
+            publish_base_fd,
+            stage_parent_fd,
+            staging_root_fd,
+            parent_fd,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
     manifest = {"schema": "bms.ont.raw-signal-artifacts.v1", "run_id": job.run_id, "observed_generation": job.observed_generation, "format": "blow5", "artifacts": artifacts}
     representation = OntRawSignalRepresentation(
         id=_id("ont-raw-rep"), run_id=job.run_id, observed_generation=job.observed_generation,
