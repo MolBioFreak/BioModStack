@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "f5e56b837570dfce0e8a7554a4309895786e0b87e3201b1fddfe3a8cea4fb0be",
+  "content_sha256": "fbecb2dffbb5b16bc9dee59c27ceaa7cfbc7f2c95b990caa9d86fc44dc0db7c8",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -119,8 +119,8 @@
     },
     {
       "path": "platform/api/database.py",
-      "sha256": "bdb0dd864fe2a8827b88a2bc90d3160b54a404a56e85792b8071fc4a66dd5935",
-      "size_bytes": 124305
+      "sha256": "ea2cb65c6533c03af169aca0cc16411a3e38b7945cbff171c26e9cac093befa2",
+      "size_bytes": 131906
     },
     {
       "path": "platform/api/experiment_database.py",
@@ -149,8 +149,8 @@
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "a394777c97f75306d07f9fabca2180472fe85f1633b10fb4fda66590df0d47bf",
-      "size_bytes": 16769
+      "sha256": "e7a7254a2c9466c758b513eba47271093dd49948752c4cc8165d981b1e437799",
+      "size_bytes": 16872
     },
     {
       "path": "platform/api/migrations/add_ont_move_source_attempt_lineage.py",
@@ -164,8 +164,8 @@
     },
     {
       "path": "platform/api/migrations/runner.py",
-      "sha256": "f11d62814a50ce45cb0ca7a3bfc5f4d811250914daebc7bf3c802b554503ee00",
-      "size_bytes": 21662
+      "sha256": "7b6643b01f7383fad972283af5c4444be150f66eb8c5616f812b0d28c89fee5a",
+      "size_bytes": 22088
     },
     {
       "path": "platform/api/migrations/sqlite_sha256.py",
@@ -224,8 +224,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "cf9ddb0139c8e0443e25e5c01fe450e00cd0b2ea8d76359647c5822f703ea0e9",
-      "size_bytes": 381617
+      "sha256": "2fbb59b60e80d9dde97b4d9c003c2fe91c7ade14fcebc6dfd866422f17d64f3a",
+      "size_bytes": 382661
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -274,8 +274,8 @@
     },
     {
       "path": "platform/api/schemas.py",
-      "sha256": "2ea08faa4cc1e37beb7f2246562beba68972aaee9de710caed770dbca9437721",
-      "size_bytes": 15511
+      "sha256": "3a924fef180681ca6955302978eb38a7c715df49c46d541fd4dcd4baf94be05b",
+      "size_bytes": 15571
     },
     {
       "path": "platform/api/services/execution_ownership.py",
@@ -289,8 +289,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/adapters.py",
-      "sha256": "6e4db2a6072b4f80bddb878cb04f6eba601bd7da9f7f7827c9426b226ae1f324",
-      "size_bytes": 163552
+      "sha256": "942d9e47d01524799470b5a7c1889cb404f0d5a0d87c97241de727e872aa3a3c",
+      "size_bytes": 163509
     },
     {
       "path": "platform/api/services/global_experiments/launch_contexts.py",
@@ -539,8 +539,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "572d0f224b683c371ad5b76a35d59d5ca0f6a50170ce23853a91fc785668283e",
-      "size_bytes": 172719
+      "sha256": "1cde06927da613c7ee4fd8e84915591ccb5fde21e0c5dbbc1a3553a3cb14218a",
+      "size_bytes": 174854
     },
     {
       "path": "platform/frontend/src/lib/nanoporeCloneState.ts",
@@ -632,8 +632,8 @@
     "content_sha256": "64f620461f320f6097c4e8cb50dde7190c0594a239cb637bcd1ba3a0640f268c",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "0744c8f0fe61a7bb997c0fd2fb0952d784acba71",
-  "successor_source_tree": "765493b6eb1a85a600b524e4cccc93d26aa81719",
+  "successor_source_commit": "15275275fec48eb9b79364d21612446d84ff9c24",
+  "successor_source_tree": "25da75d07faa7a8d0aac725f13b1561d427dc8c4",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
