@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import or_, select
+from sqlalchemy import Text, cast as sql_cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
@@ -3009,11 +3009,16 @@ async def request_results(
     record = await _authorized_record(request_id, request, session)
     rows = (
         await session.execute(
-            select(ConformationalMappingRecord).where(
+            select(
+                ConformationalMappingRecord.record_type,
+                ConformationalMappingRecord.record_key,
+                ConformationalMappingRecord.content_sha256,
+                sql_cast(ConformationalMappingRecord.payload_json, Text).label("payload_json"),
+            ).where(
                 ConformationalMappingRecord.request_id == request_id
             ).order_by(ConformationalMappingRecord.record_type, ConformationalMappingRecord.record_key)
         )
-    ).scalars().all()
+    ).all()
     artifacts = (
         await session.execute(
             select(ConformationalMappingArtifact).where(
@@ -3061,13 +3066,18 @@ async def request_record_page(
         raise HTTPException(status_code=422, detail="requested CM record collection is not supported")
     row = (
         await session.execute(
-            select(ConformationalMappingRecord).where(
+            select(
+                ConformationalMappingRecord.record_type,
+                ConformationalMappingRecord.record_key,
+                ConformationalMappingRecord.content_sha256,
+                sql_cast(ConformationalMappingRecord.payload_json, Text).label("payload_json"),
+            ).where(
                 ConformationalMappingRecord.request_id == request_id,
                 ConformationalMappingRecord.record_type == record_type,
                 ConformationalMappingRecord.record_key == record_key,
             )
         )
-    ).scalar_one_or_none()
+    ).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="CM result record was not found")
     reference = _cm_record_artifact_reference(row)
