@@ -77,6 +77,7 @@ export interface Job {
     decision_history?: Array<Record<string, UntypedApiValue>> | null;
     frustrampnn_result_count?: number;
     frustrampnn_reopen_destination?: Record<string, UntypedApiValue> | null;
+    conformational_mapping_request_id?: string | null;
     selected_cdr_loops?: string[] | null;
 }
 

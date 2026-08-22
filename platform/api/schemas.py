@@ -134,6 +134,7 @@ class JobResponse(BaseModel):
     return_uri: Optional[str] = None
     frustrampnn_result_count: int = 0
     frustrampnn_reopen_destination: Optional[dict] = None
+    conformational_mapping_request_id: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
     
