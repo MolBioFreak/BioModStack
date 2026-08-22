@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "8ebce2db92ce0643e9138d969e02bd47c60cbf8b99382cb9e513d3a9ce73dd6c",
+  "content_sha256": "bd79ce5967af2cac69534e6dae9ddb6d586b2b74323bd307514f4c39afae4234",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -529,8 +529,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
-      "sha256": "f718c11da3369c7aab1fa947a33c5f811344e29a1ddb9c1b740967dd4104883f",
-      "size_bytes": 11848
+      "sha256": "09edf1edb4d80d0d0bf6803b8a94686df2a7a80385ec4028579e6b27e09045c8",
+      "size_bytes": 11919
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
@@ -632,8 +632,8 @@
     "content_sha256": "64f620461f320f6097c4e8cb50dde7190c0594a239cb637bcd1ba3a0640f268c",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "421bc711fa5d9861a3a6aaaeb71c204237ed94df",
-  "successor_source_tree": "cdc2f60873b07de0996acf27226bb3eb4d6537ab",
+  "successor_source_commit": "8945dbe4d8574d2dc475d4414533ccfac86a28c3",
+  "successor_source_tree": "a045c6dd4c8a37fcb2ea3414a34953dd304d6013",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
