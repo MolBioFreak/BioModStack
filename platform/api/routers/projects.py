@@ -1453,7 +1453,7 @@ async def create_domain_experiment_route(
             domain_payload,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") in {"ngs_molbio", "protein_in_silico"}:
             command = await issue_binding_command(
                 session, project_id=project_id, global_experiment_id=experiment_id,
                 domain_id=head.aggregate_id, expected_domain_revision_id=str(head.current_revision_id),
