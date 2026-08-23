@@ -1,5 +1,5 @@
 {
-  "content_sha256": "de2cb0763bc3088bb8880d7cdabaaf072963c44a59eaf036d297c6e467016184",
+  "content_sha256": "9ffe88b1e1f88f8628a4f23e6f2371ce97ea260c5e31ff6b1e01a9e601fa0b4f",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -92,6 +92,7 @@
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
     "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
+    "platform/frontend/src/components/ngs/NanoporeWorkflowChooser.tsx",
     "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
     "platform/frontend/src/components/ngs/RawReadInspector.tsx",
     "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
@@ -100,6 +101,7 @@
     "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
     "platform/frontend/src/lib/api.ts",
     "platform/frontend/src/lib/nanoporeCloneState.ts",
+    "platform/frontend/src/lib/nanoporeLaunchPayload.ts",
     "platform/frontend/src/lib/ngsResultRouting.ts",
     "platform/frontend/src/lib/projectManager.ts",
     "platform/frontend/src/pages/ProjectManager.tsx",
