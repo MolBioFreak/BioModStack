@@ -202,7 +202,7 @@ async def _hierarchy(
         raise ConnectorConflict("Domain Experiment revision is invalid JSON") from exc
     if (
         domain_payload.get("schema") not in {"bms.domain-experiment.v2", "bms.domain-experiment.v4"}
-        or domain_payload.get("domain_kind") != "ngs_molbio"
+        or domain_payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}
         or domain_payload.get("domain_contract_version") not in {"2", "3"}
     ):
         raise ConnectorConflict("binding requires an exact NGS/MolBio Domain v2 or v4 revision")
