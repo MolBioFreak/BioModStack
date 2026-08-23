@@ -50,13 +50,13 @@ export function ProteinModificationTemplate({
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const initialMode = initialValues?.modification_mode;
-    const [mode, setMode] = useState<ModificationMode | null>(
-        initialMode === 'de_novo_design'
-            || initialMode === 'rfd3_local_redesign'
-            || initialMode === 'region_redesign'
-            || initialMode === 'shape_blueprint'
+    const normalizedInitialMode: ModificationMode | null = initialMode === 'rfd3_local_redesign' || initialMode === 'region_redesign'
+        ? 'rfd3_iteration'
+        : initialMode === 'de_novo_design' || initialMode === 'rfd3_iteration' || initialMode === 'shape_blueprint'
             ? initialMode
-            : null,
+            : null;
+    const [mode, setMode] = useState<ModificationMode | null>(
+        normalizedInitialMode,
     );
     const [jobName, setJobName] = useState(initialString(initialValues, 'job_name', 'protein_modification'));
     const [backend, setBackend] = useState<DeNovoBackend>(
@@ -94,25 +94,14 @@ export function ProteinModificationTemplate({
         onError: (err: Error) => setError(err.message || 'Failed to submit protein modification job'),
     });
 
-    if (mode === 'rfd3_local_redesign') {
+    if (mode === 'rfd3_iteration') {
+        const reopenValidatedPipeline = initialMode === 'region_redesign';
         return (
             <ProteinLocalRedesignTemplate
                 onBack={() => setMode(null)}
                 initialValues={initialValues}
-                submissionModelId="protein_local_redesign"
-                submissionMode="local_redesign"
+                submissionModelId={reopenValidatedPipeline ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu}
-            />
-        );
-    }
-
-    if (mode === 'region_redesign') {
-        return (
-            <ProteinLocalRedesignTemplate
-                onBack={() => setMode(null)}
-                initialValues={initialValues}
-                submissionModelId="protein_modification_experimental"
-                submissionMode="region_redesign"
             />
         );
     }
@@ -137,9 +126,9 @@ export function ProteinModificationTemplate({
                     </div>
                 </div>
                 <p className="max-w-3xl text-sm text-slate-400">
-                    Choose whether to create a new protein candidate or modify selected regions of an existing structure. These modes share one product boundary but retain distinct scientific contracts.
+                    Create a new protein, iterate an existing complex in one RFD3 workbench, or use a shape blueprint.
                 </p>
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-4 md:grid-cols-3">
                     {DE_NOVO_MODIFICATION_MODE_CARDS.map((card) => (
                         <button
                             key={card.id}

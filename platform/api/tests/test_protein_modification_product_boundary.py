@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,7 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
             "design_chains": "A",
             "region_mode": "manual_ranges",
             "redesign_ranges": "10-20",
+            "sequence_redesign_ranges": "A12-14",
             "num_designs": 3,
         },
         "/tmp/protein-modification-region",
@@ -85,6 +87,7 @@ def test_canonical_region_mode_reuses_internal_local_redesign_entrypoint() -> No
     assert "protein_local_redesign,workstation_ryzen7960x" in cmd
     assert "--plr_input_pdb /tmp/input.pdb" in joined
     assert "--plr_redesign_ranges 10-20" in joined
+    assert "--plr_sequence_redesign_ranges A12-14" in joined
     assert "--modification_mode region_redesign" in joined
 
 
@@ -96,7 +99,7 @@ def test_launcher_exposes_parent_and_not_legacy_products() -> None:
     assert parent_template.exists()
     assert "id: 'protein_modification_experimental'" in job_submission
     assert "name: 'De Novo Design'" in job_submission
-    assert "id: 'protein_local_redesign'" not in job_submission
+    assert re.search(r"^\s*id: 'protein_local_redesign'", job_submission, flags=re.MULTILINE) is None
     assert "selectedTemplateId === 'protein_local_redesign'" not in job_submission
     assert "'protein_modification_experimental'" in template_state
 

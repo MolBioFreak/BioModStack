@@ -3728,6 +3728,7 @@ def build_nextflow_command(
             'context_chains': 'plr_context_chains',
             'region_mode': 'plr_region_mode',
             'redesign_ranges': 'plr_redesign_ranges',
+            'sequence_redesign_ranges': 'plr_sequence_redesign_ranges',
             'interface_cutoff': 'plr_interface_cutoff',
             'region_padding': 'plr_region_padding',
             'num_designs': 'plr_num_designs',

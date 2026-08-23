@@ -70,7 +70,10 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    designable_tokens = parse_position_spec(manifest.get("movable_positions_spec", ""))
+    designable_tokens = parse_position_spec(
+        manifest.get("sequence_redesign_positions_spec")
+        or manifest.get("movable_positions_spec", "")
+    )
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)

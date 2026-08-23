@@ -1377,7 +1377,11 @@ def _rcsb_human_metadata(accession: str, payload: Mapping[str, Any] | None) -> d
     }
 
 
-async def _rcsb_entry_metadata(accession: str) -> dict[str, Any]:
+async def _rcsb_entry_metadata(
+    accession: str,
+    *,
+    require_materializable: bool = True,
+) -> dict[str, Any]:
     try:
         async with _rcsb_http_client() as client:
             response = await client.get(f"https://data.rcsb.org/rest/v1/core/entry/{accession}")
@@ -1397,7 +1401,11 @@ async def _rcsb_entry_metadata(accession: str) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="RCSB metadata was not an object")
     downloaded = await _download_rcsb_mmcif(accession)
     try:
-        discovery = discover_rcsb_contexts(accession, downloaded)
+        discovery = discover_rcsb_contexts(
+            accession,
+            downloaded,
+            require_materializable=require_materializable,
+        )
     except RcsbSourceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {**_rcsb_human_metadata(accession, payload), **discovery}
@@ -1454,6 +1462,7 @@ async def search_rcsb_sources(
     request: Request,
     keyword: str | None = Query(default=None, min_length=2, max_length=200),
     accession: str | None = Query(default=None, min_length=4, max_length=4),
+    purpose: Literal["cm_import", "full_structure_context"] = "cm_import",
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
@@ -1464,12 +1473,16 @@ async def search_rcsb_sources(
     normalized_keyword = keyword.strip() if keyword else None
     if not normalized_accession and not normalized_keyword:
         raise HTTPException(status_code=422, detail="RCSB accession or keyword is required")
-    cached = await _cached_rcsb_entries(principal_id, session)
+    require_materializable = purpose == "cm_import"
+    cached = await _cached_rcsb_entries(principal_id, session) if require_materializable else []
     if normalized_accession:
         cached_match = [entry for entry in cached if entry["accession"] == normalized_accession]
         if cached_match:
             return {"query": normalized_accession, "entries": cached_match, "cached": True}
-        entry = await _rcsb_entry_metadata(normalized_accession)
+        entry = await _rcsb_entry_metadata(
+            normalized_accession,
+            require_materializable=require_materializable,
+        )
         return {"query": normalized_accession, "entries": [entry], "cached": False}
     lowered = normalized_keyword.casefold()
     cached_matches = [
@@ -1514,7 +1527,10 @@ async def search_rcsb_sources(
         if not re.fullmatch(r"[A-Z0-9]{4}", candidate):
             continue
         try:
-            metadata = await _rcsb_entry_metadata(candidate)
+            metadata = await _rcsb_entry_metadata(
+                candidate,
+                require_materializable=require_materializable,
+            )
         except HTTPException as exc:
             if exc.status_code == 422:
                 continue

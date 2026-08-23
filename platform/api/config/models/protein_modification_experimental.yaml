@@ -63,6 +63,7 @@ modes:
       - context_chains
       - region_mode
       - redesign_ranges
+      - sequence_redesign_ranges
       - interface_cutoff
       - region_padding
       - num_designs
@@ -184,6 +185,12 @@ params:
     required: false
     ui_group: Region Redesign
     ui_order: 34
+  - name: sequence_redesign_ranges
+    type: string
+    description: Exact editable residue subset whose amino-acid identities may change during downstream sequence design
+    required: false
+    ui_group: Region Redesign
+    ui_order: 35
   - name: interface_cutoff
     type: float
     description: Interface-shell distance cutoff in angstroms

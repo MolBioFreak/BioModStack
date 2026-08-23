@@ -553,9 +553,15 @@ def build_request(
 
     sequence_policy = _text(params.get("sequence_policy"), "sequence_policy")
     if sequence_policy is None:
-        sequence_policy = "skip"
+        sequence_policy = "insert_only" if mode == "minimal_insertion" else "preserve"
     if sequence_policy not in {"preserve", "insert_only", "explicit_positions", "external", "skip"}:
         raise ContractError(f"unsupported sequence_policy '{sequence_policy}'")
+    if mode == "minimal_insertion" and sequence_policy != "insert_only":
+        raise ContractError("minimal_insertion requires sequence_policy=insert_only")
+    if mode == "partial_diffusion" and sequence_policy == "insert_only":
+        raise ContractError("partial_diffusion does not accept sequence_policy=insert_only")
+    if sequence_policy == "explicit_positions" and "select_unfixed_sequence" not in native:
+        raise ContractError("explicit_positions sequence_policy requires select_unfixed_sequence")
     if mode == "partial_diffusion" and sequence_policy == "preserve" and "select_unfixed_sequence" in native:
         raise ContractError("preserve sequence_policy cannot include select_unfixed_sequence")
     if sequence_policy == "skip" and "select_unfixed_sequence" in native:

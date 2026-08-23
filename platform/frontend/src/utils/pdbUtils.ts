@@ -297,7 +297,7 @@ export function parseMmCIF(cifContent: string): ParsedPDB {
             });
             pdbLines.push('END');
         }
-        return parsePDB(pdbLines.join('\\n'));
+        return parsePDB(pdbLines.join('\n'));
     }
     return { chains: [], models: [] };
 }

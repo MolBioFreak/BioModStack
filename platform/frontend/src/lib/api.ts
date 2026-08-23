@@ -625,6 +625,23 @@ export const uploadFile = async (path: string, file: File) => {
     });
 };
 
+export interface ImmutableFileUploadResponse extends FileUploadResponse {
+    sha256: string;
+    existing: boolean;
+}
+
+export const uploadImmutableFile = async (path: string, file: File, sha256: string) => {
+    const formData = new FormData();
+    formData.append('path', path);
+    formData.append('sha256', sha256);
+    formData.append('file', file);
+    return api.post<ImmutableFileUploadResponse>('/api/files/upload-immutable-structure', formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    });
+};
+
 // Extract a single chain from a multi-chain PDB
 export interface ExtractChainResult {
     success: boolean;

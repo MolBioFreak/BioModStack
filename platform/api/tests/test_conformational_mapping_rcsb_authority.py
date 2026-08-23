@@ -93,6 +93,17 @@ def _multi_context_mmcif() -> bytes:
     ).encode("utf-8")
 
 
+def _multi_context_mmcif_with_struct_conn() -> bytes:
+    return _multi_context_mmcif() + (
+        "#\n"
+        "loop_\n"
+        "_struct_conn.id\n"
+        "_struct_conn.conn_type_id\n"
+        "conn1 covale\n"
+        "#\n"
+    ).encode("utf-8")
+
+
 def _request(accession: str = "1abc"):
     request = cm_router.Request({
         "type": "http",
@@ -132,7 +143,7 @@ async def test_rcsb_search_enumerates_only_server_materializable_asymmetric_unit
     source_bytes = _multi_context_mmcif()
 
     async def no_cached_entries(principal_id, session):
-        assert principal_id == "test-operator"
+        assert principal_id in {"test-operator", "local-personal-workflow"}
         return []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -189,6 +200,49 @@ async def test_rcsb_search_enumerates_only_server_materializable_asymmetric_unit
         {"entity_id": "2", "label": "Protein entity 2", "entity_type": "protein", "residue_count": 2},
     ]
     assert entry["required_selection"] == ["model_id", "sample_id", "chain_ids", "entity_ids"]
+
+
+@pytest.mark.asyncio
+async def test_rcsb_full_structure_context_search_accepts_struct_conn_without_weakening_cm_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_bytes = _multi_context_mmcif_with_struct_conn()
+
+    async def no_cached_entries(principal_id, session):
+        assert principal_id in {"test-operator", "local-personal-workflow"}
+        return []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/v1/core/entry/1ABC":
+            return httpx.Response(200, request=request, json={"struct": {"title": "Full complex"}})
+        if request.url.path == "/download/1ABC.cif":
+            return httpx.Response(200, request=request, content=source_bytes)
+        raise AssertionError(f"unexpected RCSB request: {request.url}")
+
+    monkeypatch.setattr(cm_router, "_cached_rcsb_entries", no_cached_entries)
+    monkeypatch.setattr(cm_router, "_rcsb_http_client", _mock_rcsb_client(handler))
+
+    with pytest.raises(HTTPException, match="covalent struct_conn authority unsupported") as exc_info:
+        await cm_router.search_rcsb_sources(
+            _request(), keyword=None, accession="1abc", limit=10, session=object()  # type: ignore[arg-type]
+        )
+    assert exc_info.value.status_code == 422
+
+    result = await cm_router.search_rcsb_sources(
+        _request(),
+        keyword=None,
+        accession="1abc",
+        purpose="full_structure_context",
+        limit=10,
+        session=object(),  # type: ignore[arg-type]
+    )
+
+    assert result["entries"][0]["title"] == "Full complex"
+    assert result["entries"][0]["models"] == [
+        {"model_id": "1", "label": "Model 1"},
+        {"model_id": "2", "label": "Model 2"},
+    ]
+    assert [chain["chain_id"] for chain in result["entries"][0]["chains"]] == ["X", "Y"]
 
 
 @pytest.mark.asyncio

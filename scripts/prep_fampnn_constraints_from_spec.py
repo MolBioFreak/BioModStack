@@ -18,7 +18,7 @@ def main() -> None:
 
     input_dir = Path(args.input_dir)
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    fixed_spec = str(manifest.get("fixed_positions_spec", "") or "")
+    fixed_spec = str(manifest.get("sequence_fixed_positions_spec", manifest.get("fixed_positions_spec", "")) or "")
     fixed_sidechains = fixed_spec if args.fix_sidechains else ""
 
     pdb_files = sorted(input_dir.glob("*.pdb"))

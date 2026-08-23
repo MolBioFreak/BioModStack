@@ -29,20 +29,15 @@ test('De Novo Design exposes the complete supported native request controls', ()
     assert.doesNotMatch(template, /<option value="medium">Medium<\/option>/);
 });
 
-test('RFD3-only editing and validated region redesign have distinct operator identities', () => {
-    const localRedesign = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'rfd3_local_redesign');
-    const regionRedesign = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'region_redesign');
+test('RFD3 native and validated execution depths share one operator workbench', () => {
+    const workbench = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'rfd3_iteration');
     const template = source('components/ProteinLocalRedesignTemplate.tsx');
 
-    assert.equal(localRedesign?.label, 'RFD3 Native Local Edit');
-    assert.match(localRedesign?.description ?? '', /RFD3 only/i);
-    assert.match(localRedesign?.description ?? '', /preserves the source sequence/i);
-    assert.equal(regionRedesign?.label, 'Validated Region Redesign');
-    assert.match(regionRedesign?.description ?? '', /FA-MPNN/i);
-    assert.match(regionRedesign?.description ?? '', /ESMFold2 and Protenix V2/i);
-
-    assert.match(template, /isNativeLocalRedesign \? 'RFD3 Native Local Edit' : 'Validated Region Redesign'/);
-    assert.match(template, /isNativeLocalRedesign \? 'Launch RFD3 Native Edit' : 'Launch Validated Region Redesign'/);
+    assert.equal(workbench?.label, 'RFD3 Iteration Workbench');
+    assert.match(workbench?.description ?? '', /native RFD3 output or downstream sequence design and validation/i);
+    assert.match(template, /Native RFD3 only/);
+    assert.match(template, /Continue through sequence design and validation/);
+    assert.match(template, /isNativeLocalRedesign \? 'Launch Native RFD3' : 'Launch RFD3 \+ Sequence \+ Validation'/);
 });
 
 test('the RFD3 workflow uses the available wide viewport instead of stacking its main sections', () => {

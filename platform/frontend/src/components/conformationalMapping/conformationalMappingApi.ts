@@ -601,11 +601,15 @@ const parseCmRcsbEntry = (value: unknown): CmRcsbEntry => {
     };
 };
 
-export const searchCmRcsb = async (query: string): Promise<CmRcsbSearchResponse> => {
+export const searchCmRcsb = async (
+    query: string,
+    purpose: 'cm_import' | 'full_structure_context' = 'cm_import',
+): Promise<CmRcsbSearchResponse> => {
     const normalized = query.trim();
-    const params = /^[A-Za-z0-9]{4}$/.test(normalized)
+    const params: Record<string, string> = /^[A-Za-z0-9]{4}$/.test(normalized)
         ? { accession: normalized.toUpperCase() }
         : { keyword: normalized };
+    if (purpose === 'full_structure_context') params.purpose = purpose;
     const response = await api.get<unknown>('/api/conformational-mapping/sources/rcsb/search', { params });
     const body = rcsbObject(response.data, 'response must be an object');
     const responseQuery = rcsbString(body.query, 'response query is required');

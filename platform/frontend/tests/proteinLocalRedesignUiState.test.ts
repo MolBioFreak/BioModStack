@@ -3,7 +3,42 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { getProteinLocalRedesignUiState } from '../src/components/proteinLocalRedesignUiState';
+import {
+    getProteinLocalRedesignUiState,
+    resolveProteinLocalRedesignSourcePath,
+    selectResidueKeysFromRanges,
+} from '../src/components/proteinLocalRedesignUiState';
+
+test('clone hydration resolves exact range selectors against the loaded design chain', () => {
+    const residues = [
+        { resNum: 1, iCode: '' },
+        { resNum: 2, iCode: '' },
+        { resNum: 3, iCode: '' },
+        { resNum: 10, iCode: 'A' },
+    ];
+    assert.deepEqual(
+        Array.from(selectResidueKeysFromRanges('A', residues, 'A2-3,A10A,B1')).sort(),
+        ['A10A', 'A2', 'A3'],
+    );
+    assert.deepEqual(
+        Array.from(selectResidueKeysFromRanges('A', residues, '2-3')).sort(),
+        ['A2', 'A3'],
+    );
+});
+
+test('native clone source hydration accepts input_structure with input_pdb precedence', () => {
+    assert.equal(
+        resolveProteinLocalRedesignSourcePath({ input_structure: 'inputs/native-clone.pdb' }),
+        'inputs/native-clone.pdb',
+    );
+    assert.equal(
+        resolveProteinLocalRedesignSourcePath({
+            input_pdb: 'inputs/validated-clone.pdb',
+            input_structure: 'inputs/native-clone.pdb',
+        }),
+        'inputs/validated-clone.pdb',
+    );
+});
 
 test('native local redesign defaults to a compact sequence-design-disabled lane', () => {
     assert.deepEqual(

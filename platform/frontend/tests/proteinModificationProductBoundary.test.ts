@@ -14,10 +14,10 @@ describe('De Novo Design product boundary', () => {
         assert.equal(template.includes("import { DE_NOVO_MODIFICATION_MODE_CARDS"), true);
         assert.equal(template.includes("model_id: 'protein_modification_experimental'"), true);
         assert.equal(template.includes("mode: 'de_novo_design'"), true);
-        assert.equal(template.includes('submissionModelId="protein_modification_experimental"'), true);
-        assert.equal(template.includes('submissionMode="region_redesign"'), true);
-        assert.equal(template.includes('submissionModelId="protein_local_redesign"'), true);
-        assert.equal(template.includes('submissionMode="local_redesign"'), true);
+        assert.equal(template.includes("mode === 'rfd3_iteration'"), true);
+        assert.equal(template.includes("initialMode === 'rfd3_local_redesign' || initialMode === 'region_redesign'"), true);
+        assert.equal(template.includes("submissionModelId={reopenValidatedPipeline ? 'protein_modification_experimental' : 'protein_local_redesign'}"), true);
+        assert.equal(template.includes('submissionMode='), false);
         assert.equal(template.includes('Protein Hunter'), false);
         assert.equal(template.includes('Iterative Binder Design'), false);
     });

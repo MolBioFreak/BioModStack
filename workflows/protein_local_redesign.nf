@@ -247,6 +247,7 @@ process ResolveProteinLocalRegion {
     script:
     def contextChains = (params.plr_context_chains ?: '').toString()
     def redesignRanges = (params.plr_redesign_ranges ?: '').toString()
+    def sequenceRedesignRanges = (params.plr_sequence_redesign_ranges ?: '').toString()
     def modelNumberArg = params.plr_model_number != null ? "--model_number ${params.plr_model_number}" : ''
     """
     python3 ${params.code_root}/scripts/resolve_redesign_regions.py \
@@ -256,6 +257,7 @@ process ResolveProteinLocalRegion {
         --context_chains '${contextChains}' \
         --region_mode ${params.plr_region_mode ?: 'manual_ranges'} \
         --redesign_ranges '${redesignRanges}' \
+        --sequence_redesign_ranges '${sequenceRedesignRanges}' \
         --interface_cutoff ${params.plr_interface_cutoff ?: 6.0} \
         --region_padding ${params.containsKey('plr_region_padding') ? params.plr_region_padding : 2} \
         --output_seed_pdb resolved_design_chain.pdb \
