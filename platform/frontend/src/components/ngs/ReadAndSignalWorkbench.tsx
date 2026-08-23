@@ -224,6 +224,19 @@ export function ReadAndSignalWorkbench({
         if (generation !== identityRef.current) return;
         setCapabilities(nextCapabilities);
         setMoveSources(sourcePayload.items);
+        const resumableExternalSource = [...sourcePayload.items]
+            .filter((item) => (
+                (item.state === 'requested' || item.state === 'running')
+                && item.external_registration_receipt_id !== null
+            ))
+            .sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
+        setRegisteredExternalMoveSourceId((current) => {
+            const currentStillActive = current !== null && sourcePayload.items.some((item) => (
+                item.move_source_id === current
+                && (item.state === 'requested' || item.state === 'running')
+            ));
+            return currentStillActive ? current : resumableExternalSource?.move_source_id ?? null;
+        });
         setProfiles(profilePayload.items);
         setExternalMoveBamCandidates(externalCandidateResult.payload.items);
         setExternalMoveBamAvailability(externalCandidateResult.unavailable);

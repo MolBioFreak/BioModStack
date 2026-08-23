@@ -5,7 +5,7 @@ import sqlite3
 
 from migrations.add_ont_external_move_bam_receipts import MIGRATION_33_TRIGGER_SQL
 from migrations.add_ont_move_source_attempt_lineage import MIGRATION_34_TRIGGER_SQL
-from migrations.seal_ont_external_move_bam_receipt_binding import MIGRATION_38_TRIGGER_SQL
+from migrations.seal_ont_external_move_bam_receipt_binding import MIGRATION_39_TRIGGER_SQL
 
 
 ContractColumn = tuple[str, str, int, str | None, int]
@@ -250,7 +250,7 @@ def assert_ont_move_source_table_contract(
         triggers.update(
             {
                 name: normalize_sql(sql)
-                for name, sql in MIGRATION_38_TRIGGER_SQL.items()
+                for name, sql in MIGRATION_39_TRIGGER_SQL.items()
             }
         )
     assert_sqlite_table_contract(

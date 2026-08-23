@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e4f92dc2e3a72f3283612f785f3acedab1662af31eb0c19f267de40f576b1ad7",
+  "content_sha256": "b673d90aab2a519655bb30a1fca22520495b933821fd4c1db1fa88d795c9140d",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -113,14 +113,19 @@
       "size_bytes": 26539
     },
     {
+      "path": "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
+      "sha256": "6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05",
+      "size_bytes": 352
+    },
+    {
       "path": "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
       "sha256": "c61d92636f7d556773e82e892f06e1b79ef6d7d8286c3c1ac2e85561bc07bdc8",
       "size_bytes": 390
     },
     {
       "path": "platform/api/database.py",
-      "sha256": "ea2cb65c6533c03af169aca0cc16411a3e38b7945cbff171c26e9cac093befa2",
-      "size_bytes": 131906
+      "sha256": "17aa9394e8535be8cc1f5cc69129de71d8b4c363f139681a3bd29a5259b1b919",
+      "size_bytes": 148127
     },
     {
       "path": "platform/api/experiment_database.py",
@@ -153,6 +158,11 @@
       "size_bytes": 16872
     },
     {
+      "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
+      "sha256": "74892ab3d6747d40696d77df9ca3b7d2d6d0cd04a32edcc9638ea68087b0df28",
+      "size_bytes": 6833
+    },
+    {
       "path": "platform/api/migrations/add_ont_move_source_attempt_lineage.py",
       "sha256": "84f3797fa503d446e00194f16eb568524915329af4b4b43bf4b9db4cdd0dffc1",
       "size_bytes": 16042
@@ -163,9 +173,34 @@
       "size_bytes": 25163
     },
     {
+      "path": "platform/api/migrations/ont_sqlite_schema_contract.py",
+      "sha256": "8436a51a80d9b8d20bf4713b1e25f520f8d3de2c90cf9a9d19c04148bb9d2872",
+      "size_bytes": 10942
+    },
+    {
+      "path": "platform/api/migrations/retire_scientific_landscape_projections.py",
+      "sha256": "50b3c728eaf71c6c31bf250bbbf4ca81e9bb681a14ff59344c9a1efbafb83495",
+      "size_bytes": 2548
+    },
+    {
       "path": "platform/api/migrations/runner.py",
-      "sha256": "7b6643b01f7383fad972283af5c4444be150f66eb8c5616f812b0d28c89fee5a",
-      "size_bytes": 22088
+      "sha256": "9eda0259930648fd35722f47bfbea42f9a7d2426524bbdf12a3120ff9a5ae9fc",
+      "size_bytes": 23041
+    },
+    {
+      "path": "platform/api/migrations/seal_ont_external_move_bam_receipt_binding.py",
+      "sha256": "3fb10c69cee43b0b8b3da5202eb76877e43c50a700d6e1a2d8b867d753336b19",
+      "size_bytes": 5710
+    },
+    {
+      "path": "platform/api/migrations/seal_ont_move_source_terminal_immutability.py",
+      "sha256": "46557e1e6720401dae9a1822bf4826bb5b2de84526dfbdfcc3262fbe80be7b56",
+      "size_bytes": 846
+    },
+    {
+      "path": "platform/api/migrations/seal_ont_raw_signal_lookup_terminal_immutability.py",
+      "sha256": "646cff5eec8c5a6b3dad08f3261daf8abc3adba703dd29ddc84fe549d8f618ab",
+      "size_bytes": 2529
     },
     {
       "path": "platform/api/migrations/sqlite_sha256.py",
@@ -239,13 +274,13 @@
     },
     {
       "path": "platform/api/routers/ont_runs.py",
-      "sha256": "1df85dc485a3e7e80b4af148e0f7968949c8a1625cdb81c5a3337a47861f6368",
-      "size_bytes": 62564
+      "sha256": "e48426c4643e3cc1d7e99eee58464f2f3d0dff8480d555ef53cd31d76c18e32d",
+      "size_bytes": 62675
     },
     {
       "path": "platform/api/routers/ont_signal_workbench.py",
-      "sha256": "f51c3d7c31a9b09eb03d4c20bd2fd1bf8f4020f7424172e8ad59fbaaf5e486cf",
-      "size_bytes": 25032
+      "sha256": "eebbf5393482b27b957abfbd0c4ed6009dd08acb7756d8580e7756b1c67cbd32",
+      "size_bytes": 28152
     },
     {
       "path": "platform/api/routers/payload_ownership_audit.py",
@@ -349,8 +384,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "19c67c77ba834dad21dca98694a472c62fa8f068bc426da60bc25e6fea095bac",
-      "size_bytes": 203282
+      "sha256": "4978a5c28f22fa6db3e4fc3f6482a5a444dfee5309221070faeb5b2455d8963f",
+      "size_bytes": 203354
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -409,23 +444,23 @@
     },
     {
       "path": "platform/api/services/ont_raw_signal.py",
-      "sha256": "c7d00e430abc5def3535fe2a68a36db86fc85f4a910db18f818f6dd99eb698d3",
-      "size_bytes": 110069
+      "sha256": "e5b71ad824114f30fd84c082c3144b5c9c645f70c9a921d293b7801d7f827671",
+      "size_bytes": 176726
     },
     {
       "path": "platform/api/services/ont_raw_signal_worker.py",
-      "sha256": "1601471154fe832663448572579ff78ebad51280198826827b8d20bde924ed3b",
-      "size_bytes": 18411
+      "sha256": "23cb9601142349a9b6f5e6a1aa8dc27f2d74180903ae31e06198c28055090472",
+      "size_bytes": 24423
     },
     {
       "path": "platform/api/services/ont_signal_workbench.py",
-      "sha256": "c639c2721cd5c23420d35cd4409cfa07d686dbf859c37f1b89697f4b28e3eb03",
-      "size_bytes": 97602
+      "sha256": "ea6ec19d0e6e7cd78342af2861627d9299df7e6ce141342e8ce9b1439851996a",
+      "size_bytes": 136438
     },
     {
       "path": "platform/api/services/ont_signal_worker.py",
-      "sha256": "9cb215cc65a4eb6ba95db10a50cd51d301ca3c4e03bcf44e8d43c1cb4bb999c3",
-      "size_bytes": 103438
+      "sha256": "b7483ef1c934bcd0eb61522ce7c9e7e5fb4fca382afebfdd8f9b0098e2bafaf5",
+      "size_bytes": 114912
     },
     {
       "path": "platform/api/services/payload_ownership_audit.py",
@@ -514,18 +549,18 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
-      "sha256": "1f4b71fff52205bd35a9d04c084531676058a0d371dfc75826e8de3942e85bc5",
-      "size_bytes": 61143
+      "sha256": "7834348293bd77e8e7b2b078029f6f43b873d13654147627027dc3586a3a515b",
+      "size_bytes": 61251
     },
     {
       "path": "platform/frontend/src/components/ngs/RawReadInspector.tsx",
-      "sha256": "91657abb005cb8afd15066f18d7fb07290a708d090aa38f9a3649eecd29f3893",
-      "size_bytes": 21186
+      "sha256": "fe3a5f1d99ab4e809f181cf2d4f10206cd141fcbb968ba798453bbae91ad16fd",
+      "size_bytes": 21275
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
-      "sha256": "e6b9fc7a4e3fee66185b969a4b0832265d7278d07336c45ba41f52a1da6cf86c",
-      "size_bytes": 62493
+      "sha256": "f967ab0d2851a4ceda59be1dc3ca37904573cc9d3e0131b4a527912fa696f124",
+      "size_bytes": 73870
     },
     {
       "path": "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
@@ -544,8 +579,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "1cde06927da613c7ee4fd8e84915591ccb5fde21e0c5dbbc1a3553a3cb14218a",
-      "size_bytes": 174854
+      "sha256": "7abb9943d14b6650be1d9244088694b31eeb1470a2b359426e98d6f3011e00ac",
+      "size_bytes": 176524
     },
     {
       "path": "platform/frontend/src/lib/nanoporeCloneState.ts",
@@ -594,8 +629,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
-      "sha256": "d4b7a30eed35436534fff9bf99459bf068372585341d0ef654c7e4d9cc10fc76",
-      "size_bytes": 6627
+      "sha256": "5b94de312bde71ec7045f9d59de67ef312746de4e7abb330fb40699ac4385b4f",
+      "size_bytes": 7150
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -614,23 +649,23 @@
     },
     {
       "path": "scripts/build_ont_raw_signal_runtime.sh",
-      "sha256": "3042e7fe32f8097c378d24cd12cc6ec0136e677dc541d68b3846e54edca5d5f6",
-      "size_bytes": 1446
+      "sha256": "81e48644b60d014a09e502161cc0074db1d8eeb01b5b114dfeb341c9b8b6e5b2",
+      "size_bytes": 2776
     },
     {
       "path": "scripts/build_ont_squigualiser_runtime.sh",
-      "sha256": "073334400cd28bbd7adf54060c75903d230466cca630796fa71507ae645950de",
-      "size_bytes": 1135
+      "sha256": "a189c3871c8a90af1f591bcda79e82809050c397112b3dee5889ca97f992613d",
+      "size_bytes": 2035
     },
     {
       "path": "scripts/ont_raw_signal_lookup.py",
-      "sha256": "98a0d9a47f2af07b9279e5532a53f031bc1118184664ed99c87aa09afbd644c9",
-      "size_bytes": 1757
+      "sha256": "93e7d7ab6544957a253da752f8aadd693bd105b1e1c5b4e70a9febd1c438fedd",
+      "size_bytes": 10570
     },
     {
       "path": "scripts/ont_raw_signal_validate.py",
-      "sha256": "fff104a721d803e1a9534cb6d97941ee2087e938983737a390d1cee09748c3e8",
-      "size_bytes": 22343
+      "sha256": "fc6dff75492f534c164592958a15f5b1855713b160da7bdd9d0b191046b69cea",
+      "size_bytes": 38528
     },
     {
       "path": "scripts/ont_signal_runtime.py",
@@ -649,11 +684,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "9ffe88b1e1f88f8628a4f23e6f2371ce97ea260c5e31ff6b1e01a9e601fa0b4f",
+    "content_sha256": "dc74a364489ea71167f5010969a6f132bdda92db60db3f67eb22d6b729f5f359",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "512d80b5cf43eeb422878344265dce8bf4bdb341",
-  "successor_source_tree": "bad74b92918473aff9d9cde17b63438d87b1e8bb",
+  "successor_source_commit": "59d08fd676131c61d33510bfb4f75d30afa0e854",
+  "successor_source_tree": "3747e4e43a9aac70608484e641a7f3797c7e98b6",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

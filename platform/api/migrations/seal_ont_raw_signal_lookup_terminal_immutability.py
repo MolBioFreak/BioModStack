@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-MIGRATION_39_TRIGGER_SQL = {
+MIGRATION_40_TRIGGER_SQL = {
     "trg_ont_raw_signal_lookup_terminal_no_update": """
         CREATE TRIGGER IF NOT EXISTS trg_ont_raw_signal_lookup_terminal_no_update
             BEFORE UPDATE ON ont_raw_signal_lookups
@@ -28,9 +28,9 @@ def _normalize_sql(sql: str) -> str:
     )
 
 
-MIGRATION_39_TRIGGER_SQL_DIGESTS = {
+MIGRATION_40_TRIGGER_SQL_DIGESTS = {
     name: hashlib.sha256(_normalize_sql(sql).encode("utf-8")).hexdigest()
-    for name, sql in MIGRATION_39_TRIGGER_SQL.items()
+    for name, sql in MIGRATION_40_TRIGGER_SQL.items()
 }
 
 
@@ -45,7 +45,7 @@ def migrate(db_path: str | Path) -> None:
         ).fetchone() is None:
             connection.commit()
             return
-        for trigger_sql in MIGRATION_39_TRIGGER_SQL.values():
+        for trigger_sql in MIGRATION_40_TRIGGER_SQL.values():
             connection.execute(trigger_sql)
         connection.commit()
     except Exception:
@@ -63,15 +63,15 @@ def assert_attested(connection: sqlite3.Connection) -> None:
         for row in connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
         )
-        if str(row[0]) in MIGRATION_39_TRIGGER_SQL_DIGESTS
+        if str(row[0]) in MIGRATION_40_TRIGGER_SQL_DIGESTS
     }
-    if observed != MIGRATION_39_TRIGGER_SQL_DIGESTS:
-        raise RuntimeError("migration 39 trigger authority diverged")
+    if observed != MIGRATION_40_TRIGGER_SQL_DIGESTS:
+        raise RuntimeError("migration 40 trigger authority diverged")
 
 
 __all__ = [
-    "MIGRATION_39_TRIGGER_SQL",
-    "MIGRATION_39_TRIGGER_SQL_DIGESTS",
+    "MIGRATION_40_TRIGGER_SQL",
+    "MIGRATION_40_TRIGGER_SQL_DIGESTS",
     "assert_attested",
     "migrate",
 ]

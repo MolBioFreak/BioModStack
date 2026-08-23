@@ -653,7 +653,7 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39):
+        for version in (37, 38, 39, 40):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -720,7 +720,7 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39):
+        for version in (37, 38, 39, 40):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (

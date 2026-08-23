@@ -1590,7 +1590,7 @@ def test_terminal_waveform_lookup_migration_blocks_update_and_delete(
         None,
     )
     assert migration is not None, "terminal waveform lookup migration is not registered"
-    assert migration.version == 39
+    assert migration.version == 40
     database_path = tmp_path / "waveform-terminal.db"
     with sqlite3.connect(database_path) as connection:
         connection.execute(

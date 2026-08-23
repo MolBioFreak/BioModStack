@@ -2575,35 +2575,11 @@ def _attest_sqlite_migration_34(db_path: str) -> None:
             raise RuntimeError("migration 34 startup attestation failed") from exc
 
 
-def _attest_sqlite_migration_37(db_path: str) -> None:
-    """Prove migration 37 ledger identity and terminal trigger authority."""
+def _attest_sqlite_migration_38(db_path: str) -> None:
+    """Prove migration 38 ledger identity and terminal trigger authority."""
     from migrations.add_ont_move_source_attempt_lineage import attest
     from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
-
-    expected_checksum = migration_runner._migration_content_sha256(
-        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 37)
-    )
-    with sqlite3.connect(db_path) as connection:
-        ledger = connection.execute(
-            "SELECT name, content_sha256 FROM schema_migrations WHERE version=37"
-        ).fetchone()
-        if ledger != ("seal_ont_move_source_terminal_immutability", expected_checksum):
-            raise RuntimeError("migration 37 startup attestation failed")
-        try:
-            assert_ont_move_source_table_contract(
-                connection,
-                include_external_receipt_binding=True,
-            )
-            attest(connection)
-        except RuntimeError as exc:
-            raise RuntimeError("migration 37 startup attestation failed") from exc
-
-
-def _attest_sqlite_migration_38(db_path: str) -> None:
-    """Prove migration 38 ledger identity and receipt tuple triggers."""
-    from migrations import runner as migration_runner
-    from migrations.seal_ont_external_move_bam_receipt_binding import assert_attested
 
     expected_checksum = migration_runner._migration_content_sha256(
         next(migration for migration in migration_runner.MIGRATIONS if migration.version == 38)
@@ -2612,20 +2588,22 @@ def _attest_sqlite_migration_38(db_path: str) -> None:
         ledger = connection.execute(
             "SELECT name, content_sha256 FROM schema_migrations WHERE version=38"
         ).fetchone()
-        if ledger != ("seal_ont_external_move_bam_receipt_binding", expected_checksum):
+        if ledger != ("seal_ont_move_source_terminal_immutability", expected_checksum):
             raise RuntimeError("migration 38 startup attestation failed")
         try:
-            assert_attested(connection)
+            assert_ont_move_source_table_contract(
+                connection,
+                include_external_receipt_binding=True,
+            )
+            attest(connection)
         except RuntimeError as exc:
             raise RuntimeError("migration 38 startup attestation failed") from exc
 
 
 def _attest_sqlite_migration_39(db_path: str) -> None:
-    """Prove migration 39 ledger identity and terminal lookup triggers."""
+    """Prove migration 39 ledger identity and receipt tuple triggers."""
     from migrations import runner as migration_runner
-    from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
-        assert_attested,
-    )
+    from migrations.seal_ont_external_move_bam_receipt_binding import assert_attested
 
     expected_checksum = migration_runner._migration_content_sha256(
         next(migration for migration in migration_runner.MIGRATIONS if migration.version == 39)
@@ -2634,15 +2612,37 @@ def _attest_sqlite_migration_39(db_path: str) -> None:
         ledger = connection.execute(
             "SELECT name, content_sha256 FROM schema_migrations WHERE version=39"
         ).fetchone()
-        if ledger != (
-            "seal_ont_raw_signal_lookup_terminal_immutability",
-            expected_checksum,
-        ):
+        if ledger != ("seal_ont_external_move_bam_receipt_binding", expected_checksum):
             raise RuntimeError("migration 39 startup attestation failed")
         try:
             assert_attested(connection)
         except RuntimeError as exc:
             raise RuntimeError("migration 39 startup attestation failed") from exc
+
+
+def _attest_sqlite_migration_40(db_path: str) -> None:
+    """Prove migration 40 ledger identity and terminal lookup triggers."""
+    from migrations import runner as migration_runner
+    from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+        assert_attested,
+    )
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 40)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=40"
+        ).fetchone()
+        if ledger != (
+            "seal_ont_raw_signal_lookup_terminal_immutability",
+            expected_checksum,
+        ):
+            raise RuntimeError("migration 40 startup attestation failed")
+        try:
+            assert_attested(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 40 startup attestation failed") from exc
 
 
 async def init_db():
@@ -2665,9 +2665,9 @@ async def init_db():
         await asyncio.to_thread(_attest_sqlite_migration_ledger, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_33, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
-        await asyncio.to_thread(_attest_sqlite_migration_37, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_39, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_40, str(db_path))
 
 
 async def _ensure_schema(conn):

@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 
-MIGRATION_38_TRIGGER_SQL = {
+MIGRATION_39_TRIGGER_SQL = {
     "trg_ont_move_source_external_receipt_binding_insert": """
         CREATE TRIGGER IF NOT EXISTS trg_ont_move_source_external_receipt_binding_insert
             BEFORE INSERT ON ont_move_table_sources
@@ -77,9 +77,9 @@ def _normalize_sql(sql: str) -> str:
     return "".join(output).replace("CREATE TRIGGER IF NOT EXISTS ", "CREATE TRIGGER ", 1)
 
 
-MIGRATION_38_TRIGGER_SQL_DIGESTS = {
+MIGRATION_39_TRIGGER_SQL_DIGESTS = {
     name: hashlib.sha256(_normalize_sql(sql).encode("utf-8")).hexdigest()
-    for name, sql in MIGRATION_38_TRIGGER_SQL.items()
+    for name, sql in MIGRATION_39_TRIGGER_SQL.items()
 }
 
 
@@ -113,7 +113,7 @@ def migrate(db_path: str | Path) -> None:
         connection.execute("PRAGMA busy_timeout=30000")
         connection.execute("BEGIN IMMEDIATE")
         _preflight_existing_rows(connection)
-        for trigger_sql in MIGRATION_38_TRIGGER_SQL.values():
+        for trigger_sql in MIGRATION_39_TRIGGER_SQL.values():
             connection.execute(trigger_sql)
         connection.commit()
     except Exception:
@@ -129,15 +129,15 @@ def assert_attested(connection: sqlite3.Connection) -> None:
         for row in connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
         )
-        if str(row[0]) in MIGRATION_38_TRIGGER_SQL_DIGESTS
+        if str(row[0]) in MIGRATION_39_TRIGGER_SQL_DIGESTS
     }
-    if observed != MIGRATION_38_TRIGGER_SQL_DIGESTS:
-        raise RuntimeError("migration 38 trigger authority diverged")
+    if observed != MIGRATION_39_TRIGGER_SQL_DIGESTS:
+        raise RuntimeError("migration 39 trigger authority diverged")
 
 
 __all__ = [
-    "MIGRATION_38_TRIGGER_SQL",
-    "MIGRATION_38_TRIGGER_SQL_DIGESTS",
+    "MIGRATION_39_TRIGGER_SQL",
+    "MIGRATION_39_TRIGGER_SQL_DIGESTS",
     "assert_attested",
     "migrate",
 ]
