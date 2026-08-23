@@ -12,26 +12,29 @@ from database import (
     FrustraMPNNComparison,
     FrustraMPNNComparisonRow,
     FrustraMPNNGuidancePlan,
-    FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
 )
 
 from .contracts import canonical_sha256, validate_schema
+from .persistence import FrustraMPNNPersistenceError, landscape_page
+from services.scientific_artifacts import publish_json_payload
 
 
 class DerivedPersistenceError(ValueError):
     """Raised when a derived artifact is missing or conflicts with immutable state."""
 
 
-def _result_landscape_metadata(result: FrustraMPNNResult, first_row: FrustraMPNNLandscapeRow) -> dict[str, Any]:
+def _result_landscape_metadata(
+    result: FrustraMPNNResult, first_row: Mapping[str, Any]
+) -> dict[str, Any]:
     summary = dict(result.summary_json or {})
-    provenance = dict(first_row.provenance_json or {})
+    provenance = dict(first_row["provenance"] or {})
     policy = provenance.get("threshold_policy") or summary.get("threshold_policy")
     schema_version = 2 if summary.get("schema_version") == 2 else 1
     common = {
         "schema_name": "frustrampnn_landscape",
         "schema_version": schema_version,
-        "target_id": first_row.target_id,
+        "target_id": first_row["target_id"],
         "parent_job_id": result.parent_job_id,
         "candidate_id": result.candidate_id,
         "structure_map_sha256": (
@@ -80,70 +83,79 @@ def _result_landscape_metadata(result: FrustraMPNNResult, first_row: FrustraMPNN
     }
 
 
-async def load_persisted_landscape(session: AsyncSession, result: FrustraMPNNResult) -> dict[str, Any]:
-    """Reconstruct a canonical landscape from immutable persisted rows."""
-    rows = (
-        await session.execute(
-            select(FrustraMPNNLandscapeRow)
-            .where(
-                FrustraMPNNLandscapeRow.parent_job_id == result.parent_job_id,
-                FrustraMPNNLandscapeRow.invocation_id == result.invocation_id,
-            )
-            .order_by(
-                FrustraMPNNLandscapeRow.entity_instance_id.asc(),
-                FrustraMPNNLandscapeRow.sequence_index.asc(),
-                FrustraMPNNLandscapeRow.mutation_aa.asc(),
-                FrustraMPNNLandscapeRow.id.asc(),
-            )
+async def load_persisted_landscape(
+    session: AsyncSession, result: FrustraMPNNResult
+) -> dict[str, Any]:
+    """Reconstruct a canonical landscape through bounded verified artifact pages."""
+    try:
+        page = await landscape_page(
+            session,
+            result.parent_job_id,
+            result.invocation_id,
+            limit=500,
         )
-    ).scalars().all()
+        rows = list(page["items"])
+        total = int(page["total"])
+        while len(rows) < total:
+            next_page = await landscape_page(
+                session,
+                result.parent_job_id,
+                result.invocation_id,
+                limit=500,
+                offset=len(rows),
+            )
+            if not next_page["items"]:
+                raise DerivedPersistenceError(
+                    "persisted FrustraMPNN landscape artifact paging is incomplete"
+                )
+            rows.extend(next_page["items"])
+    except FrustraMPNNPersistenceError as exc:
+        raise DerivedPersistenceError(str(exc)) from exc
     if not rows:
         raise DerivedPersistenceError("persisted FrustraMPNN landscape rows are missing")
     metadata = _result_landscape_metadata(result, rows[0])
     grouped: OrderedDict[tuple[str, str, int, str, int], dict[str, Any]] = OrderedDict()
     for row in rows:
-        stored = dict(row.row_json or {})
+        stored = dict(row["row"] or {})
         residue = dict(stored.get("residue") or {})
-        residue.setdefault("entity_instance_id", row.entity_instance_id)
+        residue.setdefault("entity_instance_id", row["entity_instance_id"])
         residue.setdefault("source_entity_id", None)
         residue.setdefault("label_asym_id", None)
-        residue.setdefault("auth_asym_id", row.auth_asym_id)
+        residue.setdefault("auth_asym_id", row["auth_asym_id"])
         residue.setdefault("label_seq_id", None)
-        residue.setdefault("auth_seq_id", int(row.auth_seq_id))
-        residue.setdefault("insertion_code", row.insertion_code or "")
-        residue.setdefault("sequence_index", row.sequence_index)
-        residue.setdefault("pdb_chain_id", row.auth_asym_id)
-        residue.setdefault("pdb_residue_id", int(row.auth_seq_id))
-        residue.setdefault("pdb_insertion_code", row.insertion_code or "")
-        residue.setdefault("model_position", max(int(row.sequence_index) - 1, 0))
+        residue.setdefault("auth_seq_id", int(row["auth_seq_id"]))
+        residue.setdefault("insertion_code", row["insertion_code"] or "")
+        residue.setdefault("sequence_index", row["sequence_index"])
+        residue.setdefault("pdb_chain_id", row["auth_asym_id"])
+        residue.setdefault("pdb_residue_id", int(row["auth_seq_id"]))
+        residue.setdefault("pdb_insertion_code", row["insertion_code"] or "")
+        residue.setdefault("model_position", max(int(row["sequence_index"]) - 1, 0))
         residue.setdefault("residue_name", "UNK")
-        residue.setdefault("wt", row.wt)
+        residue.setdefault("wt", row["wt"])
         key = (
-            row.entity_instance_id,
-            row.auth_asym_id,
-            int(row.auth_seq_id),
-            row.insertion_code or "",
-            int(row.sequence_index),
+            row["entity_instance_id"],
+            row["auth_asym_id"],
+            int(row["auth_seq_id"]),
+            row["insertion_code"] or "",
+            int(row["sequence_index"]),
         )
         if key not in grouped:
             residue["slots"] = []
             grouped[key] = residue
         slot = dict(stored.get("slot") or {})
-        slot.setdefault("mutation_aa", row.mutation_aa)
-        slot.setdefault("score", row.score)
-        slot.setdefault("class", row.score_class)
-        slot.setdefault("scoreable", row.scoreable)
-        slot.setdefault("status", row.status)
-        slot.setdefault("reason", row.reason)
-        slot.setdefault("native", row.mutation_aa == row.wt)
+        slot.setdefault("mutation_aa", row["mutation_aa"])
+        slot.setdefault("score", row["score"])
+        slot.setdefault("class", row["score_class"])
+        slot.setdefault("scoreable", row["scoreable"])
+        slot.setdefault("status", row["status"])
+        slot.setdefault("reason", row["reason"])
+        slot.setdefault("native", row["mutation_aa"] == row["wt"])
         grouped[key]["slots"].append(slot)
     landscape = {**metadata, "residues": list(grouped.values())}
     persisted_hashes = {
         str(value)
         for row in rows
-        if (
-            value := dict(row.provenance_json or {}).get("landscape_sha256")
-        )
+        if (value := dict(row["provenance"] or {}).get("landscape_sha256"))
     }
     summary_hash = dict(result.summary_json or {}).get("landscape_sha256")
     if summary_hash:
@@ -327,6 +339,15 @@ async def persist_comparison(
             raise DerivedPersistenceError("immutable comparison conflict")
         return existing
     comparability = dict(payload.get("comparability") or {})
+    payload_reference = await publish_json_payload(
+        session,
+        owner_kind="frustrampnn_comparison",
+        owner_id=comparison_id,
+        role="payload",
+        schema_id="bms.frustrampnn-comparison.v1",
+        payload=dict(payload),
+        source_sha256=comparison_sha256,
+    )
     model = FrustraMPNNComparison(
         comparison_id=comparison_id,
         reference_parent_job_id=reference_result.parent_job_id,
@@ -339,7 +360,7 @@ async def persist_comparison(
         configuration_sha256=payload.get("configuration_sha256"),
         status=str(comparability.get("status") or "review"),
         comparison_sha256=comparison_sha256,
-        payload_json=dict(payload),
+        payload_json=payload_reference,
     )
     session.add(model)
     await session.flush()

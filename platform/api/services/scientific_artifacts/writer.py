@@ -152,7 +152,7 @@ def install_parquet_rows(
             content_sha256=content_sha256,
             size_bytes=size_bytes,
             row_count=len(materialized),
-            column_schema_sha256=_schema_digest(table.schema),
+            column_schema_sha256=_schema_digest(pq.read_schema(destination)),
         )
     finally:
         staging.unlink(missing_ok=True)

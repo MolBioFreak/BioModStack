@@ -41,6 +41,18 @@ def test_migration_versions_are_unique_with_md_before_ont() -> None:
         (23, "add_frustrampnn_persistence"),
         (24, "add_ngs_reference_sets"),
         (25, "add_pooled_ont_reference_assignment"),
+        (26, "add_frustrampnn_statistics"),
+        (27, "add_frustrampnn_reviews"),
+        (28, "add_ont_raw_signal_ledger"),
+        (29, "add_ont_external_registration_identity"),
+        (30, "enforce_ont_external_registration_immutability"),
+        (31, "seal_ont_external_source_identity"),
+        (32, "add_ont_signal_workbench"),
+        (33, "add_ont_external_move_bam_receipts"),
+        (34, "add_ont_move_source_attempt_lineage"),
+        (35, "add_scientific_artifact_receipts"),
+        (36, "add_frustrampnn_landscape_index_slimming"),
+        (37, "retire_scientific_landscape_projections"),
     ]
     assert len({migration.version for migration in MIGRATIONS}) == len(MIGRATIONS)
 

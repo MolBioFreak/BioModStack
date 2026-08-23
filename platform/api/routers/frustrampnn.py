@@ -66,6 +66,7 @@ from services.frustrampnn.derived import (
     persist_comparison,
     persist_guidance_plan,
 )
+from services.frustrampnn.persistence import landscape_page as persisted_landscape_page
 from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 from services.frustrampnn.contracts import (
     ContractValidationError,
@@ -3297,7 +3298,7 @@ async def analytics_points(
 
 
 def _comparison_payload(model: FrustraMPNNComparison) -> dict[str, Any]:
-    payload = dict(model.payload_json)
+    payload = dict(resolve_json_value(model.payload_json))
     payload["comparison_id"] = model.comparison_id
     payload["persisted"] = True
     payload["created_at"] = model.created_at
@@ -3790,60 +3791,39 @@ async def result_landscape(
     session: AsyncSession = Depends(get_session),
 ):
     result = await _scoped_result(invocation_id, job_id, session)
-    filters = [
-        FrustraMPNNLandscapeRow.parent_job_id == job_id,
-        FrustraMPNNLandscapeRow.invocation_id == invocation_id,
-    ]
-    exact = {
-        "target_id": target_id,
-        "entity_instance_id": entity_instance_id,
-        "auth_asym_id": auth_asym_id,
-        "auth_seq_id": auth_seq_id,
-        "insertion_code": insertion_code,
-        "sequence_index": sequence_index,
-        "mutation_aa": mutation_aa,
-        "status": status,
-    }
-    for field, value in exact.items():
-        if value is not None:
-            filters.append(getattr(FrustraMPNNLandscapeRow, field) == value)
-    total = int(
-        (
-            await session.execute(
-                select(func.count()).select_from(FrustraMPNNLandscapeRow).where(*filters)
-            )
-        ).scalar_one()
+    page = await persisted_landscape_page(
+        session,
+        job_id,
+        invocation_id,
+        limit=limit,
+        offset=offset,
+        target_id=target_id,
+        entity_instance_id=entity_instance_id,
+        auth_asym_id=auth_asym_id,
+        auth_seq_id=auth_seq_id,
+        insertion_code=insertion_code,
+        sequence_index=sequence_index,
+        mutation_aa=mutation_aa,
+        status=status,
     )
-    rows = (
-        await session.execute(
-            select(FrustraMPNNLandscapeRow)
-            .where(*filters)
-            .order_by(
-                FrustraMPNNLandscapeRow.entity_instance_id.asc(),
-                FrustraMPNNLandscapeRow.sequence_index.asc(),
-                FrustraMPNNLandscapeRow.mutation_aa.asc(),
-                FrustraMPNNLandscapeRow.id.asc(),
-            )
-            .offset(offset)
-            .limit(limit)
-        )
-    ).scalars().all()
+    total = int(page["total"])
+    rows = page["items"]
     items = []
     for row in rows:
-        stored = dict(resolve_json_value(row.row_json))
+        stored = dict(row["row"])
         residue = stored.get("residue")
         residue_identity = residue if isinstance(residue, dict) else {}
         items.append({
-            **{name: getattr(row, name) for name in _LANDSCAPE_FIELDS},
+            **{name: row[name] for name in _LANDSCAPE_FIELDS},
             "candidate_id": result.candidate_id,
             "source_entity_id": residue_identity.get("source_entity_id"),
             "label_asym_id": residue_identity.get("label_asym_id"),
-            "auth_seq_id": int(row.auth_seq_id),
+            "auth_seq_id": int(row["auth_seq_id"]),
             "pdb_chain_id": residue_identity.get("pdb_chain_id"),
             "model_position": residue_identity.get("model_position"),
-            "class": row.score_class,
-            "native": row.mutation_aa == row.wt,
-            "provenance": dict(resolve_json_value(row.provenance_json)),
+            "class": row["score_class"],
+            "native": row["mutation_aa"] == row["wt"],
+            "provenance": dict(row["provenance"]),
             "residue": dict(residue) if isinstance(residue, dict) else None,
         })
     return {
@@ -4332,31 +4312,19 @@ async def create_governed_export(
     if review.invocation_id != payload.invocation_id:
         raise HTTPException(status_code=422, detail="export invocation does not match review authority")
     result = await _scoped_result(payload.invocation_id, job_id, session)
-    filters = [
-        FrustraMPNNLandscapeRow.parent_job_id == job_id,
-        FrustraMPNNLandscapeRow.invocation_id == payload.invocation_id,
-    ]
-    for field in ("auth_asym_id", "mutation_aa", "status"):
-        value = getattr(payload, field)
-        if value is not None:
-            filters.append(getattr(FrustraMPNNLandscapeRow, field) == value)
-    total = int((await session.execute(
-        select(func.count()).select_from(FrustraMPNNLandscapeRow).where(*filters)
-    )).scalar_one())
-    rows = (await session.execute(
-        select(FrustraMPNNLandscapeRow)
-        .where(*filters)
-        .order_by(
-            FrustraMPNNLandscapeRow.entity_instance_id.asc(),
-            FrustraMPNNLandscapeRow.sequence_index.asc(),
-            FrustraMPNNLandscapeRow.mutation_aa.asc(),
-            FrustraMPNNLandscapeRow.id.asc(),
-        )
-        .limit(payload.limit)
-    )).scalars().all()
+    page = await persisted_landscape_page(
+        session,
+        job_id,
+        payload.invocation_id,
+        limit=payload.limit,
+        auth_asym_id=payload.auth_asym_id,
+        mutation_aa=payload.mutation_aa,
+        status=payload.status,
+    )
+    total = int(page["total"])
     exported_rows = [
-        {field: getattr(row, field) for field in _EXPORT_FIELDS}
-        for row in rows
+        {field: row[field] for field in _EXPORT_FIELDS}
+        for row in page["items"]
     ]
     export_payload = {
         "schema_name": "frustrampnn_governed_export",

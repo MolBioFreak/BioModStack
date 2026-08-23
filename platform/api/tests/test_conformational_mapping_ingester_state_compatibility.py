@@ -36,7 +36,9 @@ from services.conformational_mapping.persistence import (
     paged_landscape,
     register_prepared_request,
 )
+from services.frustrampnn.persistence import _FRUSTRA_LANDSCAPE_PARQUET_SCHEMA
 from services.frustrampnn.settings import default_settings, requested_settings_sha256
+from services.scientific_artifacts import publish_table_rows
 from services.conformational_mapping.state_landscape_analysis import (
     derive_state_landscape_analysis_for_request,
     validate_state_landscape_analysis_binding,
@@ -490,14 +492,33 @@ async def test_cm_global_landscape_query_uses_only_referenced_invocations(
             (reference["invocation_id"], 1.0),
             (extra_result["invocation_id"], 99.0),
         ):
-            session.add(FrustraMPNNLandscapeRow(
-                id=f"row-{score}", parent_job_id=request["request_id"],
-                invocation_id=invocation_id, target_id="target-a",
-                entity_instance_id="protein-1", auth_asym_id="A", auth_seq_id="1",
-                insertion_code="", sequence_index=1, wt="A", mutation_aa="V",
-                score=score, score_class="neutral", scoreable=True, status="ok",
-                reason=None, row_json={"score": score}, provenance_json={},
-            ))
+            await publish_table_rows(
+                session,
+                owner_kind="frustrampnn_result",
+                owner_id=f"{request['request_id']}:{invocation_id}",
+                role="landscape",
+                schema_id="bms.frustrampnn-landscape.v1",
+                source_sha256=hashlib.sha256(str(score).encode()).hexdigest(),
+                rows=[{
+                    "id": f"row-{score}",
+                    "target_id": "target-a",
+                    "entity_instance_id": "protein-1",
+                    "auth_asym_id": "A",
+                    "auth_seq_id": "1",
+                    "insertion_code": "",
+                    "sequence_index": 1,
+                    "wt": "A",
+                    "mutation_aa": "V",
+                    "score": score,
+                    "score_class": "neutral",
+                    "scoreable": True,
+                    "status": "ok",
+                    "reason": None,
+                    "row_json": json.dumps({"score": score}),
+                    "provenance_json": "{}",
+                }],
+                schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
+            )
         await session.flush()
 
         rows = await paged_landscape(session, request["request_id"])
@@ -618,6 +639,7 @@ async def test_cm_ingest_bundle_treats_missing_or_empty_state_analysis_as_legacy
     try:
         record = await _register(session, request, bundle)
         await ingest_result_bundle(session, record, bundle=bundle, result_root=root)
+        assert await session.scalar(select(ConformationalMappingLandscapeRow)) is None
         assert capture_flags
         assert not any(capture_flags)
         assert await session.scalar(

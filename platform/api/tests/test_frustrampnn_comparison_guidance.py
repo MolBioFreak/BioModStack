@@ -4,6 +4,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import copy
+import json
 
 import httpx
 import pytest
@@ -11,7 +12,7 @@ import pytest_asyncio
 from fastapi import FastAPI
 from pydantic import ValidationError
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import (
@@ -27,7 +28,9 @@ from routers.frustrampnn import MultiComparisonCreateRequest, router
 import routers.frustrampnn as frustrampnn_router
 from services.frustrampnn.analytics import comparison_compatibility_id
 from services.frustrampnn.configuration import global_configuration
+from services.frustrampnn.persistence import _FRUSTRA_LANDSCAPE_PARQUET_SCHEMA
 from services.frustrampnn.settings import default_settings, requested_settings_sha256
+from services.scientific_artifacts import publish_table_rows
 
 
 def _compatibility_basis(
@@ -878,7 +881,8 @@ async def test_external_candidate_handoff_rejects_parent_landscape_mismatch_befo
 
 
 @pytest_asyncio.fixture
-async def derived_session(tmp_path):
+async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'derived.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -973,32 +977,54 @@ async def derived_session(tmp_path):
                 ),
                 created_at=datetime(2026, 8, 2),
             ))
+            artifact_rows = []
             for residue in landscape["residues"]:
                 residue_json = {key: value for key, value in residue.items() if key != "slots"}
                 for slot in residue["slots"]:
-                    session.add(FrustraMPNNLandscapeRow(
-                        id=f"row-{invocation_id}-{residue['sequence_index']}-{slot['mutation_aa']}",
-                        parent_job_id="job-derived", invocation_id=invocation_id,
-                        target_id=landscape["target_id"],
-                        entity_instance_id=residue["entity_instance_id"],
-                        auth_asym_id=residue["auth_asym_id"],
-                        auth_seq_id=str(residue["auth_seq_id"]),
-                        insertion_code=residue["insertion_code"],
-                        sequence_index=residue["sequence_index"], wt=residue["wt"],
-                        mutation_aa=slot["mutation_aa"], score=slot["score"],
-                        score_class=slot["class"] or "neutral",
-                        scoreable=slot["scoreable"], status=slot["status"],
-                        reason=slot["reason"],
-                        row_json={"residue": residue_json, "slot": slot},
-                        provenance_json={
-                            "landscape_sha256": "5" * 64,
-                            "structure_map_sha256": landscape["structure_map_sha256"],
-                            "normalized_pdb_sha256": landscape["normalized_pdb_sha256"],
-                            "raw_csv_sha256": landscape["raw_csv_sha256"],
-                            "threshold_policy": landscape["threshold_policy"],
-                            "threshold_policy_sha256": landscape["threshold_policy_sha256"],
-                        },
-                    ))
+                    provenance = {
+                        "landscape_sha256": "5" * 64,
+                        "structure_map_sha256": landscape["structure_map_sha256"],
+                        "normalized_pdb_sha256": landscape["normalized_pdb_sha256"],
+                        "raw_csv_sha256": landscape["raw_csv_sha256"],
+                        "threshold_policy": landscape["threshold_policy"],
+                        "threshold_policy_sha256": landscape["threshold_policy_sha256"],
+                    }
+                    artifact_rows.append({
+                        "id": f"row-{invocation_id}-{residue['sequence_index']}-{slot['mutation_aa']}",
+                        "target_id": landscape["target_id"],
+                        "entity_instance_id": residue["entity_instance_id"],
+                        "auth_asym_id": residue["auth_asym_id"],
+                        "auth_seq_id": str(residue["auth_seq_id"]),
+                        "insertion_code": residue["insertion_code"],
+                        "sequence_index": residue["sequence_index"],
+                        "wt": residue["wt"],
+                        "mutation_aa": slot["mutation_aa"],
+                        "score": slot["score"],
+                        "score_class": slot["class"] or "neutral",
+                        "scoreable": slot["scoreable"],
+                        "status": slot["status"],
+                        "reason": slot["reason"],
+                        "row_json": json.dumps(
+                            {"residue": residue_json, "slot": slot},
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        "provenance_json": json.dumps(
+                            provenance,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    })
+            await publish_table_rows(
+                session,
+                owner_kind="frustrampnn_result",
+                owner_id=f"job-derived:{invocation_id}",
+                role="landscape",
+                schema_id="bms.frustrampnn-landscape.v1",
+                source_sha256="5" * 64,
+                rows=artifact_rows,
+                schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
+            )
         await session.commit()
         yield session
     await engine.dispose()
@@ -1074,6 +1100,20 @@ async def test_persisted_comparison_and_guidance_are_immutable_and_retrievable(d
     comparison = compare_landscapes(landscape, landscape, comparison_id="cmp-derived")
     stored = await persist_comparison(derived_session, comparison, reference_result=result, target_result=result)
     assert stored.comparison_id == "cmp-derived"
+    await derived_session.flush()
+    raw_payload = json.loads(
+        (
+            await derived_session.execute(
+                text(
+                    "SELECT payload_json FROM frustrampnn_comparisons "
+                    "WHERE comparison_id = :comparison_id"
+                ),
+                {"comparison_id": "cmp-derived"},
+            )
+        ).scalar_one()
+    )
+    assert raw_payload["schema"] == "bms.scientific-artifact-reference.v1"
+    assert "rows" not in raw_payload
     guidance = build_guidance_plan(
         landscape=landscape,
         region={"region_type": "residue_set", "residues": [{"auth_asym_id": "A", "auth_seq_id": 1, "insertion_code": ""}]},

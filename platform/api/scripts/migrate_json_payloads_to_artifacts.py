@@ -24,6 +24,9 @@ import pyarrow.parquet as pq
 import rfc8785
 
 from migrations.add_scientific_artifact_receipts import migrate as migrate_core_receipts
+from migrations.retire_scientific_landscape_projections import (
+    migrate as migrate_landscape_retirement,
+)
 from services.scientific_artifacts.contracts import (
     artifact_row_reference,
     canonical_json_bytes,
@@ -67,8 +70,25 @@ FRUSTRA_LANDSCAPE_SCHEMA = pa.schema(
         ("provenance_json", pa.string()),
     ]
 )
-CM_PROVENANCE_SCHEMA = pa.schema(
-    [("row_index", pa.int64()), ("row_id", pa.string()), ("provenance_json", pa.string())]
+CM_LANDSCAPE_SCHEMA = pa.schema(
+    [
+        ("row_index", pa.int64()),
+        ("id", pa.string()),
+        ("candidate_id", pa.string()),
+        ("entity_instance_id", pa.string()),
+        ("auth_asym_id", pa.string()),
+        ("auth_seq_id", pa.string()),
+        ("insertion_code", pa.string()),
+        ("sequence_index", pa.int64()),
+        ("wt", pa.string()),
+        ("mutation_aa", pa.string()),
+        ("score", pa.float64()),
+        ("score_class", pa.string()),
+        ("scoreable", pa.bool_()),
+        ("status", pa.string()),
+        ("reason", pa.string()),
+        ("provenance_json", pa.string()),
+    ]
 )
 DESIGN_ARTIFACT_FIELDS = (
     "confidence_metrics",
@@ -121,6 +141,40 @@ def json_value(raw: Any) -> Any:
 
 def json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def resolved_json_value(raw: Any, root: Path | None = None) -> Any:
+    value = json_value(raw)
+    if isinstance(value, dict) and value.get("schema") in {
+        "bms.scientific-artifact-reference.v1",
+        "bms.scientific-artifact-row-reference.v1",
+    }:
+        if root is None:
+            raise ValueError("artifact-backed JSON requires a source artifact root")
+        return resolve_json_value(value, root=root)
+    return value
+
+
+def resolved_json_value_cached(
+    raw: Any,
+    root: Path,
+    cache: dict[str, list[dict[str, Any]]],
+) -> Any:
+    value = json_value(raw)
+    if not isinstance(value, dict):
+        return value
+    if value.get("schema") != "bms.scientific-artifact-row-reference.v1":
+        return resolved_json_value(value, root)
+    artifact_id = str(value["artifact_id"])
+    if artifact_id not in cache:
+        cache[artifact_id] = read_rows(value, root=root)
+    raw_index = value.get("i", value.get("row_index"))
+    if raw_index is None:
+        return resolve_json_value(value, root=root)
+    row_index = int(raw_index)
+    value_field = str(value.get("f", value.get("value_field", "payload_json")))
+    selected = cache[artifact_id][row_index][value_field]
+    return json_value(selected)
 
 
 def statistics_source_sha(payload: Mapping[str, Any], stored_sha256: Any) -> str:
@@ -419,14 +473,25 @@ def publish_telemetry_group(
         raise
 
 
-def backfill_cm_records(source: sqlite3.Connection, target: sqlite3.Connection, root: Path) -> int:
+def backfill_cm_records(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
     count = 0
     rows = source.execute(
         "SELECT id, request_id, record_type, record_key, content_sha256, payload_json "
         "FROM conformational_mapping_records WHERE payload_json IS NOT NULL ORDER BY id"
     )
     for row in rows:
-        payload = json_value(row[5])
+        raw_payload = json_value(row[5])
+        if isinstance(raw_payload, dict) and raw_payload.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            continue
+        payload = raw_payload
         if not isinstance(payload, dict):
             raise ValueError(f"CM record {row[0]} is not a JSON object")
         source_sha256 = str(row[4])
@@ -443,10 +508,21 @@ def backfill_cm_records(source: sqlite3.Connection, target: sqlite3.Connection, 
     return count
 
 
-def backfill_frustrampnn_statistics(source: sqlite3.Connection, target: sqlite3.Connection, root: Path) -> int:
+def backfill_frustrampnn_statistics(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
     count = 0
     for row in source.execute("SELECT parent_job_id, invocation_id, statistics_sha256, statistics_json FROM frustrampnn_results WHERE statistics_json IS NOT NULL ORDER BY parent_job_id, invocation_id"):
-        payload = json_value(row[3])
+        raw_payload = json_value(row[3])
+        if isinstance(raw_payload, dict) and raw_payload.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            continue
+        payload = raw_payload
         if not isinstance(payload, dict):
             raise ValueError(f"FrustraMPNN statistics {row[0]}:{row[1]} is not an object")
         source_sha256 = statistics_source_sha(payload, row[2])
@@ -460,12 +536,88 @@ def backfill_frustrampnn_statistics(source: sqlite3.Connection, target: sqlite3.
     return count
 
 
-def backfill_design_payloads(source: sqlite3.Connection, target: sqlite3.Connection, root: Path) -> int:
+def backfill_frustrampnn_comparisons(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
+    count = 0
+    for comparison_id, comparison_sha256, raw_payload in source.execute(
+        "SELECT comparison_id, comparison_sha256, payload_json "
+        "FROM frustrampnn_comparisons ORDER BY comparison_id"
+    ):
+        parsed_payload = json_value(raw_payload)
+        if isinstance(parsed_payload, dict) and parsed_payload.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            continue
+        payload = parsed_payload
+        if not isinstance(payload, dict):
+            raise ValueError(f"FrustraMPNN comparison {comparison_id} is not an object")
+        source_sha256 = str(comparison_sha256)
+        artifact = install_parquet_rows(
+            root=root,
+            owner_kind="frustrampnn_comparison",
+            owner_id=str(comparison_id),
+            role="payload",
+            schema_id="bms.frustrampnn-comparison.v1",
+            schema_version=1,
+            source_sha256=source_sha256,
+            rows=envelope_rows(payload),
+            schema=ENVELOPE_SCHEMA,
+        )
+        reconstructed = reconstruct_envelope(read_rows(artifact, root=root))
+        if canonical_json_bytes(reconstructed) != canonical_json_bytes(payload):
+            raise ValueError(
+                f"FrustraMPNN comparison {comparison_id} artifact equivalence failed"
+            )
+        publish_group(
+            target,
+            artifact=artifact,
+            source_info=artifact_source_info(
+                source_store="core",
+                source_table="frustrampnn_comparisons",
+                source_column="payload_json",
+                source_key=str(comparison_id),
+                source_sha256=source_sha256,
+            ),
+            equivalence_sha256=canonical_sha256(reconstructed),
+            updates=[(
+                "UPDATE frustrampnn_comparisons SET payload_json = ? "
+                "WHERE comparison_id = ?",
+                (json_text(artifact.reference()), str(comparison_id)),
+            )],
+        )
+        count += 1
+    return count
+
+
+def backfill_design_payloads(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
     total = 0
     for field_name in DESIGN_ARTIFACT_FIELDS:
         source_rows = []
         for design_id, raw in source.execute(f'SELECT id, "{field_name}" FROM designs WHERE "{field_name}" IS NOT NULL ORDER BY id'):
-            source_rows.append(design_field_rows(str(design_id), field_name, json_value(raw), row_index=len(source_rows)))
+            value = json_value(raw)
+            if isinstance(value, dict) and value.get("schema") in {
+                "bms.scientific-artifact-reference.v1",
+                "bms.scientific-artifact-row-reference.v1",
+            }:
+                continue
+            source_rows.append(
+                design_field_rows(
+                    str(design_id),
+                    field_name,
+                    value,
+                    row_index=len(source_rows),
+                )
+            )
         if not source_rows:
             continue
         source_sha256 = digest_rows(source_rows)
@@ -479,16 +631,60 @@ def backfill_design_payloads(source: sqlite3.Connection, target: sqlite3.Connect
     return total
 
 
-def backfill_frustrampnn_landscape(source: sqlite3.Connection, target: sqlite3.Connection, root: Path) -> int:
+def backfill_frustrampnn_landscape(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
     groups: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
     source.row_factory = sqlite3.Row
     for row in source.execute("SELECT * FROM frustrampnn_landscape_rows ORDER BY parent_job_id, invocation_id, id"):
         groups[(str(row["parent_job_id"]), str(row["invocation_id"]))].append(row)
     checked = 0
+    artifact_cache: dict[str, list[dict[str, Any]]] = {}
     for (parent_job_id, invocation_id), group in groups.items():
+        owner_id = f"{parent_job_id}:{invocation_id}"
+        covered = target.execute(
+            """
+            SELECT row_count FROM scientific_artifact_receipts
+            WHERE owner_id = ? AND schema_id = 'bms.frustrampnn-landscape.v1'
+              AND availability = 'available'
+              AND ((owner_kind = 'frustrampnn_landscape' AND role = 'rows')
+                   OR (owner_kind = 'frustrampnn_result' AND role = 'landscape'))
+            """,
+            (owner_id,),
+        ).fetchall()
+        if any(int(receipt[0]) == len(group) for receipt in covered):
+            checked += 1
+            continue
         rows = []
         for index, row in enumerate(group):
-            rows.append({"row_index": index, "id": str(row["id"]), "target_id": str(row["target_id"]), "entity_instance_id": str(row["entity_instance_id"]), "auth_asym_id": str(row["auth_asym_id"]), "auth_seq_id": str(row["auth_seq_id"]), "insertion_code": str(row["insertion_code"]), "sequence_index": int(row["sequence_index"]), "wt": str(row["wt"]), "mutation_aa": str(row["mutation_aa"]), "score": None if row["score"] is None else float(row["score"]), "score_class": str(row["score_class"]), "scoreable": bool(row["scoreable"]), "status": str(row["status"]), "reason": None if row["reason"] is None else str(row["reason"]), "row_json": str(row["row_json"]), "provenance_json": str(row["provenance_json"])})
+            row_payload = resolved_json_value_cached(
+                row["row_json"], source_artifact_root or root, artifact_cache
+            )
+            provenance = resolved_json_value_cached(
+                row["provenance_json"], source_artifact_root or root, artifact_cache
+            )
+            rows.append({
+                "row_index": index,
+                "id": str(row["id"]),
+                "target_id": str(row["target_id"]),
+                "entity_instance_id": str(row["entity_instance_id"]),
+                "auth_asym_id": str(row["auth_asym_id"]),
+                "auth_seq_id": str(row["auth_seq_id"]),
+                "insertion_code": str(row["insertion_code"]),
+                "sequence_index": int(row["sequence_index"]),
+                "wt": str(row["wt"]),
+                "mutation_aa": str(row["mutation_aa"]),
+                "score": None if row["score"] is None else float(row["score"]),
+                "score_class": None if row["score_class"] is None else str(row["score_class"]),
+                "scoreable": bool(row["scoreable"]),
+                "status": str(row["status"]),
+                "reason": None if row["reason"] is None else str(row["reason"]),
+                "row_json": json_text(row_payload),
+                "provenance_json": json_text(provenance),
+            })
         source_sha256 = digest_rows(rows)
         artifact = install_parquet_rows(root=root, owner_kind="frustrampnn_landscape", owner_id=f"{parent_job_id}:{invocation_id}", role="rows", schema_id="bms.frustrampnn-landscape.v1", schema_version=1, source_sha256=source_sha256, rows=rows, schema=FRUSTRA_LANDSCAPE_SCHEMA)
         if read_rows(artifact, root=root) != rows:
@@ -503,22 +699,179 @@ def backfill_frustrampnn_landscape(source: sqlite3.Connection, target: sqlite3.C
     return checked
 
 
-def backfill_cm_landscape_provenance(source: sqlite3.Connection, target: sqlite3.Connection, root: Path) -> int:
+def backfill_cm_landscape_provenance(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    root: Path,
+    source_artifact_root: Path | None = None,
+) -> int:
     groups: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
     source.row_factory = sqlite3.Row
-    for row in source.execute("SELECT id, request_id, candidate_id, provenance_json FROM conformational_mapping_landscape_rows ORDER BY request_id, candidate_id, id"):
+    for row in source.execute(
+        "SELECT * FROM conformational_mapping_landscape_rows "
+        "ORDER BY request_id, candidate_id, id"
+    ):
         groups[(str(row["request_id"]), str(row["candidate_id"]))].append(row)
     checked = 0
+    artifact_cache: dict[str, list[dict[str, Any]]] = {}
     for (request_id, candidate_id), group in groups.items():
-        rows = [{"row_index": index, "row_id": str(row["id"]), "provenance_json": str(row["provenance_json"])} for index, row in enumerate(group)]
+        rows: list[dict[str, Any]] = []
+        for index, row in enumerate(group):
+            provenance = resolved_json_value_cached(
+                row["provenance_json"],
+                source_artifact_root or root,
+                artifact_cache,
+            )
+            rows.append({
+                "row_index": index,
+                "id": str(row["id"]),
+                "candidate_id": candidate_id,
+                "entity_instance_id": str(row["entity_instance_id"]),
+                "auth_asym_id": str(row["auth_asym_id"]),
+                "auth_seq_id": str(row["auth_seq_id"]),
+                "insertion_code": str(row["insertion_code"]),
+                "sequence_index": int(row["sequence_index"]),
+                "wt": str(row["wt"]),
+                "mutation_aa": str(row["mutation_aa"]),
+                "score": None if row["score"] is None else float(row["score"]),
+                "score_class": None if row["score_class"] is None else str(row["score_class"]),
+                "scoreable": bool(row["scoreable"]),
+                "status": str(row["status"]),
+                "reason": None if row["reason"] is None else str(row["reason"]),
+                "provenance_json": json_text(provenance),
+            })
         source_sha256 = digest_rows(rows)
-        artifact = install_parquet_rows(root=root, owner_kind="conformational_mapping_landscape", owner_id=f"{request_id}:{candidate_id}", role="provenance", schema_id="bms.cm-landscape-provenance.v1", schema_version=1, source_sha256=source_sha256, rows=rows, schema=CM_PROVENANCE_SCHEMA)
+        artifact = install_parquet_rows(
+            root=root,
+            owner_kind="conformational_mapping_landscape",
+            owner_id=f"{request_id}:{candidate_id}",
+            role="rows",
+            schema_id="bms.cm-landscape.v1",
+            schema_version=1,
+            source_sha256=source_sha256,
+            rows=rows,
+            schema=CM_LANDSCAPE_SCHEMA,
+        )
         if read_rows(artifact, root=root) != rows:
-            raise ValueError(f"CM provenance {request_id}:{candidate_id} artifact equivalence failed")
-        updates = [("UPDATE conformational_mapping_landscape_rows SET provenance_json = ? WHERE id = ?", (json_text(artifact_row_reference(artifact.reference(), row["row_index"], value_field="provenance_json")), row["row_id"])) for row in rows]
-        publish_group(target, artifact=artifact, source_info=artifact_source_info(source_store="core", source_table="conformational_mapping_landscape_rows", source_column="provenance_json", source_key=f"{request_id}:{candidate_id}", source_sha256=source_sha256), equivalence_sha256=source_sha256, updates=updates)
+            raise ValueError(
+                f"CM landscape {request_id}:{candidate_id} artifact equivalence failed"
+            )
+        publish_group(
+            target,
+            artifact=artifact,
+            source_info=artifact_source_info(
+                source_store="core",
+                source_table="conformational_mapping_landscape_rows",
+                source_column="complete_row",
+                source_key=f"{request_id}:{candidate_id}",
+                source_sha256=source_sha256,
+            ),
+            equivalence_sha256=source_sha256,
+            updates=[],
+        )
         checked += len(rows)
     return checked
+
+
+def _is_compact_artifact_reference(raw: Any) -> bool:
+    try:
+        value = json_value(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(value, dict) and value.get("schema") in {
+        "bms.scientific-artifact-reference.v1",
+        "bms.scientific-artifact-row-reference.v1",
+    }
+
+
+def retire_legacy_landscape_rows(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+) -> dict[str, int]:
+    for table, owner_kind, role, schema_id, owner_expression in (
+        (
+            "conformational_mapping_landscape_rows",
+            "conformational_mapping_landscape",
+            "rows",
+            "bms.cm-landscape.v1",
+            "request_id || ':' || candidate_id",
+        ),
+        (
+            "frustrampnn_landscape_rows",
+            "frustrampnn_landscape",
+            "rows",
+            "bms.frustrampnn-landscape.v1",
+            "parent_job_id || ':' || invocation_id",
+        ),
+    ):
+        for owner_id, source_count in source.execute(
+            f"SELECT {owner_expression}, COUNT(*) FROM {table} GROUP BY 1"
+        ):
+            if table == "frustrampnn_landscape_rows":
+                receipts = target.execute(
+                    """
+                    SELECT row_count FROM scientific_artifact_receipts
+                    WHERE owner_id = ? AND schema_id = ? AND availability = 'available'
+                      AND ((owner_kind = 'frustrampnn_landscape' AND role = 'rows')
+                           OR (owner_kind = 'frustrampnn_result' AND role = 'landscape'))
+                    """,
+                    (str(owner_id), schema_id),
+                ).fetchall()
+            else:
+                receipts = target.execute(
+                    "SELECT row_count FROM scientific_artifact_receipts "
+                    "WHERE owner_kind = ? AND owner_id = ? AND role = ? "
+                    "AND schema_id = ? AND availability = 'available'",
+                    (owner_kind, str(owner_id), role, schema_id),
+                ).fetchall()
+            matched = next(
+                (row for row in receipts if int(row[0]) == int(source_count)),
+                None,
+            )
+            if matched is None:
+                observed = [int(row[0]) for row in receipts]
+                raise ValueError(
+                    f"{table} artifact coverage mismatch for {owner_id}: "
+                    f"source={source_count}, receipts={observed}"
+                )
+
+    for comparison_id, raw_payload in target.execute(
+        "SELECT comparison_id, payload_json FROM frustrampnn_comparisons"
+    ):
+        if not _is_compact_artifact_reference(raw_payload):
+            raise ValueError(
+                f"FrustraMPNN comparison {comparison_id} remains inline"
+            )
+    for field_name in DESIGN_ARTIFACT_FIELDS:
+        for design_id, raw_payload in target.execute(
+            f'SELECT id, "{field_name}" FROM designs '
+            f'WHERE "{field_name}" IS NOT NULL'
+        ):
+            if not _is_compact_artifact_reference(raw_payload):
+                raise ValueError(
+                    f"Design {design_id} field {field_name} remains inline"
+                )
+
+    before = {
+        "conformational_mapping_landscape_rows": int(
+            target.execute(
+                "SELECT COUNT(*) FROM conformational_mapping_landscape_rows"
+            ).fetchone()[0]
+        ),
+        "frustrampnn_landscape_rows": int(
+            target.execute("SELECT COUNT(*) FROM frustrampnn_landscape_rows").fetchone()[0]
+        ),
+    }
+    target.execute("BEGIN IMMEDIATE")
+    try:
+        target.execute("DELETE FROM conformational_mapping_landscape_rows")
+        target.execute("DELETE FROM frustrampnn_landscape_rows")
+        target.commit()
+    except Exception:
+        target.rollback()
+        raise
+    migrate_landscape_retirement(target)
+    return before
 
 
 def telemetry_rows(
@@ -593,6 +946,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--source-artifact-root", type=Path)
     parser.add_argument("--store", choices=["core", "telemetry"], required=True)
+    parser.add_argument("--retire-landscapes", action="store_true")
     parser.add_argument("--apply", action="store_true")
     return parser.parse_args()
 
@@ -610,10 +964,51 @@ def main() -> int:
     target.execute("PRAGMA busy_timeout=60000")
     try:
         ensure_receipt_tables(target)
+        source_artifact_root = args.source_artifact_root or args.artifact_root
         if args.store == "core":
-            counts = {"cm_records": backfill_cm_records(source, target, args.artifact_root), "frustrampnn_statistics": backfill_frustrampnn_statistics(source, target, args.artifact_root), "design_payload_rows": backfill_design_payloads(source, target, args.artifact_root), "frustrampnn_landscape_rows": backfill_frustrampnn_landscape(source, target, args.artifact_root), "cm_landscape_provenance_rows": backfill_cm_landscape_provenance(source, target, args.artifact_root)}
+            counts: dict[str, Any] = {
+                "cm_records": backfill_cm_records(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+                "frustrampnn_statistics": backfill_frustrampnn_statistics(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+                "frustrampnn_comparisons": backfill_frustrampnn_comparisons(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+                "design_payload_rows": backfill_design_payloads(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+                "frustrampnn_landscape_rows": backfill_frustrampnn_landscape(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+                "cm_landscape_rows": backfill_cm_landscape_provenance(
+                    source, target, args.artifact_root, source_artifact_root
+                ),
+            }
+            if args.retire_landscapes:
+                counts["retired_landscape_rows"] = retire_legacy_landscape_rows(
+                    source, target
+                )
         else:
-            counts = {"raw_samples": backfill_telemetry_table(source, target, args.artifact_root, "raw_samples", source_artifact_root=args.source_artifact_root or args.artifact_root), "minute_aggregates": backfill_telemetry_table(source, target, args.artifact_root, "minute_aggregates", source_artifact_root=args.source_artifact_root or args.artifact_root)}
+            if args.retire_landscapes:
+                raise ValueError("--retire-landscapes is valid only for the core store")
+            counts = {
+                "raw_samples": backfill_telemetry_table(
+                    source,
+                    target,
+                    args.artifact_root,
+                    "raw_samples",
+                    source_artifact_root=source_artifact_root,
+                ),
+                "minute_aggregates": backfill_telemetry_table(
+                    source,
+                    target,
+                    args.artifact_root,
+                    "minute_aggregates",
+                    source_artifact_root=source_artifact_root,
+                ),
+            }
         print(json.dumps(counts, sort_keys=True))
         return 0
     finally:

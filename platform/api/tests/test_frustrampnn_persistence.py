@@ -23,6 +23,7 @@ from database import (
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
+    ScientificArtifactReceipt,
 )
 from services.frustrampnn.analysis import summarize_landscape
 from services.frustrampnn.contracts import (
@@ -403,13 +404,12 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
                 .order_by(FrustraMPNNArtifact.relative_path)
             )
         ).scalars().all()
-        rows = (
-            await session.execute(
-                select(FrustraMPNNLandscapeRow)
-                .where(FrustraMPNNLandscapeRow.invocation_id == result.invocation_id)
-                .order_by(FrustraMPNNLandscapeRow.mutation_aa)
-            )
-        ).scalars().all()
+        rows = await module.paged_landscape(
+            session,
+            "job-1",
+            result.invocation_id,
+            limit=20,
+        )
 
     request = _load_json(tmp_path / "bundle", "workflow_component_request_v1.json")
     receipt = _load_json(tmp_path / "bundle", "frustrampnn_execution_receipt_v1.json")
@@ -429,9 +429,9 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
     assert len(artifacts) == 10
     assert len(rows) == 20
     assert all(Path(artifact.storage_path).is_file() for artifact in artifacts)
-    assert {row.mutation_aa for row in rows} == set("ACDEFGHIKLMNPQRSTVWY")
-    assert all(row.row_json["residue"]["auth_seq_id"] == 1 for row in rows)
-    assert all(row.provenance_json["landscape_sha256"] == summary["landscape_sha256"] for row in rows)
+    assert {row["mutation_aa"] for row in rows} == set("ACDEFGHIKLMNPQRSTVWY")
+    assert all(row["row"]["residue"]["auth_seq_id"] == 1 for row in rows)
+    assert all(row["provenance"]["landscape_sha256"] == summary["landscape_sha256"] for row in rows)
     assert (
         result.settings_sha256,
         result.effective_settings_sha256,
@@ -477,13 +477,12 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
                 .order_by(FrustraMPNNArtifact.relative_path)
             )
         ).scalars().all()
-        rows = (
-            await session.execute(
-                select(FrustraMPNNLandscapeRow).where(
-                    FrustraMPNNLandscapeRow.invocation_id == "invoke-v2"
-                )
-            )
-        ).scalars().all()
+        rows = await module.paged_landscape(
+            session,
+            "job-v2",
+            "invoke-v2",
+            limit=40,
+        )
         created_at = result.created_at
         counts = await _counts(session)
         replay = await module.ingest_result_bundle(
@@ -538,7 +537,7 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
             "text/plain",
         }
     assert len(rows) == 2 * 20
-    assert len({row.id for row in rows}) == 2 * 20
+    assert len({row["id"] for row in rows}) == 2 * 20
     expected_row_json = {
         canonical_json_bytes(
             {
@@ -551,7 +550,7 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
         for residue in landscape["residues"]
         for slot in residue["slots"]
     }
-    assert {canonical_json_bytes(row.row_json) for row in rows} == expected_row_json
+    assert {canonical_json_bytes(row["row"]) for row in rows} == expected_row_json
     assert all(
         {
             "source_entity_id",
@@ -559,12 +558,12 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
             "pdb_residue_id",
             "pdb_insertion_code",
             "residue_name",
-        }.issubset(row.row_json["residue"])
+        }.issubset(row["row"]["residue"])
         for row in rows
     )
     assert replay.created_at == created_at
     async with db() as session:
-        assert await _counts(session) == counts == (1, 10, 40)
+        assert await _counts(session) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
@@ -617,13 +616,18 @@ async def test_v2_replay_conflicts_on_each_new_authority_field_without_repair(
         assert canonical_json_bytes(getattr(persisted, field)) == canonical_json_bytes(
             contradiction
         )
-        assert await _counts(verification) == counts == (1, 10, 20)
+        assert await _counts(verification) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authority",
-    ["artifact_storage_path", "artifact_metadata", "landscape_score", "landscape_row"],
+    [
+        "artifact_storage_path",
+        "artifact_metadata",
+        "landscape_source_hash",
+        "landscape_row_count",
+    ],
 )
 async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
     tmp_path: Path,
@@ -660,17 +664,21 @@ async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
         else:
             persisted = (
                 await session.execute(
-                    select(FrustraMPNNLandscapeRow).where(
-                        FrustraMPNNLandscapeRow.parent_job_id == "job-v2",
-                        FrustraMPNNLandscapeRow.invocation_id == "invoke-v2",
+                    select(ScientificArtifactReceipt).where(
+                        ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                        ScientificArtifactReceipt.owner_id == "job-v2:invoke-v2",
+                        ScientificArtifactReceipt.role == "landscape",
                     )
                 )
-            ).scalars().first()
+            ).scalar_one_or_none()
             assert persisted is not None
-            if authority == "landscape_score":
-                persisted.score = 123.0
+            if authority == "landscape_source_hash":
+                persisted.source_receipts_json = {
+                    **persisted.source_receipts_json,
+                    "source_sha256": "0" * 64,
+                }
             else:
-                persisted.row_json = {"contradiction": "landscape row"}
+                persisted.row_count += 1
         await session.commit()
         counts = await _counts(session)
 
@@ -681,7 +689,7 @@ async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
                 parent_job_id="job-v2",
                 terminal_envelope=terminal,
             )
-        assert await _counts(session) == counts == (1, 10, 20)
+        assert await _counts(session) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
@@ -723,7 +731,7 @@ async def test_v2_insert_failure_rolls_back_result_artifacts_and_rows(
     def fail_landscape_insert(*_args, **_kwargs):
         raise RuntimeError("injected v2 landscape insert failure")
 
-    event.listen(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+    event.listen(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
     try:
         async with db() as session:
             with pytest.raises(module.FrustraMPNNPersistenceError, match="injected v2"):
@@ -735,7 +743,7 @@ async def test_v2_insert_failure_rolls_back_result_artifacts_and_rows(
                 )
             assert await _counts(session) == (0, 0, 0)
     finally:
-        event.remove(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+        event.remove(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
 
 
 @pytest.mark.asyncio
@@ -806,7 +814,7 @@ async def test_identical_replay_returns_existing_and_preserves_historical_design
         await session.refresh(design)
         assert replay.invocation_id == first.invocation_id
         assert replay.created_at == created_at
-        assert await _counts(session) == counts == (1, 10, 20)
+        assert await _counts(session) == counts == (1, 10, 0)
         assert design.frustration_high_count == 99
         assert design.frustration_min_count is None
         assert design.frustration_pct_high is None
@@ -872,16 +880,15 @@ async def test_same_local_invocation_id_is_isolated_by_parent_job(
                     )
                 ).scalars()
             )
-            row_ids_by_job[job_id] = set(
-                (
-                    await session.execute(
-                        select(FrustraMPNNLandscapeRow.id).where(
-                            FrustraMPNNLandscapeRow.parent_job_id == job_id,
-                            FrustraMPNNLandscapeRow.invocation_id == "invoke-1",
-                        )
-                    )
-                ).scalars()
-            )
+            row_ids_by_job[job_id] = {
+                row["id"]
+                for row in await module.paged_landscape(
+                    session,
+                    job_id,
+                    "invoke-1",
+                    limit=20,
+                )
+            }
         assert len(artifact_ids_by_job["job-1"]) == len(artifact_ids_by_job["job-2"]) == 10
         assert len(row_ids_by_job["job-1"]) == len(row_ids_by_job["job-2"]) == 20
         assert artifact_ids_by_job["job-1"].isdisjoint(artifact_ids_by_job["job-2"])
@@ -900,7 +907,7 @@ async def test_same_local_invocation_id_is_isolated_by_parent_job(
         )
         assert replay_one.parent_job_id == "job-1"
         assert replay_two.parent_job_id == "job-2"
-        assert await _counts(session) == (2, 20, 40)
+        assert await _counts(session) == (2, 20, 0)
 
 
 @pytest.mark.asyncio
@@ -1217,7 +1224,7 @@ async def test_insert_failure_rolls_back_result_artifacts_rows_and_legacy_projec
     def fail_landscape_insert(*_args, **_kwargs):
         raise RuntimeError("injected landscape insert failure")
 
-    event.listen(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+    event.listen(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
     try:
         async with db() as session:
             with pytest.raises(module.FrustraMPNNPersistenceError, match="injected"):
@@ -1232,7 +1239,7 @@ async def test_insert_failure_rolls_back_result_artifacts_rows_and_legacy_projec
             assert design.frustration_high_count is None
             assert design.frustration_csv_path is None
     finally:
-        event.remove(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+        event.remove(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
 
 
 @pytest.mark.asyncio
@@ -1252,7 +1259,7 @@ async def test_commit_false_flushes_for_caller_owned_transaction_without_committ
             commit=False,
         )
         assert result.invocation_id == "invoke-1"
-        assert await _counts(session) == (1, 10, 20)
+        assert await _counts(session) == (1, 10, 0)
         await session.rollback()
 
     async with db() as session:
@@ -1275,7 +1282,15 @@ async def test_read_projections_are_ordered_and_never_expose_storage_paths(
         rows = await module.paged_landscape(
             session, "job-1", "invoke-1", limit=5, offset=0
         )
+        duplicated_sql_rows = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(FrustraMPNNLandscapeRow)
+                )
+            ).scalar_one()
+        )
 
+    assert duplicated_sql_rows == 0
     assert projection["invocation_id"] == "invoke-1"
     assert projection["manifest_sha256"]
     assert all("storage_path" not in artifact for artifact in artifacts)

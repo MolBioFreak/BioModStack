@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,6 +52,139 @@ def test_store_is_separate_append_only_and_readers_are_query_only(tmp_path: Path
         assert json.loads(staged.read_text().splitlines()[0])["cpu"]["utilization"] == 10.0
         with pytest.raises(sqlite3.OperationalError):
             connection.execute("DELETE FROM raw_samples")
+
+
+def test_legacy_receipt_schema_is_rebuilt_before_bucket_finalization(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """CREATE TABLE scientific_artifact_receipts (
+                artifact_id TEXT PRIMARY KEY,
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                schema_id TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                row_count INTEGER NOT NULL,
+                column_schema_sha256 TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                availability TEXT NOT NULL,
+                source_receipts_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(owner_kind, owner_id, role, content_sha256)
+            )"""
+        )
+    store = TelemetryStore(path)
+    store.initialize()
+    minute = 1_700_000_040_000
+    store.append_sample(sample(minute + 1_000, 10.0, 20.0))
+    assert store.finalize_completed_minutes(minute + 60_000) == 1
+
+    with open_read_only(path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(scientific_artifact_receipts)"
+            )
+        }
+        receipts = connection.execute(
+            "SELECT role, schema_id, artifact_schema_version, row_count, "
+            "column_schema_sha256 FROM scientific_artifact_receipts ORDER BY role"
+        ).fetchall()
+    assert "schema_version" not in columns
+    assert "artifact_schema_version" in columns
+    assert [(row[0], row[1], row[2]) for row in receipts] == [
+        ("minute_aggregate", "bms.telemetry.aggregate.v1", 1),
+        ("raw_history", "bms.telemetry.raw.v1", 1),
+    ]
+    assert all(int(row[3]) > 0 and len(str(row[4])) == 64 for row in receipts)
+
+
+def test_conflicting_existing_telemetry_receipt_fails_closed(tmp_path: Path) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    store = TelemetryStore(path)
+    store.initialize()
+    minute = 1_700_000_040_000
+    store.append_sample(sample(minute + 1_000, 10.0, 20.0))
+    assert store.finalize_completed_minutes(minute + 60_000) == 1
+
+    with sqlite3.connect(path) as connection:
+        connection.row_factory = sqlite3.Row
+        receipt = connection.execute(
+            "SELECT * FROM scientific_artifact_receipts "
+            "WHERE role = 'raw_history'"
+        ).fetchone()
+        assert receipt is not None
+        artifact = SimpleNamespace(
+            artifact_id=receipt["artifact_id"],
+            owner_kind=receipt["owner_kind"],
+            owner_id=receipt["owner_id"],
+            role=receipt["role"],
+            schema_id=receipt["schema_id"],
+            schema_version=receipt["artifact_schema_version"],
+            relative_path=receipt["relative_path"],
+            content_sha256=receipt["content_sha256"],
+            size_bytes=receipt["size_bytes"],
+            row_count=receipt["row_count"],
+            column_schema_sha256=receipt["column_schema_sha256"],
+            media_type=receipt["media_type"],
+            reference=lambda: {},
+        )
+        source = json.loads(receipt["source_receipts_json"])
+        connection.execute(
+            "UPDATE scientific_artifact_receipts "
+            "SET column_schema_sha256 = ? WHERE artifact_id = ?",
+            ("f" * 64, receipt["artifact_id"]),
+        )
+        with pytest.raises(ValueError, match="receipt conflict"):
+            store._insert_receipt(connection, artifact, source)
+
+
+def test_reconcile_restores_missing_receipts_and_repairs_schema_fingerprints(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    store = TelemetryStore(path)
+    store.initialize()
+    minute = 1_700_000_040_000
+    store.append_sample(sample(minute + 1_000, 10.0, 20.0))
+    assert store.finalize_completed_minutes(minute + 60_000) == 1
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "DELETE FROM scientific_artifact_receipts WHERE role = 'raw_history'"
+        )
+        connection.execute(
+            "UPDATE scientific_artifact_receipts SET column_schema_sha256 = ? "
+            "WHERE role = 'minute_aggregate'",
+            ("f" * 64,),
+        )
+
+    assert store.reconcile_artifact_receipts() == {
+        "verified": 2,
+        "inserted": 1,
+        "repaired": 1,
+    }
+    assert store.reconcile_artifact_receipts() == {
+        "verified": 2,
+        "inserted": 0,
+        "repaired": 0,
+    }
+    with open_read_only(path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM scientific_artifact_receipts"
+        ).fetchone()[0] == 2
+    reopened = TelemetryStore(path)
+    reopened.initialize()
+    points = reopened.read_history(
+        start_ms=minute,
+        end_ms=minute + 60_000,
+        resolution="raw",
+        limit=10,
+    )
+    assert points[0]["payload"]["cpu"]["utilization"] == 10.0
 
 
 def test_completed_minute_aggregate_is_finalized_once(tmp_path: Path) -> None:

@@ -9,8 +9,10 @@ import sqlite3
 from typing import Any, Literal
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from services.scientific_artifacts import (
+    InstalledArtifact,
     artifact_reference,
     artifact_row_reference,
     canonical_json_bytes,
@@ -19,6 +21,7 @@ from services.scientific_artifacts import (
     install_parquet_rows,
     reconstruct_envelope,
     resolve_json_value,
+    verify_artifact,
 )
 
 RAW_RETENTION_SECONDS = 7 * 24 * 60 * 60
@@ -185,6 +188,27 @@ def _artifact_source_sha(rows: list[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
+def _schema_digest(schema: pa.Schema) -> str:
+    fields = [
+        {"name": field.name, "type": str(field.type), "nullable": field.nullable}
+        for field in schema
+    ]
+    return hashlib.sha256(canonical_json_bytes(fields)).hexdigest()
+
+
+def _type_signature(data_type: pa.DataType) -> Any:
+    if pa.types.is_list(data_type):
+        return ("list", _type_signature(data_type.value_type))
+    return str(data_type)
+
+
+def _schema_signature(schema: pa.Schema) -> tuple[Any, ...]:
+    return tuple(
+        (field.name, _type_signature(field.type), field.nullable)
+        for field in schema
+    )
+
+
 def _safe_staging_path(root: Path, relative: str) -> Path:
     path = (root / relative).resolve()
     path.relative_to(root.resolve())
@@ -215,6 +239,82 @@ def _receipt_values(artifact: Any, source: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+_RECEIPT_COLUMNS = (
+    "artifact_id", "owner_kind", "owner_id", "role", "schema_id",
+    "artifact_schema_version", "storage_root", "relative_path",
+    "content_sha256", "size_bytes", "row_count", "column_schema_sha256",
+    "media_type", "availability", "source_receipts_json", "created_at",
+)
+
+
+def _rebuild_legacy_receipt_table(connection: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1])
+        for row in connection.execute(
+            "PRAGMA table_info(scientific_artifact_receipts)"
+        )
+    }
+    if columns == set(_RECEIPT_COLUMNS):
+        return
+    version_column = (
+        "artifact_schema_version"
+        if "artifact_schema_version" in columns
+        else "schema_version"
+    )
+    if version_column not in columns:
+        raise ValueError("telemetry artifact receipt schema has no version column")
+    storage_expression = (
+        "storage_root" if "storage_root" in columns
+        else "'scientific_artifact_root'"
+    )
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            "ALTER TABLE scientific_artifact_receipts "
+            "RENAME TO scientific_artifact_receipts_legacy"
+        )
+        connection.execute(
+            """CREATE TABLE scientific_artifact_receipts (
+                artifact_id TEXT PRIMARY KEY,
+                owner_kind TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                schema_id TEXT NOT NULL,
+                artifact_schema_version INTEGER NOT NULL,
+                storage_root TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                row_count INTEGER NOT NULL,
+                column_schema_sha256 TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                availability TEXT NOT NULL,
+                source_receipts_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(owner_kind, owner_id, role, content_sha256)
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO scientific_artifact_receipts(
+                artifact_id, owner_kind, owner_id, role, schema_id,
+                artifact_schema_version, storage_root, relative_path,
+                content_sha256, size_bytes, row_count, column_schema_sha256,
+                media_type, availability, source_receipts_json, created_at
+            )
+            SELECT artifact_id, owner_kind, owner_id, role, schema_id,
+                   """ + version_column + ", " + storage_expression + """,
+                   relative_path, content_sha256, size_bytes, row_count,
+                   column_schema_sha256, media_type, availability,
+                   source_receipts_json, created_at
+            FROM scientific_artifact_receipts_legacy"""
+        )
+        connection.execute("DROP TABLE scientific_artifact_receipts_legacy")
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 class TelemetryStore:
     def __init__(self, path: Path):
         self.path = path.resolve()
@@ -227,19 +327,7 @@ class TelemetryStore:
         self.artifact_root.mkdir(parents=True, exist_ok=True)
         with _connect(self.path) as connection:
             connection.executescript(_SCHEMA)
-            receipt_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_artifact_receipts)")}
-            if "artifact_schema_version" not in receipt_columns:
-                connection.execute(
-                    "ALTER TABLE scientific_artifact_receipts ADD COLUMN artifact_schema_version INTEGER NOT NULL DEFAULT 1"
-                )
-                if "schema_version" in receipt_columns:
-                    connection.execute(
-                        "UPDATE scientific_artifact_receipts SET artifact_schema_version = schema_version"
-                    )
-            if "storage_root" not in receipt_columns:
-                connection.execute(
-                    "ALTER TABLE scientific_artifact_receipts ADD COLUMN storage_root TEXT NOT NULL DEFAULT 'scientific_artifact_root'"
-                )
+            _rebuild_legacy_receipt_table(connection)
             ledger_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_payload_migrations)")}
             if "attempt_count" not in ledger_columns:
                 connection.execute(
@@ -334,14 +422,187 @@ class TelemetryStore:
         raise ValueError("telemetry payload is not an object")
 
     def _insert_receipt(self, connection: sqlite3.Connection, artifact: Any, source: dict[str, Any]) -> None:
+        values = _receipt_values(artifact, source)
         connection.execute(
-            """INSERT OR IGNORE INTO scientific_artifact_receipts(
+            """INSERT INTO scientific_artifact_receipts(
                 artifact_id, owner_kind, owner_id, role, schema_id, artifact_schema_version,
                 storage_root, relative_path, content_sha256, size_bytes, row_count,
                 column_schema_sha256, media_type, availability, source_receipts_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            _receipt_values(artifact, source),
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(artifact_id) DO NOTHING""",
+            values,
         )
+        persisted = connection.execute(
+            "SELECT * FROM scientific_artifact_receipts WHERE artifact_id = ?",
+            (artifact.artifact_id,),
+        ).fetchone()
+        if persisted is None:
+            raise ValueError("telemetry artifact receipt conflict")
+        conflicts = [
+            column
+            for column, expected in zip(_RECEIPT_COLUMNS[:-1], values[:-1], strict=True)
+            if persisted[column] != expected
+        ]
+        if conflicts:
+            raise ValueError(
+                "telemetry artifact receipt conflict: " + ", ".join(conflicts)
+            )
+
+    def reconcile_artifact_receipts(self) -> dict[str, int]:
+        candidates: dict[str, tuple[InstalledArtifact, dict[str, Any]]] = {}
+
+        def installed_from_reference(
+            reference: dict[str, Any],
+            *,
+            owner_kind: str,
+            owner_id: str,
+            role: str,
+            schema_id: str,
+            schema_version: int = 1,
+        ) -> InstalledArtifact:
+            path = verify_artifact(reference, root=self.artifact_root)
+            compact = "p" in reference
+            relative_path = str(reference["p"] if compact else reference["relative_path"])
+            content_sha256 = str(reference["h"] if compact else reference["content_sha256"])
+            size_bytes = int(reference["z"] if compact else reference["size_bytes"])
+            row_count = int(reference["n"] if compact else reference["row_count"])
+            schema = pq.read_schema(path)
+            return InstalledArtifact(
+                artifact_id=str(reference["artifact_id"]),
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                role=role,
+                schema_id=schema_id,
+                schema_version=schema_version,
+                relative_path=relative_path,
+                storage_path=path,
+                content_sha256=content_sha256,
+                size_bytes=size_bytes,
+                row_count=row_count,
+                column_schema_sha256=_schema_digest(schema),
+            )
+
+        with _connect(self.path) as connection:
+            for receipt in connection.execute(
+                "SELECT * FROM scientific_artifact_receipts"
+            ).fetchall():
+                reference = artifact_reference(
+                    artifact_id=receipt["artifact_id"],
+                    owner_kind=receipt["owner_kind"],
+                    owner_id=receipt["owner_id"],
+                    role=receipt["role"],
+                    schema_id=receipt["schema_id"],
+                    schema_version=receipt["artifact_schema_version"],
+                    content_sha256=receipt["content_sha256"],
+                    size_bytes=receipt["size_bytes"],
+                    row_count=receipt["row_count"],
+                    relative_path=receipt["relative_path"],
+                )
+                installed = installed_from_reference(
+                    reference,
+                    owner_kind=str(receipt["owner_kind"]),
+                    owner_id=str(receipt["owner_id"]),
+                    role=str(receipt["role"]),
+                    schema_id=str(receipt["schema_id"]),
+                    schema_version=int(receipt["artifact_schema_version"]),
+                )
+                candidates[installed.artifact_id] = (
+                    installed,
+                    json.loads(receipt["source_receipts_json"]),
+                )
+
+            for row in connection.execute(
+                "SELECT raw_samples.timestamp_ms, telemetry_sample_artifact_refs.artifact_ref "
+                "FROM telemetry_sample_artifact_refs "
+                "JOIN raw_samples USING(timestamp_ms) ORDER BY raw_samples.timestamp_ms"
+            ).fetchall():
+                reference = json.loads(row["artifact_ref"])
+                bucket = (int(row["timestamp_ms"]) // 60_000) * 60_000
+                installed = installed_from_reference(
+                    reference,
+                    owner_kind="telemetry_bucket",
+                    owner_id=f"raw:{bucket}",
+                    role="raw_history",
+                    schema_id="bms.telemetry.raw.v1",
+                )
+                if _schema_signature(pq.read_schema(installed.storage_path)) != _schema_signature(_TELEMETRY_SCHEMA):
+                    raise ValueError(f"telemetry raw artifact schema mismatch: {installed.artifact_id}")
+                candidates[installed.artifact_id] = (
+                    installed,
+                    {
+                        "source_store": "telemetry",
+                        "source_table": "raw_samples",
+                        "source_key": str(bucket),
+                    },
+                )
+
+            for row in connection.execute(
+                "SELECT bucket_ms, payload_json FROM minute_aggregates ORDER BY bucket_ms"
+            ).fetchall():
+                reference = json.loads(row["payload_json"])
+                if reference.get("schema") != "bms.scientific-artifact-reference.v1":
+                    continue
+                installed = installed_from_reference(
+                    reference,
+                    owner_kind="telemetry_bucket",
+                    owner_id=f"minute:{int(row['bucket_ms'])}",
+                    role="minute_aggregate",
+                    schema_id="bms.telemetry.aggregate.v1",
+                )
+                if _schema_signature(pq.read_schema(installed.storage_path)) != _schema_signature(_ENVELOPE_SCHEMA):
+                    raise ValueError(
+                        f"telemetry aggregate artifact schema mismatch: {installed.artifact_id}"
+                    )
+                candidates[installed.artifact_id] = (
+                    installed,
+                    {
+                        "source_store": "telemetry",
+                        "source_table": "minute_aggregates",
+                        "source_key": str(int(row["bucket_ms"])),
+                    },
+                )
+
+            inserted = 0
+            repaired = 0
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                for artifact_id in sorted(candidates):
+                    installed, source = candidates[artifact_id]
+                    values = _receipt_values(installed, source)
+                    persisted = connection.execute(
+                        "SELECT * FROM scientific_artifact_receipts WHERE artifact_id = ?",
+                        (artifact_id,),
+                    ).fetchone()
+                    if persisted is None:
+                        self._insert_receipt(connection, installed, source)
+                        inserted += 1
+                        continue
+                    conflicts = [
+                        column
+                        for column, expected in zip(
+                            _RECEIPT_COLUMNS[:-1], values[:-1], strict=True
+                        )
+                        if persisted[column] != expected
+                    ]
+                    if conflicts:
+                        assignments = ", ".join(
+                            f'"{column}" = ?' for column in _RECEIPT_COLUMNS[1:-1]
+                        )
+                        connection.execute(
+                            f"UPDATE scientific_artifact_receipts SET {assignments} "
+                            "WHERE artifact_id = ?",
+                            (*values[1:-1], artifact_id),
+                        )
+                        repaired += 1
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return {
+            "verified": len(candidates),
+            "inserted": inserted,
+            "repaired": repaired,
+        }
 
     def finalize_completed_minutes(self, now_ms: int) -> int:
         open_bucket = (int(now_ms) // 60_000) * 60_000

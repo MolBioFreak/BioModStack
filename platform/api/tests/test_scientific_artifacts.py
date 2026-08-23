@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import sqlite3
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from migrations.add_scientific_artifact_receipts import migrate
 import scripts.migrate_json_payloads_to_artifacts as migration
 from services.scientific_artifacts import (
     artifact_row_reference,
+    canonical_json_bytes,
     envelope_rows,
     install_parquet_rows,
     query_json_envelope_page,
@@ -55,6 +58,28 @@ def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):
         root=str(tmp_path),
     )
     assert reconstruct_envelope(rows) == payload
+
+
+def test_artifact_fingerprint_matches_persisted_parquet_schema(tmp_path):
+    schema = pa.schema([("values", pa.list_(pa.float64()))])
+    installed = install_parquet_rows(
+        root=tmp_path,
+        owner_kind="test",
+        owner_id="list-schema",
+        role="values",
+        schema_id="bms.test-list.v1",
+        schema_version=1,
+        source_sha256="a" * 64,
+        rows=[{"values": [1.0, 2.0]}],
+        schema=schema,
+    )
+    persisted_schema = pq.read_schema(installed.storage_path)
+    fields = [
+        {"name": field.name, "type": str(field.type), "nullable": field.nullable}
+        for field in persisted_schema
+    ]
+    expected = hashlib.sha256(canonical_json_bytes(fields)).hexdigest()
+    assert installed.column_schema_sha256 == expected
 
 
 def test_json_envelope_projection_and_collection_page_are_bounded(tmp_path):
@@ -150,6 +175,47 @@ def test_redundant_frustra_indexes_are_removed():
     assert remaining == {"ix_frustrampnn_landscape_rows_status", "sqlite_autoindex_frustrampnn_landscape_rows_1"}
 
 
+def test_landscape_retirement_migration_requires_empty_tables_and_blocks_repopulation():
+    retirement = importlib.import_module(
+        "migrations.retire_scientific_landscape_projections"
+    )
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE conformational_mapping_landscape_rows (
+            id TEXT PRIMARY KEY, request_id TEXT
+        );
+        CREATE INDEX ix_cm_legacy_request
+            ON conformational_mapping_landscape_rows(request_id);
+        CREATE TABLE frustrampnn_landscape_rows (
+            id TEXT PRIMARY KEY, parent_job_id TEXT
+        );
+        CREATE INDEX ix_fmpnn_legacy_parent
+            ON frustrampnn_landscape_rows(parent_job_id);
+        INSERT INTO conformational_mapping_landscape_rows VALUES ('cm-1', 'request-1');
+        """
+    )
+    with pytest.raises(RuntimeError, match="still contain rows"):
+        retirement.migrate(connection)
+    connection.execute("DELETE FROM conformational_mapping_landscape_rows")
+    connection.commit()
+    retirement.migrate(connection)
+    assert {
+        row[1]
+        for row in connection.execute(
+            'PRAGMA index_list("conformational_mapping_landscape_rows")'
+        )
+    } == {"sqlite_autoindex_conformational_mapping_landscape_rows_1"}
+    assert {
+        row[1]
+        for row in connection.execute('PRAGMA index_list("frustrampnn_landscape_rows")')
+    } == {"sqlite_autoindex_frustrampnn_landscape_rows_1"}
+    with pytest.raises(sqlite3.IntegrityError, match="retired"):
+        connection.execute(
+            "INSERT INTO frustrampnn_landscape_rows VALUES ('f-1', 'job-1')"
+        )
+
+
 
     assert migration.design_field_rows("design-1", "confidence_metrics", {"b": 2, "a": 1}) == {
         "row_index": 0,
@@ -168,6 +234,120 @@ def test_statistics_source_sha_excludes_self_digest() -> None:
     payload = {"value": 3, "statistics_sha256": ""}
     payload["statistics_sha256"] = migration.statistics_source_sha(payload, None)
     assert migration.statistics_source_sha(payload, payload["statistics_sha256"]) == payload["statistics_sha256"]
+
+
+def test_cm_landscape_backfill_publishes_complete_rows(tmp_path):
+    ddl = """
+        CREATE TABLE conformational_mapping_landscape_rows (
+            id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            entity_instance_id TEXT NOT NULL,
+            auth_asym_id TEXT NOT NULL,
+            auth_seq_id TEXT NOT NULL,
+            insertion_code TEXT NOT NULL,
+            sequence_index INTEGER NOT NULL,
+            wt TEXT NOT NULL,
+            mutation_aa TEXT NOT NULL,
+            score REAL,
+            score_class TEXT,
+            scoreable INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT,
+            provenance_json TEXT NOT NULL
+        );
+    """
+    source = sqlite3.connect(":memory:")
+    target = sqlite3.connect(":memory:")
+    source.executescript(ddl)
+    target.executescript(ddl)
+    migration.ensure_receipt_tables(target)
+    values = (
+        "row-1", "request-1", "candidate-1", "copy-1", "A", "3", "",
+        3, "A", "V", -1.25, "high", 1, "ok", None,
+        json.dumps({"container_sha256": "a" * 64}),
+    )
+    insert = (
+        "INSERT INTO conformational_mapping_landscape_rows VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    source.execute(insert, values)
+    target.execute(insert, values)
+    source.commit()
+    target.commit()
+
+    assert migration.backfill_cm_landscape_provenance(
+        source, target, tmp_path
+    ) == 1
+    receipt = target.execute(
+        "SELECT role, schema_id, row_count FROM scientific_artifact_receipts"
+    ).fetchone()
+    assert receipt == ("rows", "bms.cm-landscape.v1", 1)
+    artifact_path = next(tmp_path.rglob("*.parquet"))
+    artifact_rows = migration.pq.read_table(artifact_path).to_pylist()
+    assert artifact_rows == [{
+        "row_index": 0,
+        "id": "row-1",
+        "candidate_id": "candidate-1",
+        "entity_instance_id": "copy-1",
+        "auth_asym_id": "A",
+        "auth_seq_id": "3",
+        "insertion_code": "",
+        "sequence_index": 3,
+        "wt": "A",
+        "mutation_aa": "V",
+        "score": -1.25,
+        "score_class": "high",
+        "scoreable": True,
+        "status": "ok",
+        "reason": None,
+        "provenance_json": json.dumps(
+            {"container_sha256": "a" * 64}, separators=(",", ":"), sort_keys=True
+        ),
+    }]
+
+
+def test_frustrampnn_comparison_backfill_replaces_inline_payload(tmp_path):
+    source = sqlite3.connect(":memory:")
+    target = sqlite3.connect(":memory:")
+    ddl = """
+        CREATE TABLE frustrampnn_comparisons (
+            comparison_id TEXT PRIMARY KEY,
+            comparison_sha256 TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+    """
+    source.executescript(ddl)
+    target.executescript(ddl)
+    migration.ensure_receipt_tables(target)
+    payload = {
+        "schema_name": "frustrampnn_comparison",
+        "schema_version": 1,
+        "comparison_id": "comparison-1",
+        "rows": [{"residue": index} for index in range(3)],
+    }
+    digest = migration.canonical_sha256(payload)
+    source.execute(
+        "INSERT INTO frustrampnn_comparisons VALUES (?, ?, ?)",
+        ("comparison-1", digest, json.dumps(payload)),
+    )
+    target.execute(
+        "INSERT INTO frustrampnn_comparisons VALUES (?, ?, ?)",
+        ("comparison-1", digest, json.dumps(payload)),
+    )
+    source.commit()
+    target.commit()
+
+    assert migration.backfill_frustrampnn_comparisons(
+        source, target, tmp_path
+    ) == 1
+    raw_reference = json.loads(
+        target.execute(
+            "SELECT payload_json FROM frustrampnn_comparisons"
+        ).fetchone()[0]
+    )
+    assert raw_reference["schema"] == "bms.scientific-artifact-reference.v1"
+    assert resolve_json_value(raw_reference, root=tmp_path) == payload
 
 
 def test_envelope_reconstructs_empty_lists():

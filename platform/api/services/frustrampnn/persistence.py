@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 import pyarrow as pa
 import rfc8785
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
@@ -22,11 +22,16 @@ from database import (
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
+    ScientificArtifactReceipt,
 )
 from services.scientific_artifacts import (
+    ScientificArtifactError,
+    artifact_reference,
     artifact_row_reference,
+    count_rows,
     publish_json_payload,
     publish_table_rows,
+    query_rows,
     resolve_json_value,
 )
 from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
@@ -501,7 +506,7 @@ def _landscape_artifact_values(
             "score_class": str(value["score_class"]),
             "scoreable": bool(value["scoreable"]),
             "status": str(value["status"]),
-            "reason": str(value["reason"]),
+            "reason": None if value["reason"] is None else str(value["reason"]),
             "row_json": json.dumps(value["row_json"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False),
             "provenance_json": json.dumps(value["provenance_json"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False),
         }
@@ -729,6 +734,63 @@ def _resolved_landscape_values(
     return values
 
 
+def _receipt_reference(receipt: ScientificArtifactReceipt) -> dict[str, Any]:
+    return artifact_reference(
+        artifact_id=receipt.artifact_id,
+        owner_kind=receipt.owner_kind,
+        owner_id=receipt.owner_id,
+        role=receipt.role,
+        schema_id=receipt.schema_id,
+        schema_version=receipt.artifact_schema_version,
+        content_sha256=receipt.content_sha256,
+        size_bytes=receipt.size_bytes,
+        row_count=receipt.row_count,
+        relative_path=receipt.relative_path,
+    )
+
+
+async def _landscape_receipt(
+    session: AsyncSession, parent_job_id: str, invocation_id: str
+) -> ScientificArtifactReceipt:
+    owner_id = f"{parent_job_id}:{invocation_id}"
+    receipts = list(
+        (
+            await session.execute(
+                select(ScientificArtifactReceipt).where(
+                    ScientificArtifactReceipt.owner_id == owner_id,
+                    ScientificArtifactReceipt.schema_id == "bms.frustrampnn-landscape.v1",
+                    ScientificArtifactReceipt.availability == "available",
+                    or_(
+                        and_(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                            ScientificArtifactReceipt.role == "landscape",
+                        ),
+                        and_(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_landscape",
+                            ScientificArtifactReceipt.role == "rows",
+                        ),
+                    ),
+                )
+            )
+        ).scalars().all()
+    )
+    if not receipts:
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape artifact receipt is missing"
+        )
+    preferred = [
+        receipt
+        for receipt in receipts
+        if receipt.owner_kind == "frustrampnn_result" and receipt.role == "landscape"
+    ]
+    selected = preferred or receipts
+    if len(selected) != 1:
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape artifact receipt is ambiguous"
+        )
+    return selected[0]
+
+
 async def _assert_identical_replay(
     session: AsyncSession,
     existing: FrustraMPNNResult,
@@ -780,42 +842,17 @@ async def _assert_identical_replay(
             "FrustraMPNN invocation already exists with different artifact authority"
         )
 
-    existing_rows = (
-        await session.execute(
-            select(FrustraMPNNLandscapeRow)
-            .where(
-                FrustraMPNNLandscapeRow.parent_job_id == existing.parent_job_id,
-                FrustraMPNNLandscapeRow.invocation_id == existing.invocation_id,
-            )
-            .order_by(FrustraMPNNLandscapeRow.id)
-        )
-    ).scalars().all()
-    expected_rows = sorted(landscape_values, key=lambda value: value["id"])
-    landscape_fields = (
-        "id",
-        "parent_job_id",
-        "invocation_id",
-        "target_id",
-        "entity_instance_id",
-        "auth_asym_id",
-        "auth_seq_id",
-        "insertion_code",
-        "sequence_index",
-        "wt",
-        "mutation_aa",
-        "score",
-        "score_class",
-        "scoreable",
-        "status",
-        "reason",
-        "row_json",
-        "provenance_json",
+    receipt = await _landscape_receipt(
+        session, existing.parent_job_id, existing.invocation_id
     )
-    if len(existing_rows) != len(expected_rows) or any(
-        not _strict_authority_values_equal(
-            _resolved_landscape_values(row, landscape_fields), value, landscape_fields
-        )
-        for row, value in zip(existing_rows, expected_rows, strict=True)
+    _expected_artifact_rows, expected_source_sha256 = _landscape_artifact_values(
+        landscape_values
+    )
+    source_receipts = receipt.source_receipts_json
+    if (
+        not isinstance(source_receipts, Mapping)
+        or source_receipts.get("source_sha256") != expected_source_sha256
+        or receipt.row_count != len(landscape_values)
     ):
         raise FrustraMPNNConflictError(
             "FrustraMPNN invocation already exists with different landscape authority"
@@ -959,19 +996,6 @@ async def ingest_result_bundle(
             rows=landscape_artifact_rows,
             schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
         )
-        landscape_values = [
-            {
-                **value,
-                "row_json": artifact_row_reference(
-                    landscape_artifact.reference(), index, value_field="row_json"
-                ),
-                "provenance_json": artifact_row_reference(
-                    landscape_artifact.reference(), index, value_field="provenance_json"
-                ),
-            }
-            for index, value in enumerate(landscape_values)
-        ]
-
         result = FrustraMPNNResult(**result_values)
         session.add(result)
         # SQLite enforces the composite child foreign keys in production. Flush
@@ -979,9 +1003,6 @@ async def ingest_result_bundle(
         # rows; ORM add order alone does not establish that dependency here.
         await session.flush()
         session.add_all(FrustraMPNNArtifact(**values) for values in artifact_values)
-        session.add_all(
-            FrustraMPNNLandscapeRow(**values) for values in landscape_values
-        )
         if design is not None:
             _apply_canonical_projection(design, bundle)
         await session.flush()
@@ -1062,6 +1083,97 @@ async def list_result_artifacts(
     ]
 
 
+async def landscape_page(
+    session: AsyncSession,
+    parent_job_id: str,
+    invocation_id: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    target_id: str | None = None,
+    entity_instance_id: str | None = None,
+    auth_asym_id: str | None = None,
+    auth_seq_id: str | None = None,
+    insertion_code: str | None = None,
+    sequence_index: int | None = None,
+    mutation_aa: str | None = None,
+    status: str | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
+    receipt = await _landscape_receipt(session, parent_job_id, invocation_id)
+    filters = {
+        key: value
+        for key, value in {
+            "target_id": target_id,
+            "entity_instance_id": entity_instance_id,
+            "auth_asym_id": auth_asym_id,
+            "auth_seq_id": auth_seq_id,
+            "insertion_code": insertion_code,
+            "sequence_index": sequence_index,
+            "mutation_aa": mutation_aa,
+            "status": status,
+        }.items()
+        if value is not None
+    }
+    range_filters = {
+        "sequence_index": (sequence_start, sequence_end)
+    } if sequence_start is not None or sequence_end is not None else {}
+    columns = (
+        "id", "target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id",
+        "insertion_code", "sequence_index", "wt", "mutation_aa", "score",
+        "score_class", "scoreable", "status", "reason", "row_json",
+        "provenance_json",
+    )
+    reference = _receipt_reference(receipt)
+    try:
+        total = count_rows(reference, filters=filters, range_filters=range_filters)
+        rows = query_rows(
+            reference,
+            columns=columns,
+            limit=bounded_limit,
+            offset=bounded_offset,
+            max_limit=500,
+            filters=filters,
+            range_filters=range_filters,
+            order_by=(
+                "entity_instance_id", "sequence_index", "mutation_aa", "id",
+            ),
+        )
+    except ScientificArtifactError as exc:
+        raise FrustraMPNNPersistenceError(
+            f"persisted FrustraMPNN landscape artifact is unavailable: {exc}"
+        ) from exc
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": row["id"],
+                "invocation_id": invocation_id,
+                "target_id": row["target_id"],
+                "entity_instance_id": row["entity_instance_id"],
+                "auth_asym_id": row["auth_asym_id"],
+                "auth_seq_id": row["auth_seq_id"],
+                "insertion_code": row["insertion_code"],
+                "sequence_index": row["sequence_index"],
+                "wt": row["wt"],
+                "mutation_aa": row["mutation_aa"],
+                "score": row["score"],
+                "score_class": row["score_class"],
+                "class": row["score_class"],
+                "scoreable": row["scoreable"],
+                "status": row["status"],
+                "reason": row["reason"],
+                "row": json.loads(row["row_json"]),
+                "provenance": json.loads(row["provenance_json"]),
+            }
+            for row in rows
+        ],
+    }
+
+
 async def paged_landscape(
     session: AsyncSession,
     parent_job_id: str,
@@ -1073,55 +1185,18 @@ async def paged_landscape(
     entity_instance_id: str | None = None,
     auth_asym_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    bounded_limit = max(1, min(int(limit), 500))
-    bounded_offset = max(0, int(offset))
-    statement = select(FrustraMPNNLandscapeRow).where(
-        FrustraMPNNLandscapeRow.parent_job_id == parent_job_id,
-        FrustraMPNNLandscapeRow.invocation_id == invocation_id,
-    )
-    if target_id is not None:
-        statement = statement.where(FrustraMPNNLandscapeRow.target_id == target_id)
-    if entity_instance_id is not None:
-        statement = statement.where(
-            FrustraMPNNLandscapeRow.entity_instance_id == entity_instance_id
+    return (
+        await landscape_page(
+            session,
+            parent_job_id,
+            invocation_id,
+            limit=limit,
+            offset=offset,
+            target_id=target_id,
+            entity_instance_id=entity_instance_id,
+            auth_asym_id=auth_asym_id,
         )
-    if auth_asym_id is not None:
-        statement = statement.where(
-            FrustraMPNNLandscapeRow.auth_asym_id == auth_asym_id
-        )
-    statement = statement.order_by(
-        FrustraMPNNLandscapeRow.target_id,
-        FrustraMPNNLandscapeRow.entity_instance_id,
-        FrustraMPNNLandscapeRow.auth_asym_id,
-        FrustraMPNNLandscapeRow.auth_seq_id,
-        FrustraMPNNLandscapeRow.insertion_code,
-        FrustraMPNNLandscapeRow.sequence_index,
-        FrustraMPNNLandscapeRow.mutation_aa,
-        FrustraMPNNLandscapeRow.id,
-    ).offset(bounded_offset).limit(bounded_limit)
-    rows = (await session.execute(statement)).scalars().all()
-    return [
-        {
-            "id": row.id,
-            "invocation_id": row.invocation_id,
-            "target_id": row.target_id,
-            "entity_instance_id": row.entity_instance_id,
-            "auth_asym_id": row.auth_asym_id,
-            "auth_seq_id": row.auth_seq_id,
-            "insertion_code": row.insertion_code,
-            "sequence_index": row.sequence_index,
-            "wt": row.wt,
-            "mutation_aa": row.mutation_aa,
-            "score": row.score,
-            "class": row.score_class,
-            "scoreable": row.scoreable,
-            "status": row.status,
-            "reason": row.reason,
-            "row": row.row_json,
-            "provenance": row.provenance_json,
-        }
-        for row in rows
-    ]
+    )["items"]
 
 
 __all__ = [
@@ -1131,6 +1206,7 @@ __all__ = [
     "load_and_validate_result_bundle",
     "ingest_result_bundle",
     "get_result_projection",
+    "landscape_page",
     "paged_landscape",
     "list_result_artifacts",
 ]

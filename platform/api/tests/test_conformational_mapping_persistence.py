@@ -20,6 +20,7 @@ from routers.designs import ANALYTICS_LOAD_ONLY_COLUMNS
 from services.conformational_mapping.contracts import normalize_artifact_class_alias
 from services.conformational_mapping.persistence import (
     RESULT_CONTRACT_BY_BACKEND,
+    _CM_LANDSCAPE_PARQUET_SCHEMA,
     ConformationalPersistenceError,
     paged_landscape,
     persist_derived_record,
@@ -31,6 +32,7 @@ from services.result_contracts import (
     normalize_conformational_mapping_artifact_class,
     resolve_result_contract,
 )
+from services.scientific_artifacts import publish_table_rows
 
 
 async def _session(tmp_path: Path) -> tuple[AsyncSession, AsyncEngine]:
@@ -112,9 +114,22 @@ async def test_cm11_005a_landscape_rows_retain_container_provenance(tmp_path: Pa
         landscape = json.loads(fixture_path.read_text())["cm_frustration_landscape_v1"]
         await persist_landscape_matrix(session, "request-1", landscape)
         await session.flush()
-        row = await session.scalar(select(ConformationalMappingLandscapeRow))
-        assert row is not None
-        assert row.provenance_json["container_sha256"] == landscape["container_sha256"]
+        duplicated_sql_rows = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(ConformationalMappingLandscapeRow)
+                )
+            ).scalar_one()
+        )
+        rows = await paged_landscape(
+            session,
+            "request-1",
+            candidate_id=str(landscape["candidate_id"]),
+            limit=1,
+        )
+        assert duplicated_sql_rows == 0
+        assert rows
+        assert rows[0].provenance_json["container_sha256"] == landscape["container_sha256"]
     finally:
         await session.close()
         await engine.dispose()
@@ -134,9 +149,14 @@ async def test_cm_legacy_v1_landscape_replay_does_not_fabricate_container_digest
         landscape.pop("container_sha256")
         await persist_landscape_matrix(session, "legacy-request", landscape)
         await session.flush()
-        row = await session.scalar(select(ConformationalMappingLandscapeRow))
-        assert row is not None
-        assert "container_sha256" not in row.provenance_json
+        rows = await paged_landscape(
+            session,
+            "legacy-request",
+            candidate_id=str(landscape["candidate_id"]),
+            limit=1,
+        )
+        assert rows
+        assert "container_sha256" not in rows[0].provenance_json
     finally:
         await session.close()
         await engine.dispose()
@@ -184,13 +204,36 @@ async def test_cm11_009_landscape_pagination_and_range(tmp_path: Path) -> None:
     session, engine = await _session(tmp_path)
     try:
         await register_prepared_request(session, job=_job(), principal_id="alice", request=_request(), coordinate_plan=_plan(), resume_key="0" * 64, capability_sha256="c" * 64)
-        for index in range(1, 6):
-            session.add(ConformationalMappingLandscapeRow(
-                id=f"row-{index}", request_id="request-1", candidate_id="candidate", entity_instance_id="copy",
-                auth_asym_id="A", auth_seq_id=str(index), insertion_code="", sequence_index=index,
-                wt="A", mutation_aa="V", score=float(index), score_class="neutral", scoreable=True,
-                status="ok", reason=None, provenance_json={},
-            ))
+        artifact_rows = [
+            {
+                "id": f"row-{index}",
+                "candidate_id": "candidate",
+                "entity_instance_id": "copy",
+                "auth_asym_id": "A",
+                "auth_seq_id": str(index),
+                "insertion_code": "",
+                "sequence_index": index,
+                "wt": "A",
+                "mutation_aa": "V",
+                "score": float(index),
+                "score_class": "neutral",
+                "scoreable": True,
+                "status": "ok",
+                "reason": None,
+                "provenance_json": "{}",
+            }
+            for index in range(1, 6)
+        ]
+        await publish_table_rows(
+            session,
+            owner_kind="conformational_mapping_landscape",
+            owner_id="request-1:candidate",
+            role="rows",
+            schema_id="bms.cm-landscape.v1",
+            source_sha256="a" * 64,
+            rows=artifact_rows,
+            schema=_CM_LANDSCAPE_PARQUET_SCHEMA,
+        )
         await session.commit()
         page = await paged_landscape(session, "request-1", sequence_start=2, sequence_end=4, offset=1, limit=2)
         assert [row.sequence_index for row in page] == [3, 4]

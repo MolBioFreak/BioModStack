@@ -7,6 +7,7 @@ import struct
 import zlib
 
 import httpx
+import pyarrow as pa
 import pytest
 import pytest_asyncio
 from PIL import Image
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, FrustraMPNNArtifact, FrustraMPNNResult, Job, get_session
 from routers.frustrampnn import router
+from services.scientific_artifacts import publish_table_rows
 
 
 VIEW_STATE = {"active_metric_id": "frustrampnn-native-index", "landscape_offset": 0, "metric_workbench_open": True, "chart_x_axis": "sequence_index", "chart_y_axis": "score", "structure_camera": None, "structure_representations": [], "structure_layers": []}
@@ -33,7 +35,8 @@ async def create_review(client: httpx.AsyncClient) -> dict:
 
 
 @pytest_asyncio.fixture
-async def review_api(tmp_path: Path):
+async def review_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
     landscape_path = tmp_path / "landscape.json"
     landscape_path.write_bytes(b"{}")
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reviews.db'}")
@@ -55,6 +58,50 @@ async def review_api(tmp_path: Path):
             role="landscape", relative_path="landscape.json", storage_path=str(landscape_path), content_sha256="6" * 64,
             size_bytes=2, media_type="application/json",
         ))
+        schema = pa.schema([
+            pa.field("id", pa.string(), nullable=False),
+            pa.field("target_id", pa.string(), nullable=False),
+            pa.field("entity_instance_id", pa.string(), nullable=False),
+            pa.field("auth_asym_id", pa.string(), nullable=False),
+            pa.field("auth_seq_id", pa.string(), nullable=False),
+            pa.field("insertion_code", pa.string(), nullable=False),
+            pa.field("sequence_index", pa.int64(), nullable=False),
+            pa.field("wt", pa.string(), nullable=False),
+            pa.field("mutation_aa", pa.string(), nullable=False),
+            pa.field("score", pa.float64()),
+            pa.field("score_class", pa.string(), nullable=False),
+            pa.field("scoreable", pa.bool_(), nullable=False),
+            pa.field("status", pa.string(), nullable=False),
+            pa.field("reason", pa.string()),
+            pa.field("row_json", pa.string(), nullable=False),
+            pa.field("provenance_json", pa.string(), nullable=False),
+        ])
+        rows = [
+            {
+                "id": f"row-{mutation}", "target_id": "target-1",
+                "entity_instance_id": "entity-1", "auth_asym_id": "A",
+                "auth_seq_id": "42", "insertion_code": "", "sequence_index": 42,
+                "wt": "A", "mutation_aa": mutation, "score": score,
+                "score_class": score_class, "scoreable": True, "status": "ok",
+                "reason": None,
+                "row_json": '{"residue":{"auth_asym_id":"A","auth_seq_id":42},"slot":{}}',
+                "provenance_json": '{"source":"fixture"}',
+            }
+            for mutation, score, score_class in (
+                ("A", -1.25, "high"),
+                ("G", 0.75, "minimal"),
+            )
+        ]
+        await publish_table_rows(
+            session,
+            owner_kind="frustrampnn_result",
+            owner_id="job-1:inv-1",
+            role="landscape",
+            schema_id="bms.frustrampnn-landscape.v1",
+            source_sha256="7" * 64,
+            rows=rows,
+            schema=schema,
+        )
         await session.commit()
 
     app = FastAPI()
@@ -167,7 +214,7 @@ async def test_governed_export_persists_exact_download_identity(review_api, expo
     assert created.status_code == 201, created.text
     receipt = created.json()
     assert receipt["complete"] is True
-    assert receipt["row_count"] == receipt["total_matching_rows"] == 0
+    assert receipt["row_count"] == receipt["total_matching_rows"] == 2
     downloaded = await review_api.get(receipt["download_url"])
     assert downloaded.status_code == 200
     assert downloaded.headers["content-type"].startswith(media_type)

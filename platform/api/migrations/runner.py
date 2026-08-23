@@ -67,6 +67,7 @@ from migrations.add_ont_move_source_attempt_lineage import (
 )
 from migrations.add_scientific_artifact_receipts import migrate as migrate_scientific_artifact_receipts
 from migrations.add_frustrampnn_landscape_index_slimming import migrate as migrate_frustrampnn_landscape_index_slimming
+from migrations.retire_scientific_landscape_projections import migrate as migrate_retire_scientific_landscape_projections
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -122,6 +123,7 @@ MIGRATIONS: List[Migration] = [
     Migration(34, "add_ont_move_source_attempt_lineage", migrate_ont_move_source_attempt_lineage),
     Migration(35, "add_scientific_artifact_receipts", migrate_scientific_artifact_receipts),
     Migration(36, "add_frustrampnn_landscape_index_slimming", migrate_frustrampnn_landscape_index_slimming),
+    Migration(37, "retire_scientific_landscape_projections", migrate_retire_scientific_landscape_projections),
 ]
 
 

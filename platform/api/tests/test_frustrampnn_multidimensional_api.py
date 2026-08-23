@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import json
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -10,12 +12,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, FrustraMPNNLandscapeRow, FrustraMPNNResult, Job, get_session
 from routers.frustrampnn import router
+from services.frustrampnn.persistence import _FRUSTRA_LANDSCAPE_PARQUET_SCHEMA
+from services.scientific_artifacts import publish_table_rows
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
 
 @pytest_asyncio.fixture
-async def analytics_api(tmp_path):
+async def analytics_api(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'multidimensional.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -47,16 +52,42 @@ async def analytics_api(tmp_path):
                 parent_metadata_json={"workflow_family": "de_novo_nanobody", "dataset_label": f"batch-{index // 50}"},
                 created_at=datetime(2026, 8, 2),
             ))
+            artifact_rows = []
             for mutation_index, mutation in enumerate(AMINO_ACIDS):
                 score = -2.0 + mutation_index * 0.2 + index * 0.001
                 score_class = "high" if score <= -1.0 else "minimal" if score >= 0.58 else "neutral"
-                session.add(FrustraMPNNLandscapeRow(
-                    id=f"row-{index:03d}-{mutation}", parent_job_id=job_id, invocation_id=invocation_id,
-                    target_id="nanobody", entity_instance_id="heavy-chain", auth_asym_id="H", auth_seq_id="27",
-                    insertion_code="A", sequence_index=26, wt="A", mutation_aa=mutation, score=score,
-                    score_class=score_class, scoreable=True, status="ok", reason=None,
-                    row_json={"score": score, "class": score_class}, provenance_json={"source": "fixture"},
-                ))
+                artifact_rows.append({
+                    "id": f"row-{index:03d}-{mutation}",
+                    "target_id": "nanobody",
+                    "entity_instance_id": "heavy-chain",
+                    "auth_asym_id": "H",
+                    "auth_seq_id": "27",
+                    "insertion_code": "A",
+                    "sequence_index": 26,
+                    "wt": "A",
+                    "mutation_aa": mutation,
+                    "score": score,
+                    "score_class": score_class,
+                    "scoreable": True,
+                    "status": "ok",
+                    "reason": None,
+                    "row_json": json.dumps(
+                        {"score": score, "class": score_class},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "provenance_json": '{"source":"fixture"}',
+                })
+            await publish_table_rows(
+                session,
+                owner_kind="frustrampnn_result",
+                owner_id=f"{job_id}:{invocation_id}",
+                role="landscape",
+                schema_id="bms.frustrampnn-landscape.v1",
+                source_sha256=f"{index + 5:064x}",
+                rows=artifact_rows,
+                schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
+            )
         await session.commit()
 
     app = FastAPI()
