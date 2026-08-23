@@ -52,6 +52,7 @@
 - `platform/api/tests/test_ont_ngs_workflow_products.py`
 - `workflows/ngs/ont_construct_screening.nf`
 - `schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json`
+- `schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json`
 
 ### Forbidden changes
 
