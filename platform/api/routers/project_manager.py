@@ -1323,14 +1323,23 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                 raise IdempotencyConflict("preparation replay conflicts with its immutable launch authority")
         else:
             prior = await session.scalar(select(ExperimentWorkflowPreparation).join(ExperimentRevision, ExperimentRevision.resource_id == ExperimentWorkflowPreparation.workflow_revision_id).where(ExperimentRevision.subject_id == plan_id).order_by(ExperimentWorkflowPreparation.created_at.desc(), ExperimentWorkflowPreparation.resource_id.desc()))
-            preparation = await prepare_workflow(
-                session,
-                revision_id,
-                {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
-                core_session=core_session,
-            )
-            if prior is not None and prior.resource_id != preparation.resource_id:
-                session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
+            prior_authority = None
+            if prior is not None:
+                try:
+                    prior_authority = json.loads(prior.normalized_request_json).get("launch_authority")
+                except (TypeError, ValueError):
+                    prior_authority = None
+            if prior is not None and prior_authority == launch_authority:
+                preparation = prior
+            else:
+                preparation = await prepare_workflow(
+                    session,
+                    revision_id,
+                    {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
+                    core_session=core_session,
+                )
+                if prior is not None and prior.resource_id != preparation.resource_id:
+                    session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
             session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=preparation.resource_id, response_json=json.dumps({"preparation_id": preparation.resource_id}), created_at=datetime.now(timezone.utc).isoformat()))
         await session.commit()
         return _preparation_document(preparation)
