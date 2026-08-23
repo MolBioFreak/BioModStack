@@ -35,6 +35,12 @@ import {
     type PreparedLaunchContext,
     type RunCloneReceipt,
 } from '../../lib/projectManager';
+import {
+    type DomainStateRevisionPayload,
+    fetchMolBioNgsDomainState,
+    initializeMolBioNgsDomainState,
+    saveMolBioNgsStateRevision,
+} from '../../lib/api';
 import ExperimentReferenceLinks from './ExperimentReferenceLinks';
 
 interface DomainWorkflowOperatorProps {
@@ -54,6 +60,33 @@ const INPUT_CLASS = 'w-full rounded-md border border-border-primary bg-surface p
 const BUTTON_CLASS = 'rounded-md border border-border-primary bg-surface-secondary px-3 py-2 text-sm font-medium text-content-primary hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-40';
 const PRIMARY_BUTTON_CLASS = 'rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40';
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'awaiting_input']);
+
+const EMPTY_DOMAIN_STATE_PAYLOAD: DomainStateRevisionPayload = {
+    schema: 'bms.molbio-ngs.domain-state-revision.v1',
+    design: {
+        sample_revision_ids: [],
+        conditions: [],
+        replicates: [],
+        expected_molecule_roles: [],
+    },
+    reference_policy: {
+        required_roles: [],
+        coordinate_policy: 'exact_revision',
+    },
+    acquisition_policy: {
+        platform: 'none',
+        required_terminal_manifest: false,
+    },
+    analysis_policy: {
+        allowed_workflow_ids: [],
+        required_manifest_schemas: [],
+    },
+    assessment_policy: {
+        rule_id: 'server-owned-rule',
+        completion_is_scientific_pass: false,
+    },
+    notes: 'Initial empty state for a Project Manager governed Domain workflow.',
+};
 
 interface SelectedPreparation {
     preparation: DomainWorkflowPreparation;
@@ -1620,8 +1653,33 @@ export default function DomainWorkflowOperator({
     };
 
     const initializeBindingMutation = useMutation({
-        mutationFn: () => initializeNgsMolBioBinding(...scope, domainRevisionId as string),
-        onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['ngs-molbio-binding', ...scope] }),
+        mutationFn: async () => {
+            if (!domainRevisionId) throw new Error('The exact Domain revision is unavailable.');
+            const bindingStatus = await initializeNgsMolBioBinding(...scope, domainRevisionId);
+            if (bindingStatus.provisioning_state !== 'ready') {
+                throw new Error('The managed connector is still establishing binding authority. Refresh and retry after it is ready.');
+            }
+            const state = await initializeMolBioNgsDomainState(domainExperimentId, {
+                global_domain_experiment_revision_id: domainRevisionId,
+                idempotency_key: `project-manager-state-init:${domainExperimentId}:${domainRevisionId}`,
+            });
+            if (state.current_state_revision_id) return state;
+            await saveMolBioNgsStateRevision(domainExperimentId, {
+                global_domain_experiment_revision_id: domainRevisionId,
+                expected_head_generation: state.head_generation,
+                parent_revision_id: null,
+                idempotency_key: `project-manager-state-revision:${domainExperimentId}:${domainRevisionId}`,
+                payload: EMPTY_DOMAIN_STATE_PAYLOAD,
+                members: [],
+            });
+            return fetchMolBioNgsDomainState(domainExperimentId);
+        },
+        onSuccess: async () => Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['ngs-molbio-binding', ...scope] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-project-domain-experiments', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-domain-state', domainExperimentId] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-state-revisions', domainExperimentId] }),
+        ]),
     });
     const reverifyBindingMutation = useMutation({
         mutationFn: () => reverifyNgsMolBioBinding(...scope, domainRevisionId as string, binding?.binding_revision_id as string),
@@ -2024,6 +2082,7 @@ export default function DomainWorkflowOperator({
                     </span>
                 </div>
                 <ErrorBanner error={bindingQuery.error} />
+                <ErrorBanner error={initializeBindingMutation.error} />
             </Panel>
 
             <ErrorBanner error={activeError ?? draftError} />

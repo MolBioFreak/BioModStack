@@ -297,6 +297,9 @@ async def issue_binding_command(
             or current_local_binding.connector_command_id is not None
         ):
             raise RevisionConflict("stale_revision")
+    domain_kind = json.loads(domain_revision.canonical_payload).get("domain_kind")
+    if domain_kind not in {"ngs_molbio", "protein_in_silico"}:
+        raise ConnectorConflict("binding requires a supported Domain kind")
     verified_at = _utc_now()
     receipt_id = new_id("ngs-molbio-binding-receipt")
     receipt = {
@@ -316,7 +319,7 @@ async def issue_binding_command(
             "id": domain_id, "revision_id": domain_revision.resource_id,
             "generation": domain.head_generation, "digest": domain_revision.payload_sha256,
             "reopen_destination": f"/projects/{project_id}?focus={global_experiment_id}&selected=domain:{domain_id}",
-            "lifecycle_state": domain.lifecycle_state, "domain_kind": "ngs_molbio",
+            "lifecycle_state": domain.lifecycle_state, "domain_kind": domain_kind,
             "domain_contract_version": json.loads(domain_revision.canonical_payload)["domain_contract_version"],
         },
         "adapter_id": BINDING_ADAPTER_ID, "adapter_version": "1",
@@ -655,7 +658,7 @@ async def exact_local_launch_authority(
         or binding_receipt["domain_experiment"].get("revision_id") != domain.current_revision_id
         or binding_receipt["domain_experiment"].get("generation") != domain.head_generation
         or binding_receipt["domain_experiment"].get("digest") != domain_revision.payload_sha256
-        or binding_receipt["domain_experiment"].get("domain_kind") != "ngs_molbio"
+        or binding_receipt["domain_experiment"].get("domain_kind") != domain_payload.get("domain_kind")
         or binding_receipt["domain_experiment"].get("domain_contract_version") not in {"2", "3"}
         or binding_receipt.get("adapter_id") != BINDING_ADAPTER_ID
         or binding_receipt.get("acknowledgement") != {"status": "verified"}
