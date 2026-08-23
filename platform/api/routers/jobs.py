@@ -6306,6 +6306,14 @@ async def create_job(
             params=dict(job_data.params or {}),
             pinned_gpu=job_data.pinned_gpu,
         )
+        if _preallocated_job_id:
+            existing_job = await session.get(Job, str(_preallocated_job_id))
+            if existing_job is not None:
+                raise LaunchContextError(
+                    "launch_context_job_exists",
+                    "The canonical Job already exists for this launch context.",
+                    status_code=409,
+                )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
