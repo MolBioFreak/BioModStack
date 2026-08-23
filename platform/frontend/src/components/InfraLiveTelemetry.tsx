@@ -14,6 +14,7 @@ import {
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
+    isTelemetryHistoryFresh,
     isValidPollPreset,
     loadPersistedTelemetryPreferences,
     parseTelemetryTimestampMs,
@@ -21,7 +22,11 @@ import {
     resampleTelemetrySamples,
     resolveTelemetryBucketIntervalMs,
     resolveTelemetryDisplayIntervalMs,
+    resolveTelemetryFreshnessObservedAtMs,
     resolveTelemetryGapBreakMs,
+    resolveTelemetryNominalDomain,
+    resolveTelemetryPlotDomain,
+    resolveTelemetryStaleAfterMs,
     resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
 import type {
@@ -1433,14 +1438,35 @@ export function InfraLiveTelemetry({
     const samples = resampleTelemetrySamples(rawSamples, bucketIntervalMs);
     const latestPoint = historyPoints.at(-1);
     const payload = liveStatusQuery.data?.data ?? latestPoint?.payload;
-    const staleAfterMs = Math.max(10_000, pollIntervalMs * 5);
-    const historyIsStale = Boolean(
-        latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
+    const staleAfterMs = resolveTelemetryStaleAfterMs(pollIntervalMs);
+    const freshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
+        historyQuery.data?.data.generated_at_ms ?? historyQuery.dataUpdatedAt,
+        liveStatusQuery.data?.data.timestamp
+            ? parseTelemetryTimestampMs(liveStatusQuery.data.data.timestamp)
+            : Number.NaN,
+        historyQuery.isError ? historyQuery.errorUpdatedAt : Number.NaN,
+        liveStatusQuery.isError ? liveStatusQuery.errorUpdatedAt : Number.NaN,
     );
-    const xDomain: [number, number] = [
-        historyQuery.data?.data.start_ms ?? Date.now() - windowMinutes * 60_000,
-        historyQuery.data?.data.end_ms ?? Date.now(),
-    ];
+    const historyIsFresh = isTelemetryHistoryFresh(
+        latestPoint?.timestamp_ms,
+        freshnessObservedAtMs,
+        staleAfterMs,
+        historyQuery.isError || liveStatusQuery.isError,
+    );
+    const historyIsStale = Boolean(latestPoint) && !historyIsFresh;
+    const nominalXDomain = resolveTelemetryNominalDomain(
+        historyQuery.data?.data.start_ms,
+        historyQuery.data?.data.end_ms,
+        freshnessObservedAtMs,
+        windowMinutes,
+        displayIntervalMs,
+        historyQuery.isError || historyIsStale,
+    );
+    const xDomain = resolveTelemetryPlotDomain(
+        nominalXDomain,
+        samples.at(-1)?.timestampMs,
+        historyIsFresh,
+    );
 
     const { data: powerControlData } = useQuery({
         queryKey: SHARED_POWER_CONTROL_QUERY_KEY,

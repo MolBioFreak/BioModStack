@@ -21,6 +21,11 @@ from migrations.add_frustrampnn_reviews import (
 from migrations.runner import MIGRATIONS
 from runtime_policy import core_runtime_mode_enabled, workflow_launches_allowed
 from services.workflow_adapter import workflow_adapter_base_url
+from telemetry_store import (
+    TELEMETRY_FRESHNESS_STALE_AFTER_MS,
+    TelemetryStore,
+    telemetry_db_path,
+)
 
 
 async def core_database_readiness() -> tuple[bool, str]:
@@ -129,6 +134,32 @@ async def http_readiness(url: str) -> tuple[bool, str]:
     return await asyncio.to_thread(_probe)
 
 
+async def telemetry_collection_readiness() -> tuple[bool, str, dict[str, Any]]:
+    def _probe() -> tuple[bool, str, dict[str, Any]]:
+        empty_metadata = {
+            "latest_timestamp_ms": None,
+            "age_ms": None,
+            "stale_after_ms": TELEMETRY_FRESHNESS_STALE_AFTER_MS,
+        }
+        try:
+            path = telemetry_db_path()
+            if not path.is_file():
+                return False, "unavailable", empty_metadata
+            freshness = TelemetryStore(path).read_freshness(
+                stale_after_ms=TELEMETRY_FRESHNESS_STALE_AFTER_MS,
+            )
+        except Exception as exc:  # noqa: BLE001 - readiness reports a closed degradation state.
+            return False, _failure_status(exc), empty_metadata
+        metadata = {
+            "latest_timestamp_ms": freshness["latest_timestamp_ms"],
+            "age_ms": freshness["age_ms"],
+            "stale_after_ms": freshness["stale_after_ms"],
+        }
+        return bool(freshness["ready"]), str(freshness["status"]), metadata
+
+    return await asyncio.to_thread(_probe)
+
+
 def _failure_status(exc: BaseException) -> str:
     return f"unavailable:{exc.__class__.__name__}"
 
@@ -147,6 +178,7 @@ async def collect_runtime_readiness(
 
     core_ready, core_status = await core_database_readiness()
     migration_ready, migration_status, migration_metadata = await core_migration_readiness()
+    telemetry_ready, telemetry_status, telemetry_metadata = await telemetry_collection_readiness()
     molbio_ready = molbio.get("status") == "healthy" or molbio.get("ready") is True
     molbio_ngs_required = molbio_ngs is not None
     molbio_ngs = molbio_ngs or {}
@@ -178,6 +210,12 @@ async def collect_runtime_readiness(
     checks = {
         "process_liveness": _check(required=True, ready=True, status="alive"),
         "core_database": _check(required=True, ready=core_ready, status=core_status),
+        "telemetry_collection": _check(
+            required=True,
+            ready=telemetry_ready,
+            status=telemetry_status,
+            **telemetry_metadata,
+        ),
         "core_schema_migrations": _check(
             required=True,
             ready=migration_ready,

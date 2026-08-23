@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any, Literal
 
 import pyarrow as pa
@@ -19,7 +20,9 @@ from services.scientific_artifacts import (
     canonical_sha256,
     envelope_rows,
     install_parquet_rows,
+    read_rows,
     reconstruct_envelope,
+    require_row_reference,
     resolve_json_value,
     verify_artifact,
 )
@@ -27,6 +30,7 @@ from services.scientific_artifacts import (
 RAW_RETENTION_SECONDS = 7 * 24 * 60 * 60
 AGGREGATE_RETENTION_SECONDS = 90 * 24 * 60 * 60
 MAX_HISTORY_POINTS = 10_000
+TELEMETRY_FRESHNESS_STALE_AFTER_MS = 15_000
 
 _TELEMETRY_SCHEMA = pa.schema(
     [
@@ -395,31 +399,91 @@ class TelemetryStore:
                 (timestamp_ms, cpu, ram, _encoded(gpu_util), _encoded(gpu_memory), _encoded(gpu_names), relative, locator),
             )
 
-    def _sample_for_row(self, row: sqlite3.Row, connection: sqlite3.Connection | None = None) -> dict[str, Any]:
-        if row["staging_relative_path"]:
-            path = _safe_staging_path(self.artifact_root, str(row["staging_relative_path"]))
-            if path.exists():
+    def _samples_for_rows(
+        self,
+        rows: list[sqlite3.Row],
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        samples: dict[int, dict[str, Any]] = {}
+        staging_groups: dict[str, list[sqlite3.Row]] = {}
+        unresolved: list[sqlite3.Row] = []
+
+        for row in rows:
+            relative = row["staging_relative_path"]
+            if relative:
+                staging_groups.setdefault(str(relative), []).append(row)
+                continue
+            value = json.loads(row["payload_json"])
+            resolved = resolve_json_value(value, root=self.artifact_root)
+            if not isinstance(resolved, dict):
+                raise ValueError("telemetry payload is not an object")
+            samples[int(row["timestamp_ms"])] = resolved
+
+        for relative, staged_rows in staging_groups.items():
+            path = _safe_staging_path(self.artifact_root, relative)
+            try:
                 lines = path.read_text(encoding="utf-8").splitlines()
-                return json.loads(lines[int(row["staging_row_locator"])])
+            except FileNotFoundError:
+                unresolved.extend(staged_rows)
+                continue
+            for row in staged_rows:
+                locator = int(row["staging_row_locator"])
+                payload = json.loads(lines[locator])
+                if not isinstance(payload, dict):
+                    raise ValueError("telemetry staging payload is not an object")
+                samples[int(row["timestamp_ms"])] = payload
+
+        if unresolved:
             lookup = connection or open_read_only(self.path)
             try:
-                reference_row = lookup.execute(
-                    "SELECT artifact_ref FROM telemetry_sample_artifact_refs WHERE timestamp_ms = ?",
-                    (int(row["timestamp_ms"]),),
-                ).fetchone()
+                timestamps = [int(row["timestamp_ms"]) for row in unresolved]
+                reference_rows = lookup.execute(
+                    """SELECT timestamp_ms, artifact_ref
+                    FROM telemetry_sample_artifact_refs
+                    WHERE timestamp_ms >= ? AND timestamp_ms <= ?""",
+                    (min(timestamps), max(timestamps)),
+                ).fetchall()
             finally:
                 if connection is None:
                     lookup.close()
-            if reference_row is not None:
-                resolved = resolve_json_value(json.loads(reference_row["artifact_ref"]), root=self.artifact_root)
-                if isinstance(resolved, dict):
-                    return resolved
-            raise FileNotFoundError(f"telemetry sample staging and artifact reference are unavailable: {row['timestamp_ms']}")
-        value = json.loads(row["payload_json"])
-        resolved = resolve_json_value(value, root=self.artifact_root)
-        if isinstance(resolved, dict):
-            return resolved
-        raise ValueError("telemetry payload is not an object")
+            references = {int(row["timestamp_ms"]): row["artifact_ref"] for row in reference_rows}
+            artifact_groups: dict[
+                tuple[str, str, int, int, str],
+                tuple[dict[str, Any], list[tuple[int, int]]],
+            ] = {}
+            for row in unresolved:
+                timestamp_ms = int(row["timestamp_ms"])
+                encoded_reference = references.get(timestamp_ms)
+                if encoded_reference is None:
+                    raise FileNotFoundError(
+                        f"telemetry sample staging and artifact reference are unavailable: {timestamp_ms}"
+                    )
+                reference = dict(require_row_reference(json.loads(encoded_reference)))
+                key = (
+                    str(reference["relative_path"]),
+                    str(reference["content_sha256"]),
+                    int(reference["size_bytes"]),
+                    int(reference["row_count"]),
+                    str(reference["value_field"]),
+                )
+                group = artifact_groups.setdefault(key, (reference, []))
+                group[1].append((timestamp_ms, int(reference["row_locator"])))
+
+            for reference, locators in artifact_groups.values():
+                artifact_rows = read_rows(reference, root=self.artifact_root, max_rows=MAX_HISTORY_POINTS)
+                field = str(reference["value_field"])
+                for timestamp_ms, locator in locators:
+                    raw_value = artifact_rows[locator][field]
+                    payload = json.loads(str(raw_value)) if field.endswith("_json") else raw_value
+                    if not isinstance(payload, dict):
+                        raise ValueError("telemetry artifact payload is not an object")
+                    samples[timestamp_ms] = payload
+
+        return samples
+
+    def _sample_for_row(self, row: sqlite3.Row, connection: sqlite3.Connection | None = None) -> dict[str, Any]:
+        return self._samples_for_rows([row], connection=connection)[int(row["timestamp_ms"])]
 
     def _insert_receipt(self, connection: sqlite3.Connection, artifact: Any, source: dict[str, Any]) -> None:
         values = _receipt_values(artifact, source)
@@ -620,7 +684,8 @@ class TelemetryStore:
                     "SELECT * FROM raw_samples WHERE timestamp_ms >= ? AND timestamp_ms < ? ORDER BY timestamp_ms",
                     (bucket, bucket + 60_000),
                 ).fetchall()
-                samples = [self._sample_for_row(row, connection=connection) for row in rows]
+                samples_by_timestamp = self._samples_for_rows(rows, connection=connection)
+                samples = [samples_by_timestamp[int(row["timestamp_ms"])] for row in rows]
                 if not samples:
                     continue
                 artifact_rows = []
@@ -736,14 +801,53 @@ class TelemetryStore:
                 f"SELECT {column} AS timestamp_ms, payload_json, {sample_count}{extra} FROM {table} WHERE {column} >= ? AND {column} < ? ORDER BY {column} DESC LIMIT ?",
                 (int(start_ms), int(end_ms), int(limit)),
             ).fetchall()
+            ordered_rows = list(reversed(rows))
+            raw_samples = (
+                self._samples_for_rows(ordered_rows, connection=connection)
+                if resolution == "raw"
+                else {}
+            )
         values = []
-        for row in reversed(rows):
-            if resolution == "raw" and row["staging_relative_path"]:
-                payload = self._sample_for_row(row)
+        for row in ordered_rows:
+            if resolution == "raw":
+                payload = raw_samples[int(row["timestamp_ms"])]
             else:
                 payload = resolve_json_value(json.loads(row["payload_json"]), root=self.artifact_root)
             values.append({"timestamp_ms": int(row["timestamp_ms"]), "sample_count": int(row["sample_count"]), "payload": payload})
         return values
+
+    def read_freshness(self, *, now_ms: int | None = None, stale_after_ms: int) -> dict[str, Any]:
+        if int(stale_after_ms) <= 0:
+            raise ValueError("telemetry freshness threshold must be positive")
+        with open_read_only(self.path) as connection:
+            latest = connection.execute("SELECT MAX(timestamp_ms) FROM raw_samples").fetchone()[0]
+        if latest is None:
+            return {
+                "ready": False,
+                "status": "empty",
+                "latest_timestamp_ms": None,
+                "age_ms": None,
+                "stale_after_ms": int(stale_after_ms),
+            }
+        latest_timestamp_ms = int(latest)
+        observed_now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        age_ms = observed_now_ms - latest_timestamp_ms
+        if age_ms < 0:
+            return {
+                "ready": False,
+                "status": "future",
+                "latest_timestamp_ms": latest_timestamp_ms,
+                "age_ms": age_ms,
+                "stale_after_ms": int(stale_after_ms),
+            }
+        ready = age_ms <= int(stale_after_ms)
+        return {
+            "ready": ready,
+            "status": "fresh" if ready else "stale",
+            "latest_timestamp_ms": latest_timestamp_ms,
+            "age_ms": age_ms,
+            "stale_after_ms": int(stale_after_ms),
+        }
 
     def insert_minute_for_test(self, bucket_ms: int, payload: dict[str, Any], sample_count: int) -> None:
         encoded = _encoded(payload)

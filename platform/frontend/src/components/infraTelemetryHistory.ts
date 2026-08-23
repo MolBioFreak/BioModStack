@@ -2,6 +2,7 @@ export type PollPreset = 1000 | 2000 | 5000;
 export type WindowPreset = 1 | 3 | 5 | 10 | 15 | 30 | 60;
 
 const RAW_MIN_GAP_BREAK_MS = 12_000;
+const TELEMETRY_COLLECTION_STALE_AFTER_MS = 15_000;
 
 export function resolveTelemetryDisplayIntervalMs(
     windowMinutes: WindowPreset,
@@ -12,6 +13,28 @@ export function resolveTelemetryDisplayIntervalMs(
     if (windowMinutes === 30) return 15_000;
     if (windowMinutes === 60) return 30_000;
     return pollIntervalMs;
+}
+
+export function resolveTelemetryStaleAfterMs(pollIntervalMs: PollPreset): number {
+    return Math.min(
+        TELEMETRY_COLLECTION_STALE_AFTER_MS,
+        Math.max(10_000, pollIntervalMs * 5),
+    );
+}
+
+export function resolveTelemetryFreshnessObservedAtMs(
+    ...observedAtMs: number[]
+): number {
+    let latestObservedAtMs = Number.NaN;
+    for (const observedAtMsValue of observedAtMs) {
+        if (
+            Number.isFinite(observedAtMsValue)
+            && (!Number.isFinite(latestObservedAtMs) || observedAtMsValue > latestObservedAtMs)
+        ) {
+            latestObservedAtMs = observedAtMsValue;
+        }
+    }
+    return latestObservedAtMs;
 }
 
 export function resolveTelemetryBucketIntervalMs(windowMinutes: WindowPreset): number {
@@ -31,6 +54,66 @@ export function resolveTelemetryWindowBounds(
 ): [number, number] {
     const endMs = Math.ceil(nowMs / displayIntervalMs) * displayIntervalMs;
     return [endMs - windowMinutes * 60_000, endMs];
+}
+
+export function isTelemetryHistoryFresh(
+    latestTimestampMs: number | undefined,
+    generatedAtMs: number,
+    staleAfterMs: number,
+    requestFailed: boolean,
+): boolean {
+    if (
+        requestFailed
+        || latestTimestampMs == null
+        || !Number.isFinite(latestTimestampMs)
+        || !Number.isFinite(generatedAtMs)
+        || staleAfterMs < 0
+    ) {
+        return false;
+    }
+    const ageMs = generatedAtMs - latestTimestampMs;
+    return ageMs >= 0 && ageMs <= staleAfterMs;
+}
+
+export function resolveTelemetryNominalDomain(
+    storedStartMs: number | undefined,
+    storedEndMs: number | undefined,
+    wallClockMs: number,
+    windowMinutes: WindowPreset,
+    displayIntervalMs: number,
+    requestFailed: boolean,
+): [number, number] {
+    if (
+        !requestFailed
+        && storedStartMs != null
+        && storedEndMs != null
+        && Number.isFinite(storedStartMs)
+        && Number.isFinite(storedEndMs)
+        && storedEndMs > storedStartMs
+    ) {
+        return [storedStartMs, storedEndMs];
+    }
+    return resolveTelemetryWindowBounds(wallClockMs, windowMinutes, displayIntervalMs);
+}
+
+export function resolveTelemetryPlotDomain(
+    nominalDomain: readonly [number, number],
+    latestPlottedTimestampMs: number | undefined,
+    fresh: boolean,
+): [number, number] {
+    const [nominalStartMs, nominalEndMs] = nominalDomain;
+    const widthMs = nominalEndMs - nominalStartMs;
+    if (
+        !fresh
+        || latestPlottedTimestampMs == null
+        || !Number.isFinite(latestPlottedTimestampMs)
+        || widthMs <= 0
+        || latestPlottedTimestampMs < nominalStartMs
+        || latestPlottedTimestampMs > nominalEndMs
+    ) {
+        return [nominalStartMs, nominalEndMs];
+    }
+    return [latestPlottedTimestampMs - widthMs, latestPlottedTimestampMs];
 }
 
 function average(values: readonly number[]): number {

@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+import telemetry_store as telemetry_store_module
+from services.scientific_artifacts import read_rows as read_artifact_rows
 from telemetry_store import (
     AGGREGATE_RETENTION_SECONDS,
     RAW_RETENTION_SECONDS,
@@ -251,6 +253,101 @@ def test_store_reopens_with_persisted_history(tmp_path: Path) -> None:
     )
     assert len(points) == 1
     assert points[0]["payload"]["cpu"]["utilization"] == 17.0
+
+
+def test_raw_history_reads_each_staging_file_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    minute = 1_700_000_040_000
+    for offset in range(5):
+        store.append_sample(sample(minute + offset * 1_000, float(offset)))
+
+    staging_path = store.artifact_root / f"staging/raw-{minute}.jsonl"
+    original_read_text = Path.read_text
+    staging_reads = 0
+
+    def counted_read_text(path: Path, *args, **kwargs) -> str:
+        nonlocal staging_reads
+        if path == staging_path:
+            staging_reads += 1
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+
+    points = store.read_history(
+        start_ms=minute,
+        end_ms=minute + 60_000,
+        resolution="raw",
+        limit=10,
+    )
+
+    assert [point["payload"]["cpu"]["utilization"] for point in points] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert staging_reads == 1
+
+
+def test_raw_history_reads_each_finalized_artifact_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    minute = 1_700_000_040_000
+    for offset in range(5):
+        store.append_sample(sample(minute + offset * 1_000, float(offset)))
+    assert store.finalize_completed_minutes(minute + 60_000) == 1
+
+    artifact_reads = 0
+
+    def counted_read_rows(*args, **kwargs):
+        nonlocal artifact_reads
+        artifact_reads += 1
+        return read_artifact_rows(*args, **kwargs)
+
+    monkeypatch.setattr(telemetry_store_module, "read_rows", counted_read_rows, raising=False)
+
+    points = store.read_history(
+        start_ms=minute,
+        end_ms=minute + 60_000,
+        resolution="raw",
+        limit=10,
+    )
+
+    assert [point["payload"]["cpu"]["utilization"] for point in points] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert artifact_reads == 1
+
+
+def test_collection_freshness_is_bound_to_latest_persisted_sample(tmp_path: Path) -> None:
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    base = 1_700_000_000_000
+
+    assert store.read_freshness(now_ms=base, stale_after_ms=15_000) == {
+        "ready": False,
+        "status": "empty",
+        "latest_timestamp_ms": None,
+        "age_ms": None,
+        "stale_after_ms": 15_000,
+    }
+
+    store.append_sample(sample(base, 10.0))
+
+    assert store.read_freshness(now_ms=base + 15_000, stale_after_ms=15_000)["ready"] is True
+    stale = store.read_freshness(now_ms=base + 15_001, stale_after_ms=15_000)
+    assert stale["ready"] is False
+    assert stale["status"] == "stale"
+    assert stale["latest_timestamp_ms"] == base
+    assert stale["age_ms"] == 15_001
+
+
+def test_collection_freshness_rejects_future_sample_timestamps(tmp_path: Path) -> None:
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    base = 1_700_000_000_000
+    store.append_sample(sample(base + 1, 10.0))
+
+    freshness = store.read_freshness(now_ms=base, stale_after_ms=15_000)
+
+    assert freshness["ready"] is False
+    assert freshness["status"] == "future"
+    assert freshness["latest_timestamp_ms"] == base + 1
+    assert freshness["age_ms"] == -1
 
 
 def test_history_is_range_bounded_ordered_and_resolution_limited(tmp_path: Path) -> None:
