@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "397e0e137a68f947e75017d2f32a2ddad7293fe210c172d52f01d358620d900a",
+  "content_sha256": "e4f92dc2e3a72f3283612f785f3acedab1662af31eb0c19f267de40f576b1ad7",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -508,6 +508,11 @@
       "size_bytes": 42498
     },
     {
+      "path": "platform/frontend/src/components/ngs/NanoporeWorkflowChooser.tsx",
+      "sha256": "175ec0717e197ea14372d52cabc0b56f2b42daf156c40103bd098a7dd2e1b742",
+      "size_bytes": 6647
+    },
+    {
       "path": "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
       "sha256": "1f4b71fff52205bd35a9d04c084531676058a0d371dfc75826e8de3942e85bc5",
       "size_bytes": 61143
@@ -548,6 +553,11 @@
       "size_bytes": 5542
     },
     {
+      "path": "platform/frontend/src/lib/nanoporeLaunchPayload.ts",
+      "sha256": "b879f78a9693f46b38c3fa7434675288e67958b3d4996fdb68be267b890a3c2e",
+      "size_bytes": 980
+    },
+    {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
       "sha256": "e1802797ffef73b4e1a872201ad82350a8a055cdcb6fa580dfcba609e144365d",
       "size_bytes": 3319
@@ -584,8 +594,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
-      "sha256": "766064c1d9bb6483dab1974b0f573d456e2271c3cd5f49979b3e964c7d30994b",
-      "size_bytes": 6497
+      "sha256": "d4b7a30eed35436534fff9bf99459bf068372585341d0ef654c7e4d9cc10fc76",
+      "size_bytes": 6627
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -639,11 +649,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "de2cb0763bc3088bb8880d7cdabaaf072963c44a59eaf036d297c6e467016184",
+    "content_sha256": "9ffe88b1e1f88f8628a4f23e6f2371ce97ea260c5e31ff6b1e01a9e601fa0b4f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "8ac290149eb745028b404ab79d96509dec204376",
-  "successor_source_tree": "df531189b8ae89de664d5c3373090624afab2118",
+  "successor_source_commit": "512d80b5cf43eeb422878344265dce8bf4bdb341",
+  "successor_source_tree": "bad74b92918473aff9d9cde17b63438d87b1e8bb",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
