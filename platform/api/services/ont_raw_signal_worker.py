@@ -44,6 +44,7 @@ from services.ont_raw_signal import (
 )
 
 logger = logging.getLogger(__name__)
+RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS = 120.0
 
 
 class OntRawSignalWorker:
@@ -246,12 +247,14 @@ class OntRawSignalWorker:
                 self._child = None
                 raise RuntimeError("raw-signal claim was cancelled or lost before stage execution")
             communication = asyncio.create_task(self._child.communicate())
-            last_renewal = asyncio.get_running_loop().time()
+            loop = asyncio.get_running_loop()
+            started_at = loop.time()
+            last_renewal = started_at
             while not communication.done():
                 try:
                     await asyncio.wait_for(
                         asyncio.shield(communication),
-                        timeout=0.25 if source_fds else 60.0,
+                        timeout=0.25 if source_fds or waveform else 60.0,
                     )
                 except asyncio.TimeoutError:
                     if source_fds and source_lease_break_requested():
@@ -260,7 +263,18 @@ class OntRawSignalWorker:
                             await self._child.wait()
                         communication.cancel()
                         raise RuntimeError("raw-signal source write lease break was requested")
-                    now = asyncio.get_running_loop().time()
+                    now = loop.time()
+                    if waveform and now - started_at >= RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS:
+                        if self._child.returncode is None:
+                            self._child.terminate()
+                            await self._child.wait()
+                        communication.cancel()
+                        try:
+                            await communication
+                        except asyncio.CancelledError:
+                            pass
+                        self._child = None
+                        raise RuntimeError("raw-signal waveform runtime exceeded")
                     if now - last_renewal < 60.0:
                         continue
                     try:
