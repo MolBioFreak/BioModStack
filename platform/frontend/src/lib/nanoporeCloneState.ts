@@ -53,6 +53,7 @@ export function normalizeNanoporeCloneState(job: Job | null): Record<string, unk
         modifiedBases: p.modified_bases || 'none',
         trimAdapters: p.trim_adapters !== false,
         runModkit: p.run_modkit === true,
+        // Legacy reopen compatibility. Fresh payloads serialize run_fastq_qc only.
         runFastqQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
         runMultimerQc: (typeof p.run_fastq_qc === 'boolean') ? p.run_fastq_qc : p.run_multimer_qc === true,
         expectedPlasmidSize: p.expected_plasmid_size ?? 7000,

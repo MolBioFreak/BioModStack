@@ -533,6 +533,10 @@ def _job_create_for_ont_submit(
             "pooled reference assignment requires the dedicated atomic submission endpoint"
         )
     submitted_params = dict(request.params)
+    if "run_multimer_qc" in submitted_params:
+        raise ValueError(
+            "run_multimer_qc is read-only legacy compatibility and cannot be submitted for a fresh ONT job"
+        )
     if any(key in submitted_params for key in ("comparison_panel_snapshot", "comparison_panel_min_mapq", "ngs_comparison_panel_receipt_id")):
         raise ValueError(
             "comparison-panel paths are not accepted from ordinary NGS submissions; use a server-staged operator receipt"

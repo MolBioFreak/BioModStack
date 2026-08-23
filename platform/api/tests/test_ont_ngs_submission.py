@@ -34,9 +34,21 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
         async def commit(self) -> None:
             return None
 
+        async def rollback(self) -> None:
+            return None
+
     app.dependency_overrides[ont_runs.get_session] = FakeSession
 
-    async def fake_create_pipeline_job(job_data, background_tasks, session, response, request):
+    async def fake_create_pipeline_job(
+        job_data,
+        background_tasks,
+        session,
+        experiment_session,
+        response,
+        request,
+        *,
+        commit=True,
+    ):
         captured["job_data"] = job_data
         captured["session"] = session
         return JobResponse(
@@ -95,6 +107,30 @@ def test_each_canonical_ont_workflow_has_a_typed_prelaunch_route(monkeypatch, wo
     assert job_data.mode == mode
     assert job_data.params["ont_workflow_id"] == workflow_id
     assert job_data.params["ont_input_mode"] in {"pod5", "bam", "fastq"}
+
+
+@pytest.mark.parametrize(
+    "legacy_params",
+    [
+        {"run_multimer_qc": True},
+        {"run_multimer_qc": True, "run_fastq_qc": False},
+    ],
+)
+def test_typed_ont_submit_rejects_legacy_multimer_qc_for_fresh_jobs(monkeypatch, legacy_params) -> None:
+    captured: dict[str, Any] = {}
+    client = _client_with_fake_create(monkeypatch, captured)
+
+    response = client.post(
+        "/api/ont/ngs/ont_basecall_dna/submit",
+        json={
+            "name": "fresh-legacy-alias",
+            "params": {"pod5_dir": "/data/run/pod5", **legacy_params},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "run_multimer_qc is read-only legacy compatibility" in response.text
+    assert captured == {}
 
 
 @pytest.mark.parametrize(

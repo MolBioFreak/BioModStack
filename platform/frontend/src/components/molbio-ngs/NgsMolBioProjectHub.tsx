@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     createDomainExperiment,
@@ -21,6 +21,10 @@ const INPUT = 'w-full rounded-lg border border-border-primary bg-surface px-3 py
 const BUTTON = 'rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs font-semibold text-content-primary hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-40';
 
 type OwnershipMode = 'local-new' | 'local-existing' | 'global';
+
+type NgsMolBioProjectHubProps = {
+    presentation?: 'inline' | 'launcher-dialog';
+};
 
 interface LocalHierarchy {
     experiments: HierarchyMutationResult[];
@@ -52,7 +56,7 @@ function ngsDomainPayload(objective: string): JsonObject {
     };
 }
 
-export default function NgsMolBioProjectHub() {
+export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolBioProjectHubProps) {
     const queryClient = useQueryClient();
     const { workspaceId, updateQueryParams } = useGlobalExperimentContext();
     const [mode, setMode] = useState<OwnershipMode>('local-new');
@@ -71,7 +75,9 @@ export default function NgsMolBioProjectHub() {
     const [priority, setPriority] = useState<'low' | 'normal' | 'high' | 'critical'>('normal');
     const [showDetails, setShowDetails] = useState(false);
     const [showExpose, setShowExpose] = useState(false);
+    const [projectPanelTab, setProjectPanelTab] = useState<'local' | 'broader'>('local');
     const [selectedLocalProjectId, setSelectedLocalProjectId] = useState('');
+    const [selectedLocalDomainId, setSelectedLocalDomainId] = useState('');
     const [targetGlobalProjectId, setTargetGlobalProjectId] = useState('');
     const [selectedExperimentIds, setSelectedExperimentIds] = useState<string[]>([]);
     const [selectedResultIds, setSelectedResultIds] = useState<string[]>([]);
@@ -86,8 +92,8 @@ export default function NgsMolBioProjectHub() {
         queryFn: ({ signal }) => searchProjects({ projectScope: 'global', archive: 'active', limit: 100, signal }),
         retry: false,
     });
-    const localProjects = localProjectsQuery.data?.items ?? [];
-    const globalProjects = globalProjectsQuery.data?.items ?? [];
+    const localProjects = useMemo(() => localProjectsQuery.data?.items ?? [], [localProjectsQuery.data?.items]);
+    const globalProjects = useMemo(() => globalProjectsQuery.data?.items ?? [], [globalProjectsQuery.data?.items]);
 
     useEffect(() => {
         if (workspaceId && localProjects.some((project) => project.id === workspaceId)) {
@@ -115,6 +121,26 @@ export default function NgsMolBioProjectHub() {
             };
         },
     });
+    useEffect(() => {
+        const domains = localHierarchyQuery.data?.domains ?? [];
+        if (domains.some(({ domain }) => domain.id === selectedLocalDomainId)) return;
+        setSelectedLocalDomainId(domains[0]?.domain.id ?? '');
+    }, [localHierarchyQuery.data, selectedLocalDomainId]);
+    const selectedLocalDomain = useMemo(
+        () => (localHierarchyQuery.data?.domains ?? []).find(({ domain }) => domain.id === selectedLocalDomainId) ?? null,
+        [localHierarchyQuery.data, selectedLocalDomainId],
+    );
+    const openSelectedProject = () => {
+        if (!selectedLocalProjectId) return;
+        updateQueryParams({
+            workspace_id: selectedLocalProjectId,
+            global_experiment_id: selectedLocalDomain?.experiment.id ?? null,
+            domain_experiment_id: selectedLocalDomain?.domain.id ?? null,
+            state_revision_id: null,
+            ownership_scope: 'ngs_molbio_local',
+        });
+    };
+
     const linksQuery = useQuery({
         queryKey: ['ngs-molbio-project-links', selectedLocalProjectId],
         enabled: Boolean(selectedLocalProjectId),
@@ -139,14 +165,14 @@ export default function NgsMolBioProjectHub() {
     }, [shareableResultsQuery.data]);
 
     const createMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: async (requestedMode: OwnershipMode = mode) => {
             if (!experimentName.trim()) throw new Error('Enter the required contained Experiment name.');
             if (!objective.trim()) throw new Error('Enter the required scientific objective.');
-            if (mode === 'local-new' && !projectName.trim()) throw new Error('Enter the required local Project name.');
-            if (mode === 'local-existing' && !selectedLocalProjectId) throw new Error('Select the owning local Project.');
-            if (mode === 'global' && !targetGlobalProjectId) throw new Error('Select the owning broader Project.');
-            let projectId = mode === 'local-existing' ? selectedLocalProjectId : targetGlobalProjectId;
-            if (mode === 'local-new') {
+            if (requestedMode === 'local-new' && !projectName.trim()) throw new Error('Enter the required local Project name.');
+            if (requestedMode === 'local-existing' && !selectedLocalProjectId) throw new Error('Select the owning local Project.');
+            if (requestedMode === 'global' && !targetGlobalProjectId) throw new Error('Select the owning broader Project.');
+            let projectId = requestedMode === 'local-existing' ? selectedLocalProjectId : targetGlobalProjectId;
+            if (requestedMode === 'local-new') {
                 const project = await createProject({
                     schema: 'bms.project.v2',
                     name: projectName,
@@ -175,7 +201,7 @@ export default function NgsMolBioProjectHub() {
                 priority,
                 tags: tags.split(',').map((value) => value.trim()).filter(Boolean),
                 success_criteria: successCriteria.split('\n').map((value) => value.trim()).filter(Boolean),
-                change_summary: mode === 'global' ? 'Created inside broader BMS Project' : 'Created inside local NGS/MolBio Project',
+                change_summary: requestedMode === 'global' ? 'Created inside broader BMS Project' : 'Created inside local NGS/MolBio Project',
             });
             const domain = await createDomainExperiment(projectId, experiment.id, {
                 schema: 'bms.domain-experiment.v4',
@@ -190,9 +216,9 @@ export default function NgsMolBioProjectHub() {
                 change_summary: 'Created from two-tier NGS/MolBio Project authoring',
                 domain_payload: ngsDomainPayload(objective),
             });
-            return { projectId, experiment, domain };
+            return { projectId, experiment, domain, ownershipMode: requestedMode };
         },
-        onSuccess: ({ projectId, experiment, domain }) => {
+        onSuccess: ({ projectId, experiment, domain, ownershipMode }) => {
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['ngs-molbio-projects'] }),
                 queryClient.invalidateQueries({ queryKey: ['ngs-molbio-project-authority', projectId] }),
@@ -219,7 +245,7 @@ export default function NgsMolBioProjectHub() {
                 global_experiment_id: experiment.id,
                 domain_experiment_id: domain.id,
                 state_revision_id: null,
-                ownership_scope: mode === 'global' ? 'global' : 'ngs_molbio_local',
+                ownership_scope: ownershipMode === 'global' ? 'global' : 'ngs_molbio_local',
             });
         },
     });
@@ -253,8 +279,98 @@ export default function NgsMolBioProjectHub() {
             ? String(selectedResearchObjective)
             : 'No objective recorded.');
     const error = createMutation.error ?? linkMutation.error ?? localProjectsQuery.error ?? globalProjectsQuery.error ?? localHierarchyQuery.error ?? shareableResultsQuery.error;
+    const [isOpen, setIsOpen] = useState(false);
+    const launcherRef = useRef<HTMLButtonElement>(null);
+    const dialogRef = useRef<HTMLElement>(null);
+    const wasDialogOpenRef = useRef(false);
 
-    return (
+    useEffect(() => {
+        if (presentation !== 'launcher-dialog' || !isOpen) return undefined;
+        const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])';
+        const focusFirst = () => dialogRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setIsOpen(false);
+                return;
+            }
+            if (event.key !== 'Tab' || !dialogRef.current) return;
+            const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector));
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        queueMicrotask(focusFirst);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, presentation]);
+
+    useEffect(() => {
+        if (presentation !== 'launcher-dialog') {
+            wasDialogOpenRef.current = false;
+            return;
+        }
+        if (wasDialogOpenRef.current && !isOpen) launcherRef.current?.focus();
+        wasDialogOpenRef.current = isOpen;
+    }, [isOpen, presentation]);
+
+    const advancedMetadataFields = (
+        <div className="mt-3 grid gap-3 rounded-lg border border-border-primary bg-surface-secondary p-3 sm:grid-cols-2">
+            <label className="text-xs text-content-secondary sm:col-span-2">Description<textarea className={`${INPUT} mt-1 min-h-16`} value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} /></label>
+            {mode === 'local-new' && <>
+                <label className="text-xs text-content-secondary">Owner <span className="text-content-muted">(leave blank to use authenticated principal)</span><input className={`${INPUT} mt-1`} value={projectOwner} onChange={(event) => setProjectOwner(event.target.value)} placeholder="Exact authenticated principal only" /></label>
+                <label className="text-xs text-content-secondary">Contributors, comma separated<input className={`${INPUT} mt-1`} value={contributors} onChange={(event) => setContributors(event.target.value)} /></label>
+                <label className="text-xs text-content-secondary">Start date<input type="date" className={`${INPUT} mt-1`} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+                <label className="text-xs text-content-secondary">Target end date<input type="date" className={`${INPUT} mt-1`} value={targetEndDate} onChange={(event) => setTargetEndDate(event.target.value)} /></label>
+            </>}
+            <label className="text-xs text-content-secondary sm:col-span-2">Tags, comma separated<input className={`${INPUT} mt-1`} value={tags} onChange={(event) => setTags(event.target.value)} /></label>
+            <label className="text-xs text-content-secondary sm:col-span-2">Scientific question<textarea className={`${INPUT} mt-1 min-h-16`} value={scientificQuestion} onChange={(event) => setScientificQuestion(event.target.value)} placeholder="Defaults to the objective" /></label>
+            <label className="text-xs text-content-secondary sm:col-span-2">Hypothesis<textarea className={`${INPUT} mt-1 min-h-16`} value={hypothesis} onChange={(event) => setHypothesis(event.target.value)} /></label>
+            <label className="text-xs text-content-secondary">Priority<select className={`${INPUT} mt-1`} value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select></label>
+            <label className="text-xs text-content-secondary sm:col-span-2">Success criteria, one per line<textarea className={`${INPUT} mt-1 min-h-20`} value={successCriteria} onChange={(event) => setSuccessCriteria(event.target.value)} /></label>
+        </div>
+    );
+
+    const governedExposureControls = selectedLocalProjectId ? (
+        <div className="mt-3 rounded-xl border border-border-primary bg-surface p-3">
+            <button type="button" className="flex w-full items-center justify-between gap-2 text-left" onClick={() => setShowExpose((value) => !value)}>
+                <span className="text-sm font-semibold text-content-primary">Optional: expose local Experiments and Results to a broader Project</span>
+                <span className="text-xs text-content-muted">{showExpose ? 'Hide' : 'Show'}</span>
+            </button>
+            {showExpose && (<>
+                <p className="mt-1 text-xs text-content-secondary">This local Project needs no broader association. When useful, each explicit link adds governed membership and lineage. Native Data and Result payloads remain single-copy in their owning stores.</p>
+                <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto]">
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">Contained Experiments</p>
+                        {(localHierarchyQuery.data?.experiments ?? []).map((experiment) => (
+                            <label key={experiment.id} className="flex items-center gap-2 text-xs text-content-secondary"><input type="checkbox" checked={selectedExperimentIds.includes(experiment.id)} onChange={(event) => setSelectedExperimentIds((current) => event.target.checked ? [...current, experiment.id] : current.filter((id) => id !== experiment.id))} />{experiment.name}</label>
+                        ))}
+                    </div>
+                    <div className="space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">Data-bearing Results</p>
+                        {(shareableResultsQuery.data ?? []).map((result) => (
+                            <label key={result.result_receipt_id} className="flex items-start gap-2 text-xs text-content-secondary"><input className="mt-0.5" type="checkbox" checked={selectedResultIds.includes(result.result_receipt_id)} onChange={(event) => setSelectedResultIds((current) => event.target.checked ? [...current, result.result_receipt_id] : current.filter((id) => id !== result.result_receipt_id))} /><span>{result.entity_kind} · {result.entity_id}<span className="block font-mono text-[10px] text-content-muted">{result.content_digest.slice(0, 12)} · {result.store_id}</span></span></label>
+                        ))}
+                        {!shareableResultsQuery.isLoading && (shareableResultsQuery.data?.length ?? 0) === 0 && <p className="text-xs text-content-muted">No governed native Result receipts are available yet.</p>}
+                    </div>
+                    <select className={INPUT} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select broader Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
+                    <button type="button" className={BUTTON} disabled={linkMutation.isPending || !targetGlobalProjectId || selectedExperimentIds.length === 0} onClick={() => linkMutation.mutate()}>{linkMutation.isPending ? 'Linking…' : 'Create governed link'}</button>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">{(linksQuery.data ?? []).map((link) => <span key={link.link_id} className="rounded-full border border-border-primary px-2 py-1 text-[11px] text-content-muted">Global Project {link.global_project_id.slice(0, 8)} · {link.experiment_ids.length} Experiment{link.experiment_ids.length === 1 ? '' : 's'} · {link.result_ids.length} Result{link.result_ids.length === 1 ? '' : 's'}</span>)}</div>
+            </>)}
+        </div>
+    ) : null;
+
+    const advancedProjectWorkspace = <DomainExperimentWorkspace />;
+
+    const projectSurface = (
         <div className="w-full max-w-none rounded-2xl border border-border-primary bg-surface-secondary/80 shadow-sm">
             <section className="p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -262,7 +378,9 @@ export default function NgsMolBioProjectHub() {
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Two-tier ownership</p>
                     <h2 className="mt-1 text-lg font-semibold text-content-primary" title="Projects contain Experiments. Local Projects are complete standalone authorities for Mol Bio and NGS and can optionally share selected Experiments and Results with broader Projects.">NGS/MolBio Projects</h2>
                 </div>
-                <a href="/projects" className={BUTTON}>Open broader Project Manager</a>
+                        {presentation === 'inline' && (
+                            <a href="/projects" className={BUTTON}>Open broader Project Manager</a>
+                        )}
             </div>
 
             <div className="mt-2 grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
@@ -286,21 +404,8 @@ export default function NgsMolBioProjectHub() {
                         <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective <span className="text-error">(required)</span><textarea required className={`${INPUT} mt-1 min-h-16`} value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
                     </div>
                     <button type="button" className={`${BUTTON} mt-2`} onClick={() => setShowDetails((value) => !value)}>{showDetails ? 'Hide Project and Experiment details' : 'Add Project and Experiment details'}</button>
-                    {showDetails && <div className="mt-3 grid gap-3 rounded-lg border border-border-primary bg-surface-secondary p-3 sm:grid-cols-2">
-                        <label className="text-xs text-content-secondary sm:col-span-2">Description<textarea className={`${INPUT} mt-1 min-h-16`} value={projectDescription} onChange={(event) => setProjectDescription(event.target.value)} /></label>
-                        {mode === 'local-new' && <>
-                            <label className="text-xs text-content-secondary">Owner <span className="text-content-muted">(leave blank to use authenticated principal)</span><input className={`${INPUT} mt-1`} value={projectOwner} onChange={(event) => setProjectOwner(event.target.value)} placeholder="Exact authenticated principal only" /></label>
-                            <label className="text-xs text-content-secondary">Contributors, comma separated<input className={`${INPUT} mt-1`} value={contributors} onChange={(event) => setContributors(event.target.value)} /></label>
-                            <label className="text-xs text-content-secondary">Start date<input type="date" className={`${INPUT} mt-1`} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
-                            <label className="text-xs text-content-secondary">Target end date<input type="date" className={`${INPUT} mt-1`} value={targetEndDate} onChange={(event) => setTargetEndDate(event.target.value)} /></label>
-                        </>}
-                        <label className="text-xs text-content-secondary sm:col-span-2">Tags, comma separated<input className={`${INPUT} mt-1`} value={tags} onChange={(event) => setTags(event.target.value)} /></label>
-                        <label className="text-xs text-content-secondary sm:col-span-2">Scientific question<textarea className={`${INPUT} mt-1 min-h-16`} value={scientificQuestion} onChange={(event) => setScientificQuestion(event.target.value)} placeholder="Defaults to the objective" /></label>
-                        <label className="text-xs text-content-secondary sm:col-span-2">Hypothesis<textarea className={`${INPUT} mt-1 min-h-16`} value={hypothesis} onChange={(event) => setHypothesis(event.target.value)} /></label>
-                        <label className="text-xs text-content-secondary">Priority<select className={`${INPUT} mt-1`} value={priority} onChange={(event) => setPriority(event.target.value as typeof priority)}><option value="low">Low</option><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select></label>
-                        <label className="text-xs text-content-secondary sm:col-span-2">Success criteria, one per line<textarea className={`${INPUT} mt-1 min-h-20`} value={successCriteria} onChange={(event) => setSuccessCriteria(event.target.value)} /></label>
-                    </div>}
-                    <button type="button" className={`${BUTTON} mt-2`} disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
+                    {showDetails && advancedMetadataFields}
+                    <button type="button" className={`${BUTTON} mt-2`} disabled={createMutation.isPending} onClick={() => createMutation.mutate(mode)}>
                         {createMutation.isPending ? 'Creating…' : mode === 'local-new' ? 'Create local Project and first Experiment' : mode === 'local-existing' ? 'Add contained Experiment' : 'Create global NGS/MolBio Experiment'}
                     </button>
                 </div>
@@ -320,40 +425,157 @@ export default function NgsMolBioProjectHub() {
                 </div>
             </div>
 
-            {selectedLocalProjectId && (
-                <div className="mt-3 rounded-xl border border-border-primary bg-surface p-3">
-                    <button type="button" className="flex w-full items-center justify-between gap-2 text-left" onClick={() => setShowExpose((value) => !value)}>
-                        <span className="text-sm font-semibold text-content-primary">Optional: expose local Experiments and Results to a broader Project</span>
-                        <span className="text-xs text-content-muted">{showExpose ? 'Hide' : 'Show'}</span>
-                    </button>
-                    {showExpose && (<>
-                    <p className="mt-1 text-xs text-content-secondary">This local Project needs no broader association. When useful, each explicit link adds governed membership and lineage. Native Data and Result payloads remain single-copy in their owning stores.</p>
-                    <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto]">
-                        <div className="space-y-2">
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">Contained Experiments</p>
-                            {(localHierarchyQuery.data?.experiments ?? []).map((experiment) => (
-                                <label key={experiment.id} className="flex items-center gap-2 text-xs text-content-secondary"><input type="checkbox" checked={selectedExperimentIds.includes(experiment.id)} onChange={(event) => setSelectedExperimentIds((current) => event.target.checked ? [...current, experiment.id] : current.filter((id) => id !== experiment.id))} />{experiment.name}</label>
-                            ))}
-                        </div>
-                        <div className="space-y-2">
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">Data-bearing Results</p>
-                            {(shareableResultsQuery.data ?? []).map((result) => (
-                                <label key={result.result_receipt_id} className="flex items-start gap-2 text-xs text-content-secondary"><input className="mt-0.5" type="checkbox" checked={selectedResultIds.includes(result.result_receipt_id)} onChange={(event) => setSelectedResultIds((current) => event.target.checked ? [...current, result.result_receipt_id] : current.filter((id) => id !== result.result_receipt_id))} /><span>{result.entity_kind} · {result.entity_id}<span className="block font-mono text-[10px] text-content-muted">{result.content_digest.slice(0, 12)} · {result.store_id}</span></span></label>
-                            ))}
-                            {!shareableResultsQuery.isLoading && (shareableResultsQuery.data?.length ?? 0) === 0 && <p className="text-xs text-content-muted">No governed native Result receipts are available yet.</p>}
-                        </div>
-                        <select className={INPUT} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select broader Project</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
-                        <button type="button" className={BUTTON} disabled={linkMutation.isPending || !targetGlobalProjectId || selectedExperimentIds.length === 0} onClick={() => linkMutation.mutate()}>{linkMutation.isPending ? 'Linking…' : 'Create governed link'}</button>
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">{(linksQuery.data ?? []).map((link) => <span key={link.link_id} className="rounded-full border border-border-primary px-2 py-1 text-[11px] text-content-muted">Global Project {link.global_project_id.slice(0, 8)} · {link.experiment_ids.length} Experiment{link.experiment_ids.length === 1 ? '' : 's'} · {link.result_ids.length} Result{link.result_ids.length === 1 ? '' : 's'}</span>)}</div>
-                    </>)}
-                </div>
-            )}
+            {governedExposureControls}
 
             {error && <p className="mt-3 rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">{projectManagerErrorMessage(error)}</p>}
             </section>
 
-            <DomainExperimentWorkspace />
+            {advancedProjectWorkspace}
         </div>
+    );
+
+    const compactProjectPanel = (
+        <div className="p-4 sm:p-5">
+            <div role="tablist" aria-label="Project scope" className="flex gap-2 border-b border-border-primary pb-3">
+                <button
+                    type="button"
+                    role="tab"
+                    id="ngs-project-tab-local"
+                    aria-selected={projectPanelTab === 'local'}
+                    aria-controls="ngs-project-panel-local"
+                    className={`${BUTTON} ${projectPanelTab === 'local' ? 'border-primary bg-primary/15' : ''}`}
+                    onClick={() => {
+                        setProjectPanelTab('local');
+                        setMode('local-new');
+                    }}
+                >
+                    Local Projects
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    id="ngs-project-tab-broader"
+                    aria-selected={projectPanelTab === 'broader'}
+                    aria-controls="ngs-project-panel-broader"
+                    className={`${BUTTON} ${projectPanelTab === 'broader' ? 'border-primary bg-primary/15' : ''}`}
+                    onClick={() => {
+                        setProjectPanelTab('broader');
+                        setMode('global');
+                    }}
+                >
+                    Broader Projects
+                </button>
+            </div>
+
+            {projectPanelTab === 'local' ? (
+                <div id="ngs-project-panel-local" role="tabpanel" aria-labelledby="ngs-project-tab-local" className="grid gap-3 pt-4 md:grid-cols-2">
+                    <section className="rounded-xl border border-border-primary bg-surface p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">Open a local Project</p>
+                        <label className="mt-3 block text-xs text-content-secondary">
+                            Existing Project
+                            <select className={`${INPUT} mt-1`} value={selectedLocalProjectId} onChange={(event) => setSelectedLocalProjectId(event.target.value)}>
+                                <option value="">Select local NGS/MolBio Project…</option>
+                                {localProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                            </select>
+                        </label>
+                        <label className="mt-3 block text-xs text-content-secondary">
+                            Contained Experiment
+                            <select className={`${INPUT} mt-1`} value={selectedLocalDomainId} onChange={(event) => setSelectedLocalDomainId(event.target.value)} disabled={!selectedLocalProjectId || localHierarchyQuery.isLoading}>
+                                <option value="">Select Experiment…</option>
+                                {(localHierarchyQuery.data?.domains ?? []).map(({ experiment, domain }) => <option key={domain.id} value={domain.id}>{experiment.name}</option>)}
+                            </select>
+                        </label>
+                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={!selectedLocalProjectId} onClick={openSelectedProject}>Open selected Project</button>
+                    </section>
+                    <section className="rounded-xl border border-border-primary bg-surface p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">Create a local Project</p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            <label className="text-xs text-content-secondary">Project name<input className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>
+                            <label className="text-xs text-content-secondary">First Experiment<input className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Validation run" /></label>
+                            <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective<input className={`${INPUT} mt-1`} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Define the sequencing objective…" /></label>
+                        </div>
+                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={createMutation.isPending} onClick={() => createMutation.mutate('local-new')}>{createMutation.isPending ? 'Creating…' : 'Create Project and Experiment'}</button>
+                    </section>
+                </div>
+            ) : (
+                <div id="ngs-project-panel-broader" role="tabpanel" aria-labelledby="ngs-project-tab-broader" className="grid gap-3 pt-4 md:grid-cols-2">
+                    <section className="rounded-xl border border-border-primary bg-surface p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">Open a broader Project</p>
+                        <label className="mt-3 block text-xs text-content-secondary">Existing Project<select className={`${INPUT} mt-1`} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select broader Project…</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={!targetGlobalProjectId} onClick={() => updateQueryParams({ workspace_id: targetGlobalProjectId, global_experiment_id: null, domain_experiment_id: null, state_revision_id: null, ownership_scope: 'global' })}>Open selected Project</button>
+                    </section>
+                    <section className="rounded-xl border border-border-primary bg-surface p-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">Create a broader Experiment</p>
+                        <label className="mt-3 block text-xs text-content-secondary">Owning broader Project<select className={`${INPUT} mt-1`} value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)}><option value="">Select broader Project…</option>{globalProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                            <label className="text-xs text-content-secondary">First Experiment<input className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Validation run" /></label>
+                            <label className="text-xs text-content-secondary">Scientific objective<input className={`${INPUT} mt-1`} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Define the sequencing objective…" /></label>
+                        </div>
+                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={createMutation.isPending} onClick={() => createMutation.mutate('global')}>{createMutation.isPending ? 'Creating…' : 'Create Experiment'}</button>
+                    </section>
+                </div>
+            )}
+
+            <details data-testid="ngs-project-advanced-disclosure" className="mt-3 rounded-xl border border-border-primary bg-surface p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-content-primary">Advanced project and experiment metadata</summary>
+                <div className="mt-3 rounded-lg border border-border-primary bg-surface-secondary p-3 text-xs text-content-secondary">
+                    <p>These controls reuse the compact panel's Project and Experiment state and existing governed mutations.</p>
+                    {advancedMetadataFields}
+                    {governedExposureControls}
+                    <div className="mt-3">
+                        <p className="mb-3">Use the existing governed workspace for immutable state, evidence, and exact revision controls.</p>
+                        {advancedProjectWorkspace}
+                    </div>
+                </div>
+            </details>
+
+            <div className="mt-3 flex flex-col gap-3 rounded-xl border border-border-primary bg-surface p-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-content-secondary">Need cross-domain ownership or global Project administration?</p>
+                <a href="/projects" className={BUTTON}>Open global Project Manager</a>
+            </div>
+            {error && <p role="alert" className="mt-3 rounded-lg border border-error/40 bg-error/10 px-3 py-2 text-xs text-error">{projectManagerErrorMessage(error)}</p>}
+        </div>
+    );
+
+    if (presentation === 'inline') return projectSurface;
+
+    return (
+        <>
+            <button
+                ref={launcherRef}
+                type="button"
+                className={`${BUTTON} border-primary bg-primary/10`}
+                onClick={() => setIsOpen(true)}
+                aria-haspopup="dialog"
+                aria-expanded={isOpen}
+            >
+                Projects
+            </button>
+            {isOpen && (
+                <div
+                    className="fixed inset-0 z-[100] grid items-end justify-center bg-black/70 p-0 sm:items-center sm:p-3"
+                    onMouseDown={(event) => {
+                        if (event.currentTarget === event.target) setIsOpen(false);
+                    }}
+                >
+                    <section
+                        ref={dialogRef}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="ngs-project-panel-title"
+                        className="h-[100dvh] max-h-[100dvh] w-full overflow-y-auto rounded-t-2xl border border-border-primary bg-surface-secondary shadow-2xl sm:h-auto sm:max-h-[90vh] sm:max-w-[1040px] sm:rounded-2xl"
+                    >
+                        <header className="flex items-start justify-between gap-4 border-b border-border-primary px-4 py-4 sm:px-5">
+                            <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">NGS / MolBio Projects</p>
+                                <h2 id="ngs-project-panel-title" className="mt-1 text-lg font-semibold text-content-primary">Project workspace</h2>
+                            </div>
+                            <button type="button" className={BUTTON} onClick={() => setIsOpen(false)}>Close ×</button>
+                        </header>
+                        {compactProjectPanel}
+                    </section>
+                </div>
+            )}
+        </>
     );
 }

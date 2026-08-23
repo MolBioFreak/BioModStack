@@ -888,12 +888,9 @@ export default function DomainExperimentWorkspace() {
                         <p className="mt-1 text-sm text-content-secondary">
                             Create or open a local NGS/MolBio Project above. For cross-domain work, create an NGS/MolBio Experiment inside a broader Project or open one from Project Manager.
                         </p>
-                        <Link
-                            to="/projects"
-                            className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent"
-                        >
-                            Open Project Manager
-                        </Link>
+                        <p className="mt-3 text-xs text-content-secondary">
+                            Open the <strong>Projects</strong> control in the NGS Toolkit header to create or open a local NGS/MolBio Project, or to use the broader Project Manager.
+                        </p>
                     </div>
                 )}
 

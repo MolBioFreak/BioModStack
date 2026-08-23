@@ -21,34 +21,38 @@ test('Nanopore FASTQ launch defaults stay compatible with bundled minimap2', () 
 
 test('Nanopore reference workflows are gated on an exact saved MolBio revision', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
+    const chooser = readSource('src/components/ngs/NanoporeWorkflowChooser.tsx');
 
     assert.match(template, /const requiresReference = selectedWorkflow === 'clone'/u);
     assert.match(template, /selectedMolbioSequenceId/u);
     assert.match(template, /selectedMolbioRevisionId/u);
     assert.match(template, /selectedWorkflow === 'clone' \|\| selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'constructScreening' \|\| selectedWorkflow === 'fastqQc'/u);
-    assert.match(template, /This workflow requires a saved MolBio sequence and exact immutable revision/u);
-    assert.doesNotMatch(template, /localStorage|uploadFile|referencePath|reference_fasta/u);
+    assert.match(template, /Shared Experiment reference/u);
+    assert.match(chooser, /saved MolBio revision/u);
+    assert.doesNotMatch(template, /reference_fasta:\s*effectiveReferencePath/u);
     assert.match(template, /function coerceIntegerInput/u);
     assert.match(template, /FASTQ_MAX_IGV_REPORT_MAX_SITES/u);
     assert.match(template, /max=\{FASTQ_MAX_IGV_REPORT_MAX_SITES\}/u);
 });
 
 test('NGS exposes named workflow choices with input and output expectations before the detailed form', () => {
-    const template = readSource('src/components/NanoporeTemplate.tsx');
+    const chooser = readSource('src/components/ngs/NanoporeWorkflowChooser.tsx');
 
-    assert.match(template, /Choose what you want to do/u);
-    assert.match(template, /Validate a known plasmid \/ clone/u);
-    assert.match(template, /QC plasmid reads/u);
-    assert.match(template, /Screen a construct/u);
-    assert.match(template, /ONT FASTQ QC/u);
-    assert.match(template, /Basecall DNA simplex/u);
-    assert.match(template, /Basecall RNA/u);
-    assert.match(template, /Basecall DNA duplex/u);
-    assert.match(template, /Call modified bases/u);
-    assert.match(template, /Classify and demultiplex RBK114/u);
-    assert.match(template, /Analyze aligned plasmid BAM/u);
-    assert.match(template, /aria-pressed=\{selectedWorkflow === workflow\.key\}/u);
-    assert.match(template, /How to use this page:/u);
+    for (const label of [
+        'Choose what you want to do',
+        'Validate a known plasmid / clone',
+        'QC plasmid reads',
+        'Screen a construct',
+        'ONT FASTQ QC',
+        'Basecall DNA simplex',
+        'Basecall RNA',
+        'Basecall DNA duplex',
+        'Call modified bases',
+        'Classify and demultiplex RBK114',
+        'Analyze aligned plasmid BAM',
+        'How to use this page:',
+    ]) assert.match(chooser, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
+    assert.match(chooser, /aria-pressed=\{selected\}/u);
 });
 
 test('Clone-validation tuning controls serialize bounded vendor-supported settings without unsupported switches', () => {
@@ -67,8 +71,10 @@ test('Clone-validation tuning controls serialize bounded vendor-supported settin
     assert.doesNotMatch(source, /wf_clone_analyse_unclassified/u);
     assert.match(source, /enable_rotating_reference_frames/u);
     assert.match(source, /single_ref_split_min_mapq/u);
-    assert.match(source, /max-w-\[1440px\]/);
-    assert.match(source, /xl:grid-cols-12/);
+    assert.match(source, /max-w-\[1480px\]/u);
+    assert.match(source, /xl:grid-cols-2/u);
+    assert.match(source, /data-testid="ngs-review-bar"/u);
+    assert.match(source, /GPU assignment/u);
 });
 
 test('Nanopore control surface does not expose raw Nextflow arguments', () => {
@@ -106,13 +112,15 @@ test('Nanopore P4 controls serialize only locked molecule, quality, duplex, and 
 
 test('Nanopore workflow state routes clone and BAM QC to their supported workflows', () => {
     const template = readSource('src/components/NanoporeTemplate.tsx');
+    const payload = readSource('src/lib/nanoporeLaunchPayload.ts');
 
     assert.match(template, /selectedWorkflow === 'clone'\s*\? 'wf_clone_validation'/u);
     assert.match(template, /selectedWorkflow === 'plasmidQc' \|\| selectedWorkflow === 'bamQc'/u);
     assert.match(template, /selectedWorkflow === 'constructScreening'\s*\? 'ont_construct_screening'/u);
     assert.match(template, /selectedWorkflow === 'fastqQc'\s*\? 'ont_fastq_qc'/u);
     assert.match(template, /setBarcodeKit\(''\)/u);
-    assert.match(template, /run_assembly: selectedWorkflow === 'clone'/u);
+    assert.match(payload, /if \(selectedWorkflow === 'clone'\) params\.run_assembly = true/u);
+    assert.match(payload, /if \(selectedWorkflow === 'constructScreening'\) params\.run_assembly = runAssembly/u);
     assert.match(template, /if \(value\) \{ setModifiedBases\('none'\); setRunModkit\(false\); setRunAssembly\(false\); \}/u);
     assert.match(template, /type="range"\s+min=\{0\}/u);
 });
@@ -184,6 +192,15 @@ test('Nanopore surfaces expose external documentation linkouts in a compact box'
     }
     assert.match(ngsToolkit, /target="_blank"/u);
     assert.match(ngsToolkit, /rel="noreferrer"/u);
+});
+
+test('Nanopore Validate and Submit share one authoritative blocker function', () => {
+    const template = readSource('src/components/NanoporeTemplate.tsx');
+
+    assert.match(template, /const getSubmissionBlockers = \(\): string\[\] =>/u);
+    assert.match(template, /const handleValidate = \(\) => \{[\s\S]*?getSubmissionBlockers\(\)/u);
+    assert.match(template, /const handleSubmit = \(\) => \{[\s\S]*?getSubmissionBlockers\(\)/u);
+    assert.doesNotMatch(template, /const handleSubmit = \(\) => \{[\s\S]*?if \(!jobName\.trim\(\)\)/u);
 });
 
 

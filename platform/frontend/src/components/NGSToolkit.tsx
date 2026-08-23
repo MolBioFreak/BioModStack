@@ -44,6 +44,7 @@ import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 import ExperimentReferenceLinks from './molbio-ngs/ExperimentReferenceLinks';
+import NgsMolBioProjectHub from './molbio-ngs/NgsMolBioProjectHub';
 
 type ToolkitView = NgsToolkitView;
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
@@ -528,6 +529,7 @@ function hasMeaningfulValue(value: unknown): boolean {
 function resolveFastqQcEnabled(params: Record<string, unknown>, hasFastq: boolean): boolean {
     if (!hasFastq) return false;
     if (typeof params.run_fastq_qc === 'boolean') return params.run_fastq_qc;
+    // Legacy persisted jobs only. New launches use run_fastq_qc.
     if (typeof params.run_multimer_qc === 'boolean') return params.run_multimer_qc;
     return false;
 }
@@ -4143,6 +4145,7 @@ export function NGSToolkit() {
                         <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Toolkit</h1>
                     </div>
                     <div className="flex items-center gap-2">
+                        <NgsMolBioProjectHub presentation="launcher-dialog" />
                         <button
                             onClick={() => navigate('/designer')}
                             className="px-4 py-2 rounded-lg text-sm font-medium border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"

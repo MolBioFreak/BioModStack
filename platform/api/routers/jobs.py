@@ -4538,6 +4538,7 @@ def _resolve_nanopore_fastq_qc_mode(params: Optional[dict]) -> tuple[bool, bool]
     if isinstance(run_fastq_qc, bool):
         return run_fastq_qc, False
 
+    # Legacy persisted jobs may carry run_multimer_qc. New requests use run_fastq_qc only.
     run_multimer_qc = params.get("run_multimer_qc")
     if isinstance(run_multimer_qc, bool):
         return run_multimer_qc, True
@@ -4549,6 +4550,58 @@ def _resolve_nanopore_bam_realign(params: Optional[dict]) -> bool:
     if not isinstance(params, dict):
         return False
     return _to_bool(params.get("bam_force_realign"))
+
+
+NANOPORE_STAGE_RESPONSE_MODES = frozenset(
+    {
+        "basecall_dna",
+        "basecall_rna",
+        "plasmid_qc",
+        "construct_screening",
+        "methylation_analysis",
+        "nanopore_methylation",
+        "fastq_qc",
+        "clone_validation",
+    }
+)
+
+
+def _uses_nanopore_stage_response(job: Job) -> bool:
+    return job.model_id == "nanopore" and job.mode in NANOPORE_STAGE_RESPONSE_MODES
+
+
+def _planned_nanopore_stages(params: Optional[dict]) -> List[str]:
+    np_params = params if isinstance(params, dict) else {}
+    display_stages: List[str] = []
+    has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
+    has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
+    has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
+    has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
+    fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
+    bam_force_realign = _resolve_nanopore_bam_realign(np_params)
+
+    if has_pod5:
+        display_stages.append("dorado_basecall")
+    if has_pod5 and has_reference:
+        display_stages.append("dorado_align")
+    if has_bam and has_reference:
+        display_stages.append("dorado_align" if bam_force_realign else "bam_prepare")
+    if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+        display_stages.append("bam_prepare")
+    if has_fastq and has_reference:
+        display_stages.append("fastq_align")
+    if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+        display_stages.append("fastq_qc")
+    if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
+        display_stages.append("modkit")
+    if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+        display_stages.append("multimer_qc")
+    if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+        display_stages.append("dimer_analysis")
+    if np_params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
+        display_stages.append("wf_clone_validation")
+
+    return _dedupe_preserve_order(display_stages)
 
 
 def _infer_nanopore_stage_outputs(
@@ -4691,7 +4744,7 @@ def _infer_nanopore_stage_outputs(
             allowed_stages.add("multimer_qc")
         if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
             allowed_stages.add("dimer_analysis")
-        if params.get("run_assembly") is True and (has_pod5 or has_bam):
+        if params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
             allowed_stages.add("wf_clone_validation")
 
     inferred: Dict[str, List[str]] = {}
@@ -4712,7 +4765,7 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
     completed = _dedupe_preserve_order(list(job.completed_stages or []))
     stage_outputs = dict(job.stage_outputs or {})
 
-    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+    if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
         inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
         for stage, outputs in inferred_outputs.items():
@@ -7624,6 +7677,9 @@ async def report_stage_complete(
     if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
 
+    if job.model_id == "nanopore" and stage == "clone_validation":
+        stage = "wf_clone_validation"
+
     if stage == "dorado_demux":
         provenance = dict(job.provenance or {})
         callback_digest = str(provenance.get(stage_reporting.PROVENANCE_DIGEST_KEY) or "")
@@ -8184,49 +8240,9 @@ async def get_job_stages(
              display_stages.append("thermompnn")
              
     else:
-        # Nanopore stage list is dynamic based on params.
-        if job.mode in ["methylation_analysis", "nanopore_methylation"]:
-            np_params = job.params or {}
-            display_stages = []
-            has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
-            has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
-            has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
-            has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
-            fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
-            bam_force_realign = _resolve_nanopore_bam_realign(np_params)
-
-            if has_pod5:
-                display_stages.append("dorado_basecall")
-
-            if has_pod5 and has_reference:
-                display_stages.append("dorado_align")
-
-            if has_bam and has_reference:
-                if bam_force_realign:
-                    display_stages.append("dorado_align")
-                else:
-                    display_stages.append("bam_prepare")
-
-            if (has_bam and not has_reference) or (has_pod5 and not has_reference):
-                display_stages.append("bam_prepare")
-
-            if has_fastq and has_reference:
-                display_stages.append("fastq_align")
-            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
-                display_stages.append("fastq_qc")
-
-            # Modkit only for POD5/BAM — FASTQ lacks methylation tags (MM/ML)
-            if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
-                display_stages.append("modkit")
-
-            # Legacy multimer/dimer stage labels for old runs.
-            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
-                display_stages.append("multimer_qc")
-            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
-                display_stages.append("dimer_analysis")
-
-            if np_params.get("run_assembly") is True and (has_pod5 or has_bam):
-                display_stages.append("wf_clone_validation")
+        # Nanopore stage inventory is dynamic across every typed ONT mode.
+        if _uses_nanopore_stage_response(job):
+            display_stages = _planned_nanopore_stages(job.params)
         else:
             # Fallback for other modes
             all_stages_map = {
@@ -8242,7 +8258,7 @@ async def get_job_stages(
     if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
         all_stages.append(job.awaiting_stage)
 
-    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+    if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
         # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
         inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)

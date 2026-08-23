@@ -2,12 +2,13 @@
 nextflow.enable.dsl = 2
 
 // Standalone construct screening workflow.
-// POD5/BAM/FASTQ → alignment + CloneValidation for expected-sequence comparison.
+// POD5/BAM/FASTQ → alignment evidence; run_assembly=true additionally runs CloneValidation.
+// run_fastq_qc controls the optional FASTQ plasmid-QC evidence branch.
 //
 // Input modes: POD5, BAM, FASTQ
-//   POD5: DoradoBasecall → DoradoAlign/BamPrepare → CloneValidation
-//   BAM:  BamPrepare → CloneValidation
-//   FASTQ: FastqAlign → CloneValidation + FastqPlasmidQC
+//   POD5: DoradoBasecall → DoradoAlign/BamPrepare → optional CloneValidation
+//   BAM:  BamPrepare → optional CloneValidation
+//   FASTQ: FastqAlign → optional CloneValidation + optional FastqPlasmidQC
 
 include { DoradoPreflight; DoradoBasecall } from '../../modules/ngs/dorado_basecall.nf'
 include { DoradoAlign } from '../../modules/ngs/dorado_align.nf'
@@ -37,6 +38,7 @@ def reportStage(params, stageName, files) {
 workflow ONT_CONSTRUCT_SCREENING {
     main:
     def runFastqQc = params.run_fastq_qc != false
+    def runAssembly = params.run_assembly == true
     def forceBamRealign = params.bam_force_realign == true
 
     println("Running ONT construct screening workflow")
@@ -45,6 +47,7 @@ workflow ONT_CONSTRUCT_SCREENING {
     println("  FASTQ path:  ${params.fastq_path ?: '(none)'}")
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
     println("  Run QC:      ${runFastqQc}")
+    println("  Run assembly:${runAssembly}")
     println("  Approx size: ${params.wf_clone_approx_size ?: 7000}")
     println("  Dorado quality:${params.dorado_quality_mode ?: 'sup'}")
 
@@ -188,21 +191,23 @@ workflow ONT_CONSTRUCT_SCREENING {
         analysis_bam = FastqAlign.out.aligned
     }
 
-    // --- Clone validation (required for construct screening) ---
+    // --- Clone validation (optional for construct screening) ---
     if (analysis_bam == null) {
         error("Construct screening requires BAM-capable output from basecall/align stage")
     }
 
-    println("Running clone validation for construct screening")
-    def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
-    RunCloneValidation(clone_input)
-    RunCloneValidation.out.out.subscribe { _ignored ->
-        reportStage(params, "clone_validation", [
-            "${params.out_dir}/assembly/wf_clone_out",
-            "${params.out_dir}/assembly/wf_clone.log",
-            "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
-            "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
-        ])
+    if (runAssembly) {
+        println("Running clone validation for construct screening")
+        def clone_input = analysis_bam.map { bam, bai -> [bam, (params.reference_fasta ?: "").toString()] }
+        RunCloneValidation(clone_input)
+        RunCloneValidation.out.out.subscribe { _ignored ->
+            reportStage(params, "wf_clone_validation", [
+                "${params.out_dir}/assembly/wf_clone_out",
+                "${params.out_dir}/assembly/wf_clone.log",
+                "${params.out_dir}/assembly/wf_clone_out/wf-clone-validation-report.html",
+                "${params.out_dir}/assembly/wf_clone_out/sample_status.txt",
+            ])
+        }
     }
 
     // --- FASTQ plasmid QC (only for FASTQ input with reference) ---

@@ -98,7 +98,6 @@ function App() {
               path="/ngs"
               element={(
                   <div className="w-full max-w-none">
-                    <NgsMolBioProjectHub />
                     <NGSToolkit />
                   </div>
                 )}

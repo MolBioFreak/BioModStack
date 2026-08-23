@@ -12,7 +12,12 @@ const barcodePanel = readSource('src/components/ngs/BarcodeUnitsPanel.tsx');
 const api = readSource('src/lib/api.ts');
 
 test('Nanopore references have no browser or mutable path authority', () => {
-    assert.doesNotMatch(template, /localStorage|uploadFile|referencePath|reference_fasta/u);
+    assert.doesNotMatch(
+        template,
+        /reference_fasta:\s*(?:effectiveReferencePath|referencePath|legacyPath|entry\.path)|managed_reference_(?:path|fasta_path)|params\.reference_fasta\s*=/u,
+    );
+    assert.match(template, /importMolBioNgsBrowserReference/u);
+    assert.match(template, /managed_reference:\s*\{/u);
     assert.match(api, /fetchMolBioSequenceRevisions/u);
     assert.match(api, /\/api\/molbio\/sequences\/\$\{encodeURIComponent\(sequenceId\)\}\/revisions/u);
     assert.match(template, /issueMolBioNgsReceipt\(selectedMolbioSequenceId, \{ revision_id: selectedMolbioRevisionId \}\)/u);
