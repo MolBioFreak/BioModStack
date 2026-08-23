@@ -118,6 +118,10 @@ def _validate_hierarchy_revision_payload(aggregate_kind: str, payload: dict[str,
     """Apply the frozen closed schema plus hierarchy lifecycle contract."""
     if aggregate_kind != "domain_experiment":
         filename = _HIERARCHY_SCHEMA_FILES.get(aggregate_kind)
+        if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+            filename = "project-v2.schema.json"
+        elif aggregate_kind == "experiment" and payload.get("schema") == "bms.global-experiment.v2":
+            filename = "global-experiment-v2.schema.json"
         if filename is None:
             raise ConnectorConflict(f"unsupported hierarchy revision kind: {aggregate_kind}")
         try:
@@ -494,13 +498,13 @@ async def exact_local_launch_authority(
     domain_revision = await global_session.get(ExperimentRevision, domain.current_revision_id)
     if (
         project_revision is None or project_revision.subject_id != project_id
-        or project_revision.schema_name != "bms.project.v1"
-        or project_revision.schema_version != "1"
+        or project_revision.schema_name not in {"bms.project.v1", "bms.project.v2"}
+        or project_revision.schema_version not in {"1", "2"}
         or _digest(project_revision.canonical_payload) != project_revision.payload_sha256
         or experiment_revision is None or experiment_revision.subject_id != global_experiment_id
         or experiment_revision.revision_number != experiment.head_generation
-        or experiment_revision.schema_name != "bms.global-experiment.v1"
-        or experiment_revision.schema_version != "1"
+        or experiment_revision.schema_name not in {"bms.global-experiment.v1", "bms.global-experiment.v2"}
+        or experiment_revision.schema_version not in {"1", "2"}
         or _digest(experiment_revision.canonical_payload) != experiment_revision.payload_sha256
         or domain_revision is None or domain_revision.subject_id != domain_id
         or domain_revision.revision_number != domain.head_generation
