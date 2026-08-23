@@ -6310,7 +6310,7 @@ async def create_job(
             existing_job = await session.get(Job, str(_preallocated_job_id))
             if existing_job is not None:
                 raise LaunchContextError(
-                    "launch_context_job_exists",
+                    "launch_context_claimed",
                     "The canonical Job already exists for this launch context.",
                     status_code=409,
                 )
