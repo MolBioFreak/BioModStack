@@ -112,7 +112,8 @@ def _public_clean(value: Any) -> Any:
             key = str(raw_key)
             normalized = key.lower().replace("-", "_")
             if (
-                "path" in normalized
+                _PUBLIC_PATH_TEXT.search(key)
+                or "path" in normalized
                 or "directory" in normalized
                 or "filename" in normalized
                 or normalized in {"managed_outputs", "managed_output", "output_files"}
