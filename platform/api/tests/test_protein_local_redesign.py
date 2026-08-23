@@ -445,7 +445,7 @@ def test_protein_local_redesign_is_first_class_native_model() -> None:
 
     assert "id: 'protein_modification_experimental'" in frontend_text
     assert "id: 'protein_local_redesign'" in frontend_text
-    assert "label: 'RFD3 Local Redesign'" in modification_modes_text
+    assert "label: 'RFD3 Native Local Edit'" in modification_modes_text
     assert "ProteinLocalRedesignResultsPane" in results_text
     assert "isProteinLocalRedesignResultJob" in results_text
     assert "id: protein_local_redesign" in model_text

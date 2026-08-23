@@ -1634,7 +1634,9 @@ export function JobSubmission() {
                 </header>
             )}
 
-            <main className="max-w-[104rem] mx-auto space-y-8">
+            <main className={`${selectedTemplateId === 'protein_modification_experimental'
+                ? 'max-w-none'
+                : 'max-w-[104rem]'} mx-auto space-y-8`}>
 
                 {/* 2. Mode Toggle: workflow cards only; the raw model-picker tab stays hidden for now. */}
                 <section>

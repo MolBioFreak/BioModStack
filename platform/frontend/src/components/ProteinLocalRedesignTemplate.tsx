@@ -385,7 +385,7 @@ export function ProteinLocalRedesignTemplate({
     const [error, setError] = useState<string | null>(null);
     const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, seqMethod);
     const workflowSteps = isNativeLocalRedesign
-        ? ['Source Complex', 'Visual Region Pick', 'Native RFD3', 'Optional Sequence Design']
+        ? ['Source Complex', 'Visual Region Pick', 'RFD3 Native Edit', 'Source Sequence Preserved']
         : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Structure Validation'];
 
     useEffect(() => {
@@ -937,7 +937,7 @@ export function ProteinLocalRedesignTemplate({
     };
 
     return (
-        <div className="space-y-6 text-[var(--text-primary)]">
+        <div className="w-full space-y-6 text-[var(--text-primary)]" data-bms-rfd3-layout="wide">
             <div className="space-y-4 rounded-xl border p-5" style={themedPanelStyle}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -949,7 +949,7 @@ export function ProteinLocalRedesignTemplate({
                             Back
                         </button>
                         <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
-                            RFD3 Local Editing
+                            {isNativeLocalRedesign ? 'RFD3 Native Edit' : 'Validated Redesign Pipeline'}
                         </span>
                         <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
                             Experimental Alpha
@@ -968,7 +968,9 @@ export function ProteinLocalRedesignTemplate({
                     </div>
                 </div>
                 <div>
-                    <h1 className="text-3xl font-semibold">Protein Local Redesign</h1>
+                    <h1 className="text-3xl font-semibold">
+                        {isNativeLocalRedesign ? 'RFD3 Native Local Edit' : 'Validated Region Redesign'}
+                    </h1>
                     {isNativeLocalRedesign && (
                         <div className="mt-4 space-y-4 rounded-xl border p-4" style={themedInsetStyle}>
                             <div>
@@ -1088,7 +1090,7 @@ export function ProteinLocalRedesignTemplate({
                     )}
                     {!isNativeLocalRedesign && (
                         <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
-                            Visual region pick → local remodeling → sequence redesign → optional validator.
+                            Visual region pick → RFD3 remodeling → sequence redesign → ESMFold2 and Protenix validation.
                         </p>
                     )}
                     <div className="mt-4 max-w-4xl space-y-3 rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
@@ -1364,8 +1366,8 @@ export function ProteinLocalRedesignTemplate({
                 )}
             </section>
 
-            <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.18fr)_minmax(20rem,0.82fr)]">
-                <div className="space-y-6">
+            <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.55fr)] 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(20rem,0.75fr)]">
+                <div className="space-y-6 2xl:contents">
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -1995,7 +1997,9 @@ export function ProteinLocalRedesignTemplate({
                     className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={themedSelectedStyle('var(--accent-primary)')}
                 >
-                    {submitMutation.isPending ? 'Submitting…' : 'Launch Local Redesign'}
+                    {submitMutation.isPending
+                        ? 'Submitting…'
+                        : isNativeLocalRedesign ? 'Launch RFD3 Native Edit' : 'Launch Validated Region Redesign'}
                 </button>
             </div>
         </div>
