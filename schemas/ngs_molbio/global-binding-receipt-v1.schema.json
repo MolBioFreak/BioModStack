@@ -32,7 +32,7 @@
           "enum": ["2", "3"]
         },
         "domain_kind": {
-          "const": "ngs_molbio"
+          "enum": ["ngs_molbio", "protein_in_silico"]
         },
         "generation": {
           "minimum": 0,
