@@ -1374,11 +1374,19 @@ _DESIGN_ARTIFACT_FIELDS = (
     "frustration_residues", "rfa_design_loops", "rfa_hotspots", "ppiflow_loop_metrics",
     "metric_provenance", "metric_completeness", "pair_chains_iptm", "chains_ptm",
 )
+_DESIGN_ALWAYS_ARTIFACT_FIELDS = frozenset(
+    {
+        "confidence_metrics",
+        "residue_plddt",
+        "rfa_loop_metrics",
+        "rfa_hotspot_metrics",
+    }
+)
 _DESIGN_INLINE_LIMIT = _SCIENTIFIC_JSON_INLINE_LIMIT
 
 
 @event.listens_for(Session, "before_flush")
-def _externalize_large_design_payloads(session, _flush_context, _instances):
+def _externalize_design_payloads(session, _flush_context, _instances):
     import hashlib
     import pyarrow as pa
     from services.scientific_artifacts import artifact_row_reference, install_parquet_rows, artifact_root
@@ -1390,7 +1398,11 @@ def _externalize_large_design_payloads(session, _flush_context, _instances):
     for target in tuple(session.new) + tuple(session.dirty):
         if not isinstance(target, Design):
             continue
+        target_state = inspect(target)
+        is_new = target in session.new
         for field_name in _DESIGN_ARTIFACT_FIELDS:
+            if not is_new and not target_state.attrs[field_name].history.has_changes():
+                continue
             value = getattr(target, field_name, None)
             if value is None or (isinstance(value, dict) and value.get("schema") in {
                 "bms.scientific-artifact-reference.v1",
@@ -1398,7 +1410,10 @@ def _externalize_large_design_payloads(session, _flush_context, _instances):
             }):
                 continue
             encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True)
-            if len(encoded.encode("utf-8")) <= _DESIGN_INLINE_LIMIT:
+            if (
+                field_name not in _DESIGN_ALWAYS_ARTIFACT_FIELDS
+                and len(encoded.encode("utf-8")) <= _DESIGN_INLINE_LIMIT
+            ):
                 continue
             source_sha = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
             row = {"row_index": 0, "design_id": str(target.id), "field_name": field_name, "payload_json": encoded}
@@ -1407,14 +1422,32 @@ def _externalize_large_design_payloads(session, _flush_context, _instances):
                 role="payload", schema_id="bms.design.field.v1", schema_version=1,
                 source_sha256=source_sha, rows=[row], schema=schema,
             )
-            session.add(ScientificArtifactReceipt(
-                artifact_id=artifact.artifact_id, owner_kind=artifact.owner_kind, owner_id=artifact.owner_id,
-                role=artifact.role, schema_id=artifact.schema_id, artifact_schema_version=artifact.schema_version,
-                content_sha256=artifact.content_sha256, size_bytes=artifact.size_bytes, row_count=artifact.row_count,
-                column_schema_sha256=artifact.column_schema_sha256, storage_root="scientific_artifacts",
-                relative_path=artifact.relative_path, media_type=artifact.media_type, availability="available",
-                source_receipts_json={"source_table": "designs", "source_column": field_name, "source_key": str(target.id)},
-            ))
+            existing_receipt = next(
+                (
+                    value
+                    for value in session.new
+                    if isinstance(value, ScientificArtifactReceipt)
+                    and value.artifact_id == artifact.artifact_id
+                ),
+                None,
+            )
+            if existing_receipt is None:
+                existing_receipt = session.get(ScientificArtifactReceipt, artifact.artifact_id)
+            if existing_receipt is None:
+                session.add(ScientificArtifactReceipt(
+                    artifact_id=artifact.artifact_id, owner_kind=artifact.owner_kind, owner_id=artifact.owner_id,
+                    role=artifact.role, schema_id=artifact.schema_id, artifact_schema_version=artifact.schema_version,
+                    content_sha256=artifact.content_sha256, size_bytes=artifact.size_bytes, row_count=artifact.row_count,
+                    column_schema_sha256=artifact.column_schema_sha256, storage_root="scientific_artifacts",
+                    relative_path=artifact.relative_path, media_type=artifact.media_type, availability="available",
+                    source_receipts_json={"source_table": "designs", "source_column": field_name, "source_key": str(target.id)},
+                ))
+            elif (
+                existing_receipt.content_sha256 != artifact.content_sha256
+                or existing_receipt.size_bytes != artifact.size_bytes
+                or existing_receipt.relative_path != artifact.relative_path
+            ):
+                raise ValueError("design scientific artifact receipt conflict")
             setattr(target, field_name, artifact_row_reference(artifact.reference(), 0, value_field="payload_json"))
 
 class ScientificPayloadMigration(Base):

@@ -8,7 +8,10 @@ import sqlite3
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
+from database import Base, Design
 from migrations.add_scientific_artifact_receipts import migrate
 import scripts.migrate_json_payloads_to_artifacts as migration
 from services.scientific_artifacts import (
@@ -24,6 +27,78 @@ from services.scientific_artifacts import (
     verify_artifact,
 )
 from services.scientific_artifacts.writer import ScientificArtifactError
+
+
+def test_small_design_scientific_array_is_externalized_before_flush(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
+    engine = create_engine(f"sqlite:///{tmp_path / 'design.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(
+            Design(
+                id="design-small-dense",
+                job_id="job-small-dense",
+                name="small dense",
+                pdb_path="small.pdb",
+                residue_plddt=[0.5],
+            )
+        )
+        session.commit()
+    with engine.connect() as connection:
+        raw = connection.execute(
+            text("SELECT residue_plddt FROM designs WHERE id = :id"),
+            {"id": "design-small-dense"},
+        ).scalar_one()
+        receipts = connection.execute(
+            text(
+                "SELECT owner_kind, owner_id, role, row_count "
+                "FROM scientific_artifact_receipts"
+            )
+        ).all()
+    reference = json.loads(raw)
+    assert reference["schema"] == "bms.scientific-artifact-row-reference.v1"
+    assert receipts == [
+        (
+            "design_field",
+            "design-small-dense:residue_plddt",
+            "payload",
+            1,
+        )
+    ]
+
+
+def test_unrelated_design_update_keeps_existing_dense_artifact_receipt(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
+    engine = create_engine(f"sqlite:///{tmp_path / 'design-update.db'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add(
+            Design(
+                id="design-update",
+                job_id="job-update",
+                name="before",
+                pdb_path="update.pdb",
+                residue_plddt=[0.5],
+            )
+        )
+        session.commit()
+        design = session.get(Design, "design-update")
+        assert design is not None
+        design.name = "after"
+        session.commit()
+    with engine.connect() as connection:
+        receipt_count = connection.execute(
+            text(
+                "SELECT COUNT(*) FROM scientific_artifact_receipts "
+                "WHERE owner_kind = 'design_field' AND owner_id = "
+                "'design-update:residue_plddt'"
+            )
+        ).scalar_one()
+    assert receipt_count == 1
 
 
 def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):
