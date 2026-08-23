@@ -1,5 +1,5 @@
 {
-  "content_sha256": "c513030e75be302a1ea7e9804a64686f6c992bdfb04603d58ddf4bdb38961690",
+  "content_sha256": "de2cb0763bc3088bb8880d7cdabaaf072963c44a59eaf036d297c6e467016184",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -105,6 +105,7 @@
     "platform/frontend/src/pages/ProjectManager.tsx",
     "platform/frontend/vite.config.ts",
     "schemas/ngs_molbio/binding-status-v1.schema.json",
+    "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
     "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
     "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
     "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
