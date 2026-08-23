@@ -44,6 +44,7 @@ from paths import get_allowed_roots, get_results_dir
 from services import ngs_alignment_sessions
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+MAX_EXTERNAL_MOVE_SOURCE_ATTEMPTS = 3
 OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 CONTIG = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
 LEASE_SECONDS = 300
@@ -1340,6 +1341,8 @@ async def _validated_failed_external_move_source(
     predecessor = await session.get(OntMoveTableSource, predecessor_move_source_id)
     if predecessor is None:
         raise KeyError("move source not found")
+    if predecessor.attempt_number >= MAX_EXTERNAL_MOVE_SOURCE_ATTEMPTS:
+        raise OntSignalError("fresh move-source attempt limit reached")
     if (
         predecessor.validation_state != "failed"
         or (

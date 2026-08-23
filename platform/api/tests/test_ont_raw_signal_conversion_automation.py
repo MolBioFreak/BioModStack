@@ -989,6 +989,7 @@ async def test_waveform_runtime_timeout_terminates_and_reaps_child(
     class Child:
         returncode: int | None = None
         terminated = False
+        killed = False
         waited = False
 
         async def communicate(self):
@@ -997,10 +998,15 @@ async def test_waveform_runtime_timeout_terminates_and_reaps_child(
 
         def terminate(self):
             self.terminated = True
-            self.returncode = -15
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
 
         async def wait(self):
             self.waited = True
+            if not self.killed:
+                await asyncio.Event().wait()
             return self.returncode
 
     child = Child()
@@ -1020,6 +1026,12 @@ async def test_waveform_runtime_timeout_terminates_and_reaps_child(
         0.01,
         raising=False,
     )
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS",
+        0.01,
+        raising=False,
+    )
     worker = OntRawSignalWorker(lambda: None)
 
     with pytest.raises(RuntimeError, match="waveform runtime exceeded"):
@@ -1030,6 +1042,7 @@ async def test_waveform_runtime_timeout_terminates_and_reaps_child(
 
     assert started.is_set()
     assert child.terminated is True
+    assert child.killed is True
     assert child.waited is True
     assert worker._child is None
 
@@ -1417,6 +1430,14 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
         "assert_local_raw_runtime_image",
         lambda runtime, image: admitted.append((runtime, image)),
     )
+    lease_calls: list[tuple[int, int, int]] = []
+    monkeypatch.setattr(
+        ont_raw_signal.fcntl,
+        "fcntl",
+        lambda descriptor, operation, value: lease_calls.append(
+            (descriptor, operation, value)
+        ) or 0,
+    )
 
     claimed = await ont_raw_signal.claim_next_waveform_lookup(session)
     assert claimed is not None
@@ -1431,8 +1452,50 @@ async def test_waveform_claim_uses_checked_in_runtime_identity(
     assert not any("/input/" in value for value in command)
     assert source["fd_socket"].endswith("/source-fd.sock")
     assert len(source["source_fds"]) == 4
+    assert lease_calls == [
+        (
+            source["source_fds"][1],
+            ont_raw_signal.fcntl.F_SETLEASE,
+            ont_raw_signal.fcntl.F_RDLCK,
+        ),
+        (
+            source["source_fds"][3],
+            ont_raw_signal.fcntl.F_SETLEASE,
+            ont_raw_signal.fcntl.F_RDLCK,
+        ),
+    ]
+    assert _lookup.receipt["runtime_identity"] == {
+        "image_digest": policy_digest,
+        "runtime_policy_sha256": "c" * 64,
+    }
     for descriptor in source["source_fds"]:
         os.close(descriptor)
+
+
+def test_waveform_terminal_receipt_retains_admitted_runtime_identity() -> None:
+    runtime_identity = {
+        "image_digest": "a" * 64,
+        "runtime_policy_sha256": "b" * 64,
+    }
+    receipt = ont_raw_signal._waveform_terminal_receipt(
+        {
+            "schema": "bms.ont.waveform-output-authority.v1",
+            "output_identity": {"device": 1},
+            "runtime_identity": runtime_identity,
+        },
+        {"argv_sha256": "c" * 64, "returncode": 0},
+        {
+            "schema": "bms.ont.raw-waveform.v1",
+            "read_id": "read-1",
+            "sample_count": 4,
+            "returned_sample_count": 2,
+            "stride": 2,
+        },
+        {"blow5": {}, "index": {}},
+        {"sha256": "d" * 64},
+    )
+
+    assert receipt["runtime_identity"] == runtime_identity
 
 
 def test_waveform_output_descriptor_rejects_rewrite_during_read(
@@ -1511,6 +1574,56 @@ def test_waveform_receipt_contract_binds_read_schema_and_counts() -> None:
         payload = {**valid, **mutation}
         with pytest.raises(ValueError, match="waveform receipt"):
             ont_raw_signal._validate_waveform_payload(payload, "read-1")
+
+
+def test_terminal_waveform_lookup_migration_blocks_update_and_delete(
+    tmp_path: Path,
+) -> None:
+    from migrations import runner as migration_runner
+
+    migration = next(
+        (
+            item
+            for item in migration_runner.MIGRATIONS
+            if item.name == "seal_ont_raw_signal_lookup_terminal_immutability"
+        ),
+        None,
+    )
+    assert migration is not None, "terminal waveform lookup migration is not registered"
+    assert migration.version == 39
+    database_path = tmp_path / "waveform-terminal.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE ont_raw_signal_lookups (id TEXT PRIMARY KEY, state TEXT NOT NULL, reason_code TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO ont_raw_signal_lookups VALUES (?, ?, ?)",
+            [
+                ("lookup-ready", "ready", "ready"),
+                ("lookup-failed", "failed", "failed"),
+                ("lookup-running", "running", "running"),
+            ],
+        )
+        connection.commit()
+
+    migration.fn(str(database_path))
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE ont_raw_signal_lookups SET state='ready' WHERE id='lookup-running'"
+        )
+        connection.commit()
+        for lookup_id in ("lookup-ready", "lookup-failed", "lookup-running"):
+            with pytest.raises(sqlite3.IntegrityError, match="terminal.*immutable"):
+                connection.execute(
+                    "UPDATE ont_raw_signal_lookups SET reason_code='changed' WHERE id=?",
+                    (lookup_id,),
+                )
+            with pytest.raises(sqlite3.IntegrityError, match="terminal.*immutable"):
+                connection.execute(
+                    "DELETE FROM ont_raw_signal_lookups WHERE id=?",
+                    (lookup_id,),
+                )
 
 
 def test_publication_artifact_ids_are_deterministic() -> None:

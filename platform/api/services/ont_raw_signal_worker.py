@@ -45,6 +45,7 @@ from services.ont_raw_signal import (
 
 logger = logging.getLogger(__name__)
 RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS = 120.0
+RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS = 5.0
 
 
 class OntRawSignalWorker:
@@ -57,6 +58,22 @@ class OntRawSignalWorker:
         self._monitor_task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._child: asyncio.subprocess.Process | None = None
+
+    async def _terminate_child(self) -> None:
+        child = self._child
+        if child is None or child.returncode is not None:
+            return
+        child.terminate()
+        try:
+            await asyncio.wait_for(
+                child.wait(), timeout=RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS
+            )
+        except asyncio.TimeoutError:
+            if child.returncode is None:
+                child.kill()
+            await asyncio.wait_for(
+                child.wait(), timeout=RAW_SIGNAL_CHILD_TERMINATE_GRACE_SECONDS
+            )
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -83,10 +100,7 @@ class OntRawSignalWorker:
                 await running_task
             except asyncio.CancelledError:
                 pass
-        child = self._child
-        if child is not None and child.returncode is None:
-            child.terminate()
-            await child.wait()
+        await self._terminate_child()
         self._child = None
 
     async def _reconcile_live_runs_once(self) -> int:
@@ -235,15 +249,11 @@ class OntRawSignalWorker:
                             else await derivation_spawn_admission_lost(session, job_id, claim_token)
                         )
                 except BaseException:
-                    if self._child.returncode is None:
-                        self._child.terminate()
-                        await self._child.wait()
+                    await self._terminate_child()
                     self._child = None
                     raise
             if admission_lost:
-                if self._child.returncode is None:
-                    self._child.terminate()
-                    await self._child.wait()
+                await self._terminate_child()
                 self._child = None
                 raise RuntimeError("raw-signal claim was cancelled or lost before stage execution")
             communication = asyncio.create_task(self._child.communicate())
@@ -258,16 +268,12 @@ class OntRawSignalWorker:
                     )
                 except asyncio.TimeoutError:
                     if source_fds and source_lease_break_requested():
-                        if self._child.returncode is None:
-                            self._child.terminate()
-                            await self._child.wait()
+                        await self._terminate_child()
                         communication.cancel()
                         raise RuntimeError("raw-signal source write lease break was requested")
                     now = loop.time()
                     if waveform and now - started_at >= RAW_SIGNAL_WAVEFORM_RUNTIME_TIMEOUT_SECONDS:
-                        if self._child.returncode is None:
-                            self._child.terminate()
-                            await self._child.wait()
+                        await self._terminate_child()
                         communication.cancel()
                         try:
                             await communication
@@ -285,18 +291,13 @@ class OntRawSignalWorker:
                                 await renew_derivation_lease(session, job_id, claim_token)
                         last_renewal = now
                     except Exception:
-                        if self._child is not None and self._child.returncode is None:
-                            self._child.terminate()
-                            await self._child.wait()
+                        await self._terminate_child()
                         communication.cancel()
                         self._child = None
                         raise
             stdout, stderr = await communication
         except asyncio.CancelledError:
-            child = self._child
-            if child is not None and child.returncode is None:
-                child.terminate()
-                await child.wait()
+            await self._terminate_child()
             if communication is not None and not communication.done():
                 communication.cancel()
                 try:

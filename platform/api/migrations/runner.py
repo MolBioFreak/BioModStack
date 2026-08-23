@@ -70,6 +70,9 @@ from migrations.add_frustrampnn_landscape_index_slimming import migrate as migra
 from migrations.retire_scientific_landscape_projections import migrate as migrate_retire_scientific_landscape_projections
 from migrations.seal_ont_move_source_terminal_immutability import migrate as seal_ont_move_source_terminal_immutability
 from migrations.seal_ont_external_move_bam_receipt_binding import migrate as seal_ont_external_move_bam_receipt_binding
+from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+    migrate as seal_ont_raw_signal_lookup_terminal_immutability,
+)
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -128,6 +131,7 @@ MIGRATIONS: List[Migration] = [
     Migration(37, "retire_scientific_landscape_projections", migrate_retire_scientific_landscape_projections),
     Migration(38, "seal_ont_move_source_terminal_immutability", seal_ont_move_source_terminal_immutability),
     Migration(39, "seal_ont_external_move_bam_receipt_binding", seal_ont_external_move_bam_receipt_binding),
+    Migration(40, "seal_ont_raw_signal_lookup_terminal_immutability", seal_ont_raw_signal_lookup_terminal_immutability),
 ]
 
 

@@ -48,6 +48,9 @@ from migrations.add_ont_external_move_bam_receipts import migrate as migrate_ext
 from migrations.add_ont_move_source_attempt_lineage import migrate as migrate_move_source_lineage
 from migrations.seal_ont_move_source_terminal_immutability import migrate as migrate_terminal_move_source_immutability
 from migrations.seal_ont_external_move_bam_receipt_binding import migrate as migrate_external_receipt_binding
+from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+    migrate as migrate_lookup_terminal_immutability,
+)
 from migrations import runner as migration_runner
 from molbio_ngs_models import (
     MolBioNGSDomainState,
@@ -166,6 +169,7 @@ def _materialize_exact_ont_migration_chain(db_path: Path) -> None:
     migrate_external_move_bam(str(db_path))
     migrate_move_source_lineage(str(db_path))
     migrate_terminal_move_source_immutability(str(db_path))
+    migrate_lookup_terminal_immutability(str(db_path))
 
 
 def test_migration_registers_closed_tables_checks_foreign_keys_and_is_idempotent(
@@ -647,8 +651,9 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
     next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     migrate_terminal_move_source_immutability(str(db_path))
     migrate_external_receipt_binding(str(db_path))
+    migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38):
+        for version in (37, 38, 39):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -713,8 +718,9 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
     _materialize_exact_ont_migration_chain(db_path)
     next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
     migrate_external_receipt_binding(str(db_path))
+    migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38):
+        for version in (37, 38, 39):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -1519,6 +1525,93 @@ async def test_fresh_external_move_source_attempt_is_atomic_and_registration_rep
     assert registration_replay.json()["attempt_number"] == 1
     assert registration_replay.json()["predecessor_move_source_id"] is None
     assert rejected_field.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_fresh_external_move_source_attempt_rejects_attempt_four(
+    workbench_store: WorkbenchStore,
+) -> None:
+    original_id = "ont-moves-external-attempt-1-failed"
+    await _seed_failed_external_move_source(
+        workbench_store.factory,
+        source_id=original_id,
+    )
+    app = _api(workbench_store.factory)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        attempt_two = await client.post(
+            f"/api/ont/signal-workbench/move-sources/{original_id}/fresh-attempt",
+            json={},
+        )
+    assert attempt_two.status_code == 202
+    attempt_two_id = attempt_two.json()["move_source_id"]
+    async with workbench_store.factory() as session:
+        await session.execute(
+            text(
+                "UPDATE ont_move_table_sources SET validation_state='failed', "
+                "reason_code='test_failed', validated_at=:validated_at "
+                "WHERE id=:id"
+            ),
+            {"id": attempt_two_id, "validated_at": datetime.utcnow()},
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        attempt_three = await client.post(
+            f"/api/ont/signal-workbench/move-sources/{attempt_two_id}/fresh-attempt",
+            json={},
+        )
+    assert attempt_three.status_code == 202
+    predecessor_id = attempt_three.json()["move_source_id"]
+    async with workbench_store.factory() as session:
+        await session.execute(
+            text(
+                "UPDATE ont_move_table_sources SET validation_state='failed', "
+                "reason_code='test_failed', validated_at=:validated_at "
+                "WHERE id=:id"
+            ),
+            {"id": predecessor_id, "validated_at": datetime.utcnow()},
+        )
+        await session.commit()
+        before = tuple(
+            (
+                await session.execute(
+                    text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+                    {"id": predecessor_id},
+                )
+            ).one()
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/ont/signal-workbench/move-sources/{predecessor_id}/fresh-attempt",
+            json={},
+        )
+
+    assert response.status_code == 409
+    async with workbench_store.factory() as session:
+        after = tuple(
+            (
+                await session.execute(
+                    text("SELECT * FROM ont_move_table_sources WHERE id=:id"),
+                    {"id": predecessor_id},
+                )
+            ).one()
+        )
+        assert after == before
+        assert await session.scalar(
+            select(func.count())
+            .select_from(OntMoveTableSource)
+            .where(OntMoveTableSource.predecessor_move_source_id == predecessor_id)
+        ) == 0
 
 
 @pytest.mark.asyncio

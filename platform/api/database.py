@@ -2620,6 +2620,31 @@ def _attest_sqlite_migration_38(db_path: str) -> None:
             raise RuntimeError("migration 38 startup attestation failed") from exc
 
 
+def _attest_sqlite_migration_39(db_path: str) -> None:
+    """Prove migration 39 ledger identity and terminal lookup triggers."""
+    from migrations import runner as migration_runner
+    from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+        assert_attested,
+    )
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 39)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=39"
+        ).fetchone()
+        if ledger != (
+            "seal_ont_raw_signal_lookup_terminal_immutability",
+            expected_checksum,
+        ):
+            raise RuntimeError("migration 39 startup attestation failed")
+        try:
+            assert_attested(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 39 startup attestation failed") from exc
+
+
 async def init_db():
     """Require an already migrated authoritative core database before startup."""
     if engine.dialect.name == "sqlite":
@@ -2642,6 +2667,7 @@ async def init_db():
         await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_37, str(db_path))
         await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_39, str(db_path))
 
 
 async def _ensure_schema(conn):
