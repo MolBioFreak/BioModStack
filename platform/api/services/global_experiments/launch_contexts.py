@@ -534,7 +534,9 @@ async def validate_bound_job_request(
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
     expected_adapter = str(payload.get("adapter_id") or "")
     raw_expected_params = scheduler.get("params")
-    expected_params: dict[str, Any] = raw_expected_params if isinstance(raw_expected_params, dict) else {}
+    expected_params: dict[str, Any] = dict(raw_expected_params) if isinstance(raw_expected_params, dict) else {}
+    if expected_adapter:
+        expected_params.setdefault("workflow_adapter", expected_adapter)
     if scheduler.get("model_id") != model_id or scheduler.get("mode") != mode:
         raise LaunchContextError(
             "launch_context_workflow_mismatch",
