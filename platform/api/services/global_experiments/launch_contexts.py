@@ -899,6 +899,30 @@ async def resolve_launch_context_for_display(
     return context
 
 
+def _resource_authority_matches_reserved(
+    expected_authoritative_params: dict[str, Any],
+    actual_authoritative_params: dict[str, Any],
+) -> bool:
+    """Accept only the governed prepared-v1 to assigned-v2 extension."""
+    from services.resource_usage_evidence import (
+        GLOBAL_DISPATCH_AUTHORITY_PARAM,
+        ResourceUsageEvidenceError,
+        attach_dispatch_materialization_authority,
+    )
+
+    actual_dispatch = actual_authoritative_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+    if not isinstance(actual_dispatch, dict):
+        return False
+    try:
+        expected_with_observed_dispatch = attach_dispatch_materialization_authority(
+            expected_authoritative_params,
+            actual_dispatch,
+        )
+    except ResourceUsageEvidenceError:
+        return False
+    return expected_with_observed_dispatch == actual_authoritative_params
+
+
 async def validate_bound_job(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -944,7 +968,10 @@ async def validate_bound_job(
         )
         actual_authoritative_params = strip_execution_metadata(job_params)
         actual_authoritative_params.pop(RESOURCE_USAGE_RECEIPTS_PARAM, None)
-        resource_authority_matches = actual_authoritative_params == expected_authoritative_params
+        resource_authority_matches = _resource_authority_matches_reserved(
+            expected_authoritative_params,
+            actual_authoritative_params,
+        )
     except (LaunchContextError, ResourceUsageEvidenceError):
         resource_authority_matches = False
     if not resource_authority_matches:

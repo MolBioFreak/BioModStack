@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any, Literal
 from pathlib import Path
 import uuid
@@ -52,6 +53,7 @@ from services.execution_ownership import (
     EXECUTION_ATTEMPT_TERMINAL_STATES,
     LaneIdentityError,
     LaneMismatchError,
+    UnitNotFoundError,
     adapter_identity_from_environment,
     append_execution_attempt,
     acquire_workflow_claim_lock,
@@ -72,7 +74,9 @@ from services.execution_ownership import (
     wait_for_unit_invocation,
     workflow_nvidia_device_allow_paths,
     build_systemd_run_command,
+    cancellation_intent_requested,
     create_systemd_workflow_unit,
+    release_scheduler_gpu_assignment,
     TRANSIENT_WORKFLOW_OWNER_NONCE_ENV,
     TRANSIENT_WORKFLOW_UNIT_ENV,
     TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
@@ -81,6 +85,8 @@ from services.resource_usage_evidence import (
     GLOBAL_DISPATCH_AUTHORITY_PARAM,
     GLOBAL_RESOURCE_ADMISSION_PARAM,
     ResourceUsageEvidenceError,
+    attach_pre_spawn_nonexecution_receipt,
+    dispatch_gpu_authority,
     validate_dispatch_materialization_authority,
     validate_resource_admission_handoff,
 )
@@ -187,39 +193,46 @@ def _bind_scheduler_gpu_assignment(
     return updated
 
 
-def _validate_resource_gpu_authority(job: Any, handoff: dict[str, Any]) -> None:
-    admitted_gpu = handoff["gpu_index"]
-    admitted_uuid = handoff["gpu_uuid"]
-    for field in ("pinned_gpu", "assigned_gpu"):
-        raw_value = getattr(job, field, None)
-        if raw_value is None:
-            if field == "assigned_gpu" and admitted_gpu is not None:
-                raise HTTPException(status_code=409, detail="admitted GPU has no scheduler assignment")
-            continue
-        if (
-            admitted_gpu is None
-            or _parse_gpu_authority(raw_value, field=f"Job.{field}") != admitted_gpu
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Job.{field} differs from resource admission",
-            )
-    if admitted_gpu is None:
+def _validate_resource_gpu_authority(
+    job: Any,
+    handoff: dict[str, Any],
+    dispatch_authority: dict[str, Any],
+    *,
+    inventory: dict[int, dict[str, Any]] | None = None,
+) -> None:
+    dispatch_gpu, dispatch_uuid = dispatch_gpu_authority(
+        dispatch_authority,
+        handoff=handoff,
+    )
+    assigned_gpu = getattr(job, "assigned_gpu", None)
+    if assigned_gpu is None:
+        if dispatch_gpu is not None:
+            raise HTTPException(status_code=409, detail="dispatch GPU has no scheduler assignment")
         return
+    assigned_gpu = _parse_gpu_authority(assigned_gpu, field="Job.assigned_gpu")
+    if dispatch_gpu != assigned_gpu:
+        raise HTTPException(
+            status_code=409,
+            detail="scheduler GPU assignment differs from dispatch authority",
+        )
+    pinned_gpu = getattr(job, "pinned_gpu", None)
+    if pinned_gpu is not None and _parse_gpu_authority(pinned_gpu, field="Job.pinned_gpu") != assigned_gpu:
+        raise HTTPException(status_code=409, detail="Job.pinned_gpu differs from scheduler assignment")
     try:
-        from routers.gpu import _query_smi_gpu_map
+        if inventory is None:
+            from routers.gpu import _query_smi_gpu_map
 
-        inventory = _query_smi_gpu_map()
-        match = inventory.get(admitted_gpu)
+            inventory = _query_smi_gpu_map()
+        match = inventory.get(assigned_gpu)
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="live admitted GPU authority is unavailable",
+            detail="live scheduler GPU authority is unavailable",
         ) from exc
-    if not isinstance(match, dict) or str(match.get("uuid") or "") != admitted_uuid:
+    if not isinstance(match, dict) or str(match.get("uuid") or "") != dispatch_uuid:
         raise HTTPException(
             status_code=409,
-            detail="live GPU index/UUID differs from resource admission",
+            detail="live GPU index/UUID differs from dispatch authority",
         )
 
 
@@ -424,6 +437,7 @@ def _runner_environment(
     unit_name: str,
     owner_nonce: str,
     resource_handoff: dict[str, Any] | None,
+    dispatch_authority: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Pass the lane authority into systemd without passing request authority."""
     runtime_mode = DEV_RUNTIME_MODE if identity.lane == "development" else CONTAINER_RUNTIME_MODE
@@ -451,7 +465,12 @@ def _runner_environment(
         }
     )
     if resource_handoff is not None:
-        gpu_index = resource_handoff["gpu_index"]
+        if dispatch_authority is None:
+            raise ResourceUsageEvidenceError("resource dispatch authority is required")
+        gpu_index, _gpu_uuid = dispatch_gpu_authority(
+            dispatch_authority,
+            handoff=resource_handoff,
+        )
         environment["CUDA_VISIBLE_DEVICES"] = "" if gpu_index is None else str(gpu_index)
     return environment
 
@@ -559,6 +578,146 @@ async def _publish_owner_conflict(
     job.completed_at = None
 
 
+def _apply_planned_unit_creation_rejection(
+    job: Any,
+    *,
+    lane: str,
+    generation: int,
+    attempt: int,
+    unit_name: str,
+    owner_nonce: str,
+    reason: str,
+    verified_at: str,
+) -> bool:
+    if (
+        cancellation_intent_requested(job)
+        or str(getattr(job, "status", "") or "").strip().lower() in TERMINAL_JOB_STATUSES
+        or str(getattr(job, "nextflow_run_id", "") or "") != unit_name
+    ):
+        return False
+    params = params_mapping(getattr(job, "params", {}))
+    receipt = latest_execution_attempt(params)
+    if receipt is None:
+        return False
+    try:
+        receipt_lane, receipt_generation, receipt_attempt, receipt_unit, receipt_nonce = (
+            _attempt_identity(receipt)
+        )
+    except ExecutionOwnershipError:
+        return False
+    if (
+        receipt_lane != lane
+        or receipt_generation != generation
+        or receipt_attempt != attempt
+        or receipt_unit != unit_name
+        or receipt_nonce != owner_nonce
+        or str(receipt.get("state", "")).strip().lower() != "planned"
+        or str(receipt.get("invocation_id") or "")
+    ):
+        return False
+
+    params = update_execution_attempt(
+        params,
+        lane=lane,
+        generation=generation,
+        attempt=attempt,
+        unit=unit_name,
+        owner_nonce=owner_nonce,
+        changes={
+            "state": "launch_rejected_before_spawn",
+            "terminal_at": verified_at,
+            "terminal_reason": str(reason)[:2000],
+            "unit_absence": {
+                "state": "not-found",
+                "source": "systemd",
+                "verified_at": verified_at,
+            },
+        },
+    )
+    terminal_receipt = latest_execution_attempt(params)
+    if terminal_receipt is None:
+        return False
+    has_admission = GLOBAL_RESOURCE_ADMISSION_PARAM in params
+    has_dispatch = GLOBAL_DISPATCH_AUTHORITY_PARAM in params
+    if has_admission != has_dispatch:
+        return False
+    completed_at = datetime.utcnow()
+    error_message = f"Workflow unit creation rejected before spawn: {str(reason)[:1800]}"
+    candidate = SimpleNamespace(
+        id=str(job.id),
+        status="failed",
+        nextflow_run_id=None,
+        params=params,
+        error_message=error_message,
+    )
+    if has_admission:
+        try:
+            candidate.params = attach_pre_spawn_nonexecution_receipt(
+                candidate,
+                finished_at=completed_at.isoformat(timespec="microseconds") + "Z",
+                planning_receipt=terminal_receipt,
+            )
+        except ResourceUsageEvidenceError:
+            logger.exception(
+                "Could not publish planned nonexecution evidence for %s",
+                job.id,
+            )
+            return False
+    job.params = release_scheduler_gpu_assignment(candidate.params)
+    job.nextflow_run_id = None
+    job.status = "failed"
+    job.queue_status = "failed"
+    job.error_message = error_message
+    job.completed_at = completed_at
+    job.assigned_gpu = None
+    return True
+
+
+async def _publish_planned_unit_creation_rejection(
+    *,
+    job_id: str,
+    lane: str,
+    generation: int,
+    attempt: int,
+    unit_name: str,
+    owner_nonce: str,
+    reason: str,
+) -> bool:
+    """Terminalize one planned marker after exact systemd unit absence proof."""
+
+    async with database.async_session() as session:
+        await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
+        try:
+            await asyncio.to_thread(show_unit_properties, unit_name, lane)
+        except UnitNotFoundError:
+            verified_at = utc_timestamp()
+        except ExecutionOwnershipError:
+            await session.rollback()
+            return False
+        else:
+            await session.rollback()
+            return False
+
+        result = await session.execute(
+            sqlalchemy.select(database.Job).where(database.Job.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        if job is None or not _apply_planned_unit_creation_rejection(
+            job,
+            lane=lane,
+            generation=generation,
+            attempt=attempt,
+            unit_name=unit_name,
+            owner_nonce=owner_nonce,
+            reason=reason,
+            verified_at=verified_at,
+        ):
+            await session.rollback()
+            return False
+        await session.commit()
+        return True
+
+
 async def reconcile_workflow_adapter_startup() -> dict[str, int]:
     """Reconcile only this adapter lane; never relaunch stale ownership."""
     identity = _require_adapter_identity()
@@ -570,6 +729,8 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
         for job in jobs:
             if str(getattr(job, "status", "")).lower() in TERMINAL_JOB_STATUSES:
                 continue
+            if cancellation_intent_requested(job):
+                continue
             receipt = latest_execution_attempt(getattr(job, "params", {}))
             if receipt is None or str(receipt.get("lane", "")) != identity.lane:
                 continue
@@ -580,6 +741,30 @@ async def reconcile_workflow_adapter_startup() -> dict[str, int]:
             try:
                 properties = await asyncio.to_thread(show_unit_properties, unit_name, identity.lane)
             except ExecutionOwnershipError as exc:
+                if (
+                    isinstance(exc, UnitNotFoundError)
+                    and str(receipt.get("state", "")).strip().lower() == "planned"
+                    and not str(receipt.get("invocation_id") or "")
+                ):
+                    try:
+                        lane, generation, attempt, receipt_unit, owner_nonce = _attempt_identity(
+                            receipt
+                        )
+                    except ExecutionOwnershipError:
+                        pass
+                    else:
+                        if _apply_planned_unit_creation_rejection(
+                            job,
+                            lane=lane,
+                            generation=generation,
+                            attempt=attempt,
+                            unit_name=receipt_unit,
+                            owner_nonce=owner_nonce,
+                            reason=str(exc),
+                            verified_at=utc_timestamp(),
+                        ):
+                            counts["interrupted"] += 1
+                            continue
                 logger.critical(
                     "Workflow owner missing for nonterminal job %s: %s",
                     job.id,
@@ -768,6 +953,8 @@ async def workflow_adapter_launch(
     generation: int | None = None
     attempt: int | None = None
     resource_handoff: dict[str, Any] | None = None
+    dispatch_authority: dict[str, Any] | None = None
+    dispatch_gpu_index: int | None = None
     allowed_physical_devices: tuple[str, ...] | None = None
 
     # The deterministic systemd unit is the execution claim.  The lane/job
@@ -811,6 +998,11 @@ async def workflow_adapter_launch(
                     status_code=409,
                     detail=f"Job {payload.job_id} is already terminal with status {status}",
                 )
+            if cancellation_intent_requested(job):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Job {payload.job_id} has authoritative cancellation intent",
+                )
 
             params = _bind_scheduler_gpu_assignment(
                 job,
@@ -827,29 +1019,39 @@ async def workflow_adapter_launch(
                         "resource admission and dispatch authority must be paired"
                     )
                 if resource_handoff is not None:
-                    validate_dispatch_materialization_authority(
+                    dispatch_authority = validate_dispatch_materialization_authority(
                         raw_dispatch_authority,
                         expected_handoff=resource_handoff,
                     )
+                    if resource_handoff["canonical_job_id"] != str(job.id):
+                        raise ResourceUsageEvidenceError(
+                            "resource admission handoff binds another canonical Job"
+                        )
+                    dispatch_gpu_index, _dispatch_gpu_uuid = dispatch_gpu_authority(
+                        dispatch_authority,
+                        handoff=resource_handoff,
+                    )
+            except HTTPException:
+                raise
             except ResourceUsageEvidenceError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="live scheduler GPU authority is unavailable",
+                ) from exc
             if resource_handoff is not None:
-                if resource_handoff["canonical_job_id"] != str(job.id):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="resource admission handoff binds another canonical Job",
-                    )
-                assigned_gpu = getattr(job, "assigned_gpu", None)
-                admitted_gpu = resource_handoff["gpu_index"]
-                if assigned_gpu != admitted_gpu:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="scheduler GPU assignment differs from source resource admission",
-                    )
-                _validate_resource_gpu_authority(job, resource_handoff)
-                if admitted_gpu is not None:
+                assert dispatch_authority is not None
+                _validate_resource_gpu_authority(
+                    job,
+                    resource_handoff,
+                    dispatch_authority,
+                )
+                if dispatch_gpu_index is not None:
                     try:
-                        allowed_physical_devices = workflow_nvidia_device_allow_paths(admitted_gpu)
+                        allowed_physical_devices = workflow_nvidia_device_allow_paths(
+                            dispatch_gpu_index
+                        )
                     except ExecutionOwnershipError as exc:
                         raise HTTPException(status_code=503, detail=str(exc)) from exc
             latest = latest_execution_attempt(params)
@@ -962,46 +1164,16 @@ async def workflow_adapter_launch(
                 unit_name=unit_name,
                 owner_nonce=owner_nonce,
                 resource_handoff=resource_handoff,
+                dispatch_authority=dispatch_authority,
             ),
             working_directory=API_ROOT,
             cpu_threads=(resource_handoff["cpu_threads"] if resource_handoff else None),
             memory_max_bytes=(resource_handoff["dram_bytes"] if resource_handoff else None),
             deny_physical_devices=(
-                resource_handoff is not None and resource_handoff["gpu_index"] is None
+                resource_handoff is not None and dispatch_gpu_index is None
             ),
             allowed_physical_devices=allowed_physical_devices,
         )
-        try:
-            accepted_unit = await asyncio.to_thread(
-                create_systemd_workflow_unit,
-                command,
-            )
-            if accepted_unit != unit_name:
-                raise ExecutionOwnershipError(
-                    f"systemd accepted unexpected workflow unit {accepted_unit!r}; expected {unit_name!r}"
-                )
-            properties = await asyncio.to_thread(
-                wait_for_unit_invocation,
-                unit_name,
-                identity.lane,
-            )
-        except DuplicateUnitError as exc:
-            logger.critical(
-                "Deterministic workflow unit claim collided without a reusable receipt: %s",
-                exc,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail="Deterministic workflow unit already exists; launch was rejected",
-            ) from exc
-        except ExecutionOwnershipError as exc:
-            logger.exception("Workflow unit claim failed after receipt planning for %s", payload.job_id)
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-        invocation_id = str(properties.invocation_id or "")
-        if not invocation_id:
-            raise HTTPException(status_code=503, detail="systemd accepted the unit without an InvocationID")
-
         async with database.async_session() as session:
             await session.execute(sqlalchemy.text("BEGIN IMMEDIATE"))
             result = await session.execute(
@@ -1010,37 +1182,127 @@ async def workflow_adapter_launch(
             job = result.scalar_one_or_none()
             if job is None:
                 raise HTTPException(status_code=404, detail=f"Job {payload.job_id} disappeared during launch")
+            if (
+                str(getattr(job, "status", "") or "").strip().lower() in TERMINAL_JOB_STATUSES
+                or cancellation_intent_requested(job)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Workflow launch lost to authoritative cancellation",
+                )
             current_params = params_mapping(getattr(job, "params", {}))
             current_receipt = latest_execution_attempt(current_params)
-            current_state = str((current_receipt or {}).get("state", "")).strip().lower()
-            current_invocation_id = str((current_receipt or {}).get("invocation_id", ""))
-            if current_state == "started" or current_state in EXECUTION_ATTEMPT_TERMINAL_STATES:
-                if current_invocation_id != invocation_id:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Workflow receipt has a different InvocationID",
-                    )
-            else:
-                current_params = update_execution_attempt(
-                    current_params,
-                    lane=identity.lane,
-                    generation=generation,
-                    attempt=attempt,
-                    unit=unit_name,
-                    owner_nonce=owner_nonce,
-                    changes={
-                        "state": "started",
-                        "invocation_id": invocation_id,
-                        "started_at": utc_timestamp(),
-                    },
+            if current_receipt is None:
+                raise HTTPException(status_code=409, detail="Workflow planned receipt disappeared")
+            (
+                current_lane,
+                current_generation,
+                current_attempt,
+                current_unit,
+                current_owner_nonce,
+            ) = _attempt_identity(current_receipt)
+            if (
+                str(current_receipt.get("state", "")).strip().lower() != "planned"
+                or current_lane != identity.lane
+                or current_generation != generation
+                or current_attempt != attempt
+                or current_unit != unit_name
+                or current_owner_nonce != owner_nonce
+                or str(current_receipt.get("invocation_id") or "")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Workflow planned receipt authority changed before unit creation",
                 )
-                job.params = current_params
+            try:
+                accepted_unit = await asyncio.to_thread(
+                    create_systemd_workflow_unit,
+                    command,
+                )
+            except DuplicateUnitError as exc:
+                await session.rollback()
+                logger.critical(
+                    "Deterministic workflow unit claim collided without a reusable receipt: %s",
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Deterministic workflow unit already exists; launch was rejected",
+                ) from exc
+            except ExecutionOwnershipError as exc:
+                logger.exception(
+                    "Workflow unit creation failed after receipt planning for %s",
+                    payload.job_id,
+                )
+                try:
+                    await asyncio.to_thread(show_unit_properties, unit_name, identity.lane)
+                except UnitNotFoundError:
+                    verified_at = utc_timestamp()
+                    if _apply_planned_unit_creation_rejection(
+                        job,
+                        lane=identity.lane,
+                        generation=generation,
+                        attempt=attempt,
+                        unit_name=unit_name,
+                        owner_nonce=owner_nonce,
+                        reason=str(exc),
+                        verified_at=verified_at,
+                    ):
+                        await session.commit()
+                    else:
+                        await session.rollback()
+                except ExecutionOwnershipError:
+                    await session.rollback()
+                else:
+                    await session.rollback()
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+            if accepted_unit != unit_name:
+                await session.rollback()
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"systemd accepted unexpected workflow unit {accepted_unit!r}; "
+                        f"expected {unit_name!r}"
+                    ),
+                )
+            try:
+                properties = await asyncio.to_thread(
+                    wait_for_unit_invocation,
+                    unit_name,
+                    identity.lane,
+                )
+            except ExecutionOwnershipError as exc:
+                await session.rollback()
+                logger.exception("Workflow unit invocation proof failed for %s", payload.job_id)
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+            invocation_id = str(properties.invocation_id or "")
+            if not invocation_id:
+                await session.rollback()
+                raise HTTPException(
+                    status_code=503,
+                    detail="systemd accepted the unit without an InvocationID",
+                )
+            current_params = update_execution_attempt(
+                current_params,
+                lane=identity.lane,
+                generation=generation,
+                attempt=attempt,
+                unit=unit_name,
+                owner_nonce=owner_nonce,
+                changes={
+                    "state": "started",
+                    "invocation_id": invocation_id,
+                    "started_at": utc_timestamp(),
+                },
+            )
+            job.params = current_params
             job.nextflow_run_id = unit_name
-            if str(getattr(job, "status", "queued") or "queued").lower() not in TERMINAL_JOB_STATUSES:
-                job.status = "running"
-                job.queue_status = "running"
-                if getattr(job, "started_at", None) is None:
-                    job.started_at = datetime.utcnow()
+            job.status = "running"
+            job.queue_status = "running"
+            if getattr(job, "started_at", None) is None:
+                job.started_at = datetime.utcnow()
             await session.commit()
 
     return WorkflowAdapterLaunchResponse(

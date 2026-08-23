@@ -35,7 +35,14 @@ TRANSIENT_WORKFLOW_OWNER_NONCE_ENV = "BMS_TRANSIENT_WORKFLOW_OWNER_NONCE"
 EXECUTION_ATTEMPTS_PARAM = "execution_attempts"
 EXECUTION_ATTEMPT_SCHEMA = "bms.workflow-execution-attempt.v1"
 EXECUTION_ATTEMPT_TERMINAL_STATES = frozenset(
-    {"completed", "failed", "cancelled", "interrupted_owner", "rejected"}
+    {
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted_owner",
+        "rejected",
+        "launch_rejected_before_spawn",
+    }
 )
 EXECUTION_ATTEMPT_IMMUTABLE_FIELDS = frozenset(
     {
@@ -295,6 +302,20 @@ def params_mapping(value: object) -> dict[str, Any]:
     if not isinstance(parsed, Mapping):
         return {}
     return {str(key): item for key, item in parsed.items()}
+
+
+def cancellation_intent_requested(job: object) -> bool:
+    """Return whether durable cancellation authority fences any new execution."""
+
+    queue_status = str(getattr(job, "queue_status", "") or "").strip().lower()
+    if queue_status in {"cancelling", "canceling"}:
+        return True
+    receipt = params_mapping(getattr(job, "params", {})).get("cancellation_receipt")
+    return (
+        isinstance(receipt, Mapping)
+        and receipt.get("schema") == "bms.workflow-cancellation.v1"
+        and str(receipt.get("state", "") or "").strip().lower() == "requested"
+    )
 
 
 def attach_scheduler_gpu_assignment(params: object, gpu_id: int) -> dict[str, Any]:

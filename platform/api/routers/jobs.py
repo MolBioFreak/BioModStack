@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any, Callable, NoReturn, cast
+from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, cast
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -5390,6 +5390,31 @@ def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str
     return get_results_dir() / f"{name}_{timestamp}"
 
 
+def _resolve_job_sequence_length(
+    explicit_length: int | None,
+    params: Mapping[str, Any],
+) -> int:
+    if explicit_length is not None:
+        return explicit_length
+    for key in ("sequence", "sequence_input"):
+        sequence = params.get(key)
+        if isinstance(sequence, str) and sequence:
+            return len(sequence)
+    components = params.get("complex_components")
+    if isinstance(components, list):
+        lengths = [
+            len(component["sequence"])
+            for component in components
+            if isinstance(component, Mapping)
+            and component.get("type") == "protein"
+            and isinstance(component.get("sequence"), str)
+            and component["sequence"]
+        ]
+        if lengths:
+            return max(lengths)
+    return 300
+
+
 async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
@@ -5804,25 +5829,11 @@ async def _create_job(
         )
         os.makedirs(base_output_dir, exist_ok=True)
     
-    # Extract sequence length for VRAM estimation (same for all jobs in batch)
-    # PRIORITY: 1) job_data.sequence_length (explicit), 2) extract from params, 3) fallback
-    sequence_length = job_data.sequence_length  # May be explicitly set by spawn scripts
-    
-    if sequence_length is None:
-        # Try to extract from params
-        if 'sequence_input' in job_data.params and job_data.params['sequence_input']:
-            sequence_length = len(job_data.params['sequence_input'])
-        elif 'complex_components' in job_data.params:
-            # For complexes, use the longest chain
-            max_len = 0
-            for comp in job_data.params['complex_components']:
-                if comp.get('type') == 'protein' and comp.get('sequence'):
-                    max_len = max(max_len, len(comp['sequence']))
-            if max_len > 0:
-                sequence_length = max_len
-    
-    if sequence_length is None:
-        sequence_length = 300  # Default fallback
+    # Extract sequence length for VRAM estimation (same for all jobs in batch).
+    sequence_length = _resolve_job_sequence_length(
+        job_data.sequence_length,
+        job_data.params,
+    )
     
     # Estimate VRAM based on model type
     from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens

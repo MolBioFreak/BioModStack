@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -28,8 +29,15 @@ GLOBAL_RESOURCE_ADMISSION_PARAM = "_global_resource_admission"
 GLOBAL_RESOURCE_ADMISSION_SCHEMA = "bms.global-resource-admission-handoff.v1"
 GLOBAL_DISPATCH_AUTHORITY_PARAM = "_global_dispatch_authority"
 GLOBAL_DISPATCH_AUTHORITY_SCHEMA = "bms.global-dispatch-materialization.v1"
+GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA = "bms.global-dispatch-materialization.v2"
 RESOURCE_USAGE_RECEIPTS_PARAM = "resource_usage_receipts"
 RESOURCE_USAGE_RECEIPT_SCHEMA = "bms.workflow-resource-usage.v1"
+RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA = "bms.workflow-resource-usage.v2"
+RESOURCE_NONEXECUTION_RECEIPT_SCHEMA = "bms.workflow-resource-nonexecution.v1"
+RESOURCE_PLANNED_NONEXECUTION_RECEIPT_SCHEMA = "bms.workflow-resource-nonexecution.v2"
+RESOURCE_HISTORICAL_NONEXECUTION_RECEIPT_SCHEMA = "bms.workflow-resource-nonexecution.v3"
+HISTORICAL_OWNER_ABSENCE_SCHEMA = "bms.systemd-owner-absence.v1"
+HISTORICAL_OWNER_ABSENCE_PARAM = "_historical_pre_spawn_owner_absence"
 RESOURCE_CHECKPOINT_SCHEMA = "bms.workflow-resource-usage-checkpoint.v1"
 _RESOURCE_POLL_INTERVAL_SECONDS = 0.2
 _MAX_GPU_ROWS = 32
@@ -195,10 +203,18 @@ def validate_dispatch_materialization_authority(
     if not isinstance(value, Mapping):
         raise ResourceUsageEvidenceError("global dispatch materialization authority must be an object")
     authority = {str(key): child for key, child in value.items()}
-    if set(authority) != {
+    schema = authority.get("schema")
+    base_fields = {
         "schema", "payload_sha256", "run_attempt_id", "canonical_job_id",
         "admission_handoff_sha256", "authority_sha256",
-    } or authority.get("schema") != GLOBAL_DISPATCH_AUTHORITY_SCHEMA:
+    }
+    if schema == GLOBAL_DISPATCH_AUTHORITY_SCHEMA:
+        expected_fields = base_fields
+    elif schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        expected_fields = base_fields | {"gpu_index", "gpu_uuid"}
+    else:
+        raise ResourceUsageEvidenceError("global dispatch materialization authority schema is invalid")
+    if set(authority) != expected_fields:
         raise ResourceUsageEvidenceError("global dispatch materialization authority fields are not exact")
     for key in (
         "payload_sha256", "run_attempt_id", "canonical_job_id",
@@ -209,6 +225,12 @@ def validate_dispatch_materialization_authority(
         candidate = authority[key]
         if len(candidate) != 64 or any(character not in "0123456789abcdef" for character in candidate):
             raise ResourceUsageEvidenceError("global dispatch materialization digest syntax is invalid")
+    if schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        gpu_index = authority.get("gpu_index")
+        gpu_uuid = authority.get("gpu_uuid")
+        if type(gpu_index) is not int or gpu_index < 0:
+            raise ResourceUsageEvidenceError("scheduler dispatch GPU index is invalid")
+        _required_text(authority, "gpu_uuid", maximum=255)
     unsigned = dict(authority)
     digest = unsigned.pop("authority_sha256")
     if digest != _sha256(_canonical_json(unsigned)):
@@ -221,7 +243,71 @@ def validate_dispatch_materialization_authority(
             or authority["admission_handoff_sha256"] != handoff["handoff_sha256"]
         ):
             raise ResourceUsageEvidenceError("global dispatch materialization authority diverges from admission")
+        if schema == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA and handoff["gpu_index"] is not None and (
+            authority["gpu_index"] != handoff["gpu_index"]
+            or authority["gpu_uuid"] != handoff["gpu_uuid"]
+        ):
+            raise ResourceUsageEvidenceError(
+                "scheduler GPU assignment differs from admitted GPU constraint"
+            )
     return authority
+
+
+def materialize_scheduler_dispatch_authority(
+    authority: Mapping[str, Any],
+    *,
+    handoff: Mapping[str, Any],
+    gpu_index: int,
+    gpu_uuid: str,
+) -> dict[str, Any]:
+    """Upgrade prepared dispatch authority with scheduler-owned physical GPU identity."""
+
+    prepared = validate_dispatch_materialization_authority(
+        authority,
+        expected_handoff=handoff,
+    )
+    if type(gpu_index) is not int or gpu_index < 0:
+        raise ResourceUsageEvidenceError("scheduler dispatch GPU index is invalid")
+    if not isinstance(gpu_uuid, str) or not gpu_uuid or len(gpu_uuid) > 255:
+        raise ResourceUsageEvidenceError("scheduler dispatch GPU UUID is invalid")
+    if prepared["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        if prepared["gpu_index"] != gpu_index or prepared["gpu_uuid"] != gpu_uuid:
+            raise ResourceUsageEvidenceError("scheduler dispatch GPU authority conflicts")
+        return prepared
+    assigned = {
+        key: value
+        for key, value in prepared.items()
+        if key != "authority_sha256"
+    }
+    assigned.update(
+        schema=GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA,
+        gpu_index=gpu_index,
+        gpu_uuid=gpu_uuid,
+    )
+    assigned["authority_sha256"] = _sha256(_canonical_json(assigned))
+    return validate_dispatch_materialization_authority(
+        assigned,
+        expected_handoff=handoff,
+    )
+
+
+def dispatch_gpu_authority(
+    authority: Mapping[str, Any],
+    *,
+    handoff: Mapping[str, Any],
+) -> tuple[int | None, str | None]:
+    """Resolve actual GPU authority while preserving historical constrained dispatches."""
+
+    validated = validate_dispatch_materialization_authority(
+        authority,
+        expected_handoff=handoff,
+    )
+    if validated["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        return int(validated["gpu_index"]), str(validated["gpu_uuid"])
+    admitted = validate_resource_admission_handoff(handoff)
+    if admitted is None:
+        raise ResourceUsageEvidenceError("resource admission handoff is required")
+    return admitted["gpu_index"], admitted["gpu_uuid"]
 
 
 def build_resource_admission_handoff(
@@ -286,7 +372,24 @@ def attach_dispatch_materialization_authority(
     validated = validate_dispatch_materialization_authority(authority, expected_handoff=handoff)
     existing = normalized.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
     if existing is not None and existing != validated:
-        raise ResourceUsageEvidenceError("canonical Job already has different dispatch authority")
+        previous = validate_dispatch_materialization_authority(
+            existing,
+            expected_handoff=handoff,
+        )
+        if not (
+            previous["schema"] == GLOBAL_DISPATCH_AUTHORITY_SCHEMA
+            and validated["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA
+            and all(
+                previous[key] == validated[key]
+                for key in (
+                    "payload_sha256",
+                    "run_attempt_id",
+                    "canonical_job_id",
+                    "admission_handoff_sha256",
+                )
+            )
+        ):
+            raise ResourceUsageEvidenceError("canonical Job already has different dispatch authority")
     normalized[GLOBAL_DISPATCH_AUTHORITY_PARAM] = validated
     return normalized
 
@@ -460,6 +563,8 @@ class WorkflowResourceMonitor:
     expected_invocation_id: str
     handoff: dict[str, Any]
     dispatch_authority: dict[str, Any]
+    gpu_index: int | None
+    gpu_uuid: str | None
     started_at: str = field(default_factory=_timestamp)
     _stop: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
@@ -502,6 +607,10 @@ class WorkflowResourceMonitor:
         expected_invocation_id = execution.get("invocation_id")
         if not isinstance(expected_invocation_id, str) or not expected_invocation_id:
             raise ResourceUsageEvidenceError("resource monitor execution InvocationID is absent")
+        gpu_index, gpu_uuid = dispatch_gpu_authority(
+            dispatch_authority,
+            handoff=handoff,
+        )
         return cls(
             job_id=str(job.id),
             lane=lane,
@@ -512,6 +621,8 @@ class WorkflowResourceMonitor:
             expected_invocation_id=expected_invocation_id,
             handoff=handoff,
             dispatch_authority=dispatch_authority,
+            gpu_index=gpu_index,
+            gpu_uuid=gpu_uuid,
         )
 
     def start(self) -> None:
@@ -524,7 +635,7 @@ class WorkflowResourceMonitor:
         environment_invocation_id = str(os.getenv("INVOCATION_ID") or "")
         expected_cpu_usec = int(self.handoff["cpu_threads"]) * 1_000_000
         expected_memory = int(self.handoff["dram_bytes"])
-        expected_gpu_visibility = "" if self.handoff["gpu_index"] is None else str(self.handoff["gpu_index"])
+        expected_gpu_visibility = "" if self.gpu_index is None else str(self.gpu_index)
         actual_gpu_visibility = os.environ.get("CUDA_VISIBLE_DEVICES")
         try:
             actual_cpu_usec = _systemd_duration_usec(properties.cpu_quota_per_sec_usec)
@@ -541,13 +652,13 @@ class WorkflowResourceMonitor:
         main_pid_matches = properties.main_pid.isdigit() and int(properties.main_pid) == os.getpid()
         runner_in_cgroup = os.getpid() in cgroup_pids
         actual_device_allow_paths = _device_allow_paths(properties.device_allow)
-        expected_device_allow_paths = _expected_device_allow_paths(self.handoff)
+        expected_device_allow_paths = _expected_device_allow_paths({"gpu_index": self.gpu_index})
         device_allow_exact = (
             properties.device_policy == "closed"
             and actual_device_allow_paths == tuple(sorted(expected_device_allow_paths))
         )
-        cpu_only_device_denial = self.handoff["gpu_index"] is None and device_allow_exact
-        gpu_device_denial = self.handoff["gpu_index"] is not None and device_allow_exact
+        cpu_only_device_denial = self.gpu_index is None and device_allow_exact
+        gpu_device_denial = self.gpu_index is not None and device_allow_exact
         self._enforcement = {
             "cpu_accounting": properties.cpu_accounting == "yes",
             "memory_accounting": properties.memory_accounting == "yes",
@@ -611,7 +722,7 @@ class WorkflowResourceMonitor:
         memory_current = _read_int(cgroup / "memory.current")
         memory_peak = _read_int(cgroup / "memory.peak")
         pids_peak = _read_int(cgroup / "pids.peak")
-        gpu_rows = _gpu_rows_for_pids(_cgroup_pids(cgroup)) if self.handoff["gpu_index"] is not None else []
+        gpu_rows = _gpu_rows_for_pids(_cgroup_pids(cgroup)) if self.gpu_index is not None else []
         for row in gpu_rows:
             pid = int(row["pid"])
             gpu_uuid = row["gpu_uuid"]
@@ -624,7 +735,7 @@ class WorkflowResourceMonitor:
             self._gpu_peak_by_pid_uuid[key] = max(
                 self._gpu_peak_by_pid_uuid.get(key, 0), int(row["used_memory_bytes"])
             )
-            if gpu_uuid == self.handoff["gpu_uuid"]:
+            if gpu_uuid == self.gpu_uuid:
                 self._gpu_observed = True
         self._samples += 1
         return {
@@ -689,7 +800,7 @@ class WorkflowResourceMonitor:
                 self._write_checkpoint(accounting)
             except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError):
                 self._monitor_failures += 1
-        gpu_required = self.handoff["gpu_index"] is not None
+        gpu_required = self.gpu_index is not None
         gpu_process_peaks = _gpu_process_peak_rows(self._gpu_peak_by_pid_uuid)
         gpu_uuid_peaks = _gpu_uuid_peaks(self._gpu_peak_by_pid_uuid)
         gpu_exact = (
@@ -701,7 +812,7 @@ class WorkflowResourceMonitor:
                 gpu_required
                 and self._gpu_observed
                 and bool(gpu_process_peaks)
-                and set(gpu_uuid_peaks) == {self.handoff["gpu_uuid"]}
+                and set(gpu_uuid_peaks) == {self.gpu_uuid}
             )
         )
         gpu_usage_disposition = (
@@ -713,7 +824,7 @@ class WorkflowResourceMonitor:
         )
         complete = accounting is not None and self._samples > 0 and self._monitor_failures == 0 and gpu_exact
         receipt: dict[str, Any] = {
-            "schema": RESOURCE_USAGE_RECEIPT_SCHEMA,
+            "schema": RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
             "producer": "bms.workflow_job_runner",
             "producer_source_revision": self.handoff["source_revision"],
             "producer_source_tree": self.handoff["source_tree"],
@@ -741,9 +852,13 @@ class WorkflowResourceMonitor:
                     "owner",
                 )
             },
+            "dispatch": {
+                "gpu_index": self.gpu_index,
+                "gpu_uuid": self.gpu_uuid,
+            },
             "enforcement": {
                 **self._enforcement,
-                "gpu_visibility": self.handoff["gpu_index"],
+                "gpu_visibility": self.gpu_index,
             },
             "observed": {
                 "started_at": self.started_at,
@@ -767,15 +882,309 @@ class WorkflowResourceMonitor:
         return receipt
 
 
+def _validate_pre_spawn_nonexecution_receipt(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    receipt = {str(key): value for key, value in candidate.items()}
+    base_fields = {
+        "schema", "producer", "producer_source_revision", "producer_source_tree",
+        "job_id", "run_attempt_id", "admission_id", "preparation_id", "outcome",
+        "reason", "finished_at", "cpu_usage_usec", "memory_peak_bytes",
+        "gpu_peak_by_uuid", "complete", "admission_handoff_sha256",
+        "dispatch_payload_sha256", "dispatch_authority_sha256", "receipt_sha256",
+    }
+    schema = receipt.get("schema")
+    if schema == RESOURCE_NONEXECUTION_RECEIPT_SCHEMA:
+        exact_fields = base_fields
+        expected_producer = "bms.gpu_orchestrator"
+    elif schema == RESOURCE_PLANNED_NONEXECUTION_RECEIPT_SCHEMA:
+        exact_fields = base_fields | {"planning_receipt_sha256"}
+        expected_producer = "bms.workflow_adapter"
+        _required_text(receipt, "planning_receipt_sha256", maximum=64)
+    elif schema == RESOURCE_HISTORICAL_NONEXECUTION_RECEIPT_SCHEMA:
+        exact_fields = base_fields | {"owner_absence_receipt_sha256"}
+        expected_producer = "bms.startup-reconciler"
+        _required_text(receipt, "owner_absence_receipt_sha256", maximum=64)
+    else:
+        exact_fields = set()
+        expected_producer = ""
+    if set(receipt) != exact_fields:
+        raise ResourceUsageEvidenceError("resource nonexecution receipt fields are not exact")
+    for key in (
+        "producer", "producer_source_revision", "producer_source_tree", "job_id",
+        "run_attempt_id", "admission_id", "preparation_id", "reason", "finished_at",
+        "admission_handoff_sha256", "dispatch_payload_sha256",
+        "dispatch_authority_sha256", "receipt_sha256",
+    ):
+        _required_text(receipt, key, maximum=2000 if key == "reason" else 512)
+    if (
+        receipt.get("producer") != expected_producer
+        or receipt.get("outcome") != "launch_rejected_before_spawn"
+        or receipt.get("cpu_usage_usec") != 0
+        or receipt.get("memory_peak_bytes") != 0
+        or receipt.get("gpu_peak_by_uuid") != {}
+        or receipt.get("complete") is not True
+    ):
+        raise ResourceUsageEvidenceError("resource nonexecution receipt is not exact zero-use evidence")
+    unsigned = dict(receipt)
+    digest = unsigned.pop("receipt_sha256")
+    if digest != _sha256(_canonical_json(unsigned)):
+        raise ResourceUsageEvidenceError("resource nonexecution receipt digest is invalid")
+    return receipt
+
+
+def historical_owner_absence_unit_glob(job_id: object) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.:-]", "_", str(job_id or "").strip())
+    if not token:
+        raise ResourceUsageEvidenceError("historical owner absence requires a Job ID")
+    return f"bms-*-job-{token}-attempt-*.service"
+
+
+def _historical_terminal_facts_sha256(job: Any) -> str:
+    completed_at = getattr(job, "completed_at", None)
+    completed_text = (
+        completed_at.isoformat(timespec="microseconds") + "Z"
+        if isinstance(completed_at, datetime)
+        else str(completed_at or "")
+    )
+    facts = {
+        "job_id": str(getattr(job, "id", "")),
+        "status": str(getattr(job, "status", "") or "").strip().lower(),
+        "completed_at": completed_text,
+        "error_message": str(getattr(job, "error_message", "") or ""),
+    }
+    return _sha256(_canonical_json(facts))
+
+
+def build_historical_owner_absence_receipt(
+    job: Any,
+    *,
+    observed_at: str,
+    matched_units: list[str],
+) -> dict[str, Any]:
+    units = sorted({str(item).strip() for item in matched_units if str(item).strip()})
+    if units:
+        raise ResourceUsageEvidenceError("historical workflow owner is still present")
+    observed_text = str(observed_at or "").strip()
+    if not observed_text or len(observed_text) > 128:
+        raise ResourceUsageEvidenceError("historical owner absence timestamp is invalid")
+    receipt: dict[str, Any] = {
+        "schema": HISTORICAL_OWNER_ABSENCE_SCHEMA,
+        "job_id": str(getattr(job, "id", "")),
+        "source": "systemctl-user-list-units",
+        "unit_glob": historical_owner_absence_unit_glob(getattr(job, "id", "")),
+        "matched_units": [],
+        "observed_at": observed_text,
+        "terminal_facts_sha256": _historical_terminal_facts_sha256(job),
+    }
+    receipt["receipt_sha256"] = _sha256(_canonical_json(receipt))
+    return _validate_historical_owner_absence_receipt(receipt, job=job)
+
+
+def _validate_historical_owner_absence_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    job: Any | None = None,
+) -> dict[str, Any]:
+    document = {str(key): value for key, value in receipt.items()}
+    expected_fields = {
+        "schema",
+        "job_id",
+        "source",
+        "unit_glob",
+        "matched_units",
+        "observed_at",
+        "terminal_facts_sha256",
+        "receipt_sha256",
+    }
+    if set(document) != expected_fields:
+        raise ResourceUsageEvidenceError("historical owner absence fields are not exact")
+    if document.get("schema") != HISTORICAL_OWNER_ABSENCE_SCHEMA:
+        raise ResourceUsageEvidenceError("historical owner absence schema is unsupported")
+    if document.get("source") != "systemctl-user-list-units":
+        raise ResourceUsageEvidenceError("historical owner absence source is unsupported")
+    for key, maximum in (
+        ("job_id", 512),
+        ("unit_glob", 1024),
+        ("observed_at", 128),
+        ("terminal_facts_sha256", 64),
+        ("receipt_sha256", 64),
+    ):
+        _required_text(document, key, maximum=maximum)
+    if document.get("matched_units") != []:
+        raise ResourceUsageEvidenceError("historical workflow owner is still present")
+    expected_hash = _sha256(
+        _canonical_json({key: value for key, value in document.items() if key != "receipt_sha256"})
+    )
+    if not hmac.compare_digest(str(document.get("receipt_sha256") or ""), expected_hash):
+        raise ResourceUsageEvidenceError("historical owner absence digest mismatch")
+    if job is not None:
+        if document.get("job_id") != str(getattr(job, "id", "")):
+            raise ResourceUsageEvidenceError("historical owner absence Job differs")
+        if document.get("unit_glob") != historical_owner_absence_unit_glob(getattr(job, "id", "")):
+            raise ResourceUsageEvidenceError("historical owner absence unit glob differs")
+        if document.get("terminal_facts_sha256") != _historical_terminal_facts_sha256(job):
+            raise ResourceUsageEvidenceError("historical terminal facts digest mismatch")
+    return document
+
+
+def _terminal_planning_receipt_digest(
+    executions: object,
+    *,
+    expected: Mapping[str, Any] | None = None,
+) -> str:
+    if (
+        not isinstance(executions, list)
+        or len(executions) != 1
+        or not isinstance(executions[0], Mapping)
+    ):
+        raise ResourceUsageEvidenceError(
+            "pre-spawn planning receipt cardinality is not exact"
+        )
+    planning = {str(key): value for key, value in executions[0].items()}
+    if expected is not None and planning != dict(expected):
+        raise ResourceUsageEvidenceError("pre-spawn planning receipt bytes diverged")
+    absence = planning.get("unit_absence")
+    if (
+        planning.get("state") != "launch_rejected_before_spawn"
+        or str(planning.get("invocation_id") or "")
+        or planning.get("started_at") not in (None, "")
+        or not isinstance(absence, Mapping)
+        or set(absence) != {"state", "source", "verified_at"}
+        or absence.get("state") != "not-found"
+        or absence.get("source") != "systemd"
+        or not str(absence.get("verified_at") or "").strip()
+        or not str(planning.get("terminal_at") or "").strip()
+        or not str(planning.get("terminal_reason") or "").strip()
+    ):
+        raise ResourceUsageEvidenceError(
+            "pre-spawn planning receipt is not exact terminal nonexecution authority"
+        )
+    return _sha256(_canonical_json(planning))
+
+
+def attach_pre_spawn_nonexecution_receipt(
+    job: Any,
+    *,
+    finished_at: str,
+    planning_receipt: Mapping[str, Any] | None = None,
+    owner_absence_receipt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach producer-owned zero-use evidence after scheduler claim but before unit creation."""
+
+    terminal_state = str(getattr(job, "status", "") or "").strip().lower()
+    if terminal_state not in {"failed", "cancelled", "canceled"}:
+        raise ResourceUsageEvidenceError("pre-spawn nonexecution requires a terminal Job")
+    if str(getattr(job, "nextflow_run_id", "") or "").strip():
+        raise ResourceUsageEvidenceError("pre-spawn Job has an external owner identity")
+    params = params_mapping(getattr(job, "params", {}))
+    handoff = validate_resource_admission_handoff(params.get(GLOBAL_RESOURCE_ADMISSION_PARAM))
+    if handoff is None or handoff["canonical_job_id"] != str(job.id):
+        raise ResourceUsageEvidenceError("pre-spawn resource admission authority is unavailable")
+    dispatch = validate_dispatch_materialization_authority(
+        params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
+        expected_handoff=handoff,
+    )
+    executions = params.get("execution_attempts")
+    planning_digest: str | None = None
+    owner_absence_digest: str | None = None
+    if planning_receipt is not None and owner_absence_receipt is not None:
+        raise ResourceUsageEvidenceError("pre-spawn evidence authority is ambiguous")
+    if planning_receipt is None and owner_absence_receipt is None:
+        if executions not in (None, []):
+            raise ResourceUsageEvidenceError("pre-spawn Job has execution authority")
+    elif planning_receipt is not None:
+        planning_digest = _terminal_planning_receipt_digest(
+            executions,
+            expected=planning_receipt,
+        )
+    else:
+        if executions not in (None, []):
+            raise ResourceUsageEvidenceError("historical pre-spawn Job has execution authority")
+        stored_absence = params.get(HISTORICAL_OWNER_ABSENCE_PARAM)
+        if not isinstance(stored_absence, Mapping) or dict(stored_absence) != dict(owner_absence_receipt or {}):
+            raise ResourceUsageEvidenceError("historical owner absence proof is not persisted exactly")
+        validated_absence = _validate_historical_owner_absence_receipt(
+            stored_absence,
+            job=job,
+        )
+        owner_absence_digest = str(validated_absence["receipt_sha256"])
+    reason = str(getattr(job, "error_message", "") or terminal_state).strip()[:2000]
+    if not reason:
+        raise ResourceUsageEvidenceError("pre-spawn terminal reason is unavailable")
+    receipt: dict[str, Any] = {
+        "schema": (
+            RESOURCE_PLANNED_NONEXECUTION_RECEIPT_SCHEMA
+            if planning_digest is not None
+            else (
+                RESOURCE_HISTORICAL_NONEXECUTION_RECEIPT_SCHEMA
+                if owner_absence_digest is not None
+                else RESOURCE_NONEXECUTION_RECEIPT_SCHEMA
+            )
+        ),
+        "producer": (
+            "bms.workflow_adapter"
+            if planning_digest is not None
+            else (
+                "bms.startup-reconciler"
+                if owner_absence_digest is not None
+                else "bms.gpu_orchestrator"
+            )
+        ),
+        "producer_source_revision": handoff["source_revision"],
+        "producer_source_tree": handoff["source_tree"],
+        "job_id": str(job.id),
+        "run_attempt_id": handoff["run_attempt_id"],
+        "admission_id": handoff["admission_id"],
+        "preparation_id": handoff["preparation_id"],
+        "outcome": "launch_rejected_before_spawn",
+        "reason": reason,
+        "finished_at": finished_at,
+        "cpu_usage_usec": 0,
+        "memory_peak_bytes": 0,
+        "gpu_peak_by_uuid": {},
+        "complete": True,
+        "admission_handoff_sha256": handoff["handoff_sha256"],
+        "dispatch_payload_sha256": dispatch["payload_sha256"],
+        "dispatch_authority_sha256": dispatch["authority_sha256"],
+    }
+    if planning_digest is not None:
+        receipt["planning_receipt_sha256"] = planning_digest
+    if owner_absence_digest is not None:
+        receipt["owner_absence_receipt_sha256"] = owner_absence_digest
+    receipt["receipt_sha256"] = _sha256(_canonical_json(receipt))
+    validated = _validate_pre_spawn_nonexecution_receipt(receipt)
+    receipts = params.get(RESOURCE_USAGE_RECEIPTS_PARAM, [])
+    if not isinstance(receipts, list) or any(not isinstance(item, Mapping) for item in receipts):
+        raise ResourceUsageEvidenceError("resource usage receipt history is malformed")
+    matches = [
+        item for item in receipts
+        if item.get("run_attempt_id") == handoff["run_attempt_id"]
+        and item.get("admission_id") == handoff["admission_id"]
+    ]
+    if matches:
+        if len(matches) != 1 or dict(matches[0]) != validated:
+            raise ResourceUsageEvidenceError("resource nonexecution receipt identity has conflicting bytes")
+        return params
+    params[RESOURCE_USAGE_RECEIPTS_PARAM] = [dict(item) for item in receipts] + [validated]
+    return params
+
+
 def _validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> dict[str, Any]:
     receipt = {str(key): value for key, value in candidate.items()}
-    if set(receipt) != {
+    base_fields = {
         "schema", "producer", "producer_source_revision", "producer_source_tree",
         "job_id", "run_attempt_id", "admission_id", "preparation_id", "execution",
         "admission", "enforcement", "observed", "outcome", "complete",
         "incompleteness_code", "admission_handoff_sha256", "dispatch_payload_sha256",
         "dispatch_authority_sha256", "receipt_sha256",
-    } or receipt.get("schema") != RESOURCE_USAGE_RECEIPT_SCHEMA:
+    }
+    schema = receipt.get("schema")
+    if schema == RESOURCE_USAGE_RECEIPT_SCHEMA:
+        expected_fields = base_fields
+    elif schema == RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA:
+        expected_fields = base_fields | {"dispatch"}
+    else:
+        raise ResourceUsageEvidenceError("resource usage receipt schema is invalid")
+    if set(receipt) != expected_fields:
         raise ResourceUsageEvidenceError("resource usage receipt fields are not exact")
     if len(_canonical_json(receipt).encode("utf-8")) > _MAX_CHECKPOINT_BYTES:
         raise ResourceUsageEvidenceError("resource usage receipt exceeds bounded size")
@@ -791,6 +1200,25 @@ def _validate_resource_usage_receipt_document(candidate: Mapping[str, Any]) -> d
         "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner",
     }:
         raise ResourceUsageEvidenceError("resource usage receipt admission fields are not exact")
+    dispatch = receipt.get("dispatch")
+    if schema == RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA and (
+        not isinstance(dispatch, Mapping)
+        or set(dispatch) != {"gpu_index", "gpu_uuid"}
+        or (
+            dispatch.get("gpu_index") is None
+            and dispatch.get("gpu_uuid") is not None
+        )
+        or (
+            dispatch.get("gpu_index") is not None
+            and (
+                type(dispatch.get("gpu_index")) is not int
+                or dispatch["gpu_index"] < 0
+                or not isinstance(dispatch.get("gpu_uuid"), str)
+                or not dispatch["gpu_uuid"]
+            )
+        )
+    ):
+        raise ResourceUsageEvidenceError("resource usage receipt dispatch fields are not exact")
     if not isinstance(enforcement, Mapping) or set(enforcement) != {
         "cpu_accounting", "memory_accounting", "tasks_accounting",
         "cpu_quota_per_sec_usec", "memory_max_bytes",
@@ -856,6 +1284,10 @@ def attach_cancelled_resource_receipt_from_checkpoint(
         params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
         expected_handoff=handoff,
     )
+    dispatch_gpu_index, dispatch_gpu_uuid = dispatch_gpu_authority(
+        dispatch_authority,
+        handoff=handoff,
+    )
     executions = params.get("execution_attempts")
     if not isinstance(executions, list) or not executions or not isinstance(executions[-1], Mapping):
         raise ResourceUsageEvidenceError("cancelled resource evidence has no execution authority")
@@ -916,7 +1348,7 @@ def attach_cancelled_resource_receipt_from_checkpoint(
     computed_gpu_peaks = _gpu_uuid_peaks(gpu_process_peaks)
     sample_count = checkpoint.get("sample_count")
     monitor_failures = checkpoint.get("monitor_failures")
-    gpu_required = handoff["gpu_index"] is not None
+    gpu_required = dispatch_gpu_index is not None
     gpu_exact = (
         isinstance(gpu_peaks, dict)
         and gpu_peaks == computed_gpu_peaks
@@ -928,7 +1360,7 @@ def attach_cancelled_resource_receipt_from_checkpoint(
             or (
                 gpu_required
                 and bool(gpu_process_peaks)
-                and set(computed_gpu_peaks) == {handoff["gpu_uuid"]}
+                and set(computed_gpu_peaks) == {dispatch_gpu_uuid}
             )
         )
     )
@@ -948,7 +1380,7 @@ def attach_cancelled_resource_receipt_from_checkpoint(
         and gpu_exact
     )
     receipt: dict[str, Any] = {
-        "schema": RESOURCE_USAGE_RECEIPT_SCHEMA,
+        "schema": RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
         "producer": "bms.workflow_job_runner",
         "producer_source_revision": handoff["source_revision"],
         "producer_source_tree": handoff["source_tree"],
@@ -976,9 +1408,13 @@ def attach_cancelled_resource_receipt_from_checkpoint(
                 "owner",
             )
         },
+        "dispatch": {
+            "gpu_index": dispatch_gpu_index,
+            "gpu_uuid": dispatch_gpu_uuid,
+        },
         "enforcement": {
             **enforcement,
-            "gpu_visibility": handoff["gpu_index"],
+            "gpu_visibility": dispatch_gpu_index,
         } if isinstance(enforcement, dict) else {},
         "observed": {
             "started_at": checkpoint.get("started_at"),
@@ -1018,17 +1454,14 @@ def validate_producer_resource_usage_receipt(
         params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM),
         expected_handoff=handoff,
     )
+    dispatch_gpu_index, dispatch_gpu_uuid = dispatch_gpu_authority(
+        dispatch_authority,
+        handoff=handoff,
+    )
     executions = params.get("execution_attempts")
     receipts = params.get(RESOURCE_USAGE_RECEIPTS_PARAM)
-    if (
-        not isinstance(executions, list)
-        or not executions
-        or any(not isinstance(item, Mapping) for item in executions)
-        or not isinstance(receipts, list)
-        or any(not isinstance(item, Mapping) for item in receipts)
-    ):
-        raise ResourceUsageEvidenceError("producer execution/resource receipt history is unavailable")
-    latest = executions[-1]
+    if not isinstance(receipts, list) or any(not isinstance(item, Mapping) for item in receipts):
+        raise ResourceUsageEvidenceError("producer resource receipt history is unavailable")
     matches = [
         dict(item)
         for item in receipts
@@ -1037,12 +1470,68 @@ def validate_producer_resource_usage_receipt(
     ]
     if len(matches) != 1:
         raise ResourceUsageEvidenceError("producer resource receipt cardinality is not exact")
+    if matches[0].get("schema") in {
+        RESOURCE_NONEXECUTION_RECEIPT_SCHEMA,
+        RESOURCE_PLANNED_NONEXECUTION_RECEIPT_SCHEMA,
+        RESOURCE_HISTORICAL_NONEXECUTION_RECEIPT_SCHEMA,
+    }:
+        receipt = _validate_pre_spawn_nonexecution_receipt(matches[0])
+        if (
+            receipt.get("producer_source_revision") != handoff["source_revision"]
+            or receipt.get("producer_source_tree") != handoff["source_tree"]
+            or receipt.get("job_id") != str(job.id)
+            or receipt.get("preparation_id") != handoff["preparation_id"]
+            or receipt.get("admission_handoff_sha256") != handoff["handoff_sha256"]
+            or receipt.get("dispatch_payload_sha256") != dispatch_authority["payload_sha256"]
+            or receipt.get("dispatch_authority_sha256") != dispatch_authority["authority_sha256"]
+            or str(getattr(job, "status", "") or "").strip().lower()
+            not in {"failed", "cancelled", "canceled"}
+        ):
+            raise ResourceUsageEvidenceError("producer nonexecution receipt identity diverged")
+        if receipt["schema"] == RESOURCE_NONEXECUTION_RECEIPT_SCHEMA:
+            if executions not in (None, []):
+                raise ResourceUsageEvidenceError(
+                    "producer nonexecution receipt conflicts with started execution"
+                )
+        elif receipt["schema"] == RESOURCE_PLANNED_NONEXECUTION_RECEIPT_SCHEMA:
+            planning_digest = _terminal_planning_receipt_digest(executions)
+            if planning_digest != receipt["planning_receipt_sha256"]:
+                raise ResourceUsageEvidenceError(
+                    "producer planned nonexecution receipt digest diverged"
+                )
+        else:
+            if executions not in (None, []):
+                raise ResourceUsageEvidenceError(
+                    "producer historical nonexecution receipt conflicts with execution authority"
+                )
+            stored_absence = params.get(HISTORICAL_OWNER_ABSENCE_PARAM)
+            if not isinstance(stored_absence, Mapping):
+                raise ResourceUsageEvidenceError("historical owner absence proof is unavailable")
+            validated_absence = _validate_historical_owner_absence_receipt(
+                stored_absence,
+                job=job,
+            )
+            if validated_absence["receipt_sha256"] != receipt["owner_absence_receipt_sha256"]:
+                raise ResourceUsageEvidenceError(
+                    "producer historical owner absence digest diverged"
+                )
+        return receipt
+    if (
+        not isinstance(executions, list)
+        or not executions
+        or any(not isinstance(item, Mapping) for item in executions)
+    ):
+        raise ResourceUsageEvidenceError("producer execution/resource receipt history is unavailable")
+    latest = executions[-1]
     receipt = _validate_resource_usage_receipt_document(matches[0])
     execution = receipt.get("execution")
     if not isinstance(execution, Mapping):
         raise ResourceUsageEvidenceError("producer resource receipt execution identity is absent")
     if (
-        receipt.get("schema") != RESOURCE_USAGE_RECEIPT_SCHEMA
+        receipt.get("schema") not in {
+            RESOURCE_USAGE_RECEIPT_SCHEMA,
+            RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA,
+        }
         or receipt.get("producer") != "bms.workflow_job_runner"
         or receipt.get("producer_source_revision") != handoff["source_revision"]
         or receipt.get("producer_source_tree") != handoff["source_tree"]
@@ -1064,12 +1553,25 @@ def validate_producer_resource_usage_receipt(
         )
     ):
         raise ResourceUsageEvidenceError("producer resource receipt identity diverged")
+    if receipt.get("schema") == RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA:
+        if receipt.get("dispatch") != {
+            "gpu_index": dispatch_gpu_index,
+            "gpu_uuid": dispatch_gpu_uuid,
+        }:
+            raise ResourceUsageEvidenceError("producer receipt dispatch GPU identity diverged")
+    elif dispatch_authority["schema"] == GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA:
+        raise ResourceUsageEvidenceError("producer receipt omits assigned dispatch GPU identity")
     enforcement = receipt.get("enforcement")
     observed = receipt.get("observed")
     if not isinstance(enforcement, Mapping) or not isinstance(observed, Mapping):
         raise ResourceUsageEvidenceError("producer resource enforcement/accounting evidence is absent")
+    effective_gpu_handoff = {
+        **handoff,
+        "gpu_index": dispatch_gpu_index,
+        "gpu_uuid": dispatch_gpu_uuid,
+    }
     expected_device_allow_paths = _validated_recorded_device_allow_paths(
-        handoff,
+        effective_gpu_handoff,
         enforcement.get("expected_device_allow_paths"),
     )
     if (
@@ -1080,11 +1582,11 @@ def validate_producer_resource_usage_receipt(
         or enforcement.get("expected_cpu_quota_per_sec_usec") != handoff["cpu_threads"] * 1_000_000
         or enforcement.get("memory_max_bytes") != handoff["dram_bytes"]
         or enforcement.get("expected_memory_max_bytes") != handoff["dram_bytes"]
-        or enforcement.get("gpu_visibility") != handoff["gpu_index"]
+        or enforcement.get("gpu_visibility") != dispatch_gpu_index
         or enforcement.get("cuda_visible_devices")
-        != ("" if handoff["gpu_index"] is None else str(handoff["gpu_index"]))
+        != ("" if dispatch_gpu_index is None else str(dispatch_gpu_index))
         or enforcement.get("expected_cuda_visible_devices")
-        != ("" if handoff["gpu_index"] is None else str(handoff["gpu_index"]))
+        != ("" if dispatch_gpu_index is None else str(dispatch_gpu_index))
         or enforcement.get("invocation_id_matches") is not True
         or enforcement.get("control_group_matches") is not True
         or enforcement.get("main_pid_matches") is not True
@@ -1094,8 +1596,8 @@ def validate_producer_resource_usage_receipt(
         or enforcement.get("expected_device_allow_paths") != expected_device_allow_paths
         or enforcement.get("device_allow_exact") is not True
         or enforcement.get("device_allow_is_empty") is not (not expected_device_allow_paths)
-        or enforcement.get("cpu_only_device_denial") is not (handoff["gpu_index"] is None)
-        or enforcement.get("gpu_device_denial") is not (handoff["gpu_index"] is not None)
+        or enforcement.get("cpu_only_device_denial") is not (dispatch_gpu_index is None)
+        or enforcement.get("gpu_device_denial") is not (dispatch_gpu_index is not None)
     ):
         raise ResourceUsageEvidenceError("producer resource enforcement differs from admission")
     accounting = observed.get("accounting")
@@ -1124,17 +1626,17 @@ def validate_producer_resource_usage_receipt(
     if dict(gpu_peaks) != computed_gpu_peaks:
         raise ResourceUsageEvidenceError("producer GPU UUID peaks diverge from cgroup PID evidence")
     gpu_disposition = observed.get("gpu_usage_disposition")
-    if handoff["gpu_index"] is None:
+    if dispatch_gpu_index is None:
         if gpu_process_peaks or gpu_disposition != "cpu_only":
-            raise ResourceUsageEvidenceError("CPU-only admission observed GPU use")
+            raise ResourceUsageEvidenceError("CPU-only dispatch observed GPU use")
     elif (
         gpu_disposition != "admitted_used"
         or not gpu_process_peaks
-        or set(computed_gpu_peaks) != {handoff["gpu_uuid"]}
-        or any(gpu_uuid != handoff["gpu_uuid"] for _pid, gpu_uuid in gpu_process_peaks)
+        or set(computed_gpu_peaks) != {dispatch_gpu_uuid}
+        or any(gpu_uuid != dispatch_gpu_uuid for _pid, gpu_uuid in gpu_process_peaks)
     ):
         raise ResourceUsageEvidenceError(
-            "GPU evidence does not bind cgroup process IDs to the admitted physical GPU"
+            "GPU evidence does not bind cgroup process IDs to the scheduler dispatch GPU"
         )
     raw_terminal_state = str(getattr(job, "status", "")).lower()
     terminal_state = (
@@ -1154,18 +1656,24 @@ def validate_producer_resource_usage_receipt(
 __all__ = [
     "GLOBAL_DISPATCH_AUTHORITY_PARAM",
     "GLOBAL_DISPATCH_AUTHORITY_SCHEMA",
+    "GLOBAL_ASSIGNED_DISPATCH_AUTHORITY_SCHEMA",
     "GLOBAL_RESOURCE_ADMISSION_PARAM",
     "GLOBAL_RESOURCE_ADMISSION_SCHEMA",
     "RESOURCE_USAGE_RECEIPTS_PARAM",
     "RESOURCE_USAGE_RECEIPT_SCHEMA",
+    "RESOURCE_ASSIGNED_USAGE_RECEIPT_SCHEMA",
+    "RESOURCE_NONEXECUTION_RECEIPT_SCHEMA",
     "ResourceUsageEvidenceError",
     "WorkflowResourceMonitor",
     "attach_cancelled_resource_receipt_from_checkpoint",
     "attach_dispatch_materialization_authority",
+    "attach_pre_spawn_nonexecution_receipt",
     "attach_resource_admission_handoff",
     "attach_resource_usage_receipt",
     "build_dispatch_materialization_authority",
     "build_resource_admission_handoff",
+    "dispatch_gpu_authority",
+    "materialize_scheduler_dispatch_authority",
     "strip_resource_execution_metadata",
     "validate_dispatch_materialization_authority",
     "validate_producer_resource_usage_receipt",

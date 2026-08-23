@@ -1,5 +1,5 @@
 {
-  "content_sha256": "dc74a364489ea71167f5010969a6f132bdda92db60db3f67eb22d6b729f5f359",
+  "content_sha256": "842bff8243d1b3f6f41ea76c2dbcce7949dd441db61cb6332fbb76e4271c5e13",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -41,6 +41,7 @@
     "platform/api/molbio_ngs_services.py",
     "platform/api/paths.py",
     "platform/api/routers/experiment_workspaces.py",
+    "platform/api/routers/files.py",
     "platform/api/routers/gpu.py",
     "platform/api/routers/jobs.py",
     "platform/api/routers/molbio_ngs_experiments.py",

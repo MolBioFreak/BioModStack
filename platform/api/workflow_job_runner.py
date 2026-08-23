@@ -23,6 +23,7 @@ from services.execution_ownership import (
     TRANSIENT_WORKFLOW_UNIT_NAME_ENV,
     assert_unit_lane,
     adapter_identity_from_environment,
+    cancellation_intent_requested,
     execution_attempt_is_terminal,
     latest_execution_attempt,
     params_mapping,
@@ -99,6 +100,8 @@ async def _load_authoritative_attempt(
             raise ExecutionOwnershipError(f"Authoritative workflow job {job_id} was not found")
         if not database.launch_context_binding_ready(job):
             raise ExecutionOwnershipError("launch-context source binding is not durably published")
+        if cancellation_intent_requested(job):
+            raise ExecutionOwnershipError("authoritative cancellation intent fences runner start")
         params = params_mapping(getattr(job, "params", {}))
         receipt = latest_execution_attempt(params)
         if receipt is None or str(receipt.get("lane", "")) != lane:
