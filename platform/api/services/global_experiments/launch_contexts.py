@@ -969,7 +969,10 @@ async def validate_bound_job(
         raw_resources = scheduler.get("resources")
         resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
         expected_pinned_gpu = resources.get("pinned_gpu")
-        params_match = _canonical_json(base_job_params) == _canonical_json(expected_job_params)
+        params_match = all(
+            base_job_params.get(key) == value
+            for key, value in expected_job_params.items()
+        )
         if job.model_id == "protein_local_redesign":
             try:
                 expected_native_params = prepare_local_redesign_scheduler_params(
