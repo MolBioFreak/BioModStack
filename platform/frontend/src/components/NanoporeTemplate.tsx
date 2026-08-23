@@ -1128,7 +1128,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         const blockers: string[] = [];
         if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
         if (!jobName.trim()) blockers.push('Enter a job name.');
-        if (pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
+        if (inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
         if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
         if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
         if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
@@ -1166,7 +1166,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             ? 'ALIGNED READS'
             : 'ALREADY BASECALLED';
     const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
-    const reviewGpuLabel = pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
+    const reviewGpuLabel = inputSource === 'fastq'
+        ? 'CPU ONLY'
+        : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
     const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
     const handleValidate = () => {
         const blockers = getSubmissionBlockers();
@@ -1280,7 +1282,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
-                pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null,
+                pinned_gpu: inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
                     ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
@@ -1553,14 +1555,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 onSelect={selectWorkflow}
             />
 
-            {selectedWorkflow === 'pooledAssignment' && (
-                <PooledReferenceAssignmentPanel
-                    fastqPath={fastqPath}
-                    sequences={molbioSequences}
-                    onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
-                />
-            )}
-
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
             <section className={TASK_FLOW_PANEL} data-testid="ngs-job-input-section" aria-labelledby="ngs-job-input-heading">
                 <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>1 · Job and input</h2>
@@ -1574,6 +1568,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         placeholder="my_nanopore_run"
                         className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
                     />
+                    {inputSource === 'fastq' ? (
+                        <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
+                            <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
+                        </div>
+                    ) : (
                     <label className="mt-4 block text-sm font-medium text-[var(--text-secondary)]">
                         GPU assignment
                         <select
@@ -1587,7 +1587,8 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             {gpuOptions.map((gpu) => <option key={gpu.index} value={gpu.index}>{gpu.label}</option>)}
                         </select>
                     </label>
-                    {pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                    )}
+                    {inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
                 </div>
 
             {/* Data Source */}
@@ -1719,9 +1720,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </section>
 
             {/* Shared MolBio and NGS reference library */}
-            {selectedWorkflow !== 'pooledAssignment' && (
-                <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
-                    <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
+            <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
+                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
+                {selectedWorkflow === 'pooledAssignment' ? (
+                    <PooledReferenceAssignmentPanel
+                        fastqPath={fastqPath}
+                        sequences={molbioSequences}
+                        onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
+                    />
+                ) : (
+                    <>
                     <div className="mb-3">
                         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
                         <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose one exact revision from the references attached to this Experiment. MolBio and NGS use the same molecular sequence library; NGS receives runtime FASTA only through a server receipt.</p>
@@ -1785,8 +1793,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             setSelectedMolbioRevisionId('');
                         }} />
                     </div>
-                </section>
-            )}
+                    </>
+                )}
+            </section>
             {/* Historical Domain-managed references remain visible only when reopening an older job. */}
             {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
             <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-1 space-y-3">

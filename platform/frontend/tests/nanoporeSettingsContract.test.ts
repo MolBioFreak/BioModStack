@@ -45,3 +45,15 @@ test('Construct Screening assembly authority reaches API normalization and Nextf
     assert.match(workflow, /if \(runAssembly\) \{/u);
     assert.doesNotMatch(workflow, /run_multimer_qc/u);
 });
+
+test('Construct Screening FASTQ QC remains one editable boolean contract', () => {
+    const schema = JSON.parse(readSource('../../schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json')) as {
+        properties: Record<string, Record<string, unknown>>;
+    };
+    const setting = schema.properties.run_fastq_qc;
+
+    assert.equal(setting.type, 'boolean');
+    assert.equal(setting.default, true);
+    assert.equal(setting['x-bms-ui-control'], 'checkbox');
+    assert.equal(Object.hasOwn(setting, 'const'), false);
+});

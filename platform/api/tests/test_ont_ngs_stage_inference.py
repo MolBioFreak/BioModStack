@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
 from routers import jobs
-from routers.jobs import _infer_nanopore_stage_outputs, _resolve_nanopore_fastq_qc_mode
+from routers.jobs import (
+    _infer_nanopore_stage_outputs,
+    _planned_nanopore_stages,
+    _resolve_nanopore_fastq_qc_mode,
+)
 from schemas import JobStatus
 
 
@@ -42,6 +46,51 @@ def test_persisted_legacy_multimer_flag_remains_read_compatible():
     assert _resolve_nanopore_fastq_qc_mode(
         {"run_multimer_qc": True, "run_fastq_qc": False}
     ) == (False, False)
+
+
+def test_basecall_stage_planning_matches_dna_and_rna_workflows():
+    assert _planned_nanopore_stages(
+        {"pod5_dir": "/inputs/pod5"}, mode="basecall_dna"
+    ) == ["dorado_basecall"]
+    assert _planned_nanopore_stages(
+        {
+            "pod5_dir": "/inputs/pod5",
+            "reference_fasta": "/inputs/reference.fasta",
+        },
+        mode="basecall_dna",
+    ) == ["dorado_basecall", "dorado_align"]
+    assert _planned_nanopore_stages(
+        {
+            "pod5_dir": "/inputs/pod5",
+            "reference_fasta": "/inputs/reference.fasta",
+            "barcode_kit": "SQK-RBK114-96",
+        },
+        mode="basecall_dna",
+    ) == ["dorado_basecall", "dorado_demux"]
+    assert _planned_nanopore_stages(
+        {"pod5_dir": "/inputs/pod5"}, mode="basecall_rna"
+    ) == ["dorado_basecall"]
+
+
+def test_dorado_demux_terminal_outputs_are_inferred(tmp_path: Path):
+    manifest = tmp_path / "demux" / "demux_manifest.json"
+    units = tmp_path / "demux" / "demux" / "units"
+    manifest.parent.mkdir(parents=True)
+    units.mkdir(parents=True)
+    manifest.write_text("{}", encoding="utf-8")
+    catalog = tmp_path / "demux" / "per_barcode_units.json"
+    catalog.write_text("{}", encoding="utf-8")
+
+    outputs = _infer_nanopore_stage_outputs(
+        str(tmp_path),
+        {"pod5_dir": "/inputs/pod5", "barcode_kit": "SQK-RBK114-96"},
+        mode="basecall_dna",
+    )
+
+    assert "dorado_demux" in outputs
+    assert any(path.endswith("demux/demux_manifest.json") for path in outputs["dorado_demux"])
+    assert any(path.endswith("demux/per_barcode_units.json") for path in outputs["dorado_demux"])
+    assert any(path.endswith("demux/demux/units") for path in outputs["dorado_demux"])
 
 
 def test_construct_screening_public_stage_route_plans_and_infers_fastq_assembly(tmp_path: Path):

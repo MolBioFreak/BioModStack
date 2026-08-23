@@ -108,21 +108,26 @@ function buttonWithText(text: string) {
 }
 
 describe('mounted NGS settings to submit payload', () => {
-    it('submits visible assembly, QC, GPU, reference, and input settings as one request', async () => {
-        await renderTemplate();
+    it('submits visible assembly, GPU, reference, and POD5 input settings as one request', async () => {
+        await renderTemplate({
+            selectedWorkflow: 'constructScreening',
+            inputSource: 'pod5',
+            jobName: 'construct-pod5-run',
+            pod5Dir: '/data/pod5',
+            runFastqQc: true,
+            runAssembly: false,
+            ngsReferenceRevisionId: 'reference-revision-1',
+        });
         const assembly = checkboxContaining('Consensus assembly');
-        const fastqQc = checkboxContaining('FASTQ plasmid QC');
         const gpu = container.querySelector<HTMLSelectElement>('[data-testid="ngs-gpu-assignment"]');
         const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Review and submit');
 
         expect(assembly?.checked).toBe(false);
-        expect(fastqQc?.checked).toBe(true);
         expect(gpu?.value).toBe('');
         expect(submit?.disabled).toBe(false);
 
         await act(async () => {
             assembly?.click();
-            fastqQc?.click();
             if (gpu) {
                 gpu.value = '2';
                 gpu.dispatchEvent(new Event('change', { bubbles: true }));
@@ -131,7 +136,6 @@ describe('mounted NGS settings to submit payload', () => {
         await flush();
 
         expect(assembly?.checked).toBe(true);
-        expect(fastqQc?.checked).toBe(false);
         expect(gpu?.value).toBe('2');
 
         const updatedSubmit = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Review and submit');
@@ -144,11 +148,38 @@ describe('mounted NGS settings to submit payload', () => {
         expect(workflowId).toBe('ont_construct_screening');
         expect(request.pinned_gpu).toBe(2);
         expect(request.params).toMatchObject({
-            fastq_path: '/data/input.fastq',
-            run_fastq_qc: false,
+            pod5_dir: '/data/pod5',
             run_assembly: true,
         });
         expect(request.params).not.toHaveProperty('run_multimer_qc');
+    });
+
+    it('shows FASTQ as CPU-only and omits a stale GPU pin from the request', async () => {
+        await renderTemplate({
+            selectedWorkflow: 'constructScreening',
+            inputSource: 'fastq',
+            jobName: 'fastq-cpu-only',
+            fastqPath: '/data/input.fastq',
+            runFastqQc: true,
+            runAssembly: false,
+            pinned_gpu: 2,
+            ngsReferenceRevisionId: 'reference-revision-1',
+        });
+
+        expect(container.querySelector('[data-testid="ngs-gpu-assignment"]')).toBeNull();
+        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('CPU ONLY');
+
+        const fastqQc = checkboxContaining('FASTQ plasmid QC');
+        expect(fastqQc?.checked).toBe(true);
+        await act(async () => fastqQc?.click());
+        expect(fastqQc?.checked).toBe(false);
+
+        await act(async () => buttonWithText('Review and submit')?.click());
+        await flush();
+        expect(apiMocks.submitOntNgsJob).toHaveBeenCalledTimes(1);
+        const [, request] = apiMocks.submitOntNgsJob.mock.calls[0] as [string, { pinned_gpu: number | null; params: Record<string, unknown> }];
+        expect(request.pinned_gpu).toBeNull();
+        expect(request.params.run_fastq_qc).toBe(false);
     });
 
     it('renders the four accessible task-flow sections in mobile order and desktop two-row layout', async () => {
@@ -187,6 +218,26 @@ describe('mounted NGS settings to submit payload', () => {
         expect(sections[0]?.parentElement?.className).toContain('xl:grid-cols-2');
     });
 
+    it('keeps pooled reference assignment inside Section 2 without removing any task-flow section', async () => {
+        await renderTemplate({
+            selectedWorkflow: 'pooledAssignment',
+            inputSource: 'fastq',
+            jobName: 'pooled-reference-assignment',
+            fastqPath: '/data/pooled.fastq',
+        });
+
+        const sections = [
+            container.querySelector<HTMLElement>('[data-testid="ngs-job-input-section"]'),
+            container.querySelector<HTMLElement>('[data-ngs-section="reference"]'),
+            container.querySelector<HTMLElement>('[data-testid="ngs-basecalling-section"]'),
+            container.querySelector<HTMLElement>('[data-testid="ngs-analysis-section"]'),
+        ];
+        expect(sections.every(Boolean)).toBe(true);
+        const referenceSection = sections[1];
+        expect(referenceSection?.querySelector('[data-testid="pooled-reference-assignment-panel"]')).not.toBeNull();
+        expect(referenceSection?.textContent).toContain('Pooled FASTQ reference assignment');
+    });
+
     it('keeps Section 3 visible for FASTQ with an already-basecalled state', async () => {
         await renderTemplate();
 
@@ -204,7 +255,7 @@ describe('mounted NGS settings to submit payload', () => {
         expect(container.querySelector('[data-testid="ngs-review-input"]')?.textContent).toContain('INPUT READY');
         expect(container.querySelector('[data-testid="ngs-review-mode"]')?.textContent).toContain('MODE');
         expect(container.querySelector('[data-testid="ngs-review-model"]')?.textContent).toContain('MODEL');
-        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('AUTO GPU');
+        expect(container.querySelector('[data-testid="ngs-review-gpu"]')?.textContent).toContain('CPU ONLY');
         expect(container.querySelector('[data-testid="ngs-review-reference"]')).not.toBeNull();
         expect(buttonWithText('Validate')).not.toBeNull();
         expect(buttonWithText('Review and submit')).not.toBeNull();
@@ -287,9 +338,9 @@ describe('mounted NGS settings to submit payload', () => {
     it('reopens persisted effective stage settings in the visible controls', async () => {
         await renderTemplate({
             selectedWorkflow: 'constructScreening',
-            inputSource: 'fastq',
+            inputSource: 'pod5',
             jobName: 'reopened-construct-run',
-            fastqPath: '/data/input.fastq',
+            pod5Dir: '/data/pod5',
             runFastqQc: false,
             runAssembly: true,
             pinned_gpu: 2,
@@ -297,7 +348,6 @@ describe('mounted NGS settings to submit payload', () => {
         });
 
         expect(checkboxContaining('Consensus assembly')?.checked).toBe(true);
-        expect(checkboxContaining('FASTQ plasmid QC')?.checked).toBe(false);
         expect(container.querySelector<HTMLSelectElement>('[data-testid="ngs-gpu-assignment"]')?.value).toBe('2');
     });
 });

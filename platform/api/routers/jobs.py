@@ -4571,13 +4571,23 @@ def _uses_nanopore_stage_response(job: Job) -> bool:
     return job.model_id == "nanopore" and job.mode in NANOPORE_STAGE_RESPONSE_MODES
 
 
-def _planned_nanopore_stages(params: Optional[dict]) -> List[str]:
+def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = None) -> List[str]:
     np_params = params if isinstance(params, dict) else {}
     display_stages: List[str] = []
     has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
     has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
     has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
     has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
+    if mode in {"basecall_dna", "basecall_rna"}:
+        if not has_pod5:
+            return []
+        display_stages.append("dorado_basecall")
+        has_barcode_kit = _is_meaningful_param_value(np_params.get("barcode_kit"))
+        if mode == "basecall_dna" and has_barcode_kit:
+            display_stages.append("dorado_demux")
+        elif has_reference:
+            display_stages.append("dorado_align")
+        return display_stages
     fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
     bam_force_realign = _resolve_nanopore_bam_realign(np_params)
 
@@ -4608,6 +4618,8 @@ def _planned_nanopore_stages(params: Optional[dict]) -> List[str]:
 def _infer_nanopore_stage_outputs(
     output_dir: Optional[str],
     params: Optional[dict] = None,
+    *,
+    mode: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     output_path = resolve_output_dir(output_dir or "")
     if not output_path or not output_path.exists():
@@ -4625,6 +4637,11 @@ def _infer_nanopore_stage_outputs(
             "align/reference.fasta",
             "align/reference.fasta.fai",
             "align/align.log",
+        ],
+        "dorado_demux": [
+            "demux/demux_manifest.json",
+            "demux/per_barcode_units.json",
+            "demux/demux/units",
         ],
         "bam_prepare": [
             "align/aligned.bam",
@@ -4724,29 +4741,32 @@ def _infer_nanopore_stage_outputs(
         fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(params)
         bam_force_realign = _resolve_nanopore_bam_realign(params)
 
-        allowed_stages = set()
-        if has_pod5:
-            allowed_stages.add("dorado_basecall")
-        if has_pod5 and has_reference:
-            allowed_stages.add("dorado_align")
-        if has_bam and has_reference and bam_force_realign:
-            allowed_stages.add("dorado_align")
-        if has_bam:
-            allowed_stages.add("bam_prepare")
-        if has_pod5 and not has_reference:
-            allowed_stages.add("bam_prepare")
-        if has_fastq and has_reference:
-            allowed_stages.add("fastq_align")
-        if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
-            allowed_stages.add("fastq_qc")
-        if params.get("run_modkit") is not False and (has_pod5 or has_bam):
-            allowed_stages.add("modkit")
-        if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
-            allowed_stages.add("multimer_qc")
-        if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
-            allowed_stages.add("dimer_analysis")
-        if params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
-            allowed_stages.add("wf_clone_validation")
+        if mode in {"basecall_dna", "basecall_rna"}:
+            allowed_stages = set(_planned_nanopore_stages(params, mode=mode))
+        else:
+            allowed_stages = set()
+            if has_pod5:
+                allowed_stages.add("dorado_basecall")
+            if has_pod5 and has_reference:
+                allowed_stages.add("dorado_align")
+            if has_bam and has_reference and bam_force_realign:
+                allowed_stages.add("dorado_align")
+            if has_bam:
+                allowed_stages.add("bam_prepare")
+            if has_pod5 and not has_reference:
+                allowed_stages.add("bam_prepare")
+            if has_fastq and has_reference:
+                allowed_stages.add("fastq_align")
+            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+                allowed_stages.add("fastq_qc")
+            if params.get("run_modkit") is not False and (has_pod5 or has_bam):
+                allowed_stages.add("modkit")
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+                allowed_stages.add("multimer_qc")
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+                allowed_stages.add("dimer_analysis")
+            if params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
+                allowed_stages.add("wf_clone_validation")
 
     inferred: Dict[str, List[str]] = {}
     for stage, rel_paths in expected.items():
@@ -4768,7 +4788,7 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
 
     if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
         for stage, outputs in inferred_outputs.items():
             existing = stage_outputs.get(stage)
             if isinstance(existing, list):
@@ -8270,7 +8290,7 @@ async def get_job_stages(
     else:
         # Nanopore stage inventory is dynamic across every typed ONT mode.
         if _uses_nanopore_stage_response(job):
-            display_stages = _planned_nanopore_stages(job.params)
+            display_stages = _planned_nanopore_stages(job.params, mode=job.mode)
         else:
             # Fallback for other modes
             all_stages_map = {
@@ -8289,7 +8309,7 @@ async def get_job_stages(
     if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
         # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
         for stage, outputs in inferred_outputs.items():
             existing = stage_outputs.get(stage)
             if isinstance(existing, list):

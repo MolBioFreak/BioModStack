@@ -1,7 +1,7 @@
 {
   "baseline_source_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "fa60a3f84a1f8ee67e0095232c5002eb0ab6cfc4b478087d615685a787dcc1fa",
+  "content_sha256": "d65471b5f8b1556e9972e66747de84b6d170cd707f1c79a0382f20e95c74aaa8",
   "entries": [
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -281,9 +281,9 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
-      "schema_canonical_sha256": "894ecb7d4e500995d3bb274bc0a0c4ccee968932a887676793b5ecd5d63343e4",
+      "schema_canonical_sha256": "46c5e4eda584964d3b1ef19c62775cf0f8495ca95aa7a02a329c42b5c32d3a11",
       "schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "schema_sha256": "67fd4c9d608c2fc638e24656bb739835ed67245780643da616be88d7f0b49934"
+      "schema_sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d"
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json",

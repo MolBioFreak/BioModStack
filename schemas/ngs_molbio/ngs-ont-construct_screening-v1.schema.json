@@ -287,17 +287,18 @@
       "x-bms-units": "not_applicable"
     },
     "run_fastq_qc": {
-      "const": true,
+      "default": true,
+      "type": "boolean",
       "x-bms-applicability": "always",
-      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-default-policy": "schema_default",
       "x-bms-incompatibilities": [],
       "x-bms-native-key": "run_fastq_qc",
       "x-bms-persisted-representation": "requested_and_effective",
-      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-precision": "boolean",
       "x-bms-reproducibility-effect": "changes_output",
       "x-bms-scientific-meaning": "QC execution",
       "x-bms-supported-runtime-range": "dorado=1.3.1; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
-      "x-bms-ui-control": "read_only",
+      "x-bms-ui-control": "checkbox",
       "x-bms-units": "not_applicable"
     },
     "single_ref_split_max_query_gap_bp": {

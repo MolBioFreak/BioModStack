@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     createDomainExperiment,
@@ -164,6 +164,28 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
         setSelectedResultIds((current) => current.filter((id) => available.has(id)));
     }, [shareableResultsQuery.data]);
 
+    const resetProjectDrafts = useCallback(() => {
+        setMode('local-new');
+        setProjectName('');
+        setProjectDescription('');
+        setProjectOwner('');
+        setContributors('');
+        setTags('');
+        setStartDate('');
+        setTargetEndDate('');
+        setExperimentName('');
+        setObjective('');
+        setScientificQuestion('');
+        setHypothesis('');
+        setSuccessCriteria('');
+        setPriority('normal');
+        setShowDetails(false);
+        setShowExpose(false);
+        setSelectedExperimentIds([]);
+        setSelectedResultIds([]);
+        setTargetGlobalProjectId('');
+    }, []);
+
     const createMutation = useMutation({
         mutationFn: async (requestedMode: OwnershipMode = mode) => {
             if (!experimentName.trim()) throw new Error('Enter the required contained Experiment name.');
@@ -227,19 +249,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
                 queryClient.invalidateQueries({ queryKey: ['molbio-ngs-project-domain-experiments', projectId] }),
                 queryClient.invalidateQueries({ queryKey: ['ngs-molbio-binding', projectId, experiment.id, domain.id] }),
             ]);
-            setProjectName('');
-            setProjectDescription('');
-            setProjectOwner('');
-            setContributors('');
-            setTags('');
-            setStartDate('');
-            setTargetEndDate('');
-            setExperimentName('');
-            setObjective('');
-            setScientificQuestion('');
-            setHypothesis('');
-            setSuccessCriteria('');
-            setPriority('normal');
+            resetProjectDrafts();
             updateQueryParams({
                 workspace_id: projectId,
                 global_experiment_id: experiment.id,
@@ -283,6 +293,11 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
     const launcherRef = useRef<HTMLButtonElement>(null);
     const dialogRef = useRef<HTMLElement>(null);
     const wasDialogOpenRef = useRef(false);
+    const closeProjectPanel = useCallback(() => {
+        resetProjectDrafts();
+        setProjectPanelTab('local');
+        setIsOpen(false);
+    }, [resetProjectDrafts]);
 
     useEffect(() => {
         if (presentation !== 'launcher-dialog' || !isOpen) return undefined;
@@ -291,7 +306,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 event.preventDefault();
-                setIsOpen(false);
+                closeProjectPanel();
                 return;
             }
             if (event.key !== 'Tab' || !dialogRef.current) return;
@@ -310,7 +325,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
         document.addEventListener('keydown', handleKeyDown);
         queueMicrotask(focusFirst);
         return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, presentation]);
+    }, [closeProjectPanel, isOpen, presentation]);
 
     useEffect(() => {
         if (presentation !== 'launcher-dialog') {
@@ -485,16 +500,22 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
                                 {(localHierarchyQuery.data?.domains ?? []).map(({ experiment, domain }) => <option key={domain.id} value={domain.id}>{experiment.name}</option>)}
                             </select>
                         </label>
-                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={!selectedLocalProjectId} onClick={openSelectedProject}>Open selected Project</button>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button type="button" className={`${BUTTON} border-primary bg-primary/90 text-white`} disabled={!selectedLocalProjectId} onClick={openSelectedProject}>Open selected Project</button>
+                            <button type="button" className={BUTTON} disabled={!selectedLocalProjectId} onClick={() => setMode('local-existing')}>Add Experiment to selected local Project</button>
+                        </div>
                     </section>
                     <section className="rounded-xl border border-border-primary bg-surface p-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">Create a local Project</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-content-muted">{mode === 'local-existing' ? 'Add an Experiment to the selected local Project' : 'Create a local Project'}</p>
                         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            <label className="text-xs text-content-secondary">Project name<input className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>
+                            {mode !== 'local-existing' && <label className="text-xs text-content-secondary">Project name<input className={`${INPUT} mt-1`} value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Focused sequencing Project" /></label>}
                             <label className="text-xs text-content-secondary">First Experiment<input className={`${INPUT} mt-1`} value={experimentName} onChange={(event) => setExperimentName(event.target.value)} placeholder="Validation run" /></label>
                             <label className="text-xs text-content-secondary sm:col-span-2">Scientific objective<input className={`${INPUT} mt-1`} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Define the sequencing objective…" /></label>
                         </div>
-                        <button type="button" className={`${BUTTON} mt-3 border-primary bg-primary/90 text-white`} disabled={createMutation.isPending} onClick={() => createMutation.mutate('local-new')}>{createMutation.isPending ? 'Creating…' : 'Create Project and Experiment'}</button>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button type="button" className={`${BUTTON} border-primary bg-primary/90 text-white`} disabled={createMutation.isPending} onClick={() => createMutation.mutate(mode === 'local-existing' ? 'local-existing' : 'local-new')}>{createMutation.isPending ? 'Creating…' : mode === 'local-existing' ? 'Add contained Experiment' : 'Create Project and Experiment'}</button>
+                            {mode === 'local-existing' && <button type="button" className={BUTTON} onClick={() => setMode('local-new')}>Create a new local Project instead</button>}
+                        </div>
                     </section>
                 </div>
             ) : (
@@ -555,7 +576,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
                 <div
                     className="fixed inset-0 z-[100] grid items-end justify-center bg-black/70 p-0 sm:items-center sm:p-3"
                     onMouseDown={(event) => {
-                        if (event.currentTarget === event.target) setIsOpen(false);
+                        if (event.currentTarget === event.target) closeProjectPanel();
                     }}
                 >
                     <section
@@ -570,7 +591,7 @@ export default function NgsMolBioProjectHub({ presentation = 'inline' }: NgsMolB
                                 <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">NGS / MolBio Projects</p>
                                 <h2 id="ngs-project-panel-title" className="mt-1 text-lg font-semibold text-content-primary">Project workspace</h2>
                             </div>
-                            <button type="button" className={BUTTON} onClick={() => setIsOpen(false)}>Close ×</button>
+                            <button type="button" className={BUTTON} onClick={closeProjectPanel}>Close ×</button>
                         </header>
                         {compactProjectPanel}
                     </section>

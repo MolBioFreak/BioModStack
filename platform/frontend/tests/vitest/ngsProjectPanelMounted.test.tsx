@@ -188,7 +188,38 @@ describe('mounted NGS Projects launcher', () => {
         expect(disclosure?.querySelector('[data-testid="domain-experiment-workspace"]')).not.toBeNull();
     });
 
-    it('preserves draft fields across tabs and explicit close/reopen', async () => {
+    it('preserves adding an Experiment to the selected local Project', async () => {
+        await renderHub();
+        await act(async () => buttonNamed('Projects')?.click());
+
+        const addExperiment = buttonNamed('Add Experiment to selected local Project');
+        expect(addExperiment).not.toBeNull();
+        await act(async () => addExperiment?.click());
+
+        const experimentName = container.querySelector<HTMLInputElement>('input[placeholder="Validation run"]');
+        const objective = container.querySelector<HTMLInputElement>('input[placeholder="Define the sequencing objective…"]');
+        expect(experimentName).not.toBeNull();
+        expect(objective).not.toBeNull();
+        expect(container.querySelector<HTMLInputElement>('input[placeholder="Focused sequencing Project"]')).toBeNull();
+
+        await enterValue(experimentName as HTMLInputElement, 'Existing Project run');
+        await enterValue(objective as HTMLInputElement, 'Validate the selected local Project sample');
+        await act(async () => buttonNamed('Add contained Experiment')?.click());
+        await act(async () => Promise.resolve());
+
+        expect(managerMocks.createProject).not.toHaveBeenCalled();
+        expect(managerMocks.createGlobalExperiment).toHaveBeenCalledWith(
+            'local-project-1',
+            expect.objectContaining({ name: 'Existing Project run' }),
+        );
+        expect(managerMocks.createDomainExperiment).toHaveBeenCalledWith(
+            'local-project-1',
+            'experiment-1',
+            expect.objectContaining({ name: 'Existing Project run', domain_kind: 'ngs_molbio' }),
+        );
+    });
+
+    it('preserves draft fields across tabs and discards them after explicit close', async () => {
         await renderHub();
         const launcher = buttonNamed('Projects');
         await act(async () => launcher?.click());
@@ -217,11 +248,11 @@ describe('mounted NGS Projects launcher', () => {
         expect(document.activeElement).toBe(launcher);
 
         await act(async () => launcher?.click());
-        expect(container.querySelector<HTMLInputElement>('input[placeholder="Focused sequencing Project"]')?.value).toBe('Draft local project');
-        expect(container.querySelector<HTMLInputElement>('input[placeholder="Define the sequencing objective…"]')?.value).toBe('Draft sequencing objective');
+        expect(container.querySelector<HTMLInputElement>('input[placeholder="Focused sequencing Project"]')?.value).toBe('');
+        expect(container.querySelector<HTMLInputElement>('input[placeholder="Define the sequencing objective…"]')?.value).toBe('');
         const reopenedDisclosure = container.querySelector<HTMLDetailsElement>('[data-testid="ngs-project-advanced-disclosure"]');
         await act(async () => reopenedDisclosure?.querySelector('summary')?.click());
-        expect(container.querySelector<HTMLInputElement>('input[placeholder="Exact authenticated principal only"]')?.value).toBe('draft-owner');
+        expect(container.querySelector<HTMLInputElement>('input[placeholder="Exact authenticated principal only"]')?.value).toBe('');
     });
 
     it('moves focus into the dialog and traps forward and reverse Tab navigation', async () => {

@@ -43,11 +43,15 @@
 - `platform/api/services/ont_ngs_contract.py`
 - `platform/api/routers/jobs.py`
 - `platform/api/routers/ont_runs.py`
+- `platform/api/config/ngs_molbio/schema_registry_v1.json`
+- `platform/api/config/ngs_molbio/capability_inventory_v1.json`
+- `platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json` (generated successor authority after the terminal source-fix commit)
 - `platform/api/tests/test_ont_ngs_operator_settings.py`
 - `platform/api/tests/test_ont_ngs_submission.py`
 - `platform/api/tests/test_ont_ngs_stage_inference.py`
 - `platform/api/tests/test_ont_ngs_workflow_products.py`
 - `workflows/ngs/ont_construct_screening.nf`
+- `schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json`
 
 ### Forbidden changes
 
@@ -63,7 +67,7 @@
 - Canonical Development synchronization, commit, or push without operator authorization. The operator granted this authority on 2026-08-23 for this bounded candidate.
 - Issue records outside `BMS-DEV-24` through `BMS-DEV-27`
 
-The reviewed remediation amendment permits only the narrow existing settings → payload → fresh-request validation → API → Construct Screening gate/stage response → artifact metadata chain listed in SOW §4.3.
+The reviewed remediation amendment permits only the narrow existing settings → payload → fresh-request validation → API → Construct Screening gate/stage response → artifact metadata chain listed in SOW §4.3, including the generated successor authority required for managed Development to admit those exact source bytes.
 
 ### Mandatory preservation
 
