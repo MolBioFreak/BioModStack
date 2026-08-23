@@ -526,7 +526,7 @@ async def exact_local_launch_authority(
             (domain_payload.get("schema") == "bms.domain-experiment.v2" and domain_payload.get("domain_contract_version") == "2")
             or (domain_payload.get("schema") == "bms.domain-experiment.v4" and domain_payload.get("domain_contract_version") == "3")
         )
-        or domain_payload.get("domain_kind") != "ngs_molbio"
+        or domain_payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}
         or domain_payload.get("status") == "archived"
     ):
         raise ValidationFailure("replacement_preparation_required")
