@@ -407,6 +407,32 @@ async def list_domain_adapters() -> dict:
     return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
 
 
+async def _launch_context_document(
+    session: AsyncSession,
+    context: ExperimentLaunchContext,
+) -> dict[str, object]:
+    document = context_document(context)
+    if context.preparation_id:
+        preparation = await session.get(ExperimentWorkflowPreparation, context.preparation_id)
+        if preparation is not None:
+            try:
+                scheduler = json.loads(preparation.scheduler_payload_json)
+            except (TypeError, ValueError) as exc:
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is invalid.",
+                    status_code=409,
+                ) from exc
+            if not isinstance(scheduler, dict):
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is not an object.",
+                    status_code=409,
+                )
+            document["pinned_scheduler"] = scheduler
+    return document
+
+
 @router.post(
     "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/launch-contexts",
     response_model=LaunchContextResponse,
@@ -431,7 +457,7 @@ async def issue_launch_context(
             workflow_revision_id=payload.workflow_revision_id,
             return_uri=payload.return_uri,
         )
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         await session.commit()
         return document
@@ -448,7 +474,7 @@ async def get_launch_context(
 ) -> dict[str, object]:
     try:
         context = await resolve_launch_context_for_display(session, launch_context_id)
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         if context.canonical_job_id is None:
             job_ids = list((await core_session.scalars(

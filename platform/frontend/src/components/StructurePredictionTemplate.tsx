@@ -731,6 +731,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.local_files_only = true;
         }
 
+        if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
+            params.workflow_adapter = initialValues.workflow_adapter.trim();
+        }
+
         if (usesBoltz) {
             params.boltz_use_msa = boltzUseMsa;
             params.boltz_recycling_steps = boltzRecyclingSteps;
@@ -994,6 +998,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (usesEsmFold2) {
             params.model_variant = esmfold2Variant;
             params.local_files_only = true;
+            if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
+                params.workflow_adapter = initialValues.workflow_adapter.trim();
+            }
         }
 
         // Boltz-2 parameters

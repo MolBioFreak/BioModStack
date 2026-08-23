@@ -189,6 +189,7 @@ class LaunchContextResponse(BaseModel):
     canonical_job_id: Optional[str] = None
     recovery_job_id: Optional[str] = None
     binding_receipt: Optional[dict] = None
+    pinned_scheduler: Optional[dict] = None
     issued_at: datetime
     expires_at: datetime
 

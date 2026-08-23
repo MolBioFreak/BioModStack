@@ -668,6 +668,7 @@ export interface LaunchContext {
     canonical_job_id?: string | null;
     recovery_job_id?: string | null;
     binding_receipt?: JsonObject | null;
+    pinned_scheduler?: JsonObject | null;
     issued_at: string;
     expires_at: string;
 }
@@ -1257,7 +1258,7 @@ export function parseLaunchContext(value: unknown): LaunchContext {
         value,
         label,
         ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'pinned_gpu', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'],
-        ['preparation_id', 'run_attempt_id', 'normalized_request_sha256', 'validation_receipt_id', 'validation_receipt_sha256', 'canonical_job_id', 'recovery_job_id', 'binding_receipt'],
+        ['preparation_id', 'run_attempt_id', 'normalized_request_sha256', 'validation_receipt_id', 'validation_receipt_sha256', 'canonical_job_id', 'recovery_job_id', 'binding_receipt', 'pinned_scheduler'],
     );
     const pinnedGpu = record.pinned_gpu === null ? null : requireInteger(record.pinned_gpu, `${label}.pinned_gpu`);
     if (pinnedGpu !== null && pinnedGpu < 0) throw new Error(`${label}.pinned_gpu must be non-negative.`);
@@ -1281,6 +1282,7 @@ export function parseLaunchContext(value: unknown): LaunchContext {
         canonical_job_id: record.canonical_job_id === undefined ? undefined : requireNullableString(record.canonical_job_id, `${label}.canonical_job_id`),
         recovery_job_id: record.recovery_job_id === undefined ? undefined : requireNullableString(record.recovery_job_id, `${label}.recovery_job_id`),
         binding_receipt: record.binding_receipt === undefined ? undefined : record.binding_receipt === null ? null : requireJsonObject(record.binding_receipt, `${label}.binding_receipt`),
+        pinned_scheduler: record.pinned_scheduler === undefined ? undefined : record.pinned_scheduler === null ? null : requireJsonObject(record.pinned_scheduler, `${label}.pinned_scheduler`),
         issued_at: requireString(record.issued_at, `${label}.issued_at`),
         expires_at: requireString(record.expires_at, `${label}.expires_at`),
     };

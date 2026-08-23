@@ -754,6 +754,39 @@ export function JobSubmission() {
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
     const [dedicatedTemplateVersion, setDedicatedTemplateVersion] = useState(0);
+    const hydratedLaunchContextRef = useRef<string | null>(null);
+    useEffect(() => {
+        const context = launchContextQuery.data;
+        const scheduler = context?.pinned_scheduler as UntypedApiValue | null | undefined;
+        const schedulerParams = scheduler?.params;
+        if (
+            !context?.launch_context_id
+            || hydratedLaunchContextRef.current === context.launch_context_id
+            || !scheduler
+            || scheduler.model_id !== 'esmfold2'
+            || !schedulerParams
+            || typeof schedulerParams !== 'object'
+            || Array.isArray(schedulerParams)
+        ) return;
+        const paramsFromContext = schedulerParams as Record<string, UntypedApiValue>;
+        const loadedJobName = typeof scheduler.name === 'string' && scheduler.name.trim()
+            ? scheduler.name
+            : String(paramsFromContext.name || paramsFromContext.job_name || 'structure_prediction');
+        const nextValues: Record<string, UntypedApiValue> = {
+            ...paramsFromContext,
+            name: loadedJobName,
+            job_name: loadedJobName,
+            model_id: scheduler.model_id,
+            mode: scheduler.mode,
+        };
+        hydratedLaunchContextRef.current = context.launch_context_id;
+        setClonedValues(nextValues);
+        setParams(nextValues);
+        setJobName(loadedJobName);
+        setSelectedModelId(String(scheduler.model_id));
+        setSelectedModeId(typeof scheduler.mode === 'string' ? scheduler.mode : null);
+        setDedicatedTemplateVersion((version) => version + 1);
+    }, [launchContextQuery.data]);
     const [templateManagerContext, setTemplateManagerContext] = useState<{
         currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
