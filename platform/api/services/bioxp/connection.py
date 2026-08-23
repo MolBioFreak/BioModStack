@@ -68,6 +68,10 @@ ClientFactory = Callable[[ValidatedBioXpTarget], RobotClientProtocol]
 Clock = Callable[[], datetime]
 
 
+def _is_exact_xz_action(action_id: str | None) -> bool:
+    return isinstance(action_id, str) and action_id.startswith(("oem.x.", "oem.z."))
+
+
 @dataclass(slots=True)
 class _GenerationLease:
     generation: int
@@ -367,6 +371,29 @@ class BioXpConnectionService:
                     params=params,
                     path_params=path_params,
                 )
+
+    async def request_active_oem_action(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        json_data: dict[str, Any],
+        path_params: dict[str, str],
+    ) -> dict[str, Any]:
+        """Dispatch one exact X/Z OEM action without the BMS workflow lock."""
+        action_id = path_params.get("action_id")
+        if route_name != "invoke_operator_action" or not _is_exact_xz_action(action_id):
+            raise ValueError("BioXP direct OEM action transport is reserved for exact X/Z actions")
+        async with self.active_request_lease(
+            expected_generation=expected_generation,
+            require_fresh=False,
+        ) as client:
+            return await self._request_client(
+                client,
+                route_name,
+                json_data=json_data,
+                path_params=path_params,
+            )
 
     async def request_active_v2_enqueue(
         self,

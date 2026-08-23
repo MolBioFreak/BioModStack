@@ -41,10 +41,22 @@ def mutations_enabled() -> bool:
     }
 
 
+def _is_exact_xz_action_request(request: Request, relative_path: str) -> bool:
+    action_id = request.path_params.get("action_id")
+    if not isinstance(action_id, str) or not action_id.startswith(("oem.x.", "oem.z.")):
+        return False
+    return relative_path in {
+        f"/operator-controls/actions/{action_id}",
+        f"/operator-controls/actions/{action_id}/admission",
+    }
+
+
 def require_bioxp_mutation_access(request: Request) -> None:
     if not _mutation_guard_required(request):
         return
     relative_path = _relative_path(request)
+    if _is_exact_xz_action_request(request, relative_path):
+        return
     if relative_path in CONNECTION_MUTATIONS:
         if bioxp_connection_enabled():
             return

@@ -159,18 +159,18 @@ const xMoveAction = () => ({
     provider_unavailable_reason: null,
     available: true,
     unavailable_reason: null,
-    enabled: false,
-    disabled_reason: 'Requested X relative delta exceeds the maximum source-margin span; live target preflight remains provider-owned.',
+    enabled: true,
+    disabled_reason: null,
     dependencies: [
         dep('provider_available', true),
         dep('serial206_x_lifecycle', true),
         dep('transport_live', true),
         dep('operation_allows_motion', true),
-        dep('x_relative_oem_envelope', false, 'Requested X relative delta exceeds the maximum source-margin span; live target preflight remains provider-owned.'),
+        dep('x_relative_oem_envelope', true),
     ],
     requires_confirmation: false,
     timeout_seconds: 30,
-    inputs: [{ name: 'steps', type: 'integer', required: true }],
+    inputs: [{ name: 'steps', type: 'integer', required: true, minimum: -90243, maximum: 90243 }],
     stages: [],
 });
 
@@ -189,14 +189,14 @@ const xAbsoluteAction = () => ({
     provider_unavailable_reason: null,
     available: true,
     unavailable_reason: null,
-    enabled: false,
-    disabled_reason: 'Requested X target is outside the OEM 0..90263 envelope.',
+    enabled: true,
+    disabled_reason: null,
     dependencies: [
         dep('provider_available', true),
         dep('serial206_x_lifecycle', true),
         dep('transport_live', true),
         dep('operation_allows_motion', true),
-        dep('x_target_oem_envelope', false, 'Requested X target is outside the OEM 0..90263 envelope.'),
+        dep('x_target_oem_envelope', true),
     ],
     requires_confirmation: false,
     timeout_seconds: 30,
@@ -220,6 +220,32 @@ const zHomeAction = () => ({
         dep('operation_allows_motion', true),
     ],
     inputs: [],
+});
+
+const zMoveAction = () => ({
+    ...xMoveAction(),
+    action_id: 'oem.z.move_steps',
+    label: 'Z Relative Move',
+    subsystem: 'motion.z',
+    informational_path: '/motion/oem/manual/relative',
+    dependencies: [dep('stale_bms_projection', false, 'Stale BMS projection')],
+    inputs: [{ name: 'steps', type: 'integer', required: true, minimum: -250000, maximum: 250000 }],
+});
+
+const zAbsoluteAction = () => ({
+    ...xAbsoluteAction(),
+    action_id: 'oem.z.move_absolute',
+    label: 'Z Absolute Move',
+    subsystem: 'motion.z',
+    dependencies: [dep('stale_bms_projection', false, 'Stale BMS projection')],
+    inputs: [{ name: 'position_steps', type: 'integer', required: true, minimum: -5000, maximum: 250000 }],
+});
+
+const zClearAction = () => ({
+    ...zHomeAction(),
+    action_id: 'oem.z.clear',
+    label: 'Z Clear',
+    dependencies: [dep('stale_bms_projection', false, 'Stale BMS projection')],
 });
 
 const xHomeAction = () => ({
@@ -355,6 +381,18 @@ const setXAbsolute = async (value: string) => {
     });
 };
 
+const setZInput = async (index: number, value: string) => {
+    const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+    const inputs = [...article.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
+    const input = inputs[index];
+    await act(async () => {
+        const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        valueSetter?.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await Promise.resolve();
+    });
+};
+
 const xReceipt = (status: string, index = 0) => ({
     schema_version: 'bioxp.operator_action_receipt.v1',
     command_id: `cmd_x_${index}`,
@@ -446,6 +484,9 @@ beforeEach(() => {
         xAbsoluteAction(),
         xHomeAction(),
         zHomeAction(),
+        zMoveAction(),
+        zAbsoluteAction(),
+        zClearAction(),
         {
             action_id: 'oem.x.stop',
             label: 'X Stop',
@@ -609,7 +650,76 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('applies the local X envelope gate to absolute targets', async () => {
+    it('uses robot enabled state and catalog input schemas without local X/Z re-adjudication', async () => {
+        const xMove = state.catalog.data.actions.find((row) => row.action_id === 'oem.x.move_steps')!;
+        xMove.dependencies = [dep('stale_bms_projection', false, 'Stale BMS projection')];
+        const xAbsolute = state.catalog.data.actions.find((row) => row.action_id === 'oem.x.move_absolute')!;
+        xAbsolute.inputs = [{ name: 'position_steps', type: 'integer', required: true, minimum: -5000, maximum: 120000 }];
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        await setXAbsolute('100000');
+        await setZInput(0, '200000');
+        await setZInput(1, '200000');
+
+        const xArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const xButtons = [...xArticle.querySelectorAll('button')] as HTMLButtonElement[];
+        const xMovePositive = xButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const xGoAbsolute = xButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+        const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
+        const zMovePositive = zButtons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const zGoAbsolute = zButtons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+
+        expect(xMovePositive.disabled).toBe(false);
+        expect(xGoAbsolute.disabled).toBe(false);
+        expect(zMovePositive.disabled).toBe(false);
+        expect(zGoAbsolute.disabled).toBe(false);
+        await act(async () => xMovePositive.click());
+        await act(async () => xGoAbsolute.click());
+        await act(async () => zMovePositive.click());
+        await act(async () => zGoAbsolute.click());
+        expect(state.invokeCalls.map((call) => ({ actionId: call.actionId, inputs: call.inputs }))).toEqual([
+            { actionId: 'oem.x.move_steps', inputs: { steps: 10000 } },
+            { actionId: 'oem.x.move_absolute', inputs: { position_steps: 100000 } },
+            { actionId: 'oem.z.move_steps', inputs: { steps: 200000 } },
+            { actionId: 'oem.z.move_absolute', inputs: { position_steps: 200000 } },
+        ]);
+    });
+
+    it('uses the robot action enabled flag as final X command authority', async () => {
+        const xHome = state.catalog.data.actions.find((row) => row.action_id === 'oem.x.manual_panel_home')!;
+        Object.assign(xHome, {
+            enabled: false,
+            disabled_reason: 'Robot denied X Home.',
+        });
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
+        const home = [...article.querySelectorAll('button')].find((button) => button.textContent === 'Home') as HTMLButtonElement;
+        expect(home.disabled).toBe(true);
+        expect(home.title).toContain('Robot denied X Home.');
+    });
+
+    it('does not turn a pending unrelated mutation into a Z Clear lockout', async () => {
+        state.invokePending = true;
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+        const zClear = [...zArticle.querySelectorAll('button')].find((button) => button.textContent === 'Z Clear (automatic OEM position)') as HTMLButtonElement;
+        expect(zClear.disabled).toBe(false);
+    });
+
+    it('applies the robot catalog X input schema to absolute targets', async () => {
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();

@@ -63,6 +63,10 @@ from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 router = APIRouter()
 
 
+def _is_exact_xz_action(action_id: str) -> bool:
+    return action_id.startswith(("oem.x.", "oem.z."))
+
+
 def _report_params(
     *,
     status: str | None = None,
@@ -504,7 +508,7 @@ async def operator_control_catalog(
         payload = await runtime.connection.request_active_query(
             "operator_control_catalog",
             expected_generation=snapshot.generation,
-            require_fresh=True,
+            require_fresh=False,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
@@ -520,7 +524,7 @@ async def operator_dashboard(
         payload = await runtime.connection.request_active_query(
             "operator_dashboard",
             expected_generation=snapshot.generation,
-            require_fresh=True,
+            require_fresh=False,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
@@ -603,7 +607,7 @@ async def operator_action_admission(
         payload = await runtime.connection.request_active_query(
             "operator_action_admission",
             expected_generation=request.expected_connection_generation,
-            require_fresh=True,
+            require_fresh=not _is_exact_xz_action(action_id),
             path_params={"action_id": action_id},
             json_data={"expected_generation": request.expected_ownership_generation, "inputs": request.inputs},
         )
@@ -644,11 +648,18 @@ async def invoke_operator_action(
                 path_params={"action_id": action_id},
                 json_data=action_payload,
             )
+        elif _is_exact_xz_action(action_id):
+            payload = await runtime.connection.request_active_oem_action(
+                "invoke_operator_action",
+                expected_generation=request.expected_connection_generation,
+                path_params={"action_id": action_id},
+                json_data=action_payload,
+            )
         else:
             payload = await runtime.connection.request_active(
                 "invoke_operator_action",
                 expected_generation=request.expected_connection_generation,
-                require_fresh=not (action_id.startswith("oem.x.") or action_id.startswith("oem.z.")),
+                require_fresh=True,
                 path_params={"action_id": action_id},
                 json_data=action_payload,
             )

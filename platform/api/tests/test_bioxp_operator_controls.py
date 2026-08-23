@@ -784,6 +784,7 @@ class FakeConnection:
         self.value = FakeSnapshot()
         self.safety_interrupt_calls = []
         self.active_request_calls = []
+        self.oem_action_calls = []
 
     def snapshot(self):
         return self.value
@@ -807,6 +808,17 @@ class FakeConnection:
             require_fresh=require_fresh,
             **kwargs,
         )
+
+    async def request_active_oem_action(self, route_name, *, expected_generation, **kwargs):
+        if expected_generation != self.value.generation:
+            raise ConnectionStateError(
+                f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
+            )
+        self.oem_action_calls.append({
+            "route_name": route_name,
+            "path_params": kwargs.get("path_params"),
+        })
+        return await self.client.request(route_name, **kwargs)
 
     async def request_active_v2_query(self, route_name, *, expected_generation, **kwargs):
         if kwargs.get("params", {}).get("detail") is True:
@@ -967,7 +979,11 @@ def test_invoke_relays_queued_successive_move_receipt(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "queued"
     assert response.json()["queued_at"] == 1787188152.83
-    assert runtime.connection.active_request_calls[-1]["require_fresh"] is False
+    assert runtime.connection.active_request_calls == []
+    assert runtime.connection.oem_action_calls == [{
+        "route_name": "invoke_operator_action",
+        "path_params": {"action_id": "oem.x.move_steps"},
+    }]
 
 
 def test_z_invocation_relies_on_robot_admission_without_bms_freshness_gate(monkeypatch):
@@ -989,7 +1005,11 @@ def test_z_invocation_relies_on_robot_admission_without_bms_freshness_gate(monke
     )
 
     assert response.status_code == 200
-    assert runtime.connection.active_request_calls[-1]["require_fresh"] is False
+    assert runtime.connection.active_request_calls == []
+    assert runtime.connection.oem_action_calls == [{
+        "route_name": "invoke_operator_action",
+        "path_params": {"action_id": "oem.z.move_steps"},
+    }]
 
 
 def test_robot_409_translation_preserves_structured_detail():
@@ -2243,6 +2263,23 @@ def test_catalog_is_robot_owned_and_strict(monkeypatch):
     assert runtime.connection.client.calls == [("operator_control_catalog", {})]
 
 
+def test_shared_xz_catalog_and_dashboard_query_robot_without_bms_freshness_gate(monkeypatch):
+    client, runtime = make_client(monkeypatch, mutations=False)
+
+    catalog_response = client.get("/api/bioxp/operator-controls/catalog")
+    dashboard_response = client.get("/api/bioxp/operator-controls/dashboard")
+
+    assert catalog_response.status_code == 200, catalog_response.text
+    assert dashboard_response.status_code == 200, dashboard_response.text
+    assert [
+        (call["route_name"], call["require_fresh"])
+        for call in runtime.connection.active_request_calls
+    ] == [
+        ("operator_control_catalog", False),
+        ("operator_dashboard", False),
+    ]
+
+
 def test_unavailable_source_authority_is_explicit_and_strictly_accepted(monkeypatch):
     client, runtime = make_client(monkeypatch)
     runtime.connection.client.responses["operator_control_catalog"].update({
@@ -2446,6 +2483,51 @@ def test_mutation_gate_blocks_action_and_assessment(monkeypatch):
     assert invoke.status_code == 503
     assert assess.status_code == 503
     assert runtime.connection.client.calls == []
+
+
+@pytest.mark.parametrize("action_id", ["oem.x.move_steps", "oem.z.move_steps"])
+def test_exact_xz_admission_and_invocation_rely_on_robot_without_host_policy_gates(monkeypatch, action_id):
+    client, runtime = make_client(monkeypatch, mutations=False)
+    axis = action_id.split(".")[1]
+    key = f"{axis}-direct-12345678"
+    runtime.connection.client.responses["operator_action_admission"] = {
+        "action_id": action_id,
+        "ownership_generation": 7,
+        "enabled": True,
+        "disabled_reason": None,
+        "dependencies": [],
+    }
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id=action_id,
+        key=key,
+        command_id=f"{axis}-direct-command-1",
+    )
+
+    admission = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "inputs": {"steps": 100},
+    })
+    invocation = client.post(f"/api/bioxp/operator-controls/actions/{action_id}", json={
+        "expected_connection_generation": 77,
+        "expected_ownership_generation": 7,
+        "idempotency_key": key,
+        "inputs": {"steps": 100},
+    })
+
+    assert admission.status_code == 200, admission.text
+    assert admission.json()["enabled"] is True
+    assert invocation.status_code == 200, invocation.text
+    assert invocation.json()["action_id"] == action_id
+    admission_call = next(
+        call for call in runtime.connection.active_request_calls
+        if call["route_name"] == "operator_action_admission"
+    )
+    assert admission_call["require_fresh"] is False
+    assert runtime.connection.oem_action_calls == [{
+        "route_name": "invoke_operator_action",
+        "path_params": {"action_id": action_id},
+    }]
 
 
 def test_operator_requests_require_both_generation_domains(monkeypatch):

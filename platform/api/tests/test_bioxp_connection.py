@@ -368,6 +368,44 @@ def test_query_request_does_not_block_critical_command_dispatch(tmp_path: Path) 
     asyncio.run(exercise())
 
 
+def test_exact_oem_action_lane_allows_successive_xz_dispatch(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+
+    async def exercise() -> None:
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        connected = await service.connect()
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        robot.blocking_route_name = "invoke_operator_action"
+        robot.blocking_action_id = "oem.x.move_steps"
+
+        first = asyncio.create_task(service.request_active_oem_action(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.x.move_steps"},
+            json_data={"expected_generation": 7, "idempotency_key": "x-first-action", "inputs": {"steps": 20}},
+        ))
+        await robot.request_started.wait()
+
+        second = await asyncio.wait_for(service.request_active_oem_action(
+            "invoke_operator_action",
+            expected_generation=connected.generation,
+            path_params={"action_id": "oem.z.move_steps"},
+            json_data={"expected_generation": 7, "idempotency_key": "z-second-action", "inputs": {"steps": 20}},
+        ), timeout=0.1)
+
+        assert second["kwargs"]["path_params"] == {"action_id": "oem.z.move_steps"}
+        assert first.done() is False
+        robot.request_release.set()
+        first_result = await first
+        assert first_result["kwargs"]["path_params"] == {"action_id": "oem.x.move_steps"}
+
+    asyncio.run(exercise())
+
+
 def test_generation_bound_request_lease_serializes_disconnect(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []

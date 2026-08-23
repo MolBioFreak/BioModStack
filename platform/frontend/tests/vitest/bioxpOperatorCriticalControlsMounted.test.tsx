@@ -118,9 +118,16 @@ beforeEach(() => {
         action('meta.home_xy', 'Home XY', 'meta', '/operator/actions/meta.home_xy', 'meta'),
         action('meta.full_initialization', 'Full Initialization', 'meta', '/operator/actions/meta.full_initialization', 'meta'),
     ];
-    state.catalog.data.actions = [...critical, ...fillers, ...meta];
+    const exactXz = [
+        action('oem.x.move_steps', 'X Relative Move', 'motion.x', '/operator/actions/oem.x.move_steps'),
+        action('oem.z.move_steps', 'Z Relative Move', 'motion.z', '/operator/actions/oem.z.move_steps'),
+    ];
+    state.catalog.data.source_authority_verified = true;
+    state.catalog.data.actions = [...critical, ...fillers, ...exactXz, ...meta];
     state.admissionArgs = [];
+    state.admissionData = null;
     state.invokeCalls = [];
+    state.invokeMock = null;
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -142,8 +149,8 @@ describe('mounted BioXP operator critical and exhaustive controls', () => {
         const grouped = container.querySelector('[data-individual-control-groups]') as HTMLElement;
         expect(critical.textContent).toContain('Motion Power Status');
         const exhaustiveIds = [...grouped.querySelectorAll('[data-action-id]')].map((node) => node.getAttribute('data-action-id'));
-        expect(exhaustiveIds).toHaveLength(140);
-        expect(new Set(exhaustiveIds).size).toBe(140);
+        expect(exhaustiveIds).toHaveLength(142);
+        expect(new Set(exhaustiveIds).size).toBe(142);
         const subsystemDropdowns = [...grouped.querySelectorAll<HTMLDetailsElement>('details[data-subsystem]')];
         expect(subsystemDropdowns.length).toBeGreaterThan(1);
         expect(grouped.querySelectorAll('summary')).toHaveLength(subsystemDropdowns.length);
@@ -183,5 +190,26 @@ describe('mounted BioXP operator critical and exhaustive controls', () => {
         await act(async () => metaButton.click());
         expect(container.querySelector('[data-critical-controls]')).toBeNull();
         expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3);
+    });
+
+    it('lets exact X/Z actions use robot admission when catalog-wide source authority is unavailable', async () => {
+        state.catalog.data.source_authority_verified = false;
+        await act(async () => {
+            root.render(<BioXpOperatorControlTabs generation={2637337272774657} connected />);
+            await Promise.resolve();
+        });
+
+        const zAction = container.querySelector('[data-action-id="oem.z.move_steps"]') as HTMLButtonElement;
+        await act(async () => zAction.click());
+        let run = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Run exactly this action') as HTMLButtonElement;
+        expect(run.disabled).toBe(false);
+
+        await act(async () => run.click());
+        expect(state.invokeCalls[0]).toMatchObject({ actionId: 'oem.z.move_steps' });
+
+        const unrelatedAction = container.querySelector('[data-action-id="route.filler_0"]') as HTMLButtonElement;
+        await act(async () => unrelatedAction.click());
+        run = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Run exactly this action') as HTMLButtonElement;
+        expect(run.disabled).toBe(true);
     });
 });

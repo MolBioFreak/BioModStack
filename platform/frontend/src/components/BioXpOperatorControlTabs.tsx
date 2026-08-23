@@ -223,7 +223,11 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         && (latestReceipt.action_id.startsWith('oem.x.') || latestReceipt.action_id.startsWith('oem.xy.'));
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
-    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true || isSafetyInterrupt;
+    const isExactXzAction = selected?.action_id.startsWith('oem.x.') === true
+        || selected?.action_id.startsWith('oem.z.') === true;
+    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true
+        || isSafetyInterrupt
+        || isExactXzAction;
     const currentConfirmationFingerprint = selected && normalizedForAdmission !== null
         ? buildActionConfirmationFingerprint({
             actionId: selected.action_id,

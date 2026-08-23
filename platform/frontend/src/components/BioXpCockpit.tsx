@@ -25,6 +25,7 @@ import {
     type BioXpOperatorActionV2Request,
     type BioXpOperatorDashboardV2,
     type BioXpOperatorDashboardXAxis,
+    type BioXpOperatorInputSpec,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
@@ -98,6 +99,43 @@ const AXES: readonly AxisControls[] = [
 ];
 
 const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35';
+
+const integerMinimum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
+    if (typeof input?.minimum === 'number') return Math.ceil(input.minimum);
+    if (typeof input?.exclusive_minimum === 'number') return Math.floor(input.exclusive_minimum) + 1;
+    return undefined;
+};
+
+const integerMaximum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
+    if (typeof input?.maximum === 'number') return Math.floor(input.maximum);
+    if (typeof input?.exclusive_maximum === 'number') return Math.ceil(input.exclusive_maximum) - 1;
+    return undefined;
+};
+
+const integerInputError = (
+    value: number,
+    input: BioXpOperatorInputSpec | undefined,
+    label: string,
+): string | null => {
+    const minimum = integerMinimum(input);
+    const maximum = integerMaximum(input);
+    if (!Number.isInteger(value)) return `${label} must be an integer.`;
+    if ((minimum !== undefined && value < minimum) || (maximum !== undefined && value > maximum)) {
+        if (minimum !== undefined && maximum !== undefined) {
+            return `${label} must be an integer from ${minimum} through ${maximum}.`;
+        }
+        if (minimum !== undefined) return `${label} must be an integer greater than or equal to ${minimum}.`;
+        return `${label} must be an integer less than or equal to ${maximum}.`;
+    }
+    return null;
+};
+
+const relativeMagnitudeMaximum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
+    const minimum = integerMinimum(input);
+    const maximum = integerMaximum(input);
+    if (minimum === undefined || maximum === undefined) return undefined;
+    return Math.max(Math.abs(minimum), Math.abs(maximum));
+};
 
 function v2AuthorityVersion(dashboard: BioXpOperatorDashboardV2 | undefined): string | null {
     if (!dashboard) return null;
@@ -282,43 +320,58 @@ export function BioXpCockpit() {
             ?? action?.unavailable_reason
             ?? fallback;
     };
+    const robotActionDisabledReason = (actionId: string): string | null => {
+        const action = operatorActionById(actionId);
+        if (!action) return 'Robot action unavailable.';
+        if (action.enabled !== true) {
+            return action.disabled_reason
+                ?? action.provider_unavailable_reason
+                ?? action.unavailable_reason
+                ?? 'Robot action unavailable.';
+        }
+        return null;
+    };
+    const xMoveAction = operatorActionById('oem.x.move_steps');
+    const xMoveInput = xMoveAction?.inputs.find((input) => input.name === 'steps');
     const xAbsoluteAction = operatorActionById('oem.x.move_absolute');
     const xAbsoluteInput = xAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
-    const xAbsoluteMinimum = Math.max(60, typeof xAbsoluteInput?.minimum === 'number' ? xAbsoluteInput.minimum : 0);
-    const xAbsoluteMaximum = Math.min(90263, typeof xAbsoluteInput?.maximum === 'number' ? xAbsoluteInput.maximum : 90263);
-    const xRelativeLimitMargin = 20;
-    const xRelativeMaximum = 90263 - xRelativeLimitMargin;
+    const xAbsoluteMinimum = integerMinimum(xAbsoluteInput);
+    const xAbsoluteMaximum = integerMaximum(xAbsoluteInput);
+    const xRelativeMaximum = relativeMagnitudeMaximum(xMoveInput);
+    const zMoveAction = operatorActionById('oem.z.move_steps');
+    const zMoveInput = zMoveAction?.inputs.find((input) => input.name === 'steps');
+    const zRelativeMaximum = relativeMagnitudeMaximum(zMoveInput);
+    const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
+    const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
+    const zAbsoluteMinimum = integerMinimum(zAbsoluteInput);
+    const zAbsoluteMaximum = integerMaximum(zAbsoluteInput);
 
     const xNegativeInputs = useMemo(() => ({ steps: -Math.abs(manualSteps.x) }), [manualSteps.x]);
     const xPositiveInputs = useMemo(() => ({ steps: Math.abs(manualSteps.x) }), [manualSteps.x]);
     const xAbsoluteInputs = useMemo(() => ({ position_steps: absoluteTargets.x }), [absoluteTargets.x]);
     const xHomeInputs = useMemo(() => ({}), []);
-    const xRelativeMagnitudeInRange = Number.isInteger(manualSteps.x)
-        && Math.abs(manualSteps.x) >= 1
-        && Math.abs(manualSteps.x) <= xRelativeMaximum;
-    const xAbsoluteTargetInRange = Number.isInteger(absoluteTargets.x)
-        && absoluteTargets.x >= xAbsoluteMinimum
-        && absoluteTargets.x <= xAbsoluteMaximum;
-    const zAbsoluteAction = operatorActionById('oem.z.move_absolute');
-    const zAbsoluteInput = zAbsoluteAction?.inputs.find((input) => input.name === 'position_steps');
-    const zAbsoluteMinimum = typeof zAbsoluteInput?.minimum === 'number' ? zAbsoluteInput.minimum : 0;
-    const zAbsoluteMaximum = typeof zAbsoluteInput?.maximum === 'number' ? zAbsoluteInput.maximum : 160000;
-    const zAbsoluteStaticBlocker = zAbsoluteAction?.dependencies.find(
-        (dependency) => dependency.key !== 'z_target_oem_envelope' && dependency.met !== true,
-    );
-    const zAbsoluteTargetInRange = Number.isInteger(absoluteTargets.z)
-        && absoluteTargets.z >= zAbsoluteMinimum
-        && absoluteTargets.z <= zAbsoluteMaximum;
-    const zAbsoluteDisabledReason = !zAbsoluteAction
-        ? 'Robot action unavailable.'
-        : zAbsoluteAction.provider_available !== true
-            ? zAbsoluteAction.provider_unavailable_reason ?? 'Robot action unavailable.'
-            : zAbsoluteStaticBlocker
-                ? zAbsoluteStaticBlocker.reason ?? zAbsoluteAction.disabled_reason ?? 'Robot action unavailable.'
-                : !zAbsoluteTargetInRange
-                    ? `Requested Z target must be an integer from ${zAbsoluteMinimum} through ${zAbsoluteMaximum}.`
-                    : null;
+    const xNegativeDisabledReason = integerInputError(xNegativeInputs.steps, xMoveInput, 'Requested X steps')
+        ?? robotActionDisabledReason('oem.x.move_steps');
+    const xPositiveDisabledReason = integerInputError(xPositiveInputs.steps, xMoveInput, 'Requested X steps')
+        ?? robotActionDisabledReason('oem.x.move_steps');
+    const xAbsoluteDisabledReason = integerInputError(absoluteTargets.x, xAbsoluteInput, 'Requested X target')
+        ?? robotActionDisabledReason('oem.x.move_absolute');
+    const xHomeDisabledReason = robotActionDisabledReason('oem.x.manual_panel_home');
+    const xNegativeEnabled = xNegativeDisabledReason === null;
+    const xPositiveEnabled = xPositiveDisabledReason === null;
+    const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
+    const xHomeEnabled = xHomeDisabledReason === null;
+    const zNegativeDisabledReason = integerInputError(-Math.abs(manualSteps.z), zMoveInput, 'Requested Z steps')
+        ?? robotActionDisabledReason('oem.z.move_steps');
+    const zPositiveDisabledReason = integerInputError(Math.abs(manualSteps.z), zMoveInput, 'Requested Z steps')
+        ?? robotActionDisabledReason('oem.z.move_steps');
+    const zAbsoluteDisabledReason = integerInputError(absoluteTargets.z, zAbsoluteInput, 'Requested Z target')
+        ?? robotActionDisabledReason('oem.z.move_absolute');
+    const zHomeDisabledReason = robotActionDisabledReason('oem.z.manual_home');
+    const zNegativeEnabled = zNegativeDisabledReason === null;
+    const zPositiveEnabled = zPositiveDisabledReason === null;
     const zAbsoluteEnabled = zAbsoluteDisabledReason === null;
+    const zHomeEnabled = zHomeDisabledReason === null;
     const xAxisDashboard: BioXpOperatorDashboardXAxis | undefined = dashboard?.x_axis;
     const xStatus = xAxisDashboard?.status;
     const xProvider = xAxisDashboard?.provider;
@@ -348,32 +401,6 @@ export function BioXpCockpit() {
         ?? xAxisDashboard?.latest_receipt
         ?? xProvider?.lifecycle?.latest_receipt
         ?? null;
-    const xActionStaticBlocker = (actionId: string): string | null => {
-        const action = operatorActionById(actionId);
-        if (!action) return 'Robot action unavailable.';
-        if (action.provider_available !== true) return action.provider_unavailable_reason ?? 'Robot action unavailable.';
-        const blocker = (action.dependencies ?? []).find((dependency) =>
-            dependency.key !== 'x_relative_oem_envelope'
-            && dependency.key !== 'x_target_oem_envelope'
-            && dependency.met !== true,
-        );
-        if (blocker) return blocker.reason ?? action.disabled_reason ?? 'Robot action unavailable.';
-        return null;
-    };
-    const xNegativeDisabledReason = !xRelativeMagnitudeInRange
-        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xActionStaticBlocker('oem.x.move_steps');
-    const xPositiveDisabledReason = !xRelativeMagnitudeInRange
-        ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xActionStaticBlocker('oem.x.move_steps');
-    const xAbsoluteDisabledReason = !xAbsoluteTargetInRange
-        ? `Requested X target must be an integer from ${xAbsoluteMinimum} through ${xAbsoluteMaximum}.`
-        : xActionStaticBlocker('oem.x.move_absolute');
-    const xHomeDisabledReason = xActionStaticBlocker('oem.x.manual_panel_home');
-    const xNegativeEnabled = xNegativeDisabledReason === null;
-    const xPositiveEnabled = xPositiveDisabledReason === null;
-    const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
-    const xHomeEnabled = xHomeDisabledReason === null;
 
     const invokeAction = (
         actionId: string,
@@ -424,10 +451,13 @@ export function BioXpCockpit() {
         }
         if (axis === 'z') {
             if (operation === 'move-negative') {
+                if (!zNegativeEnabled) return;
                 invokeAction('oem.z.move_steps', { steps: -Math.abs(manualSteps.z) });
             } else if (operation === 'move-positive') {
+                if (!zPositiveEnabled) return;
                 invokeAction('oem.z.move_steps', { steps: Math.abs(manualSteps.z) });
             } else if (operation === 'home' || operation === 'commission-home') {
+                if (!zHomeEnabled) return;
                 invokeAction('oem.z.manual_home', {});
             }
             return;
@@ -458,6 +488,7 @@ export function BioXpCockpit() {
             return;
         }
         if (axis === 'z') {
+            if (!zAbsoluteEnabled) return;
             invokeAction('oem.z.move_absolute', { position_steps: absoluteTargets.z });
             return;
         }
@@ -788,13 +819,14 @@ export function BioXpCockpit() {
                                         <input
                                             type="number"
                                             min={1}
-                                            max={axis === 'x' ? xRelativeMaximum : 160000}
+                                            max={axis === 'x' ? xRelativeMaximum : axis === 'z' ? zRelativeMaximum : 160000}
                                             step={1}
                                             value={manualSteps[axis]}
                                             onChange={(event) => {
                                                 const parsed = Number.parseInt(event.target.value || '1', 10);
-                                                const boundedMaximum = axis === 'x' ? xRelativeMaximum : 160000;
-                                                const bounded = Number.isFinite(parsed) ? Math.max(1, Math.min(boundedMaximum, Math.abs(parsed))) : 1;
+                                                const boundedMaximum = axis === 'x' ? xRelativeMaximum : axis === 'z' ? zRelativeMaximum : 160000;
+                                                const magnitude = Number.isFinite(parsed) ? Math.max(1, Math.abs(parsed)) : 1;
+                                                const bounded = boundedMaximum === undefined ? magnitude : Math.min(boundedMaximum, magnitude);
                                                 setManualSteps((current) => ({ ...current, [axis]: bounded }));
                                             }}
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
@@ -817,8 +849,8 @@ export function BioXpCockpit() {
                                         <div className="mt-1 flex gap-2">
                                             <input
                                                 type="number"
-                                                min={axis === 'x' ? xAbsoluteMinimum : undefined}
-                                                max={axis === 'x' ? xAbsoluteMaximum : undefined}
+                                                min={axis === 'x' ? xAbsoluteMinimum : axis === 'z' ? zAbsoluteMinimum : undefined}
+                                                max={axis === 'x' ? xAbsoluteMaximum : axis === 'z' ? zAbsoluteMaximum : undefined}
                                                 step={1}
                                                 value={absoluteTargets[axis]}
                                                 onChange={(event) => {
@@ -846,7 +878,7 @@ export function BioXpCockpit() {
                                             <p className="mt-1"><strong>Lifecycle:</strong> {xLifecycle} · <strong>Authority:</strong> {xAuthority}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {xLeftSwitchState} / {xRightSwitchState} · <strong>GAP13/12 disabled:</strong> {String(xLeftSwitchDisabled)} / {String(xRightSwitchDisabled)}</p>
                                             <p className="mt-1"><strong>Configured GAP4/5/6/205:</strong> {xMaxSpeed} / {xMaxAcceleration} / {xMaxCurrent} / {xStallGuard}</p>
-                                            <p className="mt-1"><strong>Source range:</strong> 0..90263 · <strong>Effective absolute minimum:</strong> 60 · <strong>Relative moves:</strong> 20-step inner margin</p>
+                                            <p className="mt-1"><strong>Catalog absolute bounds:</strong> {xAbsoluteMinimum ?? 'unbounded'}..{xAbsoluteMaximum ?? 'unbounded'} · <strong>Catalog relative magnitude:</strong> {xRelativeMaximum ?? 'unbounded'}</p>
                                             <p className="mt-1"><strong>Connection generation:</strong> {xGeneration} · <strong>Board lifecycle generation:</strong> {xBoardGeneration} · <strong>Fresh:</strong> {xBoardGenerationFresh === true ? 'yes' : xBoardGenerationFresh === false ? 'no' : 'unknown'}</p>
                                             <p className="mt-1"><strong>Serial-206 D1 adaptation:</strong> GAP12 right switch disabled and GAP13 left switch enabled. Masks {xSwitchMasksVerified === true ? 'verified' : xSwitchMasksVerified === false ? 'not verified' : 'unknown'}; profile {xProfileVerified === true ? 'verified' : xProfileVerified === false ? 'not verified' : 'unknown'}.</p>
                                             <p className="mt-1 text-sky-200/80">Controller/software reference is reported exactly as published by the robot provider; it is not independent evidence of the physical X location.</p>
@@ -868,7 +900,7 @@ export function BioXpCockpit() {
                                                 <button
                                                     type="button"
                                                     className={actionClass}
-                                                    disabled={!linkConnected || operatorActionById('oem.z.clear')?.enabled !== true || busy}
+                                                    disabled={!linkConnected || operatorActionById('oem.z.clear')?.enabled !== true}
                                                     title={operatorActionById('oem.z.clear')?.disabled_reason ?? 'Move to the robot-owned clear position selected from tip and gantry state'}
                                                     onClick={() => invokeAction('oem.z.clear', {})}
                                                 >Z Clear (automatic OEM position)</button>
@@ -919,7 +951,22 @@ export function BioXpCockpit() {
                                     const isXNegative = xActionId === 'oem.x.move_steps' && operation === 'move-negative';
                                     const isXPositive = xActionId === 'oem.x.move_steps' && operation === 'move-positive';
                                     const isXHome = xActionId === 'oem.x.manual_panel_home';
-                                    const admissionEnabled = isXNegative ? xNegativeEnabled : isXPositive ? xPositiveEnabled : isXHome ? xHomeEnabled : action?.enabled === true;
+                                    const isZNegative = zActionId === 'oem.z.move_steps' && operation === 'move-negative';
+                                    const isZPositive = zActionId === 'oem.z.move_steps' && operation === 'move-positive';
+                                    const isZHome = zActionId === 'oem.z.manual_home';
+                                    const admissionEnabled = isXNegative
+                                        ? xNegativeEnabled
+                                        : isXPositive
+                                            ? xPositiveEnabled
+                                            : isXHome
+                                                ? xHomeEnabled
+                                                : isZNegative
+                                                    ? zNegativeEnabled
+                                                    : isZPositive
+                                                        ? zPositiveEnabled
+                                                        : isZHome
+                                                            ? zHomeEnabled
+                                                            : action?.enabled === true;
                                     const enabled = admissionEnabled;
                                     const unavailableReason = isXNegative
                                         ? xNegativeDisabledReason ?? 'Robot verifies this exact X move at dispatch.'
@@ -927,7 +974,13 @@ export function BioXpCockpit() {
                                             ? xPositiveDisabledReason ?? 'Robot verifies this exact X move at dispatch.'
                                             : isXHome
                                                 ? xHomeDisabledReason ?? 'Robot verifies this exact X Home at dispatch.'
-                                                : action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
+                                                : isZNegative
+                                                    ? zNegativeDisabledReason ?? 'Robot verifies this exact Z move at dispatch.'
+                                                    : isZPositive
+                                                        ? zPositiveDisabledReason ?? 'Robot verifies this exact Z move at dispatch.'
+                                                        : isZHome
+                                                            ? zHomeDisabledReason ?? 'Robot verifies this exact Z Home at dispatch.'
+                                                            : action?.disabled_reason ?? action?.unavailable_reason ?? 'Robot action unavailable.';
                                     return (
                                         <button
                                             key={operation}
