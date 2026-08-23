@@ -223,6 +223,8 @@ const alignmentSession: AlignmentSession = {
 
 const moveSource: OntMoveTableSource = {
     move_source_id: 'moves-dorado-v4.3.0',
+    attempt_number: 1,
+    predecessor_move_source_id: null,
     run_id: 'run-1',
     observed_generation: 3,
     raw_representation_id: 'blow5-indexed-1',
@@ -667,6 +669,11 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             state: 'running',
             reason_code: 'move_source_validation_running',
         };
+        const decoyRequestedSource: OntMoveTableSource = {
+            ...requestedExternalSource,
+            move_source_id: 'external-moves-decoy',
+            external_registration_receipt_id: 'ont-external-move-receipt-decoy',
+        };
         const readyExternalSource: OntMoveTableSource = {
             ...requestedExternalSource,
             state: 'ready',
@@ -674,7 +681,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         };
         apiMocks.registerExternalMoveBamCandidate.mockResolvedValue(requestedExternalSource);
         apiMocks.fetchMoveSources
-            .mockResolvedValueOnce({ items: [moveSource] })
+            .mockResolvedValueOnce({ items: [moveSource, decoyRequestedSource] })
             .mockResolvedValueOnce({ items: [moveSource, runningExternalSource] })
             .mockResolvedValue({ items: [moveSource, readyExternalSource] });
         apiMocks.fetchCapabilities
@@ -762,6 +769,54 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await settlePromises();
         expect(apiMocks.fetchCapabilities).toHaveBeenCalledTimes(2);
         expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not overlap external-source polls and aborts the pending request on cleanup', async () => {
+        const requestedExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-requested-overlap-guard',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-overlap',
+            state: 'requested',
+            reason_code: 'move_source_validation_requested',
+        };
+        let resolvePendingPoll: ((value: { items: OntMoveTableSource[] }) => void) | undefined;
+        let pendingSignal: AbortSignal | undefined;
+        const pendingPoll = new Promise<{ items: OntMoveTableSource[] }>((resolve) => {
+            resolvePendingPoll = resolve;
+        });
+        apiMocks.registerExternalMoveBamCandidate.mockResolvedValue(requestedExternalSource);
+        apiMocks.fetchMoveSources.mockResolvedValueOnce({ items: [moveSource] });
+        apiMocks.fetchMoveSources.mockImplementationOnce((_runId: string, _generation: number, signal?: AbortSignal) => {
+            pendingSignal = signal;
+            return pendingPoll;
+        });
+
+        vi.useFakeTimers();
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await act(async () => {
+            button('Register external move BAM').click();
+            await Promise.resolve();
+        });
+        await settlePromises();
+
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_500);
+        });
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+        expect(pendingSignal).toBeInstanceOf(AbortSignal);
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3_000);
+        });
+        expect(apiMocks.fetchMoveSources).toHaveBeenCalledTimes(2);
+
+        await act(async () => root.unmount());
+        expect(pendingSignal?.aborted).toBe(true);
+        resolvePendingPoll?.({ items: [moveSource, requestedExternalSource] });
+        await settlePromises();
     });
 
     it('keeps frontend mapping and move-source request contracts exact to the staged closed router', () => {

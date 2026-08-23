@@ -146,6 +146,7 @@ export function ReadAndSignalWorkbench({
     const [externalMoveBamMoleculeType, setExternalMoveBamMoleculeType] = useState<'dna' | 'rna'>('dna');
     const [externalMoveBamAvailability, setExternalMoveBamAvailability] = useState<string | null>(null);
     const [moveSources, setMoveSources] = useState<OntMoveTableSource[]>([]);
+    const [registeredExternalMoveSourceId, setRegisteredExternalMoveSourceId] = useState<string | null>(null);
     const [profiles, setProfiles] = useState<OntSignalMappingProfile[]>([]);
     const [calibration, setCalibration] = useState<OntSignalCalibrationJob | null>(null);
     const [preparationMode, setPreparationMode] = useState<OntSignalMappingMode>('signal_to_read');
@@ -326,6 +327,7 @@ export function ReadAndSignalWorkbench({
         setExternalMoveBamMoleculeType('dna');
         setExternalMoveBamAvailability(null);
         setMoveSources([]);
+        setRegisteredExternalMoveSourceId(null);
         setProfiles([]);
         setCalibration(null);
         setReadMapping(null);
@@ -431,34 +433,58 @@ export function ReadAndSignalWorkbench({
         });
     }, [alignmentJobId, alignmentSession?.ready, alignmentSession?.session_id, currentLocus?.contig, currentLocus?.end, currentLocus?.start, datasetId, identityKey, igvState, mode, observedGeneration, onViewerSessionChange, readId, readMapping?.mapping_job_id, referenceMapping?.mapping_job_id, referenceRevisionId, renderParams, runId, viewJob?.view_job_id, viewerAlignmentSessionId, viewerReferenceRevisionId, viewerSession]);
 
+    const activeExternalMoveSource = useMemo(() => (
+        registeredExternalMoveSourceId
+            ? moveSources.find((item) => item.move_source_id === registeredExternalMoveSourceId
+                && item.external_registration_receipt_id
+                && (item.state === 'requested' || item.state === 'running'))
+            : null
+    ), [moveSources, registeredExternalMoveSourceId]);
+
     useEffect(() => {
-        const externalSource = moveSources.find((item) => (
-            item.external_registration_receipt_id
-            && (item.state === 'requested' || item.state === 'running')
-        ));
-        if (!externalSource) return undefined;
+        if (!activeExternalMoveSource) return undefined;
         const generation = identityRef.current;
-        const moveSourceId = externalSource.move_source_id;
-        const handle = window.setInterval(() => {
-            void fetchOntMoveSources(runId, observedGeneration).then((payload) => {
-                if (generation !== identityRef.current) return;
+        const moveSourceId = activeExternalMoveSource.move_source_id;
+        const controller = new AbortController();
+        let inFlight = false;
+        let requestSequence = 0;
+        const poll = async () => {
+            if (inFlight || controller.signal.aborted) return;
+            inFlight = true;
+            const sequence = ++requestSequence;
+            try {
+                const payload = await fetchOntMoveSources(runId, observedGeneration, controller.signal);
+                if (
+                    controller.signal.aborted
+                    || generation !== identityRef.current
+                    || sequence !== requestSequence
+                ) return;
                 const next = payload.items.find((item) => item.move_source_id === moveSourceId);
                 setMoveSources(payload.items);
                 if (next && TERMINAL_STATES.has(next.state)) {
                     window.clearInterval(handle);
                     if (next.state === 'ready') {
                         void refreshAuthorities().catch((reason) => {
-                            if (generation === identityRef.current) setError(message(reason));
+                            if (generation === identityRef.current && !controller.signal.aborted) setError(message(reason));
                         });
                     }
                 }
-            }).catch((reason) => {
-                if (generation === identityRef.current) setError(message(reason));
-            });
+            } catch (reason) {
+                if (!controller.signal.aborted && generation === identityRef.current) setError(message(reason));
+            } finally {
+                if (sequence === requestSequence) inFlight = false;
+            }
+        };
+        const handle = window.setInterval(() => {
+            void poll();
         }, 1500);
-        return () => window.clearInterval(handle);
+        return () => {
+            controller.abort();
+            window.clearInterval(handle);
+        };
     }, [
-        moveSources,
+        activeExternalMoveSource?.move_source_id,
+        activeExternalMoveSource?.state,
         observedGeneration,
         refreshAuthorities,
         runId,
@@ -601,6 +627,7 @@ export function ReadAndSignalWorkbench({
                 molecule_type: externalMoveBamMoleculeType,
             });
             if (generation !== identityRef.current) return;
+            setRegisteredExternalMoveSourceId(created.move_source_id);
             setMoveSources((current) => [
                 ...current.filter((item) => item.move_source_id !== created.move_source_id),
                 created,

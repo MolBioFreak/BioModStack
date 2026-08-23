@@ -44,7 +44,16 @@ from database import (
     OntSquigualiserViewJob,
 )
 from migrations.add_ont_signal_workbench import migrate
+from migrations.add_ont_external_move_bam_receipts import migrate as migrate_external_move_bam
+from migrations.add_ont_move_source_attempt_lineage import migrate as migrate_move_source_lineage
+from migrations.seal_ont_move_source_terminal_immutability import migrate as migrate_terminal_move_source_immutability
+from migrations.seal_ont_external_move_bam_receipt_binding import migrate as migrate_external_receipt_binding
 from migrations import runner as migration_runner
+from molbio_ngs_models import (
+    MolBioNGSDomainState,
+    MolBioNGSDomainStateRevision,
+    MolBioNGSGlobalBinding,
+)
 from migrations.runner import MIGRATIONS
 from routers import ont_signal_workbench as router
 from services import ont_signal_workbench as service
@@ -56,6 +65,56 @@ MODEL_ID = "dna_r10.4.1_e8.2_400bps_sup@v4.3.0"
 READ_IDS = ["read-1", "read-2"]
 READ_INVENTORY_SHA256 = hashlib.sha256("read-1\nread-2\n".encode()).hexdigest()
 OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+@pytest.mark.asyncio
+async def test_domain_revision_authority_returns_current_binding_and_digests() -> None:
+    domain_id = "domain-1"
+    state_revision = SimpleNamespace(
+        id="state-rev-2",
+        global_domain_experiment_id=domain_id,
+        binding_revision_id="binding-rev-2",
+        payload_sha256="a" * 64,
+        membership_graph_sha256="b" * 64,
+        global_domain_experiment_revision_id="global-rev-2",
+    )
+    domain_state = SimpleNamespace(
+        global_domain_experiment_id=domain_id,
+        current_state_revision_id=state_revision.id,
+        current_binding_revision_id=state_revision.binding_revision_id,
+        head_generation=7,
+    )
+    binding = SimpleNamespace(
+        binding_revision_id="binding-rev-2",
+        global_domain_experiment_id=domain_id,
+        global_domain_experiment_revision_id="global-rev-2",
+        global_domain_experiment_revision_digest="c" * 64,
+    )
+
+    class DomainSession:
+        async def get(self, model: Any, identifier: str) -> Any:
+            values = {
+                MolBioNGSDomainState: domain_state,
+                MolBioNGSDomainStateRevision: state_revision,
+                MolBioNGSGlobalBinding: binding,
+            }
+            if model is MolBioNGSDomainState:
+                return values[model] if identifier == domain_id else None
+            if model is MolBioNGSDomainStateRevision:
+                return values[model] if identifier == state_revision.id else None
+            return values[model] if identifier == binding.binding_revision_id else None
+
+    authority = await service._resolve_domain_revision_authority(DomainSession(), domain_id)
+    assert authority == {
+        "schema": "bms.molbio.domain-revision-authority.v1",
+        "global_domain_experiment_id": domain_id,
+        "state_revision_id": "state-rev-2",
+        "state_revision_sha256": "a" * 64,
+        "membership_graph_sha256": "b" * 64,
+        "binding_revision_id": "binding-rev-2",
+        "binding_revision_digest": "c" * 64,
+        "head_generation": 7,
+    }
 
 
 def _viewer_create_states() -> dict[str, Any]:
@@ -95,6 +154,18 @@ def _bootstrap_migration_parents(db_path: Path) -> None:
             CREATE TABLE jobs (id VARCHAR(36) PRIMARY KEY NOT NULL);
             """
         )
+
+
+def _materialize_exact_ont_migration_chain(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP TABLE IF EXISTS ont_external_move_bam_registration_receipts")
+        connection.execute("DROP TABLE IF EXISTS ont_move_table_sources")
+        connection.commit()
+    migrate(str(db_path))
+    migrate_external_move_bam(str(db_path))
+    migrate_move_source_lineage(str(db_path))
+    migrate_terminal_move_source_immutability(str(db_path))
 
 
 def test_migration_registers_closed_tables_checks_foreign_keys_and_is_idempotent(
@@ -489,7 +560,7 @@ def _assert_v33_startup_authority(db_path: Path) -> None:
         """
         with pytest.raises(sqlite3.IntegrityError, match="exactly one producer authority"):
             connection.execute(invalid_source, ("startup-xor", None, "1" * 64))
-        with pytest.raises(sqlite3.IntegrityError, match="external receipt authority does not exist"):
+        with pytest.raises(sqlite3.IntegrityError, match="external receipt.*"):
             connection.execute(
                 invalid_source,
                 ("startup-dangling", "missing-receipt", "2" * 64),
@@ -522,7 +593,7 @@ async def test_fresh_database_startup_applies_and_attests_migration_33_before_us
         with sqlite3.connect(db_path) as connection:
             assert connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ont_move_table_sources'"
-            ).fetchone() == (1,)
+            ).fetchone() is None
             assert connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
             ).fetchone() is None
@@ -559,10 +630,35 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
+        for version in (35, 36):
+            connection.execute(
+                "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
+                (
+                    migration_runner._migration_content_sha256(
+                        next(item for item in MIGRATIONS if item.version == version)
+                    ),
+                    version,
+                ),
+            )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    _materialize_exact_ont_migration_chain(db_path)
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
+    migrate_terminal_move_source_immutability(str(db_path))
+    migrate_external_receipt_binding(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        for version in (37, 38):
+            connection.execute(
+                "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
+                (
+                    migration_runner._migration_content_sha256(
+                        next(item for item in MIGRATIONS if item.version == version)
+                    ),
+                    version,
+                ),
+            )
+        connection.commit()
     monkeypatch.setattr(database_models, "engine", startup_engine)
     try:
         await database_models.init_db()
@@ -601,10 +697,34 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
         )
         connection.execute(
             "UPDATE schema_migrations SET content_sha256=? WHERE version=34",
-            (migration_runner._migration_content_sha256(MIGRATIONS[-1]),),
+            (migration_runner._migration_content_sha256(next(item for item in MIGRATIONS if item.version == 34)),),
         )
+        for version in (35, 36):
+            connection.execute(
+                "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
+                (
+                    migration_runner._migration_content_sha256(
+                        next(item for item in MIGRATIONS if item.version == version)
+                    ),
+                    version,
+                ),
+            )
         connection.commit()
-    MIGRATIONS[-1].fn(str(db_path))
+    _materialize_exact_ont_migration_chain(db_path)
+    next(item for item in MIGRATIONS if item.version == 34).fn(str(db_path))
+    migrate_external_receipt_binding(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        for version in (37, 38):
+            connection.execute(
+                "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
+                (
+                    migration_runner._migration_content_sha256(
+                        next(item for item in MIGRATIONS if item.version == version)
+                    ),
+                    version,
+                ),
+            )
+        connection.commit()
     with sqlite3.connect(db_path) as connection:
         connection.execute("DROP TRIGGER trg_ont_move_source_exact_producer_insert")
         connection.execute(
@@ -2533,7 +2653,12 @@ async def test_move_source_registration_is_nofollow_job_owned_and_external_recei
                     status="completed",
                     model_id="dorado",
                     mode="basecall",
-                    params={"dorado_resolved_model_id": MODEL_ID, "emit_moves": True},
+                    params={
+                        "dorado_resolved_model_id": MODEL_ID,
+                        "emit_moves": True,
+                        "source_instrument_run_id": "run-1",
+                        "source_instrument_observed_generation": 1,
+                    },
                     provenance={
                         "ont_dorado_terminal_products": {
                             "schema": "biomodstack.ont_dorado_terminal_products.v1",
@@ -2556,12 +2681,27 @@ async def test_move_source_registration_is_nofollow_job_owned_and_external_recei
                     output_dir=str(owned),
                 ),
                 Job(
+                    id="move-job-wrong-generation",
+                    name="wrong generation producer",
+                    status="completed",
+                    model_id="dorado",
+                    mode="basecall",
+                    params={
+                        "source_instrument_run_id": "other-run",
+                        "source_instrument_observed_generation": 99,
+                    },
+                    output_dir=str(owned),
+                ),
+                Job(
                     id="move-job-wrong-root",
                     name="wrong move producer",
                     status="completed",
                     model_id="dorado",
                     mode="basecall",
-                    params={},
+                    params={
+                        "source_instrument_run_id": "run-1",
+                        "source_instrument_observed_generation": 1,
+                    },
                     output_dir=str(owned),
                 ),
                 Job(
@@ -2570,7 +2710,10 @@ async def test_move_source_registration_is_nofollow_job_owned_and_external_recei
                     status="completed",
                     model_id="dorado",
                     mode="basecall",
-                    params={},
+                    params={
+                        "source_instrument_run_id": "run-1",
+                        "source_instrument_observed_generation": 1,
+                    },
                     output_dir=str(approved / "linked-output"),
                 ),
                 InputFile(
@@ -2597,6 +2740,42 @@ async def test_move_source_registration_is_nofollow_job_owned_and_external_recei
             ]
         )
         await session.commit()
+
+        owned_job = await session.get(Job, "move-job-owned")
+        assert owned_job is not None
+        session.add(
+            Job(
+                id="move-job-legacy-anchor",
+                name="legacy anchor producer",
+                status="completed",
+                model_id="dorado",
+                mode="basecall",
+                params={
+                    "dorado_resolved_model_id": MODEL_ID,
+                    "emit_moves": True,
+                },
+                provenance=owned_job.provenance,
+                output_dir=str(owned),
+            )
+        )
+        await session.commit()
+        legacy_job = await session.get(Job, "move-job-legacy-anchor")
+        assert legacy_job is not None
+        legacy_identity = service._derive_source_runtime_identity(legacy_job, owned_sha256)
+        assert legacy_identity["authority_state"] == "legacy_unknown"
+
+        with pytest.raises(service.OntSignalError, match="run generation"):
+            await service.register_move_source(
+                session,
+                run_id="run-1",
+                observed_generation=1,
+                raw_representation_id="raw-blow5-1",
+                input_file_id="move-input-owned",
+                molecule_type="dna",
+                source_job_id="move-job-wrong-generation",
+                external_registration_receipt_id=None,
+                source_runtime_identity=None,
+            )
 
         created = await service.register_move_source(
             session,
@@ -3385,7 +3564,12 @@ async def test_move_source_registration_seals_server_runtime_authority_or_explic
                     status="completed",
                     model_id="nanopore",
                     mode="basecall_dna",
-                    params={"dorado_resolved_model_id": MODEL_ID, "emit_moves": True},
+                    params={
+                        "dorado_resolved_model_id": MODEL_ID,
+                        "emit_moves": True,
+                        "source_instrument_run_id": "run-1",
+                        "source_instrument_observed_generation": 1,
+                    },
                     provenance={
                         "ont_dorado_terminal_products": {
                             "schema": "biomodstack.ont_dorado_terminal_products.v1",
@@ -3413,7 +3597,10 @@ async def test_move_source_registration_seals_server_runtime_authority_or_explic
                     status="completed",
                     model_id="legacy-basecaller",
                     mode="basecall",
-                    params={},
+                    params={
+                        "source_instrument_run_id": "run-1",
+                        "source_instrument_observed_generation": 1,
+                    },
                     provenance={},
                     output_dir=str(legacy_root),
                 ),

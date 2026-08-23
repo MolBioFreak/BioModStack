@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import sys
 import types
 from datetime import UTC, datetime, timedelta
@@ -797,6 +798,13 @@ def test_container_command_sets_worker_label_and_finite_fsize(
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "podman")
+    monkeypatch.setattr(
+        worker_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
+        ),
+    )
     worker = OntSignalWorker(None, None)
 
     command = worker._container_command(
@@ -806,12 +814,90 @@ def test_container_command_sets_worker_label_and_finite_fsize(
     )
 
     assert "io.biomodstack.owner=ont-signal-worker" in command
+    assert "--pull=never" in command
     assert "--ulimit" in command
     assert any(value.startswith("fsize=") for value in command)
     assert "--rm" not in command
     assert "type=bind,src=" + str(output) + ",dst=/output" in command
     assert "type=bind,src=" + str(broker) + ",dst=/broker" in command
     assert not any("/proc/" in value and "/fd/" in value for value in command)
+
+
+def test_container_command_fails_closed_when_approved_image_is_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    broker = tmp_path / "broker"
+    broker.mkdir(mode=0o700)
+    digest = worker_module.APPROVED_OCI_DIGEST.removeprefix("sha256:")
+    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
+    monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
+    monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
+    monkeypatch.setattr(
+        worker_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 1, stdout="", stderr="image is absent"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="local approved Squigualiser image"):
+        OntSignalWorker(None, None)._container_command(output, broker, kind="mapping")
+
+
+def test_squigualiser_build_script_rejects_image_id_outside_runtime_policy(tmp_path: Path) -> None:
+    runtime = tmp_path / "docker"
+    runtime.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "if sys.argv[1] == 'build': raise SystemExit(0)\n"
+        "if sys.argv[1:3] == ['image', 'inspect']:\n"
+        "    print(os.environ['FAKE_IMAGE_ID'])\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(64)\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    script = Path(__file__).parents[3] / "scripts" / "build_ont_squigualiser_runtime.sh"
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "BMS_CONTAINER_RUNTIME": "docker",
+        "FAKE_IMAGE_ID": "sha256:" + "0" * 64,
+    }
+    result = subprocess.run(
+        ["bash", str(script)], env=environment, capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "does not match the approved runtime policy" in result.stderr
+
+
+def test_squigualiser_build_script_accepts_image_id_from_runtime_policy(tmp_path: Path) -> None:
+    runtime = tmp_path / "docker"
+    runtime.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "if sys.argv[1] == 'build': raise SystemExit(0)\n"
+        "if sys.argv[1:3] == ['image', 'inspect']:\n"
+        "    print(os.environ['FAKE_IMAGE_ID'])\n"
+        "    raise SystemExit(0)\n"
+        "raise SystemExit(64)\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    script = Path(__file__).parents[3] / "scripts" / "build_ont_squigualiser_runtime.sh"
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "BMS_CONTAINER_RUNTIME": "docker",
+        "FAKE_IMAGE_ID": worker_module.APPROVED_OCI_DIGEST,
+    }
+    result = subprocess.run(
+        ["bash", str(script)], env=environment, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"BMS_ONT_SQUIGUALISER_IMAGE={worker_module.APPROVED_OCI_DIGEST}" in result.stdout
 
 
 def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_source(
@@ -846,6 +932,13 @@ def test_retained_parent_keeps_exact_inode_bytes_and_command_never_reopens_sourc
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE", f"sha256:{digest}")
     monkeypatch.setenv("BMS_ONT_SQUIGUALISER_IMAGE_DIGEST", digest)
     monkeypatch.setenv("BMS_CONTAINER_RUNTIME", "docker")
+    monkeypatch.setattr(
+        worker_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout=f"sha256:{digest}\n", stderr=""
+        ),
+    )
     command = OntSignalWorker(None, None)._container_command(
         output, broker, kind="mapping"
     )

@@ -2389,12 +2389,85 @@ class MdReconcilerLease(Base):
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
+_ONT_RECEIPT_COLUMN_CONTRACT = (
+    ("id", "VARCHAR(128)", 1, None, 1),
+    ("candidate_id", "VARCHAR(64)", 1, None, 0),
+    ("run_id", "VARCHAR(80)", 1, None, 0),
+    ("observed_generation", "INTEGER", 1, None, 0),
+    ("raw_representation_id", "VARCHAR(96)", 1, None, 0),
+    ("server_relative_path", "TEXT", 1, None, 0),
+    ("root_device", "INTEGER", 1, None, 0),
+    ("root_inode", "INTEGER", 1, None, 0),
+    ("file_device", "INTEGER", 1, None, 0),
+    ("file_inode", "INTEGER", 1, None, 0),
+    ("file_mtime_ns", "INTEGER", 1, None, 0),
+    ("file_ctime_ns", "INTEGER", 1, None, 0),
+    ("artifact_sha256", "VARCHAR(64)", 1, None, 0),
+    ("artifact_size_bytes", "INTEGER", 1, None, 0),
+    ("molecule_type", "VARCHAR(16)", 1, None, 0),
+    ("created_at", "VARCHAR", 1, None, 0),
+)
+_ONT_RECEIPT_INDEX_CONTRACT = frozenset(
+    {
+        ("sqlite_autoindex_ont_external_move_bam_registration_receipts_1", "pk", False, True, ("id",)),
+        ("sqlite_autoindex_ont_external_move_bam_registration_receipts_2", "u", False, True, ("run_id", "observed_generation", "raw_representation_id", "candidate_id", "molecule_type")),
+        ("ix_ont_external_move_bam_registration_generation", "c", False, False, ("run_id", "observed_generation")),
+    }
+)
+_ONT_RECEIPT_FOREIGN_KEY_CONTRACT = frozenset(
+    {
+        ("raw_representation_id", "ont_raw_signal_representations", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("run_id", "ont_instrument_runs", "id", "NO ACTION", "RESTRICT", "NONE"),
+    }
+)
+_ONT_RECEIPT_SQL_FRAGMENTS = (
+    "CHECK (artifact_size_bytes > 0)",
+    "CHECK (molecule_type IN ('dna','rna'))",
+)
+
+
+def _attest_sqlite_migration_ledger(db_path: str) -> None:
+    """Require an exact applied migration prefix and all available byte checksums."""
+    from migrations.runner import MIGRATIONS, _migration_content_sha256
+
+    try:
+        with sqlite3.connect(db_path) as connection:
+            rows = connection.execute(
+                "SELECT version, name, content_sha256 FROM schema_migrations ORDER BY version"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        if "no such table: schema_migrations" in str(exc):
+            raise RuntimeError("migration 33 authority is absent: migration ledger is unavailable") from exc
+        raise RuntimeError("migration ledger is unavailable") from exc
+    expected_prefix = MIGRATIONS[: len(rows)]
+    if len(rows) != len(expected_prefix) or [
+        (int(version), str(name)) for version, name, _checksum in rows
+    ] != [(migration.version, migration.name) for migration in expected_prefix]:
+        raise RuntimeError("migration ledger is not a contiguous exact prefix")
+    if len(rows) != len(MIGRATIONS):
+        raise RuntimeError("migration ledger is incomplete for startup")
+    for (version, _name, recorded_checksum), migration in zip(rows, expected_prefix, strict=True):
+        recorded = None if recorded_checksum is None else str(recorded_checksum)
+        if recorded in {None, "legacy_unknown"}:
+            if int(version) >= 33:
+                raise RuntimeError(
+                    f"migration ledger checksum is missing for version {int(version)}"
+                )
+            continue
+        if recorded != _migration_content_sha256(migration):
+            raise RuntimeError(
+                f"migration ledger checksum diverged for version {int(version)}"
+            )
+
+
 def _attest_sqlite_migration_33(db_path: str) -> None:
     """Prove migration 33 ledger and schema authority without synthesizing history."""
     from migrations.add_ont_external_move_bam_receipts import (
+        MIGRATION_33_TRIGGER_SQL,
         MIGRATION_33_TRIGGER_SQL_DIGESTS,
         migration_33_trigger_sql_digest,
     )
+    from migrations.ont_sqlite_schema_contract import assert_sqlite_table_contract, normalize_sql
     from migrations import runner as migration_runner
 
     with sqlite3.connect(db_path) as connection:
@@ -2413,6 +2486,23 @@ def _attest_sqlite_migration_33(db_path: str) -> None:
         next(migration for migration in migration_runner.MIGRATIONS if migration.version == 33)
     )
     with sqlite3.connect(db_path) as connection:
+        try:
+            assert_sqlite_table_contract(
+                connection,
+                table_name="ont_external_move_bam_registration_receipts",
+                columns=_ONT_RECEIPT_COLUMN_CONTRACT,
+                indexes=_ONT_RECEIPT_INDEX_CONTRACT,
+                foreign_keys=_ONT_RECEIPT_FOREIGN_KEY_CONTRACT,
+                sql_fragments=_ONT_RECEIPT_SQL_FRAGMENTS,
+                label="ONT external move-BAM receipt table",
+                triggers={
+                    name: normalize_sql(sql)
+                    for name, sql in MIGRATION_33_TRIGGER_SQL.items()
+                    if name.startswith("trg_ont_external_move_bam_receipt_")
+                },
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("migration 33 startup attestation failed") from exc
         ledger = connection.execute(
             "SELECT name, content_sha256 FROM schema_migrations WHERE version=33"
         ).fetchone()
@@ -2462,6 +2552,7 @@ def _attest_sqlite_migration_33(db_path: str) -> None:
 def _attest_sqlite_migration_34(db_path: str) -> None:
     """Prove move-source attempt lineage and its sealed migration ledger."""
     from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
     from migrations import runner as migration_runner
 
     expected_checksum = migration_runner._migration_content_sha256(
@@ -2475,30 +2566,82 @@ def _attest_sqlite_migration_34(db_path: str) -> None:
         if ledger != ("add_ont_move_source_attempt_lineage", expected_checksum):
             raise RuntimeError("migration 34 startup attestation failed")
         try:
+            assert_ont_move_source_table_contract(
+                connection,
+                include_external_receipt_binding=True,
+            )
             attest(connection)
         except RuntimeError as exc:
             raise RuntimeError("migration 34 startup attestation failed") from exc
 
 
-async def init_db():
-    """Bootstrap metadata, then attest migration authority before operational use."""
-    async with engine.begin() as conn:
-        if engine.dialect.name == "sqlite":
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
-            await conn.execute(text("PRAGMA busy_timeout=30000"))
-        await conn.run_sync(Base.metadata.create_all)
+def _attest_sqlite_migration_37(db_path: str) -> None:
+    """Prove migration 37 ledger identity and terminal trigger authority."""
+    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
+    from migrations import runner as migration_runner
 
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 37)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=37"
+        ).fetchone()
+        if ledger != ("seal_ont_move_source_terminal_immutability", expected_checksum):
+            raise RuntimeError("migration 37 startup attestation failed")
+        try:
+            assert_ont_move_source_table_contract(
+                connection,
+                include_external_receipt_binding=True,
+            )
+            attest(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 37 startup attestation failed") from exc
+
+
+def _attest_sqlite_migration_38(db_path: str) -> None:
+    """Prove migration 38 ledger identity and receipt tuple triggers."""
+    from migrations import runner as migration_runner
+    from migrations.seal_ont_external_move_bam_receipt_binding import assert_attested
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 38)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=38"
+        ).fetchone()
+        if ledger != ("seal_ont_external_move_bam_receipt_binding", expected_checksum):
+            raise RuntimeError("migration 38 startup attestation failed")
+        try:
+            assert_attested(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 38 startup attestation failed") from exc
+
+
+async def init_db():
+    """Require an already migrated authoritative core database before startup."""
     if engine.dialect.name == "sqlite":
         db_path = engine.url.database
         if not db_path or db_path == ":memory:":
             raise RuntimeError(
                 "SQLite startup migrations require a durable filesystem database path"
             )
-        await asyncio.to_thread(_attest_sqlite_migration_33, str(db_path))
-        await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
+    else:
+        db_path = None
 
     async with engine.begin() as conn:
-        await _ensure_schema(conn)
+        if engine.dialect.name == "sqlite":
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=30000"))
+
+    if db_path is not None:
+        await asyncio.to_thread(_attest_sqlite_migration_ledger, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_33, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_37, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
 
 
 async def _ensure_schema(conn):

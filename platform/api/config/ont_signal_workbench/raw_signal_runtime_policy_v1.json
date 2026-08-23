@@ -1,0 +1,11 @@
+{
+  "schema": "bms.ont-raw-signal-runtime-policy.v1",
+  "runtime_id": "sha256:2c8694b3c4f523aabdbffd1c0a1ed535c44d32d137e866fcafe64edf117f4408",
+  "oci_digest": "sha256:2c8694b3c4f523aabdbffd1c0a1ed535c44d32d137e866fcafe64edf117f4408",
+  "tools": {
+    "blue_crab": "0.5.0",
+    "slow5tools": "1.4.0",
+    "pyslow5": "1.4.0"
+  },
+  "network": "none"
+}

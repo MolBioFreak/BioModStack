@@ -1,5 +1,5 @@
 {
-  "content_sha256": "9ffe88b1e1f88f8628a4f23e6f2371ce97ea260c5e31ff6b1e01a9e601fa0b4f",
+  "content_sha256": "0eeffafbbec3b2a1dfb0fc3de6540b038701c760205bb7e446afd382e31921a9",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -13,6 +13,7 @@
     "platform/api/config/ngs_molbio/capability_inventory_v1.json",
     "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
+    "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
     "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
     "platform/api/database.py",
     "platform/api/experiment_database.py",
@@ -21,9 +22,13 @@
     "platform/api/experiment_operations.py",
     "platform/api/experiment_services.py",
     "platform/api/main.py",
+    "platform/api/migrations/add_ont_external_move_bam_receipts.py",
     "platform/api/migrations/add_ont_move_source_attempt_lineage.py",
     "platform/api/migrations/add_ont_signal_workbench.py",
+    "platform/api/migrations/ont_sqlite_schema_contract.py",
     "platform/api/migrations/runner.py",
+    "platform/api/migrations/seal_ont_external_move_bam_receipt_binding.py",
+    "platform/api/migrations/seal_ont_move_source_terminal_immutability.py",
     "platform/api/migrations/sqlite_sha256.py",
     "platform/api/model_registry.py",
     "platform/api/molbio_database.py",

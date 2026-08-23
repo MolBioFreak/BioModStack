@@ -38,10 +38,11 @@ from database import (
     OntInstrumentRun,
     OntInstrumentRunEvent,
     OntRawSignalDerivationJob,
+    OntRawSignalLookup,
     OntRawSignalRepresentation,
 )
 from migrations.seal_ont_external_source_identity import migrate as seal_external_source_identity
-from services import ont_raw_signal, ont_run_control
+from services import ont_raw_signal, ont_raw_signal_worker, ont_run_control
 from services.ont_raw_signal_worker import OntRawSignalWorker
 
 QUALIFICATION_ROOT = Path("/mnt/BioModStack/ont-raw-signal-qualification/BFX6NB_1_JAN26-EL-Q2-01/subset-pod5")
@@ -79,6 +80,53 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def test_semantic_output_receipt_binds_each_output_identity() -> None:
+    expected = {
+        "fp": {
+            "blow5": {"sha256": "a" * 64, "bytes": 10, "device": 1, "inode": 2, "mtime_ns": 3, "ctime_ns": 4},
+            "index": {"sha256": "b" * 64, "bytes": 11, "device": 1, "inode": 5, "mtime_ns": 6, "ctime_ns": 7},
+        }
+    }
+    ont_raw_signal._assert_semantic_output_identity(
+        expected,
+        "fp",
+        "blow5",
+        expected["fp"]["blow5"],
+    )
+    with pytest.raises(ValueError, match="semantic output identity"):
+        ont_raw_signal._assert_semantic_output_identity(
+            expected,
+            "fp",
+            "blow5",
+            {**expected["fp"]["blow5"], "inode": 99},
+        )
+
+
+def test_confined_stage_leaf_rejects_symlinked_intermediate(tmp_path: Path) -> None:
+    root = tmp_path / "stage-root"
+    target = tmp_path / "outside"
+    root.mkdir()
+    target.mkdir()
+    (root / "waveforms").symlink_to(target, target_is_directory=True)
+    with pytest.raises(OSError):
+        ont_raw_signal._prepare_confined_directory(root, ("waveforms", "lookup"))
+
+
+def test_waveform_output_writer_rejects_symlink(tmp_path: Path) -> None:
+    lookup = importlib.util.spec_from_file_location(
+        "ont_raw_signal_lookup_test", ROOT / "scripts" / "ont_raw_signal_lookup.py"
+    )
+    assert lookup and lookup.loader
+    module = importlib.util.module_from_spec(lookup)
+    lookup.loader.exec_module(module)
+    output = tmp_path / "waveform.json"
+    target = tmp_path / "outside.json"
+    target.write_text("outside", encoding="utf-8")
+    output.symlink_to(target)
+    with pytest.raises(OSError):
+        module._write_output_no_follow(output, {"schema": "bms.ont.raw-waveform.v1"})
 
 
 def _run_with_source_fds(command: list[str], fds: list[int], socket_path: Path, *, timeout: int) -> None:
@@ -273,6 +321,325 @@ def test_contract_07_runtime_packages_both_executables() -> None:
     assert "COPY scripts/ont_raw_signal_lookup.py /opt/bms/ont_raw_signal_lookup.py" in dockerfile
     assert "ont_raw_signal_validate.py --help" in dockerfile
     assert "ont_raw_signal_lookup.py --help" in dockerfile
+
+
+def _load_lookup():
+    path = ROOT / "scripts" / "ont_raw_signal_lookup.py"
+    spec = importlib.util.spec_from_file_location("ont_raw_signal_lookup_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_lookup_runtime_binds_blow5_and_index_identity_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blow5 = tmp_path / "reads.blow5"
+    index = tmp_path / "reads.blow5.idx"
+    output = tmp_path / "waveform.json"
+    blow5.write_bytes(b"blow5-bytes")
+    index.write_bytes(b"index-bytes")
+
+    def expected(path: Path) -> dict[str, int | str]:
+        stat_result = path.stat()
+        return {
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": stat_result.st_size,
+            "device": stat_result.st_dev,
+            "inode": stat_result.st_ino,
+            "mtime_ns": stat_result.st_mtime_ns,
+            "ctime_ns": stat_result.st_ctime_ns,
+        }
+
+    blow5_expected = expected(blow5)
+    index_expected = expected(index)
+    root_info = tmp_path.stat()
+    argv = [
+        "ont_raw_signal_lookup.py",
+        "--blow5", "/proc/self/fd/unbound-waveform-blow5",
+        "--index", "/proc/self/fd/unbound-waveform-index",
+        "--fd-socket", "/output/source-fd.sock",
+        "--read-id", "read-1",
+        "--max-samples", "20",
+        "--output", str(output),
+    ]
+    for prefix, values in (("blow5", blow5_expected), ("index", index_expected)):
+        for field, option in (
+            ("sha256", "sha256"),
+            ("bytes", "size"),
+            ("device", "device"),
+            ("inode", "inode"),
+            ("mtime_ns", "mtime-ns"),
+            ("ctime_ns", "ctime-ns"),
+        ):
+            argv.extend((f"--expected-{prefix}-{option}", str(values[field])))
+        argv.extend(
+            (
+                f"--expected-{prefix}-root-device", str(root_info.st_dev),
+                f"--expected-{prefix}-root-inode", str(root_info.st_ino),
+            )
+        )
+
+    opened: list[str] = []
+
+    class FakeSlow5:
+        def get_read(self, _read_id: str, *, pA: bool) -> dict[str, list[int]]:
+            assert pA is True
+            return {"signal": [1, 2, 3, 4]}
+
+        def close(self) -> None:
+            return None
+
+    def open_slow5(path: str, *_args: object) -> FakeSlow5:
+        opened.append(path)
+        return FakeSlow5()
+
+    source_fds = [
+        os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY),
+        os.open(blow5, os.O_RDONLY),
+        os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY),
+        os.open(index, os.O_RDONLY),
+    ]
+    monkeypatch.setitem(sys.modules, "pyslow5", SimpleNamespace(Open=open_slow5))
+    lookup = _load_lookup()
+    monkeypatch.setattr(
+        lookup, "_receive_source_descriptors", lambda _socket: [os.dup(fd) for fd in source_fds]
+    )
+    try:
+        monkeypatch.setattr(sys, "argv", argv)
+        assert lookup.main() == 0
+        assert opened and opened[0] != str(blow5)
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["source_identity"] == {"blow5": blow5_expected, "index": index_expected}
+
+        bad_argv = list(argv)
+        bad_argv[bad_argv.index("--expected-blow5-sha256") + 1] = "0" * 64
+        monkeypatch.setattr(sys, "argv", bad_argv)
+        with pytest.raises(ValueError, match="BLOW5 identity diverged"):
+            lookup.main()
+    finally:
+        for descriptor in source_fds:
+            os.close(descriptor)
+
+
+def test_lookup_uses_the_descriptor_snapshot_without_path_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blow5 = tmp_path / "reads.blow5"
+    index = tmp_path / "reads.blow5.idx"
+    output = tmp_path / "waveform.json"
+    blow5.write_bytes(b"blow5-bytes")
+    index.write_bytes(b"index-bytes")
+
+    def expected(path: Path) -> dict[str, int | str]:
+        info = path.stat()
+        return {
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": info.st_size,
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns,
+        }
+
+    blow5_expected = expected(blow5)
+    index_expected = expected(index)
+    root_info = tmp_path.stat()
+    argv = [
+        "ont_raw_signal_lookup.py",
+        "--blow5", "/proc/self/fd/unbound-waveform-blow5",
+        "--index", "/proc/self/fd/unbound-waveform-index",
+        "--fd-socket", "/output/source-fd.sock",
+        "--read-id", "read-1", "--max-samples", "20", "--output", str(output),
+    ]
+    for prefix, values in (("blow5", blow5_expected), ("index", index_expected)):
+        for field, option in (
+            ("sha256", "sha256"), ("bytes", "size"), ("device", "device"),
+            ("inode", "inode"), ("mtime_ns", "mtime-ns"), ("ctime_ns", "ctime-ns"),
+        ):
+            argv.extend((f"--expected-{prefix}-{option}", str(values[field])))
+        argv.extend(
+            (
+                f"--expected-{prefix}-root-device", str(root_info.st_dev),
+                f"--expected-{prefix}-root-inode", str(root_info.st_ino),
+            )
+        )
+
+    class FakeSlow5:
+        def get_read(self, _read_id: str, *, pA: bool) -> dict[str, list[int]]:
+            assert pA is True
+            return {"signal": [1]}
+
+        def close(self) -> None:
+            return None
+
+    source_fds = [
+        os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY),
+        os.open(blow5, os.O_RDONLY),
+        os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY),
+        os.open(index, os.O_RDONLY),
+    ]
+    blow5.unlink()
+    index.unlink()
+    monkeypatch.setitem(sys.modules, "pyslow5", SimpleNamespace(Open=lambda _path, _mode: FakeSlow5()))
+    lookup = _load_lookup()
+    monkeypatch.setattr(
+        lookup, "_receive_source_descriptors", lambda _socket: [os.dup(fd) for fd in source_fds]
+    )
+    monkeypatch.setattr(sys, "argv", argv)
+
+    try:
+        assert lookup.main() == 0
+        assert json.loads(output.read_text(encoding="utf-8"))["returned_sample_count"] == 1
+    finally:
+        for descriptor in source_fds:
+            os.close(descriptor)
+
+
+def test_external_validator_opens_an_attested_snapshot_and_removes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validator = _load_validator()
+    blow5 = tmp_path / "reads.blow5"
+    index = tmp_path / "reads.blow5.idx"
+    blow5.write_bytes(b"blow5-bytes")
+    index.write_bytes(b"index-bytes")
+
+    def expected(path: Path) -> dict[str, int | str]:
+        info = path.stat()
+        return {
+            "sha256": _sha256(path), "size": info.st_size, "device": info.st_dev,
+            "inode": info.st_ino, "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
+            "root_device": path.parent.stat().st_dev, "root_inode": path.parent.stat().st_ino,
+        }
+
+    args = argparse.Namespace(blow5=blow5, index=index)
+    for prefix, path in (("blow5", blow5), ("index", index)):
+        values = expected(path)
+        for field in ("sha256", "device", "inode", "mtime_ns", "ctime_ns", "root_device", "root_inode"):
+            setattr(args, f"expected_{prefix}_{field}", values[field])
+        setattr(args, f"expected_{prefix}_size", values["size"])
+
+    opened: list[Path] = []
+
+    class FakeSlow5:
+        def seq_reads(self, **_kwargs: object):
+            yield {
+                "read_id": "read-1", "signal": [1], "len_raw_signal": 1,
+                "digitisation": 1, "offset": 0, "range": 1, "sampling_rate": 1,
+            }
+
+        def get_read(self, _read_id: str, **_kwargs: object) -> dict[str, object]:
+            return {"read_id": "read-1"}
+
+        def close(self) -> None:
+            return None
+
+    def open_slow5(path: Path, *_args: object, **_kwargs: object) -> FakeSlow5:
+        opened.append(Path(path))
+        return FakeSlow5()
+
+    monkeypatch.setitem(sys.modules, "pyslow5", SimpleNamespace(Open=open_slow5))
+    payload = validator.external_blow5_validate(args)
+
+    assert payload["status"] == "passed"
+    assert opened and opened[0] != blow5
+    assert not opened[0].exists()
+
+
+def test_external_validator_consumes_received_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validator = _load_validator()
+    blow5 = tmp_path / "reads.blow5"
+    index = tmp_path / "reads.blow5.idx"
+    blow5.write_bytes(b"blow5-bytes")
+    index.write_bytes(b"index-bytes")
+    root_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    blow5_fd = os.open(blow5, os.O_RDONLY)
+    index_fd = os.open(index, os.O_RDONLY)
+
+    def expected(path: Path) -> dict[str, int | str]:
+        info = path.stat()
+        return {
+            "sha256": _sha256(path), "size": info.st_size, "device": info.st_dev,
+            "inode": info.st_ino, "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns,
+            "root_device": path.parent.stat().st_dev, "root_inode": path.parent.stat().st_ino,
+        }
+
+    args = argparse.Namespace(
+        blow5=Path(f"/proc/self/fd/{blow5_fd}"),
+        index=Path(f"/proc/self/fd/{index_fd}"),
+        external_file_fds=[blow5_fd, index_fd],
+        external_root_fds=[root_fd, root_fd],
+        receipt=tmp_path / "receipt.json",
+    )
+    for prefix, path in (("blow5", blow5), ("index", index)):
+        values = expected(path)
+        for field in ("sha256", "device", "inode", "mtime_ns", "ctime_ns", "root_device", "root_inode"):
+            setattr(args, f"expected_{prefix}_{field}", values[field])
+        setattr(args, f"expected_{prefix}_size", values["size"])
+
+    class FakeSlow5:
+        def seq_reads(self, **_kwargs: object):
+            yield {
+                "read_id": "read-1", "signal": [1], "len_raw_signal": 1,
+                "digitisation": 1, "offset": 0, "range": 1, "sampling_rate": 1,
+            }
+
+        def get_read(self, _read_id: str, **_kwargs: object) -> dict[str, object]:
+            return {"read_id": "read-1"}
+
+        def close(self) -> None:
+            return None
+
+    opened: list[str] = []
+
+    def open_slow5(path: str, *_args: object, **_kwargs: object) -> FakeSlow5:
+        opened.append(path)
+        return FakeSlow5()
+
+    monkeypatch.setitem(sys.modules, "pyslow5", SimpleNamespace(Open=open_slow5))
+    try:
+        payload = validator.external_blow5_validate(args)
+    finally:
+        os.close(blow5_fd)
+        os.close(index_fd)
+        os.close(root_fd)
+
+    assert payload["status"] == "passed"
+    assert opened and Path(opened[0]).name == "source.blow5"
+
+
+def test_external_validation_uses_descriptor_socket_without_input_path_mount(tmp_path: Path) -> None:
+    blow5 = tmp_path / "reads.blow5"
+    index = tmp_path / "reads.blow5.idx"
+    blow5.write_bytes(b"blow5-bytes")
+    index.write_bytes(b"index-bytes")
+    manifest = {
+        "artifacts": [
+            ont_raw_signal._file_artifact(blow5, "blow5", kind="blow5"),
+            ont_raw_signal._file_artifact(index, "index", kind="blow5_index"),
+        ]
+    }
+    source = OntRawSignalRepresentation(
+        id="external-source",
+        source_kind="external_native",
+        format="blow5",
+        artifact_manifest=manifest,
+    )
+    job, snapshot = _job(tmp_path / "staging")
+    job.profile_id = ont_raw_signal.EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
+
+    commands = ont_raw_signal._external_blow5_validation_commands(job, source, snapshot)
+
+    assert len(commands["source_authorities"]) == 2
+    assert commands["source_fd_count"] == 4
+    for command_name in ("quickcheck", "semantic_validate"):
+        command = commands[command_name]
+        assert "--fd-socket" in command
+        assert "/proc/self/fd/unbound-external-blow5" in command
+        assert "/proc/self/fd/unbound-external-index" in command
+        assert not any("dst=/input" in argument for argument in command)
 
 
 def test_contract_08_terminal_registration_requests_automatic_conversion() -> None:
@@ -614,6 +981,73 @@ async def test_execute_cancellation_terminates_and_reaps_child(
 
 
 @pytest.mark.asyncio
+async def test_transient_source_lease_failure_is_deferred_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class SessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class Job:
+        id = "job-transient-lease"
+        claim_token = "claim-transient-lease"
+        profile_id = ont_raw_signal.BLOW5_PROFILE_ID
+
+    deferred: list[tuple[str, str, str, dict[str, Any]]] = []
+    job = Job()
+    source = object()
+    stage = tmp_path / "stage"
+
+    async def fake_defer(_session: object, job_id: str, claim_token: str, reason_code: str, receipt: dict[str, Any]) -> None:
+        deferred.append((job_id, claim_token, reason_code, receipt))
+
+    async def fake_claim(_session: object) -> tuple[Job, object, dict[str, Any]]:
+        return job, source, {"stage": str(stage)}
+
+    async def fake_cancel(_session: object, _job_id: str, _claim_token: str) -> bool:
+        return False
+
+    class TransientLeaseError(RuntimeError):
+        pass
+
+    async def no_waveform(_session: object) -> None:
+        return None
+
+    async def no_recovery(_session: object) -> None:
+        return None
+
+    monkeypatch.setattr(ont_raw_signal_worker, "SourceLeaseUnavailable", TransientLeaseError, raising=False)
+    monkeypatch.setattr(ont_raw_signal_worker, "recover_expired_derivations", no_recovery)
+    monkeypatch.setattr(ont_raw_signal_worker, "claim_next_waveform_lookup", no_waveform)
+    monkeypatch.setattr(ont_raw_signal_worker, "claim_next_derivation", fake_claim)
+    monkeypatch.setattr(ont_raw_signal_worker, "derivation_cancellation_requested", fake_cancel)
+    monkeypatch.setattr(ont_raw_signal_worker, "defer_derivation", fake_defer, raising=False)
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "_prepare_confined_directory",
+        lambda *_args: os.open(os.devnull, os.O_RDONLY),
+    )
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "pin_conversion_source_descriptors",
+        lambda _commands: (_ for _ in ()).throw(TransientLeaseError("source lease temporarily unavailable")),
+    )
+
+    worker = OntRawSignalWorker(lambda: SessionContext())
+    assert await worker.run_once() == 1
+    assert deferred == [
+        (
+            "job-transient-lease",
+            "claim-transient-lease",
+            "source_lease_unavailable_retry",
+            {"error_type": "TransientLeaseError"},
+        )
+    ]
+
+@pytest.mark.asyncio
 async def test_worker_monitors_active_minknow_runs_without_browser_polling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -721,11 +1155,407 @@ def test_contract_09_partitioned_waveform_uses_digest_bound_route(tmp_path: Path
             item["partition_fingerprint"] = fingerprint
         elif item["path"].endswith(f"{'b' * 64}.blow5.idx"):
             item["partition_fingerprint"] = "b" * 64
+    manifest = {"artifacts": artifacts}
     representation = OntRawSignalRepresentation(
         format="blow5", state="ready", validation_receipts={"adjacent_index": True},
-        artifact_manifest={"artifacts": artifacts},
+        artifact_manifest=manifest,
+        manifest_sha256=ont_raw_signal._digest(manifest),
     )
     assert ont_raw_signal._validated_blow5_paths(representation, "read-1") == (blow5, index)
+
+
+def test_single_file_waveform_requires_sealed_manifest_digest(tmp_path: Path) -> None:
+    blow5 = tmp_path / "source.blow5"
+    index = tmp_path / "source.blow5.idx"
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    manifest = {
+        "artifacts": [
+            ont_raw_signal._file_artifact(blow5, "blow5", kind="blow5"),
+            ont_raw_signal._file_artifact(index, "index", kind="blow5_index"),
+        ]
+    }
+    representation = OntRawSignalRepresentation(
+        format="blow5",
+        state="ready",
+        validation_receipts={"adjacent_index": True},
+        artifact_manifest=manifest,
+        manifest_sha256="0" * 64,
+    )
+    with pytest.raises(ValueError, match="manifest.*digest|manifest.*authority"):
+        ont_raw_signal._validated_blow5_paths(representation)
+
+
+def test_single_file_waveform_reopens_descriptor_identity(tmp_path: Path) -> None:
+    blow5 = tmp_path / "source.blow5"
+    index = tmp_path / "source.blow5.idx"
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    manifest = {
+        "artifacts": [
+            ont_raw_signal._file_artifact(blow5, "blow5", kind="blow5"),
+            ont_raw_signal._file_artifact(index, "index", kind="blow5_index"),
+        ]
+    }
+    representation = OntRawSignalRepresentation(
+        format="blow5",
+        state="ready",
+        validation_receipts={"adjacent_index": True},
+        artifact_manifest=manifest,
+        manifest_sha256=ont_raw_signal._digest(manifest),
+    )
+    blow5.unlink()
+    blow5.write_bytes(b"replacement")
+    with pytest.raises(ValueError, match="descriptor identity|governed"):
+        ont_raw_signal._validated_blow5_paths(representation)
+
+
+class _LookupSession:
+    def __init__(self, lookup: OntRawSignalLookup):
+        self.lookup = lookup
+        self.commits = 0
+
+    async def get(self, _model, _identifier):
+        return self.lookup
+
+    async def commit(self):
+        self.commits += 1
+
+    async def execute(self, _statement):
+        return type("Result", (), {"rowcount": 0})()
+
+    async def rollback(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_waveform_execute_rechecks_policy_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy_digest = "d" * 64
+    admitted: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "raw_signal_runtime_identity",
+        lambda: {"image": f"sha256:{policy_digest}", "digest": policy_digest},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ont_raw_signal_worker,
+        "assert_local_raw_runtime_image",
+        lambda runtime, image: admitted.append((runtime, image)),
+        raising=False,
+    )
+
+    class Child:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*_command, **_kwargs):
+        return Child()
+
+    monkeypatch.setattr(ont_raw_signal_worker.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    worker = OntRawSignalWorker(lambda: None)
+    command = [
+        "docker", "run", "--rm", "--pull=never", "--network=none",
+        f"sha256:{policy_digest}", "python", "/opt/bms/ont_raw_signal_lookup.py",
+    ]
+
+    receipt = await worker._execute(command, "lookup-1", "claim-1", waveform=True)
+
+    assert receipt["returncode"] == 0
+    assert admitted == [("docker", f"sha256:{policy_digest}")]
+
+    with pytest.raises(RuntimeError, match="network"):
+        await worker._execute(
+            [argument if argument != "--network=none" else "--network=host" for argument in command],
+            "lookup-1",
+            "claim-1",
+            waveform=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_waveform_claim_uses_checked_in_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blow5 = tmp_path / "source.blow5"
+    index = tmp_path / "source.blow5.idx"
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    representation = OntRawSignalRepresentation(id="representation-1")
+    lookup = OntRawSignalLookup(
+        id="lookup-1",
+        representation_id=representation.id,
+        read_id="read-1",
+        state="requested",
+        created_at=datetime.utcnow(),
+    )
+    class ClaimResult:
+        def __init__(self, value: Any):
+            self.value = value
+            self.rowcount = 1
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self.value
+
+        def scalar_one_or_none(self):
+            return self.value
+
+    class ClaimSession:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, _statement):
+            self.calls += 1
+            return ClaimResult(None if self.calls == 1 else lookup)
+
+        async def get(self, _model, _identifier):
+            return representation
+
+        async def commit(self):
+            return None
+
+    session = ClaimSession()
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "_validated_blow5_paths",
+        lambda _representation, _read_id=None: (blow5, index),
+    )
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "_artifact_for_resolved_path",
+        lambda _representation, path, _kind: ont_raw_signal._file_artifact(
+            path, path.name, kind="blow5" if path == blow5 else "blow5_index"
+        ),
+    )
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "_resource_snapshot",
+        lambda _source_bytes: {
+            "staging_root": str(tmp_path),
+            "container_runtime": "docker",
+            "container_image": "environment-image",
+            "container_digest": "a" * 64,
+            "disk_free_bytes": 100,
+            "required_free_bytes": 1,
+            "worker_uid": os.getuid(),
+            "worker_gid": os.getgid(),
+        },
+    )
+    policy_digest = "b" * 64
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "raw_signal_runtime_identity",
+        lambda: {
+            "image": f"sha256:{policy_digest}",
+            "digest": policy_digest,
+            "policy_sha256": "c" * 64,
+        },
+    )
+    admitted: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        ont_raw_signal,
+        "assert_local_raw_runtime_image",
+        lambda runtime, image: admitted.append((runtime, image)),
+    )
+
+    claimed = await ont_raw_signal.claim_next_waveform_lookup(session)
+    assert claimed is not None
+    _lookup, command, _output, source = claimed
+
+    assert admitted == [("docker", f"sha256:{policy_digest}")]
+    assert f"sha256:{policy_digest}" in command
+    assert "environment-image" not in command
+    assert "--fd-socket" in command
+    assert "/proc/self/fd/unbound-waveform-blow5" in command
+    assert "/proc/self/fd/unbound-waveform-index" in command
+    assert not any("/input/" in value for value in command)
+    assert source["fd_socket"].endswith("/source-fd.sock")
+    assert len(source["source_fds"]) == 4
+    for descriptor in source["source_fds"]:
+        os.close(descriptor)
+
+
+def test_waveform_output_descriptor_rejects_rewrite_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "waveform.json"
+    authority = ont_raw_signal._create_waveform_output_placeholder(output)
+    output.write_text("{\"samples\": [1]}", encoding="utf-8")
+    original_read = ont_raw_signal.os.read
+    rewritten = False
+
+    def read_once(fd: int, size: int) -> bytes:
+        nonlocal rewritten
+        data = original_read(fd, size)
+        if data and not rewritten:
+            rewritten = True
+            output.write_text("{\"samples\": [2]}", encoding="utf-8")
+        return data
+
+    monkeypatch.setattr(ont_raw_signal.os, "read", read_once)
+    with pytest.raises(ValueError, match="changed"):
+        ont_raw_signal._read_waveform_output_descriptor(output, authority)
+
+
+def test_atomic_directory_publication_rejects_existing_destination(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    source_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    destination_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(FileExistsError):
+            ont_raw_signal._rename_directory_noreplace(
+                source_fd, "source", destination_fd, "destination"
+            )
+    finally:
+        os.close(source_fd)
+        os.close(destination_fd)
+    assert source.is_dir()
+    assert destination.is_dir()
+
+
+def test_waveform_output_descriptor_rejects_replaced_inode(tmp_path: Path) -> None:
+    output = tmp_path / "waveform.json"
+    authority = ont_raw_signal._create_waveform_output_placeholder(output)
+    output.write_text("{\"samples\": []}", encoding="utf-8")
+
+    raw, identity = ont_raw_signal._read_waveform_output_descriptor(output, authority)
+    assert raw == b'{"samples": []}'
+    assert identity["sha256"]
+
+    output.unlink()
+    output.write_text("{\"samples\": [1]}", encoding="utf-8")
+    with pytest.raises(ValueError, match="descriptor identity"):
+        ont_raw_signal._read_waveform_output_descriptor(output, authority)
+
+
+def test_waveform_receipt_contract_binds_read_schema_and_counts() -> None:
+    valid = {
+        "schema": "bms.ont.raw-waveform.v1",
+        "read_id": "read-1",
+        "sample_count": 4,
+        "returned_sample_count": 2,
+        "stride": 2,
+        "samples": [1.0, 2.0],
+        "source_identity": {"blow5": {}, "index": {}},
+    }
+    ont_raw_signal._validate_waveform_payload(valid, "read-1")
+    for mutation in (
+        {"read_id": "read-2"},
+        {"schema": "wrong"},
+        {"returned_sample_count": 3},
+        {"sample_count": 1},
+    ):
+        payload = {**valid, **mutation}
+        with pytest.raises(ValueError, match="waveform receipt"):
+            ont_raw_signal._validate_waveform_payload(payload, "read-1")
+
+
+def test_publication_artifact_ids_are_deterministic() -> None:
+    first = ont_raw_signal._deterministic_publication_artifact_id(
+        "run-1", 1, "outputs/a.blow5", "a" * 64
+    )
+    second = ont_raw_signal._deterministic_publication_artifact_id(
+        "run-1", 1, "outputs/a.blow5", "a" * 64
+    )
+    changed = ont_raw_signal._deterministic_publication_artifact_id(
+        "run-1", 1, "outputs/a.blow5", "b" * 64
+    )
+    assert first == second
+    assert first != changed
+
+
+@pytest.mark.asyncio
+async def test_expired_waveform_lookup_cannot_publish_ready(tmp_path: Path) -> None:
+    output = tmp_path / "waveform.json"
+    output.write_text(json.dumps({"sample_count": 1, "samples": [0.25]}), encoding="utf-8")
+    lookup = OntRawSignalLookup(
+        id="lookup-expired",
+        state="running",
+        claim_token="claim-expired",
+        lease_expires_at=datetime.utcnow() - timedelta(seconds=1),
+        receipt={},
+    )
+    session = _LookupSession(lookup)
+    with pytest.raises(ValueError, match="lease|ownership"):
+        await ont_raw_signal.finish_waveform_lookup(
+            session,
+            lookup.id,
+            str(lookup.claim_token),
+            output,
+            {"source": "test"},
+        )
+    assert lookup.state == "running"
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_waveform_lookup_cannot_renew_lease() -> None:
+    lookup = OntRawSignalLookup(
+        id="lookup-renew-expired",
+        state="running",
+        claim_token="claim-renew-expired",
+        lease_expires_at=datetime.utcnow() - timedelta(seconds=1),
+        receipt={},
+    )
+    session = _LookupSession(lookup)
+    with pytest.raises(ValueError, match="lease|ownership"):
+        await ont_raw_signal.renew_waveform_lookup_lease(
+            session,
+            lookup.id,
+            str(lookup.claim_token),
+        )
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_waveform_lookup_cannot_mark_failed() -> None:
+    lookup = OntRawSignalLookup(
+        id="lookup-fail-expired",
+        state="running",
+        claim_token="claim-fail-expired",
+        lease_expires_at=datetime.utcnow() - timedelta(seconds=1),
+        receipt={},
+    )
+    session = _LookupSession(lookup)
+    await ont_raw_signal.fail_waveform_lookup(
+        session,
+        lookup.id,
+        str(lookup.claim_token),
+        "worker_failed",
+    )
+    assert lookup.state == "running"
+    assert session.commits == 0
+
+
+def test_single_file_waveform_rejects_manifest_path_only_authority(tmp_path: Path) -> None:
+    blow5 = tmp_path / "source.blow5"
+    index = tmp_path / "source.blow5.idx"
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    manifest = {
+        "artifacts": [
+            {"kind": "blow5", "path": str(blow5)},
+            {"kind": "blow5_index", "path": str(index)},
+        ]
+    }
+    representation = OntRawSignalRepresentation(
+        format="blow5",
+        state="ready",
+        validation_receipts={"adjacent_index": True},
+        artifact_manifest=manifest,
+        manifest_sha256=ont_raw_signal._digest(manifest),
+    )
+    with pytest.raises(ValueError, match="descriptor authority"):
+        ont_raw_signal._validated_blow5_paths(representation)
 
 
 def test_partitioned_waveform_rejects_replaced_routing_root_symlink(tmp_path: Path) -> None:
@@ -758,11 +1588,13 @@ def test_partitioned_waveform_rejects_replaced_routing_root_symlink(tmp_path: Pa
     artifacts[1]["partition_fingerprint"] = fingerprint
     artifacts[2]["partition_fingerprint"] = other_fingerprint
     artifacts[3]["partition_fingerprint"] = other_fingerprint
+    manifest = {"artifacts": artifacts}
     representation = OntRawSignalRepresentation(
         format="blow5",
         state="ready",
         validation_receipts={"adjacent_index": True},
-        artifact_manifest={"artifacts": artifacts},
+        artifact_manifest=manifest,
+        manifest_sha256=ont_raw_signal._digest(manifest),
     )
     escaped = tmp_path / "escaped-job"
     final.rename(escaped)
@@ -773,8 +1605,9 @@ def test_partitioned_waveform_rejects_replaced_routing_root_symlink(tmp_path: Pa
 
 
 class _Session:
-    def __init__(self, job: OntRawSignalDerivationJob):
+    def __init__(self, job: OntRawSignalDerivationJob, *, rowcount: int = 1):
         self.job = job
+        self.rowcount = rowcount
         self.added: list[Any] = []
         self.commits = 0
 
@@ -788,6 +1621,19 @@ class _Session:
         self.commits += 1
 
     async def flush(self):
+        return None
+
+    async def execute(self, _statement):
+        return type(
+            "Result",
+            (),
+            {
+                "rowcount": self.rowcount,
+                "scalar_one_or_none": lambda _result: None,
+            },
+        )()
+
+    async def rollback(self):
         return None
 
 
@@ -810,6 +1656,37 @@ async def test_contract_11_cancelled_terminal_transition_clears_lease(tmp_path: 
     assert job.claim_token is None
     assert job.lease_expires_at is None
     assert job.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_contract_13_derivation_transition_rejects_lost_cas_race(tmp_path: Path) -> None:
+    job, _snapshot = _job(tmp_path)
+    session = _Session(job, rowcount=0)
+    with pytest.raises(ValueError, match="lease|ownership"):
+        await ont_raw_signal.transition_derivation(
+            session,
+            job.id,
+            str(job.claim_token),
+            "converting",
+            "started",
+            {},
+        )
+    assert job.state == "admitted"
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_contract_12_expired_derivation_renewal_is_rejected(tmp_path: Path) -> None:
+    job, _snapshot = _job(tmp_path)
+    job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    session = _Session(job, rowcount=0)
+    with pytest.raises(ValueError, match="lease|ownership"):
+        await ont_raw_signal.renew_derivation_lease(
+            session,
+            job.id,
+            str(job.claim_token),
+        )
+    assert session.commits == 0
 
 
 def _publication_unit(staging_root: Path) -> tuple[Path, dict[str, int], dict[str, str]]:
@@ -837,10 +1714,29 @@ def _publication_unit(staging_root: Path) -> tuple[Path, dict[str, int], dict[st
     for group in groups:
         (outputs / f"{group}.blow5").write_bytes(group.encode())
         (outputs / f"{group}.blow5.idx").write_bytes(b"index")
+
+    def output_identity(path: Path) -> dict[str, int | str]:
+        info = path.stat()
+        return {
+            "sha256": _sha256(path),
+            "bytes": info.st_size,
+            "device": info.st_dev,
+            "inode": info.st_ino,
+            "mtime_ns": info.st_mtime_ns,
+            "ctime_ns": info.st_ctime_ns,
+        }
+
     semantic = {
         "status": "passed",
         "duplicate_read_ids": 0,
         "partition_counts": groups,
+        "output_identities": {
+            group: {
+                "blow5": output_identity(outputs / f"{group}.blow5"),
+                "index": output_identity(outputs / f"{group}.blow5.idx"),
+            }
+            for group in groups
+        },
         "read_count": 3,
         "routing_sha256": _sha256(routing),
     }
@@ -872,6 +1768,7 @@ async def test_contract_12_publication_emits_one_pair_per_partition(tmp_path: Pa
     assert kinds.count("read_routing") == 1
     assert representation.read_count == 3
     assert not stage.exists()
+    assert session.commits == 0
 
     recovered = await ont_raw_signal.publish_derivation(
         _Session(job), job, source, commands
@@ -959,7 +1856,7 @@ async def test_publication_rolls_back_when_root_identity_changes_at_atomic_renam
     source = _source(source_file, "acquisition")
     job, _snapshot = _job(staging_root)
     monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
-    real_rename = os.rename
+    real_rename = ont_raw_signal._rename_directory_noreplace
     interposed = False
 
     def interposing_rename(*args: Any, **kwargs: Any) -> None:
@@ -971,7 +1868,7 @@ async def test_publication_rolls_back_when_root_identity_changes_at_atomic_renam
             publication_root.symlink_to(outside, target_is_directory=True)
         real_rename(*args, **kwargs)
 
-    monkeypatch.setattr(ont_raw_signal.os, "rename", interposing_rename)
+    monkeypatch.setattr(ont_raw_signal, "_rename_directory_noreplace", interposing_rename)
     with pytest.raises(ValueError, match="publication root.*confinement|identity changed"):
         await ont_raw_signal.publish_derivation(
             _Session(job), job, source, commands
@@ -1036,6 +1933,22 @@ def _slow5_record(read: Any) -> dict[str, Any]:
 class _FakeSlow5:
     def __init__(self, records: list[dict[str, Any]]):
         self.records = records
+        self.source_identity = {
+            "sha256": "0" * 64,
+            "bytes": 1,
+            "device": 1,
+            "inode": 2,
+            "mtime_ns": 3,
+            "ctime_ns": 4,
+        }
+        self.index_identity = {
+            "sha256": "1" * 64,
+            "bytes": 1,
+            "device": 1,
+            "inode": 5,
+            "mtime_ns": 6,
+            "ctime_ns": 7,
+        }
 
     def seq_reads(self, **_kwargs):
         yield from self.records
@@ -1056,7 +1969,11 @@ def test_validator_fixture_02_rejects_wrong_run_info_partition(tmp_path: Path, m
     index = tmp_path / f"{fingerprints[1]}.blow5.idx"
     blow5.write_bytes(b"fixture")
     index.write_bytes(b"index")
-    monkeypatch.setattr(validator, "_slow5_open", lambda _path: _FakeSlow5([_slow5_record(reads[0])]))
+    monkeypatch.setattr(
+        validator,
+        "_slow5_open",
+        lambda _path, **_kwargs: _FakeSlow5([_slow5_record(reads[0])]),
+    )
     source_info = source.stat()
     root_info = source.parent.stat()
     args = argparse.Namespace(
@@ -1400,3 +2317,205 @@ async def test_registration_holds_source_descriptor_through_outer_transaction(tm
         with pytest.raises(OSError):
             os.fstat(fd)
     await engine.dispose()
+
+
+def test_raw_runtime_identity_is_bound_to_checked_in_policy_and_rejects_env_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = json.loads(
+        (ROOT / "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    image_id = policy["runtime_id"]
+    monkeypatch.setenv(ont_raw_signal.BLOW5_CONTAINER_ENV, image_id)
+    monkeypatch.setenv(
+        ont_raw_signal.BLOW5_CONTAINER_DIGEST_ENV,
+        image_id.removeprefix("sha256:"),
+    )
+    identity = ont_raw_signal.raw_signal_runtime_identity()
+    assert identity["image"] == image_id
+    assert identity["digest"] == image_id.removeprefix("sha256:")
+
+    monkeypatch.setenv(ont_raw_signal.BLOW5_CONTAINER_DIGEST_ENV, "0" * 64)
+    with pytest.raises(RuntimeError, match="raw-signal runtime policy"):
+        ont_raw_signal.raw_signal_runtime_identity()
+
+
+def test_raw_runtime_admission_inspects_exact_local_image_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inspected: list[list[str]] = []
+    monkeypatch.setattr(ont_raw_signal.shutil, "which", lambda runtime: f"/usr/bin/{runtime}")
+
+    def inspect(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        inspected.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="sha256:" + "a" * 64 + "\n", stderr="")
+
+    monkeypatch.setattr(ont_raw_signal.subprocess, "run", inspect)
+    ont_raw_signal.assert_local_raw_runtime_image("docker", "sha256:" + "a" * 64)
+    assert inspected == [["docker", "image", "inspect", "--format", "{{.Id}}", "sha256:" + "a" * 64]]
+
+
+def test_every_raw_container_command_uses_pull_never(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ont_raw_signal, "_container_image_ref", lambda _snapshot: "sha256:" + "a" * 64)
+    source_path = tmp_path / "source.pod5"
+    source_path.write_bytes(b"pod5")
+    source = _source(source_path, "acquisition")
+    job, snapshot = _job(tmp_path / "staging")
+    commands = ont_raw_signal._conversion_commands(job, source, snapshot)
+    assert "--pull=never" in commands["common"]
+    assert "--pull=never" in ont_raw_signal.conversion_unit_commands(commands, "a" * 64)["convert"]
+    assert "--pull=never" in ont_raw_signal.conversion_unit_commands(commands, "a" * 64)["quickcheck"]
+    assert "--pull=never" in ont_raw_signal.conversion_unit_commands(commands, "a" * 64)["index_create"]
+
+    blow5 = tmp_path / "source.blow5"
+    index = Path(f"{blow5}.idx")
+    blow5.write_bytes(b"blow5")
+    index.write_bytes(b"index")
+    external = OntRawSignalRepresentation(
+        id="external-source",
+        artifact_manifest={
+            "artifacts": [
+                ont_raw_signal._file_artifact(blow5, "blow5", kind="blow5"),
+                ont_raw_signal._file_artifact(index, "index", kind="blow5_index"),
+            ]
+        },
+    )
+    external_commands = ont_raw_signal._external_blow5_validation_commands(job, external, snapshot)
+    assert "--pull=never" in external_commands["quickcheck"]
+    assert "--pull=never" in external_commands["semantic_validate"]
+    assert "--expected-blow5-sha256" in external_commands["semantic_validate"]
+    assert "--expected-index-sha256" in external_commands["semantic_validate"]
+    assert "--expected-blow5-root-device" in external_commands["semantic_validate"]
+    assert "--expected-index-root-inode" in external_commands["semantic_validate"]
+
+
+def test_raw_runtime_build_script_uses_independent_policy_before_emitting_identity() -> None:
+    script = (ROOT / "scripts/build_ont_raw_signal_runtime.sh").read_text(encoding="utf-8")
+    assert "raw_signal_runtime_policy_v1.json" in script
+    assert "does not match the approved raw-signal runtime policy" in script
+    assert "BMS_ONT_SLOW5TOOLS_IMAGE" in script
+    assert f"EXPECTED_POLICY_SHA256=\"{ont_raw_signal.RAW_SIGNAL_RUNTIME_POLICY_SHA256}\"" in script
+    assert "sha256sum \"$POLICY_PATH\"" in script
+
+
+@pytest.mark.asyncio
+async def test_expired_publication_recovery_cannot_promote_cancelled_job(tmp_path: Path) -> None:
+    job, _snapshot = _job(tmp_path / "staging")
+    job.state = "publishing"
+    job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    job.output_representation_id = "rep-1"
+    job.cancel_requested_at = datetime.utcnow()
+    source = SimpleNamespace(id="source-1")
+    representation = SimpleNamespace(id="rep-1", state="ready")
+
+    class _Result:
+        def __init__(self, values: list[Any], *, rowcount: int = 1):
+            self.values = values
+            self.rowcount = rowcount
+
+        def scalars(self) -> "_Result":
+            return self
+
+        def __iter__(self):
+            return iter(self.values)
+
+    class _RecoverySession:
+        def __init__(self) -> None:
+            self.results = [_Result([]), _Result([job]), _Result([], rowcount=1)]
+            self.added: list[Any] = []
+            self.commits = 0
+
+        async def execute(self, _statement: Any) -> _Result:
+            result = self.results.pop(0)
+            if result.rowcount == 1 and job.cancel_requested_at is not None:
+                job.state = "cancelled"
+                job.reason_code = "cancelled_after_publication_before_recovery"
+            return result
+
+        async def get(self, _model: Any, identifier: str) -> Any:
+            return {"source-1": source, "rep-1": representation}.get(identifier)
+
+        def add(self, value: Any) -> None:
+            self.added.append(value)
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    session = _RecoverySession()
+    recovered = await ont_raw_signal.recover_expired_derivations(session)
+
+    assert recovered == 1
+    assert job.state == "cancelled"
+    assert job.reason_code == "cancelled_after_publication_before_recovery"
+    assert not any(getattr(event, "state", None) == "ready" for event in session.added)
+
+
+@pytest.mark.asyncio
+async def test_expired_recovery_ignores_lost_cas_race(tmp_path: Path) -> None:
+    job, _snapshot = _job(tmp_path / "staging")
+    job.state = "publishing"
+    job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    job.output_representation_id = "rep-1"
+    job.cancel_requested_at = datetime.utcnow()
+
+    class _Result:
+        def __init__(self, values: list[Any], *, rowcount: int = 1):
+            self.values = values
+            self.rowcount = rowcount
+
+        def scalars(self) -> "_Result":
+            return self
+
+        def __iter__(self):
+            return iter(self.values)
+
+    class _RecoverySession:
+        def __init__(self) -> None:
+            self.results = [_Result([]), _Result([job]), _Result([], rowcount=0)]
+            self.commits = 0
+
+        async def execute(self, _statement: Any) -> _Result:
+            return self.results.pop(0)
+
+        async def get(self, _model: Any, _identifier: str) -> Any:
+            raise AssertionError("lost recovery CAS must not inspect or publish output")
+
+        async def rollback(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+    session = _RecoverySession()
+    recovered = await ont_raw_signal.recover_expired_derivations(session)
+
+    assert recovered == 0
+    assert job.state == "publishing"
+    assert session.commits == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tamper", ["expired", "cancelled"])
+async def test_publication_rejects_expired_or_cancelled_claim_before_commit(
+    tmp_path: Path, tamper: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging_root = tmp_path / "staging"
+    _stage, _groups, commands = _publication_unit(staging_root)
+    source_file = tmp_path / "source.pod5"
+    source_file.write_bytes(b"source")
+    source = _source(source_file, "acquisition")
+    job, _snapshot = _job(staging_root)
+    if tamper == "expired":
+        job.lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+    else:
+        job.cancel_requested_at = datetime.utcnow()
+    monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+    session = _Session(job)
+
+    with pytest.raises(ValueError, match="lease|cancellation"):
+        await ont_raw_signal.publish_derivation(session, job, source, commands)
+    assert session.commits == 0

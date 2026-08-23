@@ -4861,6 +4861,8 @@ export interface OntExternalMoveBamCandidate {
 
 export interface OntMoveTableSource {
     move_source_id: string;
+    attempt_number: number;
+    predecessor_move_source_id: string | null;
     run_id: string;
     observed_generation: number;
     raw_representation_id: string;
@@ -5142,8 +5144,8 @@ export const fetchOntSignalWorkbenchCapabilities = (
     `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/capabilities`,
     { params: authority || undefined },
 ));
-export const fetchOntMoveSources = (runId: string, observedGeneration: number) =>
-    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`));
+export const fetchOntMoveSources = (runId: string, observedGeneration: number, signal?: AbortSignal) =>
+    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, { signal }));
 export const fetchOntExternalMoveBamCandidates = () =>
     apiData(api.get<{ items: OntExternalMoveBamCandidate[] }>(`${signalWorkbenchRoot}/external-move-bam-candidates`));
 export const registerOntExternalMoveBamCandidate = (
@@ -5164,6 +5166,11 @@ export const registerOntMoveSource = (runId: string, observedGeneration: number,
     molecule_type: 'dna' | 'rna';
     source_job_id: string;
 }) => apiData(api.post<OntMoveTableSource>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, request));
+export const createOntFreshMoveSourceAttempt = (predecessorMoveSourceId: string) =>
+    apiData(api.post<OntMoveTableSource>(
+        `${signalWorkbenchRoot}/move-sources/${encodeURIComponent(predecessorMoveSourceId)}/fresh-attempt`,
+        {},
+    ));
 export const fetchOntSignalMappingProfiles = () =>
     apiData(api.get<{ items: OntSignalMappingProfile[] }>(`${signalWorkbenchRoot}/mapping-profiles`));
 export const createOntSignalMappingProfile = (request: {

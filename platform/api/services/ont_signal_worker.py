@@ -12,6 +12,7 @@ import re
 import shutil
 import socket
 import stat
+import subprocess
 import time
 import tempfile
 import uuid
@@ -119,7 +120,7 @@ def _mapping_profile_render_args(profile: Any) -> list[str]:
     return ["--kmer-length", str(kmer_length)]
 
 
-def _identity_from_descriptor(descriptor: int) -> tuple[str, int, tuple[int, int, int, int]]:
+def _identity_from_descriptor(descriptor: int) -> tuple[str, int, tuple[int, int, int, int, int]]:
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode) or before.st_size <= 0:
         raise RuntimeError("governed parent must be a non-empty retained regular file")
@@ -129,8 +130,8 @@ def _identity_from_descriptor(descriptor: int) -> tuple[str, int, tuple[int, int
         digest.update(chunk)
         offset += len(chunk)
     after = os.fstat(descriptor)
-    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
         raise RuntimeError("governed parent changed while hashing")
     return digest.hexdigest(), offset, identity
 
@@ -192,7 +193,7 @@ class RetainedParent:
     alias: str
     sha256: str
     size_bytes: int
-    identity: tuple[int, int, int, int]
+    identity: tuple[int, int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -209,7 +210,7 @@ class RetainedParentSet:
     def __init__(self, governed_roots: tuple[Path, ...] | None = None) -> None:
         self._opened_at_generation = lease_break_generation()
         self._parents: list[RetainedParent] = []
-        self._root_descriptors: list[tuple[int, tuple[int, int]]] = []
+        self._root_descriptors: list[tuple[int, tuple[int, int, int]]] = []
         self._closed = False
         self._governed_roots = governed_roots
 
@@ -333,7 +334,7 @@ class RetainedParentSet:
         if not stat.S_ISDIR(root_info.st_mode):
             os.close(root_fd)
             raise RuntimeError("external retained-parent root is not a directory")
-        root_identity = (root_info.st_dev, root_info.st_ino)
+        root_identity = (root_info.st_dev, root_info.st_ino, root_info.st_ctime_ns)
         self._root_descriptors.append((root_fd, root_identity))
         descriptor: int | None = None
         parent_fd = os.dup(root_fd)
@@ -382,11 +383,11 @@ class RetainedParentSet:
             raise RuntimeError("retained-parent read lease was broken")
         for parent in self._parents:
             current = os.fstat(parent.fd)
-            if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != parent.identity:
+            if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != parent.identity:
                 raise RuntimeError("retained-parent descriptor identity changed")
         for descriptor, identity in self._root_descriptors:
             current = os.fstat(descriptor)
-            if (current.st_dev, current.st_ino) != identity:
+            if (current.st_dev, current.st_ino, current.st_ctime_ns) != identity:
                 raise RuntimeError("retained-parent root descriptor identity changed")
 
     def metadata(self, operation_argv: list[str]) -> dict[str, Any]:
@@ -547,6 +548,25 @@ class OntSignalWorker:
             "policy_manifest_sha256": policy_sha256,
         }
 
+    @staticmethod
+    def _assert_local_runtime_image(runtime: str, image: str) -> None:
+        try:
+            result = subprocess.run(
+                [runtime, "image", "inspect", "--format", "{{.Id}}", image],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                timeout=30,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/nonexistent"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError("local approved Squigualiser image inspection failed") from exc
+        observed = result.stdout.strip()
+        if result.returncode != 0 or observed != image:
+            raise RuntimeError("local approved Squigualiser image is absent or diverged")
+
     def _container_command(
         self,
         output_dir: Path,
@@ -558,13 +578,14 @@ class OntSignalWorker:
         runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
         if runtime not in {"podman", "docker"}:
             raise RuntimeError("unsupported container runtime")
+        self._assert_local_runtime_image(runtime, identity["image"])
         uid, gid = self._container_user_identity()
         output = Path(os.path.abspath(output_dir))
         broker = Path(os.path.abspath(broker_dir))
         if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
             raise RuntimeError("container output or broker directory is invalid")
         command = [
-            runtime, "run", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
+            runtime, "run", "--pull=never", "--network", "none", "--read-only", "--user", f"{uid}:{gid}",
             "--pids-limit", "128", "--memory", "4g", "--cpus", "4", "--cap-drop", "ALL",
             "--label", WORKER_LABEL,
             "--ulimit", f"fsize={FILE_SIZE_LIMITS[kind]}:{FILE_SIZE_LIMITS[kind]}",
@@ -995,12 +1016,15 @@ class OntSignalWorker:
         table = {"move": OntMoveTableSource, "calibration": OntSignalCalibrationJob, "mapping": OntSignalMappingJob, "view": OntSquigualiserViewJob}[kind]
         state_field = "validation_state" if kind == "move" else "state"
         async with self._session_factory() as session:
+            lease_now = self._now()
             conditions = [table.id == item_id, table.claim_token == claim_token, getattr(table, state_field) == "running"]
             if hasattr(table, "cancel_requested_at"):
                 conditions.append(table.cancel_requested_at.is_(None))
+            if hasattr(table, "lease_expires_at"):
+                conditions.append(table.lease_expires_at > lease_now)
             guarded = await session.execute(update(table).where(*conditions).values(
-                lease_expires_at=self._now() + timedelta(seconds=LEASE_SECONDS),
-                **({"updated_at": self._now()} if hasattr(table, "updated_at") else {}),
+                lease_expires_at=lease_now + timedelta(seconds=LEASE_SECONDS),
+                **({"updated_at": lease_now} if hasattr(table, "updated_at") else {}),
             ))
             if guarded.rowcount != 1:
                 await session.rollback()
@@ -1043,11 +1067,14 @@ class OntSignalWorker:
                     pass
                 if time.monotonic() >= next_lease_check:
                     async with self._session_factory() as session:
+                        renew_now = self._now()
                         conditions = [table.id == item_id, table.claim_token == claim_token, getattr(table, state_field) == "running"]
                         if hasattr(table, "cancel_requested_at"):
                             conditions.append(table.cancel_requested_at.is_(None))
+                        if hasattr(table, "lease_expires_at"):
+                            conditions.append(table.lease_expires_at > renew_now)
                         result = await session.execute(
-                            update(table).where(*conditions).values(lease_expires_at=self._now() + timedelta(seconds=LEASE_SECONDS))
+                            update(table).where(*conditions).values(lease_expires_at=renew_now + timedelta(seconds=LEASE_SECONDS))
                         )
                         if result.rowcount != 1:
                             await session.rollback()
@@ -1092,7 +1119,7 @@ class OntSignalWorker:
             rows = list((await session.execute(select(table).where(
                 getattr(table, state_field) == "running",
                 table.lease_expires_at.is_not(None),
-                table.lease_expires_at < now,
+                table.lease_expires_at <= now,
             ))).scalars())
             for row in rows:
                 observed_token = row.claim_token
@@ -1167,7 +1194,7 @@ class OntSignalWorker:
                         getattr(table, state_field) == "running",
                         table.claim_token == observed_token,
                         table.lease_expires_at == observed_expiry,
-                        table.lease_expires_at < now,
+                        table.lease_expires_at <= now,
                     ).values(**values)
                 )
                 if result.rowcount not in {0, 1}:
@@ -1237,6 +1264,7 @@ class OntSignalWorker:
 
     async def _fail(self, table: Any, state_field: str, item_id: str, token: str, exc: Exception) -> None:
         async with self._session_factory() as session:
+            now = self._now()
             row = await session.get(table, item_id)
             if row is None or row.claim_token != token:
                 return
@@ -1250,8 +1278,8 @@ class OntSignalWorker:
             }
             if hasattr(table, "failure_code"): values["failure_code"] = exc.__class__.__name__
             if hasattr(table, "failure_message"): values["failure_message"] = str(exc)[:MAX_FAILURE]
-            if hasattr(table, "updated_at"): values["updated_at"] = self._now()
-            if hasattr(table, "completed_at"): values["completed_at"] = self._now()
+            if hasattr(table, "updated_at"): values["updated_at"] = now
+            if hasattr(table, "completed_at"): values["completed_at"] = now
             if isinstance(row, OntMoveTableSource):
                 receipt = row.validation_receipt if isinstance(row.validation_receipt, dict) else {}
                 retry_value: Any = receipt.get("retry")
@@ -1282,6 +1310,8 @@ class OntSignalWorker:
             conditions = [table.id == item_id, table.claim_token == token, getattr(table, state_field) == "running"]
             if hasattr(table, "cancel_requested_at"):
                 conditions.append(table.cancel_requested_at.is_(None))
+            if hasattr(table, "lease_expires_at"):
+                conditions.append(table.lease_expires_at > now)
             result = await session.execute(update(table).where(*conditions).values(**values))
             if result.rowcount != 1:
                 await session.rollback()
@@ -1494,6 +1524,7 @@ class OntSignalWorker:
             OntMoveTableSource.id == item_id,
             OntMoveTableSource.claim_token == token,
             OntMoveTableSource.validation_state == "running",
+            OntMoveTableSource.lease_expires_at > datetime.now(UTC).replace(tzinfo=None),
             OntMoveTableSource.source_job_id == authority["source_job_id"],
             OntMoveTableSource.external_registration_receipt_id
             == authority["external_registration_receipt_id"],
@@ -1671,6 +1702,7 @@ class OntSignalWorker:
                 OntSignalCalibrationJob.claim_token == token,
                 OntSignalCalibrationJob.state == "running",
                 OntSignalCalibrationJob.cancel_requested_at.is_(None),
+                OntSignalCalibrationJob.lease_expires_at > self._now(),
                 OntSignalCalibrationJob.calibration_artifact_id.is_(None),
             ).values(
                 calibration_artifact_id=artifact.id, state="ready", reason_code="validated_calibration_ready",
@@ -1704,6 +1736,10 @@ class OntSignalWorker:
             job = await session.get(OntSignalMappingJob, item_id)
             if job is None or job.claim_token != token: return
             if job.cancel_requested_at is not None: raise asyncio.CancelledError()
+            parent_snapshot = job.resource_snapshot if isinstance(job.resource_snapshot, dict) else {}
+            parent_identities = parent_snapshot.get("parents", {})
+            if not isinstance(parent_identities, dict):
+                raise RuntimeError("mapping parent authority is incomplete")
             source = await session.get(OntMoveTableSource, job.move_source_id)
             profile = await session.get(OntSignalMappingProfile, job.mapping_profile_id)
             representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
@@ -1788,6 +1824,12 @@ class OntSignalWorker:
                     revision = await domain_session.get(MolBioNGSReferenceRevision, job.reference_revision_id)
                     artifact = None if revision is None else await domain_session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
                     if revision is None or artifact is None: raise RuntimeError("managed reference authority disappeared")
+                    expected_domain_revision = parent_identities.get("domain_revision")
+                    live_domain_revision = await ont_signal_workbench._resolve_domain_revision_authority(
+                        domain_session, revision.global_domain_experiment_id
+                    )
+                    if expected_domain_revision != live_domain_revision:
+                        raise RuntimeError("mapping domain revision authority diverged")
                     reference = get_molbio_ngs_reference_root() / artifact.managed_relative_path
                     retained_reference = await self._pin_parent_async(
                         parents,
@@ -1801,7 +1843,6 @@ class OntSignalWorker:
                 for index, _pair in enumerate(raw_pairs): args.extend(["--blow5", f"/parents/raw-{index}.blow5"])
                 artifact_kind, artifact_path, media = "realign_paf", output / "realign.paf.gz", "application/gzip"
                 expected_runtime_parents = {"original_move_bam_sha256": original_sha, "filtered_move_bam_sha256": filtered_sha, "move_inventory_sha256": inventory_sha, "blow5": raw_identities["blow5"], "parent_reform_sha256": parent_reform_sha, "managed_reference_sha256": reference_sha, "alignment_bam_sha256": alignment_sha, "alignment_index_sha256": alignment_index_sha}
-            parent_identities = job.resource_snapshot.get("parents", {})
             self._require_hash_contract("mapping original move snapshot", parent_identities.get("move_bam_sha256"), original_sha)
             self._require_hash_contract("mapping inventory snapshot", parent_identities.get("move_read_inventory_sha256"), inventory_sha)
             self._require_hash_contract("mapping raw manifest snapshot", parent_identities.get("raw_manifest_sha256"), representation.manifest_sha256)
@@ -1817,6 +1858,10 @@ class OntSignalWorker:
         command_receipt = await self._invoke(parents, args, "mapping", item_id, token, output)
         validation = self._read_json_report(output / "validation.json")
         self._require_hash_contract("mapping runtime parents", expected_runtime_parents, validation.get("parent_sha256s"))
+        validation = {
+            **validation,
+            "domain_revision": parent_identities.get("domain_revision"),
+        }
         digest, artifact_size = await self._stable_file_identity_async(artifact_path)
         if validation.get("output_sha256") != digest:
             raise RuntimeError("mapping artifact digest does not match the runtime validation receipt")
@@ -1844,6 +1889,7 @@ class OntSignalWorker:
                 OntSignalMappingJob.claim_token == token,
                 OntSignalMappingJob.state == "running",
                 OntSignalMappingJob.cancel_requested_at.is_(None),
+                OntSignalMappingJob.lease_expires_at > self._now(),
             ).values(
                 state="ready", reason_code=reason, claim_token=None, lease_expires_at=None,
                 stage_receipts={**(job.stage_receipts or {}), "runtime": command_receipt, "validation": validation},
@@ -2052,6 +2098,7 @@ class OntSignalWorker:
                 OntSquigualiserViewJob.claim_token == token,
                 OntSquigualiserViewJob.state == "running",
                 OntSquigualiserViewJob.cancel_requested_at.is_(None),
+                OntSquigualiserViewJob.lease_expires_at > self._now(),
             ).values(
                 output_manifest=manifest,
                 render_receipt={**(view.render_receipt or {}), "runtime": self._runtime_identity(), "selection_command": selection_receipt, "command": command_receipt, "parent_sha256s": expected_runtime_parents},
@@ -2068,19 +2115,21 @@ class OntSignalWorker:
 
     async def _cancel_claim(self, table: Any, state_field: str, item_id: str, token: str) -> None:
         async with self._session_factory() as session:
+            now = self._now()
             row = await session.get(table, item_id)
             if row is None or row.claim_token != token or not hasattr(table, "cancel_requested_at"):
                 return
             values: dict[str, Any] = {state_field: "cancelled", "reason_code": "cancelled", "claim_token": None, "lease_expires_at": None}
             if isinstance(row, OntSignalCalibrationJob):
-                values["stage_receipts"] = {**(row.stage_receipts or {}), "cancellation": {**((row.stage_receipts or {}).get("cancellation", {})), "completed_at": self._now().isoformat(), "disposition": "cancelled"}}
-            if hasattr(table, "updated_at"): values["updated_at"] = self._now()
-            if hasattr(table, "completed_at"): values["completed_at"] = self._now()
+                values["stage_receipts"] = {**(row.stage_receipts or {}), "cancellation": {**((row.stage_receipts or {}).get("cancellation", {})), "completed_at": now.isoformat(), "disposition": "cancelled"}}
+            if hasattr(table, "updated_at"): values["updated_at"] = now
+            if hasattr(table, "completed_at"): values["completed_at"] = now
             result = await session.execute(update(table).where(
                 table.id == item_id,
                 table.claim_token == token,
                 getattr(table, state_field) == "running",
                 table.cancel_requested_at.is_not(None),
+                table.lease_expires_at > now,
             ).values(**values))
             if result.rowcount != 1:
                 await session.rollback()
