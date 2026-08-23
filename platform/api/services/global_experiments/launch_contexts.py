@@ -970,7 +970,7 @@ async def validate_bound_job(
         resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
         expected_pinned_gpu = resources.get("pinned_gpu")
         params_match = all(
-            base_job_params.get(key) == value
+            base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
             for key, value in expected_job_params.items()
         )
         if job.model_id == "protein_local_redesign":
