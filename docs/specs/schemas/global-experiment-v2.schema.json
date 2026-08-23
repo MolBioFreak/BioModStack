@@ -80,7 +80,12 @@
         {"type": "null"}
       ]
     },
-    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "created_by": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 255},
+        {"type": "null"}
+      ]
+    },
     "change_summary": {"type": "string", "minLength": 1, "maxLength": 1024},
     "needs_metadata_review": {"type": "boolean"}
   },

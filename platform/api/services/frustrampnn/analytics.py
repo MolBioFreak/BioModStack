@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import math
 from collections import Counter
@@ -441,6 +442,7 @@ def _validate_statistics_inputs(
     *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
     landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
     capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    allow_legacy_external_authority: bool = False,
 ) -> None:
     for name, value in (
         ("request", request), ("execution receipt", execution_receipt),
@@ -451,7 +453,17 @@ def _validate_statistics_inputs(
             raise ContractValidationError(f"{name} must be an object")
     if not isinstance(capability_inventory_bytes, bytes):
         raise ContractValidationError("capability inventory bytes must be exact bytes")
-    validate_schema("workflow_component_request_v2", request)
+    schema_request = request
+    if (
+        allow_legacy_external_authority
+        and request.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+        and "bytes" not in request.get("identity_authority_artifact", {})
+    ):
+        schema_request = dict(request)
+        envelope = dict(request["identity_authority_artifact"])
+        envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+        schema_request["identity_authority_artifact"] = envelope
+    validate_schema("workflow_component_request_v2", schema_request)
     validate_schema("frustrampnn_execution_receipt_v2", execution_receipt)
     validate_schema("frustrampnn_landscape_v2", landscape)
     validate_schema("frustrampnn_structure_map_v1", structure_map)
@@ -620,12 +632,14 @@ def build_statistics_receipt(
     *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
     landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
     capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    allow_legacy_external_authority: bool = False,
 ) -> dict[str, Any]:
     """Build immutable statistics from complete physical v2 authority."""
     _validate_statistics_inputs(
         request=request, execution_receipt=execution_receipt, landscape=landscape,
         structure_map=structure_map, capability_inventory=capability_inventory,
         capability_inventory_bytes=capability_inventory_bytes,
+        allow_legacy_external_authority=allow_legacy_external_authority,
     )
     residues = list(landscape["residues"])
     all_slots = [slot for residue in residues for slot in residue["slots"]]

@@ -463,7 +463,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
 
     return (
         <div className="fixed inset-0 z-[95] grid place-items-center bg-black/65 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-            <section role="dialog" aria-modal="true" aria-labelledby="manager-action-title" className="w-full max-w-lg overflow-hidden rounded-2xl border border-border-primary bg-surface-secondary shadow-2xl">
+            <section role="dialog" aria-modal="true" aria-labelledby="manager-action-title" className="w-full max-h-[calc(100vh-1.5rem)] max-w-lg overflow-y-auto rounded-2xl border border-border-primary bg-surface-secondary shadow-2xl">
                 <header className="flex items-start justify-between gap-3 border-b border-border-primary px-5 py-4">
                     <div>
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Immutable Project record</p>

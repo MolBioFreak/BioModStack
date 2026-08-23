@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from sqlalchemy import or_, select
+from sqlalchemy import Text, cast as sql_cast, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import (
@@ -84,6 +84,15 @@ from services.conformational_mapping.rcsb_source import (
     discover_rcsb_contexts,
     resolve_and_materialize_rcsb_selection,
 )
+from services.scientific_artifacts import (
+    ScientificArtifactError,
+    artifact_root,
+    is_artifact_reference,
+    query_json_envelope_page,
+    require_artifact_reference,
+    resolve_json_envelope_fields,
+    resolve_json_value,
+)
 from services.job_control import cancel_job_lineage
 from services.frustrampnn import runtime as _frustrampnn_runtime
 from services.frustrampnn.settings import (
@@ -100,6 +109,36 @@ _COOKIE_PREFIX = "bms_cm_access_"
 _CONFORNETS_CHAIN_ID = "A"
 _CONFORNETS_TEST_CASE_ID = "bms-canonical-monomer"
 _CONFORNETS_BENCHMARK_NAME = "biomodstack"
+_CM_RESULT_INLINE_MAX_BYTES = 256 * 1024
+_CM_RESULT_INLINE_MAX_ROWS = 4096
+_CM_RESULT_INITIAL_PAGE_SIZE = 10
+_CM_RESULT_PAGE_SIZE = 100
+_CM_RESULT_COLLECTIONS: dict[str, tuple[str, ...]] = {
+    "analysis": ("results", "support_records", "pair_ledger", "exclusions", "clash_records"),
+    "support": ("records", "pair_ledger", "clash_records"),
+    "missingness": ("result_records", "coordinate_exclusions"),
+    "structure_map": ("rows",),
+}
+_CM_RESULT_SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
+    "analysis": (
+        "schema_name", "schema_version", "analysis_id", "source_ensemble_sha256",
+        "source_landscape_sha256", "formula_version", "expected_strata", "ranking_policy",
+        "exclusions", "pair_ledger",
+    ),
+    "support": (
+        "schema_name", "schema_version", "analysis_id", "request_id",
+        "source_analysis_sha256", "pair_ledger", "ranking_policy",
+    ),
+    "missingness": (
+        "schema_name", "schema_version", "analysis_id", "request_id",
+        "source_analysis_sha256", "coordinate_exclusions",
+    ),
+    "structure_map": (
+        "schema_name", "schema_version", "target_id", "candidate_id", "original_cif_sha256",
+        "source_format", "source_sha256", "source_bytes", "normalized_pdb_sha256",
+        "selected_source_model", "altloc_policy", "normalizer_version",
+    ),
+}
 
 
 def _authorization_enabled() -> bool:
@@ -2187,7 +2226,7 @@ async def request_failure_receipts(
     return {
         "request_id": request_id,
         "failure_receipts": [
-            {"receipt_id": row.record_key, "sha256": row.content_sha256, "payload": row.payload_json}
+            {"receipt_id": row.record_key, "sha256": row.content_sha256, "payload": resolve_json_value(row.payload_json)}
             for row in rows
         ],
     }
@@ -2214,7 +2253,7 @@ async def compute_analysis(
     session: AsyncSession = Depends(get_session),
 ):
     await _authorized_record(request_id, request, session)
-    analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
+    analysis = resolve_json_value((await _canonical_record(session, request_id, "analysis")).payload_json)
     return {"request_id": request_id, "analysis_id": analysis["analysis_id"], "result_count": len(analysis["results"]), "analysis_sha256": canonical_sha256(analysis)}
 
 
@@ -2224,11 +2263,11 @@ async def prepare_mutagenesis_handoff(
     session: AsyncSession = Depends(get_session),
 ):
     await _authorized_record(request_id, request, session, mutation=True)
-    ensemble = (await _canonical_record(session, request_id, "ensemble", "primary")).payload_json
-    analysis = (await _canonical_record(session, request_id, "analysis")).payload_json
-    structure_map = (
-        await _canonical_record(session, request_id, "structure_map", body.structure_map_key)
-    ).payload_json
+    ensemble = resolve_json_value((await _canonical_record(session, request_id, "ensemble", "primary")).payload_json)
+    analysis = resolve_json_value((await _canonical_record(session, request_id, "analysis")).payload_json)
+    structure_map = resolve_json_value(
+        (await _canonical_record(session, request_id, "structure_map", body.structure_map_key)).payload_json
+    )
     source_record = await get_request(session, request_id)
     job = await session.get(Job, source_record.job_id if source_record else "")
     if job is None:
@@ -2291,7 +2330,7 @@ async def launch_resampling(
     source_record = await _authorized_record(request_id, request, session, mutation=True)
     principal_id = source_record.principal_id
     handoff_row = await _canonical_record(session, request_id, "handoff", body.handoff_key)
-    handoff = handoff_row.payload_json
+    handoff = resolve_json_value(handoff_row.payload_json)
     source_job = await session.get(Job, source_record.job_id)
     if source_job is None or not source_job.output_dir:
         raise HTTPException(status_code=409, detail="canonical source job is missing")
@@ -2845,6 +2884,124 @@ async def retry_request(
     }
 
 
+def _cm_record_mapping(value: object) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    return None
+
+
+def _cm_record_artifact_reference(row: ConformationalMappingRecord) -> Mapping[str, Any] | None:
+    mapping = _cm_record_mapping(row.payload_json)
+    if mapping is None or not is_artifact_reference(mapping):
+        return None
+    reference = require_artifact_reference(mapping)
+    return reference
+
+
+def _cm_record_artifact_descriptor(reference: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "artifact_id": reference["artifact_id"],
+        "owner_kind": reference["owner_kind"],
+        "owner_id": reference["owner_id"],
+        "role": reference["role"],
+        "schema_id": reference["schema_id"],
+        "schema_version": reference["schema_version"],
+        "content_sha256": reference["content_sha256"],
+        "size_bytes": reference["size_bytes"],
+        "row_count": reference["row_count"],
+        "relative_path": reference["relative_path"],
+        "media_type": "application/vnd.apache.parquet",
+    }
+
+
+def _cm_page_descriptor(page: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "offset": page["offset"],
+        "limit": page["limit"],
+        "total_count": page["total_count"],
+        "next_offset": page["next_offset"],
+    }
+
+
+def _bounded_cm_record_payload(
+    row: ConformationalMappingRecord,
+) -> tuple[Any, dict[str, dict[str, Any]], dict[str, Any] | None]:
+    reference = _cm_record_artifact_reference(row)
+    if reference is None:
+        raw = row.payload_json
+        if isinstance(raw, str) and len(raw.encode("utf-8")) > _CM_RESULT_INLINE_MAX_BYTES:
+            return {
+                "schema_name": "bms.scientific-artifact-reference",
+                "schema_version": 1,
+                "payload_omitted": True,
+                "reason": "legacy inline scientific payload exceeds the bounded response limit",
+            }, {}, None
+        return resolve_json_value(raw), {}, None
+
+    artifact = _cm_record_artifact_descriptor(reference)
+    if (
+        row.record_type not in {"analysis", "support", "missingness", "structure_map"}
+        and int(reference["size_bytes"]) <= _CM_RESULT_INLINE_MAX_BYTES
+        and int(reference["row_count"]) <= _CM_RESULT_INLINE_MAX_ROWS
+    ):
+        return resolve_json_value(reference), {}, artifact
+
+    collections = _CM_RESULT_COLLECTIONS.get(row.record_type, ())
+    fields = _CM_RESULT_SUMMARY_FIELDS.get(row.record_type, ())
+    if not fields:
+        return {
+            "schema_name": "bms.scientific-artifact-reference",
+            "schema_version": 1,
+            "payload_omitted": True,
+            "artifact_id": reference["artifact_id"],
+            "content_sha256": reference["content_sha256"],
+            "row_count": reference["row_count"],
+        }, {}, artifact
+
+    root = artifact_root()
+    payload = resolve_json_envelope_fields(reference, keys=fields, root=root)
+    pages: dict[str, dict[str, Any]] = {}
+    for collection in collections:
+        initial_limit = (
+            _CM_RESULT_INITIAL_PAGE_SIZE
+            if (row.record_type == "analysis" and collection == "results")
+            or row.record_type == "structure_map"
+            else 1
+        )
+        page = query_json_envelope_page(
+            reference,
+            key=collection,
+            offset=0,
+            limit=initial_limit,
+            root=root,
+            max_limit=_CM_RESULT_PAGE_SIZE,
+        )
+        payload[collection] = page["rows"] if initial_limit > 1 else []
+        descriptor = _cm_page_descriptor(page)
+        if initial_limit == 1 and page["total_count"]:
+            descriptor["next_offset"] = 0
+        pages[collection] = descriptor
+    return payload, pages, artifact
+
+
+def _cm_record_response(row: ConformationalMappingRecord) -> dict[str, Any]:
+    payload, pages, artifact = _bounded_cm_record_payload(row)
+    return {
+        "type": row.record_type,
+        "key": row.record_key,
+        "sha256": row.content_sha256,
+        "payload": payload,
+        "artifact": artifact,
+        "pages": pages,
+    }
+
+
 @router.get("/requests/{request_id}/results")
 async def request_results(
     request_id: str, request: Request, session: AsyncSession = Depends(get_session)
@@ -2852,11 +3009,16 @@ async def request_results(
     record = await _authorized_record(request_id, request, session)
     rows = (
         await session.execute(
-            select(ConformationalMappingRecord).where(
+            select(
+                ConformationalMappingRecord.record_type,
+                ConformationalMappingRecord.record_key,
+                ConformationalMappingRecord.content_sha256,
+                sql_cast(ConformationalMappingRecord.payload_json, Text).label("payload_json"),
+            ).where(
                 ConformationalMappingRecord.request_id == request_id
             ).order_by(ConformationalMappingRecord.record_type, ConformationalMappingRecord.record_key)
         )
-    ).scalars().all()
+    ).all()
     artifacts = (
         await session.execute(
             select(ConformationalMappingArtifact).where(
@@ -2868,12 +3030,13 @@ async def request_results(
             )
         )
     ).scalars().all()
+    try:
+        result_records = [_cm_record_response(row) for row in rows]
+    except (OSError, ScientificArtifactError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="CM scientific result artifact is unavailable or invalid") from exc
     return {
         "request_id": request_id, "result_contract_id": record.result_contract_id,
-        "records": [
-            {"type": row.record_type, "key": row.record_key, "sha256": row.content_sha256, "payload": row.payload_json}
-            for row in rows
-        ],
+        "records": result_records,
         "artifacts": [
             {
                 "artifact_id": item.artifact_id, "candidate_id": item.candidate_id,
@@ -2883,6 +3046,62 @@ async def request_results(
             }
             for item in artifacts
         ],
+    }
+
+
+@router.get("/requests/{request_id}/records/{record_type}/{record_key}/page")
+async def request_record_page(
+    request_id: str,
+    record_type: str,
+    record_key: str,
+    request: Request,
+    collection: str = Query(..., min_length=1, max_length=64),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=_CM_RESULT_PAGE_SIZE, ge=1, le=_CM_RESULT_PAGE_SIZE),
+    session: AsyncSession = Depends(get_session),
+):
+    await _authorized_record(request_id, request, session)
+    allowed_collections = _CM_RESULT_COLLECTIONS.get(record_type, ())
+    if collection not in allowed_collections:
+        raise HTTPException(status_code=422, detail="requested CM record collection is not supported")
+    row = (
+        await session.execute(
+            select(
+                ConformationalMappingRecord.record_type,
+                ConformationalMappingRecord.record_key,
+                ConformationalMappingRecord.content_sha256,
+                sql_cast(ConformationalMappingRecord.payload_json, Text).label("payload_json"),
+            ).where(
+                ConformationalMappingRecord.request_id == request_id,
+                ConformationalMappingRecord.record_type == record_type,
+                ConformationalMappingRecord.record_key == record_key,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="CM result record was not found")
+    reference = _cm_record_artifact_reference(row)
+    if reference is None:
+        raise HTTPException(status_code=409, detail="CM record does not have a page-addressable artifact")
+    try:
+        page = query_json_envelope_page(
+            reference,
+            key=collection,
+            offset=offset,
+            limit=limit,
+            root=artifact_root(),
+            max_limit=_CM_RESULT_PAGE_SIZE,
+        )
+    except (OSError, ScientificArtifactError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="CM scientific result page is unavailable or invalid") from exc
+    return {
+        "request_id": request_id,
+        "record_type": record_type,
+        "record_key": record_key,
+        "sha256": row.content_sha256,
+        "collection": collection,
+        "artifact": _cm_record_artifact_descriptor(reference),
+        **page,
     }
 
 
@@ -3081,7 +3300,7 @@ async def request_lineage(
             ).order_by(ConformationalMappingRecord.record_type, ConformationalMappingRecord.record_key)
         )
     ).scalars().all()
-    return {"request_id": request_id, "lineage": [row.payload_json for row in rows]}
+    return {"request_id": request_id, "lineage": [resolve_json_value(row.payload_json) for row in rows]}
 
 
 def _resolve_artifact_runtime_alias(path: str | Path) -> Path:

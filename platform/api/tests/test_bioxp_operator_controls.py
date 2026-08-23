@@ -397,6 +397,31 @@ def catalog():
     }
 
 
+def test_dashboard_accepts_robot_owned_unprepared_x_diagnostics() -> None:
+    payload = catalog()["dashboard"]
+    lifecycle = payload["x_axis"]["provider"]["lifecycle"]
+    failure = {
+        "failure": "raw_active_x_limit_after_mask_convergence",
+        "intent": "reconcile_switch_masks",
+        "no_motion_verified": True,
+        "physical_motion_commanded": False,
+    }
+    lifecycle.update({
+        "state": "unprepared",
+        "generation": None,
+        "board_lifecycle_generation": None,
+        "reference_state": "desynced",
+        "last_failure": copy.deepcopy(failure),
+    })
+    payload["x_axis"]["last_failure"] = failure
+
+    parsed = OperatorDashboard.model_validate(payload)
+    parsed_lifecycle = parsed.model_dump()["x_axis"]["provider"]["lifecycle"]
+
+    assert parsed_lifecycle["state"] == "unprepared"
+    assert parsed_lifecycle["last_failure"] is not None
+
+
 def receipt(*, action_id="motion.home_xy", key="invoke-12345678", command_id="cmd-1"):
     return {
         "schema_version": "bioxp.operator_action_receipt.v1",
@@ -758,6 +783,7 @@ class FakeConnection:
         self.client = FakeRobotClient()
         self.value = FakeSnapshot()
         self.safety_interrupt_calls = []
+        self.active_request_calls = []
 
     def snapshot(self):
         return self.value
@@ -767,7 +793,11 @@ class FakeConnection:
             raise ConnectionStateError(
                 f"BioXP connection generation changed: expected {expected_generation}, current {self.value.generation}"
             )
-        assert require_fresh is True
+        self.active_request_calls.append({
+            "route_name": route_name,
+            "require_fresh": require_fresh,
+            "path_params": kwargs.get("path_params"),
+        })
         return await self.client.request(route_name, **kwargs)
 
     async def request_active_query(self, route_name, *, expected_generation, require_fresh=True, **kwargs):
@@ -937,6 +967,29 @@ def test_invoke_relays_queued_successive_move_receipt(monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "queued"
     assert response.json()["queued_at"] == 1787188152.83
+    assert runtime.connection.active_request_calls[-1]["require_fresh"] is False
+
+
+def test_z_invocation_relies_on_robot_admission_without_bms_freshness_gate(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action"] = receipt(
+        action_id="oem.z.move_steps",
+        key="invoke-z-12345678",
+        command_id="operator-z-direct",
+    )
+
+    response = client.post(
+        "/api/bioxp/operator-controls/actions/oem.z.move_steps",
+        json={
+            "expected_connection_generation": 77,
+            "expected_ownership_generation": 7,
+            "idempotency_key": "invoke-z-12345678",
+            "inputs": {"steps": 100},
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.connection.active_request_calls[-1]["require_fresh"] is False
 
 
 def test_robot_409_translation_preserves_structured_detail():

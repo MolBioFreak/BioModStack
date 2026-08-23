@@ -445,8 +445,9 @@ def test_protein_local_redesign_is_first_class_native_model() -> None:
 
     assert "id: 'protein_modification_experimental'" in frontend_text
     assert "id: 'protein_local_redesign'" in frontend_text
-    assert "label: 'RFD3 Local Redesign'" in modification_modes_text
-    assert "RFD3LocalRedesignResultsPane" in results_text
+    assert "label: 'RFD3 Native Local Edit'" in modification_modes_text
+    assert "ProteinLocalRedesignResultsPane" in results_text
+    assert "isProteinLocalRedesignResultJob" in results_text
     assert "id: protein_local_redesign" in model_text
     assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
     assert "workflow {" in workflow_text
@@ -997,7 +998,7 @@ def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() 
     assert "not source.is_relative_to(data_root)" in ingester_source
 
 
-def test_plr_gpu_validators_serialize_on_the_scheduler_assigned_gpu() -> None:
+def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
     rendered = subprocess.run(
         [
             resolve_nextflow_executable(),
@@ -1012,5 +1013,7 @@ def test_plr_gpu_validators_serialize_on_the_scheduler_assigned_gpu() -> None:
         text=True,
     ).stdout
 
-    assert "process.'withName:ESMFold2FromPdb'.maxForks = 1" in rendered
-    assert "process.'withName:ProtenixFromComplex'.maxForks = 1" in rendered
+    assert "process.'withName:ESMFold2FromPdb'.maxForks" not in rendered
+    assert "process.'withName:ProtenixFromComplex'.maxForks" not in rendered
+    assert "params.gpu_id" in rendered
+    assert "params.num_parallel_jobs" in rendered

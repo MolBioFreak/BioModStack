@@ -731,6 +731,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.local_files_only = true;
         }
 
+        if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
+            params.workflow_adapter = initialValues.workflow_adapter.trim();
+        }
+
         if (usesBoltz) {
             params.boltz_use_msa = boltzUseMsa;
             params.boltz_recycling_steps = boltzRecyclingSteps;
@@ -994,6 +998,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (usesEsmFold2) {
             params.model_variant = esmfold2Variant;
             params.local_files_only = true;
+            if (typeof initialValues?.workflow_adapter === 'string' && initialValues.workflow_adapter.trim()) {
+                params.workflow_adapter = initialValues.workflow_adapter.trim();
+            }
         }
 
         // Boltz-2 parameters
@@ -1166,6 +1173,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             }
         }
 
+        const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
+        const pinnedIncludesLockGpus = Object.prototype.hasOwnProperty.call(initialValues || {}, 'lock_gpus');
+        const pinnedIncludesAllowRetries = Object.prototype.hasOwnProperty.call(initialValues || {}, 'allow_retries');
         submitMutation.mutate({
             name: jobName,
             model_id: modelId,
@@ -1174,8 +1184,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 ...params,
                 target_source: targetSource || undefined,
                 pinned_gpus: pinnedGpus.length > 0 ? pinnedGpus : undefined,
-                lock_gpus: lockGpus && pinnedGpus.length > 0,
-                allow_retries: allowRetries
+                lock_gpus: launchContextActive && !pinnedIncludesLockGpus ? undefined : lockGpus && pinnedGpus.length > 0,
+                allow_retries: launchContextActive && !pinnedIncludesAllowRetries ? undefined : allowRetries
             },
             pinned_gpu: pinnedGpus.length === 1 ? pinnedGpus[0] : null
         });

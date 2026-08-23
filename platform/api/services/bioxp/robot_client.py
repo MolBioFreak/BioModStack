@@ -4,11 +4,12 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -46,6 +47,10 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_status": ("GET", "/camera/status", 5.0),
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
+    "camera_stream_start": ("POST", "/camera/stream/start", 15.0),
+    "camera_stream_state": ("GET", "/camera/stream/state", 5.0),
+    "camera_mjpeg": ("GET", "/camera/mjpeg", 10.0),
+    "camera_stream_stop": ("POST", "/camera/stream/stop", 15.0),
     "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
     "operator_control_catalog_v2": ("GET", "/operator/v2/control-catalog", 5.0),
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
@@ -133,6 +138,34 @@ class _CameraStatusResponse(BaseModel):
         if not self.available and any(value is not None for value in frame_values):
             raise ValueError("unavailable camera status cannot claim frame metadata")
         return self
+
+
+class _CameraStreamResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = Field(pattern=r"^bioxp\.camera_stream\.v1$")
+    state: Literal["off", "starting", "live", "error"]
+    active: StrictBool
+    stream_id: str | None = None
+    stopped_session_id: str | None = None
+    camera_ownership_epoch: StrictInt = Field(ge=0)
+    device: str | None = None
+    fps: StrictInt | None = Field(default=None, ge=1, le=30)
+    quality: StrictInt | None = Field(default=None, ge=2, le=15)
+    width: StrictInt | None = Field(default=None, ge=160, le=1920)
+    height: StrictInt | None = Field(default=None, ge=120, le=1080)
+    frames_emitted: StrictInt = Field(ge=0)
+    dropped_frames: StrictInt = Field(ge=0)
+    latest_frame_at: str | None = None
+    last_error: str | None = Field(default=None, max_length=1000)
+    idempotent: StrictBool | None = None
+    ok: StrictBool | None = None
+    replacement: StrictBool | None = None
+    queue_max_frames: StrictInt | None = Field(default=None, ge=1, le=2)
+    mjpeg_url: str | None = None
+    session: dict[str, Any] | None = None
+    freshness: dict[str, Any] | None = None
+    provenance: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +374,73 @@ class BioXpRobotClient:
 
     async def camera_snapshot(self) -> CameraImage:
         return await self._camera_image("camera_snapshot")
+
+    async def _camera_stream_command(self, route_name: str) -> dict[str, Any]:
+        try:
+            method = self.routes[route_name][0]
+            payload = await self.request(route_name, json_data={} if method == "POST" else None)
+            stream = _CameraStreamResponse.model_validate(payload)
+            return stream.model_dump(
+                mode="json",
+                exclude={"device", "mjpeg_url", "session", "freshness", "provenance", "stopped_session_id"},
+            )
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except ValidationError as exc:
+            raise RobotTransportError("BioXP robot returned a malformed camera stream state") from exc
+
+    async def camera_stream_start(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_start")
+
+    async def camera_stream_state(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_state")
+
+    async def camera_stream_stop(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_stop")
+
+    @asynccontextmanager
+    async def camera_mjpeg_stream(self) -> AsyncIterator[AsyncIterator[bytes]]:
+        try:
+            method, path_template, timeout = self.routes["camera_mjpeg"]
+        except KeyError as exc:
+            raise RobotTransportError("Unknown BioXP robot route key: camera_mjpeg") from exc
+        path = _render_route_path(path_template, None)
+        stream_context = self._client.stream(
+            method,
+            path,
+            timeout=httpx.Timeout(connect=3.0, read=timeout, write=5.0, pool=3.0),
+        )
+        response: httpx.Response | None = None
+        entered = False
+        try:
+            response = await stream_context.__aenter__()
+            entered = True
+            if 300 <= response.status_code < 400:
+                raise RobotTransportError("BioXP target redirects are forbidden")
+            if response.is_error:
+                error_bytes = await _read_limited_body(
+                    response,
+                    limit=MAX_CAMERA_ERROR_BYTES,
+                    overflow_message="BioXP camera stream error response exceeded the size limit",
+                )
+                raise RobotResponseError(response.status_code, error_bytes.decode("utf-8", errors="replace"))
+            content_type = response.headers.get("content-type", "").lower()
+            if not content_type.startswith("multipart/x-mixed-replace") or "boundary=frame" not in content_type:
+                raise RobotTransportError("BioXP camera stream returned an invalid multipart content type")
+            yield response.aiter_bytes()
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP camera stream transport is unreachable or timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RobotTransportError("BioXP camera stream returned an invalid transport response") from exc
+        finally:
+            if entered:
+                await stream_context.__aexit__(None, None, None)
 
     async def _camera_image(self, route_name: str) -> CameraImage:
         try:

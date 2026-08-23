@@ -13,6 +13,13 @@ interface PendingFrame {
     reject: (error: Error) => void;
 }
 
+interface StreamState {
+    schema_version: 'bioxp.camera_stream.v1';
+    state: 'off' | 'starting' | 'live' | 'error';
+    active: boolean;
+    connection_generation: number;
+}
+
 const camera = vi.hoisted(() => ({
     pending: [] as PendingFrame[],
     status: {
@@ -30,10 +37,37 @@ const camera = vi.hoisted(() => ({
         error: null as unknown | null,
         refetch: vi.fn(async () => undefined),
     },
+    stream: {
+        data: {
+            schema_version: 'bioxp.camera_stream.v1' as const,
+            state: 'off' as const,
+            active: false,
+            connection_generation: 1,
+        } as StreamState,
+        isError: false,
+        error: null as unknown | null,
+        refetch: vi.fn(async () => undefined),
+    },
+    startStream: vi.fn(async (generation: number) => ({
+        schema_version: 'bioxp.camera_stream.v1' as const,
+        state: 'live' as const,
+        active: true,
+        connection_generation: generation,
+    })),
+    stopStream: vi.fn(async (generation: number) => ({
+        schema_version: 'bioxp.camera_stream.v1' as const,
+        state: 'off' as const,
+        active: false,
+        connection_generation: generation,
+    })),
 }));
 
 vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpCameraStatus: () => camera.status,
+    useBioXpCameraStreamState: () => camera.stream,
+    startBioXpCameraStream: camera.startStream,
+    stopBioXpCameraStream: camera.stopStream,
+    buildBioXpCameraMjpegUrl: (generation: number) => `/api/bioxp/camera/mjpeg?expected_generation=${generation}`,
     fetchBioXpCameraFrame: (generation: number) => new Promise<CameraImage>((resolve, reject) => {
         camera.pending.push({ generation, resolve, reject });
     }),
@@ -95,6 +129,18 @@ beforeEach(() => {
     camera.status.error = null;
     camera.status.refetch.mockReset();
     camera.status.refetch.mockResolvedValue(undefined);
+    camera.stream.data = {
+        schema_version: 'bioxp.camera_stream.v1',
+        state: 'off',
+        active: false,
+        connection_generation: 1,
+    };
+    camera.stream.isError = false;
+    camera.stream.error = null;
+    camera.stream.refetch.mockReset();
+    camera.stream.refetch.mockResolvedValue(undefined);
+    camera.startStream.mockClear();
+    camera.stopStream.mockClear();
     nextUrl = 1;
     createObjectURL = vi.fn(() => `blob:test-${nextUrl++}`);
     revokeObjectURL = vi.fn();
@@ -194,5 +240,22 @@ describe('mounted BioXP camera URL ownership', () => {
         expect(camera.status.refetch).toHaveBeenCalledTimes(1);
         expect(container.textContent).toContain('frame read failed');
         expect(button('Refresh')).toBeDefined();
+    });
+
+    it('starts and stops video only through the explicit Video control', async () => {
+        await renderPanel(1);
+
+        expect(camera.startStream).not.toHaveBeenCalled();
+        expect(container.querySelector('img')).toBeNull();
+
+        await act(async () => button('Video')!.click());
+        expect(camera.startStream).toHaveBeenCalledWith(1);
+        expect(container.querySelector('img')?.getAttribute('src')).toBe('/api/bioxp/camera/mjpeg?expected_generation=1');
+        expect(button('Stop Video')).toBeDefined();
+
+        await act(async () => button('Stop Video')!.click());
+        expect(camera.stopStream).toHaveBeenCalledWith(1);
+        expect(container.querySelector('img')).toBeNull();
+        expect(button('Video')).toBeDefined();
     });
 });

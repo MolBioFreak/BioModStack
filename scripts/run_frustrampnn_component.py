@@ -45,6 +45,7 @@ from services.frustrampnn.manifests import (  # noqa: E402
     ManifestValidationError,
     build_result_manifest,
     summarize_landscape_v2,
+    validate_external_authority_artifact,
     validate_result_manifest,
     validate_v2_input_closure,
 )
@@ -204,7 +205,8 @@ def _validate_request_before_runtime(
 
 
 def _external_authority_payload(request: Mapping[str, Any]) -> bytes | None:
-    external = request["identity_authority"] in {
+    identity_authority = request.get("identity_authority")
+    external = isinstance(identity_authority, str) and identity_authority in {
         "producer_manifest", "cm_complex_snapshot",
     }
     envelope = request.get("identity_authority_artifact")
@@ -216,13 +218,19 @@ def _external_authority_payload(request: Mapping[str, Any]) -> bytes | None:
         return None
     if not isinstance(envelope, Mapping):
         raise ComponentRunError("request_invalid", "external identity authority artifact is required")
+    source_artifact = request.get("source_artifact")
+    if not isinstance(source_artifact, Mapping) or not isinstance(source_artifact.get("sha256"), str):
+        raise ComponentRunError("request_invalid", "external authority source artifact is required")
     try:
         payload = base64.b64decode(envelope["canonical_json_base64"], validate=True)
     except Exception as exc:
         raise ComponentRunError("request_invalid", "external authority base64 is invalid") from exc
     if not payload or len(payload) > MAX_AUTHORITY_ARTIFACT_BYTES:
         raise ComponentRunError("request_invalid", "external authority artifact size is invalid")
-    if _sha256(payload) != envelope["sha256"]:
+    if request.get("schema_version") == 2 and envelope.get("bytes") != len(payload):
+        raise ComponentRunError("request_invalid", "external authority artifact byte count is invalid")
+    declared_sha256 = envelope.get("sha256")
+    if not isinstance(declared_sha256, str) or _sha256(payload) != declared_sha256:
         raise ComponentRunError("request_invalid", "external authority artifact digest mismatch")
     try:
         authority = canonical_json_loads(payload)
@@ -233,13 +241,13 @@ def _external_authority_payload(request: Mapping[str, Any]) -> bytes | None:
     if (
         authority.get("schema_name") != "producer_manifest"
         or authority.get("schema_version") != 1
-        or authority.get("source_sha256") != request["source_artifact"]["sha256"]
+        or authority.get("source_sha256") != source_artifact["sha256"]
     ):
         raise ComponentRunError(
             "request_invalid", "external authority type or source binding is invalid",
         )
     base_fields = {"schema_name", "schema_version", "source_sha256", "entities"}
-    if request["identity_authority"] == "cm_complex_snapshot":
+    if identity_authority == "cm_complex_snapshot":
         snapshot_digest = authority.get("cm_complex_snapshot_sha256")
         if (
             set(authority) != base_fields | {"cm_complex_snapshot_sha256"}
@@ -295,20 +303,25 @@ def preflight_runtime(
     *,
     container: Path | str,
     apptainer: Path | str = "apptainer",
-    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity = _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY,
+    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity | None = None,
 ) -> dict[str, Any]:
     """Authenticate the exact SIF generation and its executable/checkpoint without inference."""
 
+    selected_runtime_identity = (
+        _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
+        if runtime_identity is None
+        else runtime_identity
+    )
     pinned: _runtime.PinnedContainer | None = None
     try:
         configured_container = _runtime.validate_configured_container_path(
-            container, identity=runtime_identity
+            container, identity=selected_runtime_identity
         )
         pinned = _runtime.open_verified_container(
-            configured_container, runtime_identity.sif_sha256
+            configured_container, selected_runtime_identity.sif_sha256
         )
         assets = _runtime.verify_container_assets(
-            apptainer, pinned, identity=runtime_identity
+            apptainer, pinned, identity=selected_runtime_identity
         )
         return {
             "schema_name": "frustrampnn_runtime_preflight",
@@ -316,7 +329,7 @@ def preflight_runtime(
             "status": "ready",
             "sif_sha256": pinned.sha256,
             "executable_sha256": assets["executable_sha256"],
-            "checkpoint_id": runtime_identity.checkpoint_id,
+            "checkpoint_id": selected_runtime_identity.checkpoint_id,
             "checkpoint_sha256": assets["checkpoint_sha256"],
         }
     except _runtime.RuntimeValidationError as exc:
@@ -768,6 +781,7 @@ def _run_component_v2(
     if request_payload != canonical_json_bytes(dict(request)):
         raise ComponentRunError("request_invalid", "v2 request file is not exact canonical JSON")
     try:
+        authority_payload = _external_authority_payload(request)
         normalized_payload = _read_regular(
             source_structure,
             label="normalized PDB",
@@ -781,6 +795,9 @@ def _run_component_v2(
         structure, effective, configuration = validate_v2_input_closure(
             request, normalized_payload, structure_map_payload
         )
+        validate_external_authority_artifact(request, structure, authority_payload)
+    except ComponentRunError:
+        raise
     except (OSError, _runtime.RuntimeValidationError, ManifestValidationError) as exc:
         raise ComponentRunError("request_invalid", str(exc)) from exc
     if _runtime.runtime_identity_dict(runtime_identity) != configuration.runtime.model_dump(
@@ -809,6 +826,8 @@ def _run_component_v2(
     published = False
     try:
         _write_json(staging / "workflow_component_request_v2.json", request)
+        if authority_payload is not None:
+            (staging / AUTHORITY_ARTIFACT_PATH).write_bytes(authority_payload)
         (staging / "normalized_input.pdb").write_bytes(normalized_payload)
         (staging / "frustrampnn_structure_map_v1.json").write_bytes(structure_map_payload)
         (staging / "frustrampnn_stdout.log").write_bytes(b"")
@@ -1053,8 +1072,13 @@ def run_component(
     request_payload: bytes | None = None,
     apptainer: Path | str = "apptainer",
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity = _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY,
+    runtime_identity: _runtime.FrustraMPNNRuntimeIdentity | None = None,
 ) -> dict[str, Any]:
+    selected_runtime_identity = (
+        _runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
+        if runtime_identity is None
+        else runtime_identity
+    )
     version = request.get("schema_version") if isinstance(request, Mapping) else None
     if version == 1:
         if structure_map is not None:
@@ -1069,7 +1093,7 @@ def run_component(
             physical_gpu_id=physical_gpu_id,
             apptainer=apptainer,
             timeout_seconds=timeout_seconds,
-            runtime_identity=runtime_identity,
+            runtime_identity=selected_runtime_identity,
         )
     if version == 2:
         if structure_map is None:
@@ -1089,7 +1113,7 @@ def run_component(
             physical_gpu_id=physical_gpu_id,
             apptainer=apptainer,
             timeout_seconds=timeout_seconds,
-            runtime_identity=runtime_identity,
+            runtime_identity=selected_runtime_identity,
         )
     raise ComponentRunError("request_invalid", "unsupported component request schema generation")
 

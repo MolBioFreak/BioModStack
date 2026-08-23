@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     bioXpErrorPresentation,
     bioXpErrorText,
-    bioXpReceiptIsNonTerminal,
     BIOXP_Y_ABSOLUTE_MAX_STEPS,
     BIOXP_Y_ABSOLUTE_MIN_STEPS,
     BIOXP_Y_RELATIVE_MAX_STEPS,
@@ -146,18 +145,21 @@ export function BioXpCockpit() {
     const connection = status?.connection;
     const active = connection?.active === true;
     const linkConnected = active && connection?.reachable !== false;
+    const robotControlReady = linkConnected
+        && connection?.runtime_ready === true
+        && connection?.hardware_ready === true;
     const configured = connection?.configured === true;
     const generation = connection?.generation ?? 0;
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
     const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
-    const dashboardV2Query = useBioXpOperatorDashboardV2(generation, linkConnected);
-    const currentDashboardV2 = linkConnected && dashboardV2Query.error == null && !dashboardV2Query.isStale
+    const dashboardV2Query = useBioXpOperatorDashboardV2(generation, robotControlReady);
+    const currentDashboardV2 = robotControlReady && dashboardV2Query.error == null && !dashboardV2Query.isStale
         ? dashboardV2Query.data
         : undefined;
     const dashboardAuthorityVersion = v2AuthorityVersion(currentDashboardV2);
     const catalogV2Query = useBioXpOperatorControlCatalogV2(
         generation,
-        linkConnected,
+        robotControlReady,
         dashboardAuthorityVersion,
     );
     const [yCommandId, setYCommandId] = useState<string | null>(null);
@@ -175,7 +177,7 @@ export function BioXpCockpit() {
         ?? yAxisV2?.active_command?.command_id
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
-    const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, linkConnected);
+    const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, robotControlReady);
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const interruptYAction = useInterruptBioXpOperatorActionV1();
     const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
@@ -239,7 +241,7 @@ export function BioXpCockpit() {
         ? dashboardMotion.enabled ? 'Enabled — Z provider ready; each command verifies live controller state' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
         : 'Unavailable';
     const recentCommands = useMemo(
-        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).slice(0, historyLimit),
+        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter((record) => typeof record.status === 'string' && typeof record.action_id === 'string').slice(0, historyLimit),
         [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
     );
     useEffect(() => {
@@ -346,21 +348,6 @@ export function BioXpCockpit() {
         ?? xAxisDashboard?.latest_receipt
         ?? xProvider?.lifecycle?.latest_receipt
         ?? null;
-    const xReceiptActive = bioXpReceiptIsNonTerminal(xReceipt);
-    const xQueue = dashboard?.successive_move_queue?.x ?? null;
-    const xQueueFull = (xQueue?.depth ?? 0) >= 8;
-    const xMotionGateReason = (allowSuccessive = false): string | null => {
-        if (!linkConnected) return 'BioXP link is not connected.';
-        if (dashboardMotion && dashboardMotion.enabled === false) {
-            return dashboardMotion.reason ?? 'Robot motion is blocked.';
-        }
-        if (xQueueFull) return 'X successive-move queue is full (8 queued moves). Wait for the active move or use Stop to clear the queue.';
-        if (xReceiptActive && !allowSuccessive) return `X command ${typeof xReceipt?.action_id === 'string' ? xReceipt.action_id : 'in progress'} is ${String(xReceipt?.status)}.`;
-        return null;
-    };
-    const xLifecycleBlocksMoves = (xLifecycle !== 'prepared_unreferenced' && xLifecycle !== 'referenced_ready')
-        ? `Current X lifecycle state '${xLifecycle}'; expected 'prepared_unreferenced' or 'referenced_ready'.`
-        : null;
     const xActionStaticBlocker = (actionId: string): string | null => {
         const action = operatorActionById(actionId);
         if (!action) return 'Robot action unavailable.';
@@ -375,14 +362,14 @@ export function BioXpCockpit() {
     };
     const xNegativeDisabledReason = !xRelativeMagnitudeInRange
         ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+        : xActionStaticBlocker('oem.x.move_steps');
     const xPositiveDisabledReason = !xRelativeMagnitudeInRange
         ? `Requested X relative magnitude must be an integer from 1 through ${xRelativeMaximum}.`
-        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_steps');
+        : xActionStaticBlocker('oem.x.move_steps');
     const xAbsoluteDisabledReason = !xAbsoluteTargetInRange
         ? `Requested X target must be an integer from ${xAbsoluteMinimum} through ${xAbsoluteMaximum}.`
-        : xMotionGateReason(true) ?? xLifecycleBlocksMoves ?? xActionStaticBlocker('oem.x.move_absolute');
-    const xHomeDisabledReason = xMotionGateReason() ?? xActionStaticBlocker('oem.x.manual_panel_home');
+        : xActionStaticBlocker('oem.x.move_absolute');
+    const xHomeDisabledReason = xActionStaticBlocker('oem.x.manual_panel_home');
     const xNegativeEnabled = xNegativeDisabledReason === null;
     const xPositiveEnabled = xPositiveDisabledReason === null;
     const xAbsoluteEnabled = xAbsoluteDisabledReason === null;
@@ -958,7 +945,7 @@ export function BioXpCockpit() {
                 </div>
                 <BioXpPipetteControlPanel
                     generation={generation}
-                    connected={linkConnected && operatorCatalog.data !== undefined}
+                    connected={robotControlReady && operatorCatalog.data !== undefined}
                     pipettes={operatorCatalog.data?.dashboard.pipettes}
                     freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
                     actions={catalog?.actions}
@@ -984,7 +971,7 @@ export function BioXpCockpit() {
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
                 <p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p>
                 <div className="mt-4">
-                    <BioXpOperatorControlTabs generation={generation} connected={linkConnected} />
+                    <BioXpOperatorControlTabs generation={generation} connected={robotControlReady} />
                 </div>
             </details>
 

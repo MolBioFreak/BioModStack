@@ -1,0 +1,6396 @@
+{
+  "protein_core": {
+    "foreign_key_errors": [],
+    "freelist_count": 0,
+    "journal_mode": "wal",
+    "objects": [
+      {
+        "bytes": 2032177152,
+        "name": "conformational_mapping_records",
+        "pages": 496137
+      },
+      {
+        "bytes": 443887616,
+        "name": "designs",
+        "pages": 108371
+      },
+      {
+        "bytes": 376000512,
+        "name": "frustrampnn_landscape_rows",
+        "pages": 91797
+      },
+      {
+        "bytes": 347660288,
+        "name": "conformational_mapping_landscape_rows",
+        "pages": 84878
+      },
+      {
+        "bytes": 102477824,
+        "name": "frustrampnn_results",
+        "pages": 25019
+      },
+      {
+        "bytes": 68120576,
+        "name": "sqlite_autoindex_conformational_mapping_landscape_rows_2",
+        "pages": 16631
+      },
+      {
+        "bytes": 56061952,
+        "name": "ix_frustrampnn_landscape_page_order",
+        "pages": 13687
+      },
+      {
+        "bytes": 39567360,
+        "name": "uq_frustrampnn_landscape_slot",
+        "pages": 9660
+      },
+      {
+        "bytes": 39567360,
+        "name": "sqlite_autoindex_frustrampnn_landscape_rows_2",
+        "pages": 9660
+      },
+      {
+        "bytes": 35135488,
+        "name": "ix_conformational_mapping_landscape_rows_candidate_id",
+        "pages": 8578
+      },
+      {
+        "bytes": 25649152,
+        "name": "sqlite_autoindex_conformational_mapping_landscape_rows_1",
+        "pages": 6262
+      },
+      {
+        "bytes": 25436160,
+        "name": "ix_conformational_mapping_landscape_rows_request_id",
+        "pages": 6210
+      },
+      {
+        "bytes": 19955712,
+        "name": "ix_frustrampnn_landscape_rows_invocation_id",
+        "pages": 4872
+      },
+      {
+        "bytes": 19484672,
+        "name": "jobs",
+        "pages": 4757
+      },
+      {
+        "bytes": 17821696,
+        "name": "sqlite_autoindex_frustrampnn_landscape_rows_1",
+        "pages": 4351
+      },
+      {
+        "bytes": 10858496,
+        "name": "ix_frustrampnn_landscape_rows_parent_job_id",
+        "pages": 2651
+      },
+      {
+        "bytes": 10293248,
+        "name": "analysis_runs",
+        "pages": 2513
+      },
+      {
+        "bytes": 8634368,
+        "name": "ix_frustrampnn_landscape_rows_target_id",
+        "pages": 2108
+      },
+      {
+        "bytes": 7659520,
+        "name": "ix_conformational_mapping_landscape_rows_entity_instance_id",
+        "pages": 1870
+      },
+      {
+        "bytes": 6377472,
+        "name": "ix_conformational_mapping_landscape_rows_status",
+        "pages": 1557
+      },
+      {
+        "bytes": 2949120,
+        "name": "ix_frustrampnn_landscape_rows_entity_instance_id",
+        "pages": 720
+      },
+      {
+        "bytes": 2662400,
+        "name": "ix_frustrampnn_landscape_rows_status",
+        "pages": 650
+      },
+      {
+        "bytes": 2502656,
+        "name": "frustrampnn_comparison_rows",
+        "pages": 611
+      },
+      {
+        "bytes": 1994752,
+        "name": "sqlite_autoindex_designs_1",
+        "pages": 487
+      },
+      {
+        "bytes": 1712128,
+        "name": "ix_designs_job_id",
+        "pages": 418
+      },
+      {
+        "bytes": 1667072,
+        "name": "frustrampnn_comparisons",
+        "pages": 407
+      },
+      {
+        "bytes": 1257472,
+        "name": "ix_designs_lineage_root_job_id",
+        "pages": 307
+      },
+      {
+        "bytes": 884736,
+        "name": "ix_designs_stage_mode",
+        "pages": 216
+      },
+      {
+        "bytes": 688128,
+        "name": "ont_raw_signal_lookups",
+        "pages": 168
+      },
+      {
+        "bytes": 675840,
+        "name": "ix_designs_stage_family",
+        "pages": 165
+      },
+      {
+        "bytes": 643072,
+        "name": "conformational_mapping_artifacts",
+        "pages": 157
+      },
+      {
+        "bytes": 614400,
+        "name": "ix_designs_source_stage",
+        "pages": 150
+      },
+      {
+        "bytes": 540672,
+        "name": "ix_designs_artifact_class",
+        "pages": 132
+      },
+      {
+        "bytes": 487424,
+        "name": "ix_designs_origin_job_id",
+        "pages": 119
+      },
+      {
+        "bytes": 471040,
+        "name": "viewer_snapshots",
+        "pages": 115
+      },
+      {
+        "bytes": 376832,
+        "name": "ix_designs_source_stage_job_id",
+        "pages": 92
+      },
+      {
+        "bytes": 368640,
+        "name": "ix_designs_parent_design_id",
+        "pages": 90
+      },
+      {
+        "bytes": 368640,
+        "name": "ix_designs_origin_design_id",
+        "pages": 90
+      },
+      {
+        "bytes": 368640,
+        "name": "ix_designs_origin_backbone_design_id",
+        "pages": 90
+      },
+      {
+        "bytes": 344064,
+        "name": "ix_designs_backbone_id",
+        "pages": 84
+      },
+      {
+        "bytes": 339968,
+        "name": "ix_designs_source_stage_mode",
+        "pages": 83
+      },
+      {
+        "bytes": 323584,
+        "name": "ix_designs_source_stage_family",
+        "pages": 79
+      },
+      {
+        "bytes": 258048,
+        "name": "sqlite_autoindex_frustrampnn_comparison_rows_1",
+        "pages": 63
+      },
+      {
+        "bytes": 221184,
+        "name": "frustrampnn_artifacts",
+        "pages": 54
+      },
+      {
+        "bytes": 196608,
+        "name": "ix_analysis_runs_cache_key",
+        "pages": 48
+      },
+      {
+        "bytes": 192512,
+        "name": "conformational_mapping_requests",
+        "pages": 47
+      },
+      {
+        "bytes": 184320,
+        "name": "sqlite_schema",
+        "pages": 45
+      },
+      {
+        "bytes": 176128,
+        "name": "ix_frustrampnn_comparison_row_identity",
+        "pages": 43
+      },
+      {
+        "bytes": 172032,
+        "name": "ix_analysis_runs_params_hash",
+        "pages": 42
+      },
+      {
+        "bytes": 163840,
+        "name": "sqlite_autoindex_frustrampnn_comparison_rows_2",
+        "pages": 40
+      },
+      {
+        "bytes": 155648,
+        "name": "user_templates",
+        "pages": 38
+      },
+      {
+        "bytes": 155648,
+        "name": "rfd3_local_redesign_requests",
+        "pages": 38
+      },
+      {
+        "bytes": 155648,
+        "name": "ix_frustrampnn_comparison_rows_comparison_id",
+        "pages": 38
+      },
+      {
+        "bytes": 122880,
+        "name": "sqlite_autoindex_analysis_runs_1",
+        "pages": 30
+      },
+      {
+        "bytes": 118784,
+        "name": "sqlite_autoindex_conformational_mapping_artifacts_2",
+        "pages": 29
+      },
+      {
+        "bytes": 118784,
+        "name": "ix_analysis_runs_subject_id",
+        "pages": 29
+      },
+      {
+        "bytes": 98304,
+        "name": "sqlite_autoindex_jobs_1",
+        "pages": 24
+      },
+      {
+        "bytes": 98304,
+        "name": "ix_jobs_lineage_root_job_id",
+        "pages": 24
+      },
+      {
+        "bytes": 90112,
+        "name": "ix_frustrampnn_comparison_rows_biological_status",
+        "pages": 22
+      },
+      {
+        "bytes": 81920,
+        "name": "sqlite_autoindex_conformational_mapping_artifacts_1",
+        "pages": 20
+      },
+      {
+        "bytes": 81920,
+        "name": "ix_analysis_runs_queued_at",
+        "pages": 20
+      },
+      {
+        "bytes": 61440,
+        "name": "ix_jobs_parent_job_id",
+        "pages": 15
+      },
+      {
+        "bytes": 61440,
+        "name": "ix_jobs_batch_id",
+        "pages": 15
+      },
+      {
+        "bytes": 61440,
+        "name": "ix_conformational_mapping_artifacts_content_sha256",
+        "pages": 15
+      },
+      {
+        "bytes": 61440,
+        "name": "ix_analysis_runs_analysis_type",
+        "pages": 15
+      },
+      {
+        "bytes": 57344,
+        "name": "uq_frustrampnn_artifacts_invocation_path",
+        "pages": 14
+      },
+      {
+        "bytes": 57344,
+        "name": "sqlite_autoindex_frustrampnn_artifacts_2",
+        "pages": 14
+      },
+      {
+        "bytes": 53248,
+        "name": "ix_frustrampnn_comparison_rows_mapping_state",
+        "pages": 13
+      },
+      {
+        "bytes": 49152,
+        "name": "ix_jobs_selection_source_job_id",
+        "pages": 12
+      },
+      {
+        "bytes": 49152,
+        "name": "ix_analysis_runs_resource_class",
+        "pages": 12
+      },
+      {
+        "bytes": 45056,
+        "name": "ix_jobs_stage_mode",
+        "pages": 11
+      },
+      {
+        "bytes": 45056,
+        "name": "ix_frustrampnn_comparison_rows_missingness_state",
+        "pages": 11
+      },
+      {
+        "bytes": 45056,
+        "name": "ix_analysis_runs_status",
+        "pages": 11
+      },
+      {
+        "bytes": 40960,
+        "name": "ix_jobs_queue_status",
+        "pages": 10
+      },
+      {
+        "bytes": 40960,
+        "name": "ix_conformational_mapping_artifacts_request_id",
+        "pages": 10
+      },
+      {
+        "bytes": 40960,
+        "name": "ix_conformational_mapping_artifacts_candidate_id",
+        "pages": 10
+      },
+      {
+        "bytes": 36864,
+        "name": "ont_raw_signal_derivation_events",
+        "pages": 9
+      },
+      {
+        "bytes": 36864,
+        "name": "ix_jobs_stage_family",
+        "pages": 9
+      },
+      {
+        "bytes": 36864,
+        "name": "ix_analysis_runs_subject_kind",
+        "pages": 9
+      },
+      {
+        "bytes": 32768,
+        "name": "sqlite_autoindex_conformational_mapping_records_2",
+        "pages": 8
+      },
+      {
+        "bytes": 32768,
+        "name": "shape_design_requests",
+        "pages": 8
+      },
+      {
+        "bytes": 32768,
+        "name": "rfd3_local_redesign_artifacts",
+        "pages": 8
+      },
+      {
+        "bytes": 28672,
+        "name": "user_sequences",
+        "pages": 7
+      },
+      {
+        "bytes": 28672,
+        "name": "shape_design_geometries",
+        "pages": 7
+      },
+      {
+        "bytes": 28672,
+        "name": "ont_raw_signal_representations",
+        "pages": 7
+      },
+      {
+        "bytes": 28672,
+        "name": "ont_raw_signal_derivation_jobs",
+        "pages": 7
+      },
+      {
+        "bytes": 28672,
+        "name": "ix_frustrampnn_artifacts_invocation_id",
+        "pages": 7
+      },
+      {
+        "bytes": 24576,
+        "name": "sqlite_autoindex_frustrampnn_artifacts_1",
+        "pages": 6
+      },
+      {
+        "bytes": 24576,
+        "name": "ix_jobs_source_stage_job_id",
+        "pages": 6
+      },
+      {
+        "bytes": 24576,
+        "name": "ix_frustrampnn_artifacts_content_sha256",
+        "pages": 6
+      },
+      {
+        "bytes": 24576,
+        "name": "ix_conformational_mapping_records_content_sha256",
+        "pages": 6
+      },
+      {
+        "bytes": 24576,
+        "name": "ix_conformational_mapping_artifacts_role",
+        "pages": 6
+      },
+      {
+        "bytes": 24576,
+        "name": "ix_analysis_runs_supersedes_run_id",
+        "pages": 6
+      },
+      {
+        "bytes": 20480,
+        "name": "ix_jobs_source_stage_mode",
+        "pages": 5
+      },
+      {
+        "bytes": 20480,
+        "name": "ix_jobs_source_stage_family",
+        "pages": 5
+      },
+      {
+        "bytes": 20480,
+        "name": "ix_jobs_selected_input_artifact_class",
+        "pages": 5
+      },
+      {
+        "bytes": 16384,
+        "name": "sqlite_autoindex_conformational_mapping_records_1",
+        "pages": 4
+      },
+      {
+        "bytes": 16384,
+        "name": "md_runs",
+        "pages": 4
+      },
+      {
+        "bytes": 16384,
+        "name": "job_artifacts",
+        "pages": 4
+      },
+      {
+        "bytes": 16384,
+        "name": "ix_frustrampnn_artifacts_parent_job_id",
+        "pages": 4
+      },
+      {
+        "bytes": 16384,
+        "name": "ix_conformational_mapping_records_request_id",
+        "pages": 4
+      },
+      {
+        "bytes": 16384,
+        "name": "conformational_mapping_sources",
+        "pages": 4
+      },
+      {
+        "bytes": 12288,
+        "name": "sqlite_autoindex_rfd3_local_redesign_artifacts_2",
+        "pages": 3
+      },
+      {
+        "bytes": 12288,
+        "name": "ix_frustrampnn_artifacts_role",
+        "pages": 3
+      },
+      {
+        "bytes": 12288,
+        "name": "ix_conformational_mapping_records_record_type",
+        "pages": 3
+      },
+      {
+        "bytes": 12288,
+        "name": "frustrampnn_guidance_plans",
+        "pages": 3
+      },
+      {
+        "bytes": 4096,
+        "name": "uq_ont_run_external_registration_key",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "uq_md_replica_active",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "uq_frustrampnn_results_job_invocation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_viewer_snapshots_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_user_templates_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_user_templates_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_user_sequences_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_user_sequences_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_design_requests_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_design_requests_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_design_requests_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_design_geometries_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_design_geometries_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_shape_cad_sources_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_rfd3_local_redesign_requests_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_rfd3_local_redesign_candidates_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_rfd3_local_redesign_candidates_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_rfd3_local_redesign_artifacts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_primers_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_squigualiser_view_jobs_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_squigualiser_view_jobs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_squigualiser_view_jobs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_viewer_sessions_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_profiles_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_profiles_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_jobs_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_jobs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_jobs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_events_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_artifacts_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_artifacts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_mapping_artifacts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_jobs_4",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_jobs_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_jobs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_jobs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_artifacts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_signal_calibration_artifacts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_representations_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_representations_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_lookups_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_lookups_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_lookups_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_derivation_jobs_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_derivation_jobs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_derivation_jobs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_raw_signal_derivation_events_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_protocol_option_receipts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_protocol_option_receipts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_move_table_sources_4",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_move_table_sources_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_move_table_sources_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_move_table_sources_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_instrument_runs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_instrument_run_preflights_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_instrument_run_preflights_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_instrument_run_events_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_instrument_run_events_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_external_move_bam_registration_receipts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ont_external_move_bam_registration_receipts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_nucleotide_sequences_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_mappings_4",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_mappings_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_mappings_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_mappings_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_manifests_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_reference_set_manifests_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_reference_targets_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_reference_targets_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_reference_targets_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_assignment_releases_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_assignment_releases_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_assignment_release_targets_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_assignment_release_targets_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_pooled_assignment_release_targets_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_comparison_panel_receipts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_ngs_comparison_panel_receipts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_molbio_ngs_receipts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_molbio_ngs_receipts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_runs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_replica_runs_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_replica_runs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_replica_runs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_reconciler_leases_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_events_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_events_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_checkpoints_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_checkpoints_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_attempt_segments_3",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_attempt_segments_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_md_attempt_segments_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_job_artifacts_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_job_artifacts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_input_files_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_reviews_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_reviews_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_review_artifacts_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_results_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_guidance_plans_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_guidance_plans_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_exports_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_comparisons_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_frustrampnn_comparisons_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_external_result_imports_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_external_result_imports_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_state_landscape_analysis_rows_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_state_landscape_analysis_rows_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_state_landscape_analysis_pairs_2",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_state_landscape_analysis_pairs_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_state_landscape_analysis_headers_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_sources_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_conformational_mapping_requests_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_autoindex_approved_ngs_comparison_panels_1",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "shape_cad_sources",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "schema_migrations",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "rfd3_local_redesign_candidates",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "primers",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_squigualiser_view_jobs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_viewer_sessions",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_mapping_profiles",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_mapping_jobs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_mapping_events",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_mapping_artifacts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_calibration_jobs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_signal_calibration_artifacts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_protocol_option_receipts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_move_table_sources",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_instrument_runs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_instrument_run_preflights",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_instrument_run_events",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ont_external_move_bam_registration_receipts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "nucleotide_sequences",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_reference_set_mappings",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_reference_set_manifests",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_pooled_reference_targets",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_pooled_assignment_releases",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_pooled_assignment_release_targets",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ngs_comparison_panel_receipts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "molbio_ngs_receipts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "md_replica_runs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "md_reconciler_leases",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "md_events",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "md_checkpoints",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "md_attempt_segments",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_viewer_snapshots_snapshot_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_viewer_snapshots_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_design_requests_request_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_design_requests_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_design_requests_geometry_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_design_geometries_source_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_design_geometries_geometry_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_shape_cad_sources_source_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_status",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_result_manifest_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_request_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_redesign_mode",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_profile_registry_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_profile_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_requests_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_candidates_status",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_candidates_request_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_candidates_artifact_manifest_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_candidate_status",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_artifacts_role",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_artifacts_request_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_artifacts_content_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_artifacts_candidate_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_rfd3_local_redesign_artifact_role",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_squigualiser_views_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_viewer_session_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_mapping_jobs_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_mapping_jobs_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_mapping_events_job",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_calibration_jobs_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_signal_calibration_jobs_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_run_events_run_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_representations_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_representations_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_representations_manifest",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_representations_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_representations_format",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_lookups_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_lookups_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_lookups_observed_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_derivation_jobs_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_derivation_jobs_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_derivation_jobs_lease",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_derivation_jobs_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_raw_signal_derivation_events_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_protocol_option_receipts_position_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_protocol_option_receipts_position_expires",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_protocol_option_receipts_expires_at",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_move_sources_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_move_sources_predecessor",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_move_sources_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_instrument_runs_terminal_artifact_manifest_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_instrument_runs_position_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_instrument_runs_minknow_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_instrument_run_preflights_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_instrument_run_events_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ont_external_move_bam_registration_generation",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_reference_set_mappings_unit_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_reference_set_mappings_reference_set_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_reference_set_manifests_source_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_reference_set_manifests_manifest_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_reference_targets_target_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_reference_targets_reference_set_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_assignment_releases_reference_set_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_assignment_releases_assignment_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_assignment_release_targets_release_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_pooled_assignment_release_targets_assignment_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_comparison_panel_receipts_panel_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_ngs_comparison_panel_receipts_expires_at",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_molbio_ngs_receipts_sequence_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_molbio_ngs_receipts_revision_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_molbio_ngs_receipts_expires_at",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_runs_request_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_runs_phase",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_runs_chemistry_profile_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_replica_runs_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_replica_runs_md_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_events_md_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_events_event_type",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_checkpoints_segment_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_checkpoints_compatibility_key",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_attempt_segments_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_attempt_segments_replica_run_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_md_attempt_segments_compatibility_key",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_job_artifacts_owner_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_reviews_parent_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_reviews_owner_job",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_reviews_created_at",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_review_artifacts_owner_review",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_results_parent_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_results_job_candidate",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_results_design_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_results_candidate_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_guidance_source",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_guidance_plans_source_parent_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_guidance_plans_source_landscape_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_guidance_plans_source_comparison_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_exports_owner_job",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparisons_target_parent_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparisons_target_landscape_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparisons_status",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparisons_reference_parent_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparisons_reference_landscape_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_frustrampnn_comparison_sources",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_external_result_imports_state",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_external_result_imports_resource_type",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_external_result_imports_provider_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_external_result_imports_provider_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_external_result_imports_bms_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_state_landscape_analysis_rows_request_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_state_landscape_analysis_rows_pair_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_state_landscape_analysis_rows_analysis_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_state_landscape_analysis_headers_content_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_sources_source_kind",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_sources_principal_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_sources_content_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_status",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_retry_of_request_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_resume_key",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_request_sha256",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_principal_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_job_id",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_conformational_mapping_requests_backend",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_cm_state_analysis_rows_request",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_cm_state_analysis_rows_pair",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_cm_state_analysis_rows_page_order",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_cm_state_analysis_rows_analysis",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "ix_cm_state_analysis_header_content",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "input_files",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "frustrampnn_reviews",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "frustrampnn_review_artifacts",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "frustrampnn_exports",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "external_result_imports",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "conformational_mapping_state_landscape_analysis_rows",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "conformational_mapping_state_landscape_analysis_pairs",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "conformational_mapping_state_landscape_analysis_headers",
+        "pages": 1
+      },
+      {
+        "bytes": 4096,
+        "name": "approved_ngs_comparison_panels",
+        "pages": 1
+      }
+    ],
+    "page_count": 908336,
+    "page_size": 4096,
+    "path": "/home/dalab/.biomodstack-dev/json-data-plane-repair-baseline-20260821/core-current.sqlite3",
+    "quick_check": "ok",
+    "sha256": "87b2df0c822994e47a0ca5576f3150a57b2f73cfdfb18110bdaef75a91ebd2e6",
+    "size_bytes": 3720544256,
+    "synchronous": 2,
+    "tables": [
+      {
+        "columns": [
+          "id",
+          "subject_kind",
+          "subject_id",
+          "analysis_type",
+          "status",
+          "resource_class",
+          "params_json",
+          "params_hash",
+          "input_signature",
+          "code_version",
+          "cache_key",
+          "summary_json",
+          "result_inline_json",
+          "artifact_manifest",
+          "error_message",
+          "requested_by",
+          "reuse_count",
+          "supersedes_run_id",
+          "queued_at",
+          "started_at",
+          "completed_at",
+          "last_accessed_at"
+        ],
+        "name": "analysis_runs",
+        "row_count": 2222,
+        "text_columns": {
+          "analysis_type": {
+            "avg_bytes": 15.778577857785779,
+            "bytes": 35060,
+            "count": 2222,
+            "max_bytes": 24
+          },
+          "cache_key": {
+            "avg_bytes": 64.0,
+            "bytes": 142208,
+            "count": 2222,
+            "max_bytes": 64
+          },
+          "code_version": {
+            "avg_bytes": 13.0,
+            "bytes": 28886,
+            "count": 2222,
+            "max_bytes": 13
+          },
+          "error_message": {
+            "avg_bytes": 952.8518518518518,
+            "bytes": 25727,
+            "count": 27,
+            "max_bytes": 1388
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 79992,
+            "count": 2222,
+            "max_bytes": 36
+          },
+          "input_signature": {
+            "avg_bytes": 64.0,
+            "bytes": 142208,
+            "count": 2222,
+            "max_bytes": 64
+          },
+          "params_hash": {
+            "avg_bytes": 64.0,
+            "bytes": 142208,
+            "count": 2222,
+            "max_bytes": 64
+          },
+          "params_json": {
+            "avg_bytes": 10.876237623762377,
+            "bytes": 24167,
+            "count": 2222,
+            "max_bytes": 2042
+          },
+          "requested_by": {
+            "avg_bytes": 9.995499549954996,
+            "bytes": 22210,
+            "count": 2222,
+            "max_bytes": 11
+          },
+          "resource_class": {
+            "avg_bytes": 9.0,
+            "bytes": 19998,
+            "count": 2222,
+            "max_bytes": 9
+          },
+          "result_inline_json": {
+            "avg_bytes": 1703.2953020134228,
+            "bytes": 2284119,
+            "count": 1341,
+            "max_bytes": 39302
+          },
+          "status": {
+            "avg_bytes": 8.963546354635463,
+            "bytes": 19917,
+            "count": 2222,
+            "max_bytes": 9
+          },
+          "subject_id": {
+            "avg_bytes": 36.0,
+            "bytes": 79992,
+            "count": 2222,
+            "max_bytes": 36
+          },
+          "subject_kind": {
+            "avg_bytes": 5.991899189918992,
+            "bytes": 13314,
+            "count": 2222,
+            "max_bytes": 6
+          },
+          "summary_json": {
+            "avg_bytes": 505.70387243735763,
+            "bytes": 1110020,
+            "count": 2195,
+            "max_bytes": 2521
+          },
+          "supersedes_run_id": {
+            "avg_bytes": 36.0,
+            "bytes": 540,
+            "count": 15,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "version",
+          "status",
+          "label",
+          "manifest_path",
+          "snapshot_sha256",
+          "provenance",
+          "created_at",
+          "created_by"
+        ],
+        "name": "approved_ngs_comparison_panels",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "artifact_id",
+          "request_id",
+          "candidate_id",
+          "role",
+          "relative_path",
+          "storage_path",
+          "content_sha256",
+          "size_bytes",
+          "media_type",
+          "metadata_json",
+          "created_at"
+        ],
+        "name": "conformational_mapping_artifacts",
+        "row_count": 757,
+        "text_columns": {
+          "artifact_id": {
+            "avg_bytes": 88.0,
+            "bytes": 66616,
+            "count": 757,
+            "max_bytes": 88
+          },
+          "candidate_id": {
+            "avg_bytes": 51.87685774946922,
+            "bytes": 24434,
+            "count": 471,
+            "max_bytes": 86
+          },
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 48448,
+            "count": 757,
+            "max_bytes": 64
+          },
+          "media_type": {
+            "avg_bytes": 15.424042272126817,
+            "bytes": 11676,
+            "count": 757,
+            "max_bytes": 24
+          },
+          "metadata_json": {
+            "avg_bytes": 124.39894319682959,
+            "bytes": 94170,
+            "count": 757,
+            "max_bytes": 408
+          },
+          "relative_path": {
+            "avg_bytes": 74.8441215323646,
+            "bytes": 56657,
+            "count": 757,
+            "max_bytes": 142
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 27252,
+            "count": 757,
+            "max_bytes": 36
+          },
+          "role": {
+            "avg_bytes": 14.907529722589167,
+            "bytes": 11285,
+            "count": 757,
+            "max_bytes": 29
+          },
+          "storage_path": {
+            "avg_bytes": 244.85468956406868,
+            "bytes": 185355,
+            "count": 757,
+            "max_bytes": 320
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "request_id",
+          "candidate_id",
+          "entity_instance_id",
+          "auth_asym_id",
+          "auth_seq_id",
+          "insertion_code",
+          "sequence_index",
+          "wt",
+          "mutation_aa",
+          "score",
+          "score_class",
+          "scoreable",
+          "status",
+          "reason",
+          "provenance_json"
+        ],
+        "name": "conformational_mapping_landscape_rows",
+        "row_count": 508220,
+        "text_columns": {
+          "auth_asym_id": {
+            "avg_bytes": 3.656329935854551,
+            "bytes": 1858220,
+            "count": 508220,
+            "max_bytes": 6
+          },
+          "auth_seq_id": {
+            "avg_bytes": 2.7643540199126364,
+            "bytes": 1404900,
+            "count": 508220,
+            "max_bytes": 3
+          },
+          "candidate_id": {
+            "avg_bytes": 55.06819881153831,
+            "bytes": 27986760,
+            "count": 508220,
+            "max_bytes": 86
+          },
+          "entity_instance_id": {
+            "avg_bytes": 4.187595923025461,
+            "bytes": 2128220,
+            "count": 508220,
+            "max_bytes": 6
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 18295920,
+            "count": 508220,
+            "max_bytes": 36
+          },
+          "mutation_aa": {
+            "avg_bytes": 1.0,
+            "bytes": 508220,
+            "count": 508220,
+            "max_bytes": 1
+          },
+          "provenance_json": {
+            "avg_bytes": 431.8713942780686,
+            "bytes": 219485680,
+            "count": 508220,
+            "max_bytes": 441
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 18295920,
+            "count": 508220,
+            "max_bytes": 36
+          },
+          "score_class": {
+            "avg_bytes": 10.252853095116288,
+            "bytes": 5210705,
+            "count": 508220,
+            "max_bytes": 20
+          },
+          "status": {
+            "avg_bytes": 2.0,
+            "bytes": 1016440,
+            "count": 508220,
+            "max_bytes": 2
+          },
+          "wt": {
+            "avg_bytes": 1.0,
+            "bytes": 508220,
+            "count": 508220,
+            "max_bytes": 1
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "request_id",
+          "record_type",
+          "record_key",
+          "content_sha256",
+          "payload_json",
+          "created_at"
+        ],
+        "name": "conformational_mapping_records",
+        "row_count": 238,
+        "text_columns": {
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 15232,
+            "count": 238,
+            "max_bytes": 64
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 8568,
+            "count": 238,
+            "max_bytes": 36
+          },
+          "payload_json": {
+            "avg_bytes": 8529328.907563025,
+            "bytes": 2029980280,
+            "count": 238,
+            "max_bytes": 260889972
+          },
+          "record_key": {
+            "avg_bytes": 44.51260504201681,
+            "bytes": 10594,
+            "count": 238,
+            "max_bytes": 86
+          },
+          "record_type": {
+            "avg_bytes": 11.210084033613445,
+            "bytes": 2668,
+            "count": 238,
+            "max_bytes": 29
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 8568,
+            "count": 238,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "request_id",
+          "job_id",
+          "principal_id",
+          "backend",
+          "status",
+          "request_sha256",
+          "coordinate_plan_sha256",
+          "resume_key",
+          "result_contract_id",
+          "request_json",
+          "coordinate_plan_json",
+          "progress_json",
+          "failure_receipt_json",
+          "retry_of_request_id",
+          "created_at",
+          "updated_at",
+          "terminal_at"
+        ],
+        "name": "conformational_mapping_requests",
+        "row_count": 36,
+        "text_columns": {
+          "backend": {
+            "avg_bytes": 12.777777777777779,
+            "bytes": 460,
+            "count": 36,
+            "max_bytes": 20
+          },
+          "coordinate_plan_json": {
+            "avg_bytes": 1311.6666666666667,
+            "bytes": 47220,
+            "count": 36,
+            "max_bytes": 3328
+          },
+          "coordinate_plan_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 2304,
+            "count": 36,
+            "max_bytes": 64
+          },
+          "failure_receipt_json": {
+            "avg_bytes": 157.33333333333334,
+            "bytes": 5192,
+            "count": 33,
+            "max_bytes": 327
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 1296,
+            "count": 36,
+            "max_bytes": 36
+          },
+          "principal_id": {
+            "avg_bytes": 23.25,
+            "bytes": 837,
+            "count": 36,
+            "max_bytes": 26
+          },
+          "progress_json": {
+            "avg_bytes": 169.19444444444446,
+            "bytes": 6091,
+            "count": 36,
+            "max_bytes": 227
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 1296,
+            "count": 36,
+            "max_bytes": 36
+          },
+          "request_json": {
+            "avg_bytes": 2519.9444444444443,
+            "bytes": 90718,
+            "count": 36,
+            "max_bytes": 4015
+          },
+          "request_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 2304,
+            "count": 36,
+            "max_bytes": 64
+          },
+          "result_contract_id": {
+            "avg_bytes": 35.111111111111114,
+            "bytes": 1264,
+            "count": 36,
+            "max_bytes": 36
+          },
+          "resume_key": {
+            "avg_bytes": 64.0,
+            "bytes": 2304,
+            "count": 36,
+            "max_bytes": 64
+          },
+          "status": {
+            "avg_bytes": 7.333333333333333,
+            "bytes": 264,
+            "count": 36,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "source_id",
+          "principal_id",
+          "source_kind",
+          "storage_root",
+          "relative_path",
+          "content_sha256",
+          "size_bytes",
+          "metadata_json",
+          "immutable",
+          "created_at"
+        ],
+        "name": "conformational_mapping_sources",
+        "row_count": 16,
+        "text_columns": {
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1024,
+            "count": 16,
+            "max_bytes": 64
+          },
+          "metadata_json": {
+            "avg_bytes": 233.25,
+            "bytes": 3732,
+            "count": 16,
+            "max_bytes": 737
+          },
+          "principal_id": {
+            "avg_bytes": 23.5625,
+            "bytes": 377,
+            "count": 16,
+            "max_bytes": 26
+          },
+          "relative_path": {
+            "avg_bytes": 68.4375,
+            "bytes": 1095,
+            "count": 16,
+            "max_bytes": 73
+          },
+          "source_id": {
+            "avg_bytes": 59.5625,
+            "bytes": 953,
+            "count": 16,
+            "max_bytes": 68
+          },
+          "source_kind": {
+            "avg_bytes": 16.75,
+            "bytes": 268,
+            "count": 16,
+            "max_bytes": 21
+          },
+          "storage_root": {
+            "avg_bytes": 55.3125,
+            "bytes": 885,
+            "count": 16,
+            "max_bytes": 59
+          }
+        }
+      },
+      {
+        "columns": [
+          "request_id",
+          "analysis_id",
+          "content_sha256",
+          "source_ensemble_sha256",
+          "source_landscape_sha256",
+          "source_structure_map_sha256",
+          "comparison_sha256",
+          "formula_version",
+          "formula_sha256",
+          "policy_sha256",
+          "comparison_mode",
+          "comparison_target_id",
+          "comparison_scope",
+          "reference_backend_coordinates_json",
+          "reference_candidate_id",
+          "pair_count",
+          "row_count",
+          "exclusion_count",
+          "created_at"
+        ],
+        "name": "conformational_mapping_state_landscape_analysis_headers",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "request_id",
+          "analysis_id",
+          "pair_id",
+          "candidate_a_id",
+          "candidate_b_id"
+        ],
+        "name": "conformational_mapping_state_landscape_analysis_pairs",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "request_id",
+          "analysis_id",
+          "pair_id",
+          "candidate_a_id",
+          "candidate_b_id",
+          "target_id",
+          "entity_instance_id",
+          "auth_asym_id",
+          "auth_seq_id",
+          "insertion_code",
+          "sequence_index",
+          "validated_wt",
+          "metrics_json",
+          "availability_json"
+        ],
+        "name": "conformational_mapping_state_landscape_analysis_rows",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "job_id",
+          "name",
+          "pdb_path",
+          "json_path",
+          "lineage_root_job_id",
+          "parent_design_id",
+          "origin_design_id",
+          "origin_job_id",
+          "origin_backbone_design_id",
+          "stage_family",
+          "stage_mode",
+          "source_stage_job_id",
+          "source_stage_family",
+          "source_stage_mode",
+          "source_pdb_path",
+          "source_design_name",
+          "artifact_class",
+          "artifact_schema_version",
+          "selected_loop_scope",
+          "provenance",
+          "num_helices",
+          "num_strands",
+          "rog",
+          "rfd_rog",
+          "mpnn_score",
+          "fampnn_psce",
+          "plddt_overall",
+          "plddt_binder",
+          "plddt_target",
+          "pae_interaction",
+          "pae_overall",
+          "rmsd_overall",
+          "rmsd_binder",
+          "rmsd_target",
+          "conf_score",
+          "ptm",
+          "ligand_iptm",
+          "iptm",
+          "protein_iptm",
+          "complex_iplddt",
+          "complex_ipde",
+          "chains_ptm",
+          "pair_chains_iptm",
+          "disorder",
+          "num_recycles",
+          "has_clash",
+          "confidence_metrics",
+          "aligned_error_path",
+          "aligned_error_format",
+          "aligned_error_key",
+          "ipsae",
+          "ipsae_binder_to_target",
+          "ipsae_target_to_binder",
+          "ipsae_d0chn",
+          "ipsae_d0dom",
+          "ipsae_chain_pair",
+          "ipsae_pae_cutoff",
+          "ipsae_dist_cutoff",
+          "affinity_score",
+          "binder_probability",
+          "chain_metrics",
+          "residue_plddt",
+          "pae_matrix",
+          "is_favorite",
+          "notes",
+          "backbone_id",
+          "epitope_contact_count",
+          "epitope_min_distance",
+          "epitope_min_atom_distance",
+          "epitope_nearest_antibody_residue",
+          "epitope_nearest_target_residue",
+          "epitope_nearest_antibody_atom",
+          "epitope_nearest_target_atom",
+          "epitope_mapping_mode",
+          "epitope_centroid_distance",
+          "target_contact_count",
+          "target_min_distance",
+          "target_min_atom_distance",
+          "target_nearest_antibody_residue",
+          "target_nearest_target_residue",
+          "target_nearest_antibody_atom",
+          "target_nearest_target_atom",
+          "target_centroid_distance",
+          "detected_antibody_chains",
+          "detected_target_chain",
+          "antibody_residue_count",
+          "target_residue_count",
+          "epitope_residue_count",
+          "passed_screen",
+          "screening_reason",
+          "source_stage",
+          "artifact_group",
+          "rfa_loop_metrics",
+          "rfa_hotspot_metrics",
+          "rfa_hotspot_covered_count",
+          "rfa_hotspot_min_distance",
+          "rfa_hotspot_avg_min_distance",
+          "rfa_runtime_seconds",
+          "rfa_device",
+          "rfa_diffusion_steps",
+          "rfa_noise_scale_ca",
+          "rfa_noise_scale_frame",
+          "rfa_guide_scale",
+          "rfa_plddt_initial",
+          "rfa_plddt_final",
+          "rfa_plddt_delta",
+          "rfa_plddt_selected",
+          "rfa_plddt_nonselected",
+          "rfa_design_loops",
+          "rfa_hotspots",
+          "cdr_h1",
+          "cdr_h2",
+          "cdr_h3",
+          "cdr_l1",
+          "cdr_l2",
+          "cdr_l3",
+          "numbering_scheme",
+          "binder_length",
+          "cdr_h1_length",
+          "cdr_h2_length",
+          "cdr_h3_length",
+          "cdr_l1_length",
+          "cdr_l2_length",
+          "cdr_l3_length",
+          "antibody_type",
+          "fr2_contacts",
+          "de_loop",
+          "fr3_contacts",
+          "fr4_contacts",
+          "humanness_score",
+          "developability_flags",
+          "stability_data",
+          "antifold_logits_path",
+          "frustration_high_count",
+          "frustration_min_count",
+          "frustration_pct_high",
+          "frustration_residues",
+          "frustration_csv_path",
+          "maturation_delta_interface",
+          "maturation_interface_score",
+          "maturation_rmsd",
+          "maturation_selected_delta_interface",
+          "maturation_selected_interface_score",
+          "maturation_selected_rmsd",
+          "maturation_nonselected_rmsd",
+          "ppiflow_primary_loop",
+          "ppiflow_primary_loop_rmsd",
+          "ppiflow_primary_loop_target_contact_delta",
+          "ppiflow_primary_loop_target_distance_delta",
+          "ppiflow_primary_loop_epitope_contact_delta",
+          "ppiflow_primary_loop_epitope_distance_delta",
+          "ppiflow_objective_mode",
+          "ppiflow_objective_score",
+          "ppiflow_filter_passed",
+          "ppiflow_filter_reason",
+          "ppiflow_loop_metrics",
+          "metric_provenance",
+          "metric_completeness",
+          "created_at",
+          "review_profile_id",
+          "review_contract_version",
+          "review_contract_source",
+          "review_artifact_manifest",
+          "review_role_map",
+          "frustrampnn_contract_version",
+          "frustrampnn_status",
+          "frustrampnn_source_sha256",
+          "frustrampnn_manifest_relpath",
+          "frustrampnn_landscape_relpath",
+          "frustrampnn_summary_relpath",
+          "frustrampnn_runtime_sha256",
+          "frustrampnn_failure_class",
+          "frustrampnn_failure_detail"
+        ],
+        "name": "designs",
+        "row_count": 37266,
+        "text_columns": {
+          "aligned_error_format": {
+            "avg_bytes": 16.2910483484921,
+            "bytes": 34032,
+            "count": 2089,
+            "max_bytes": 18
+          },
+          "aligned_error_key": {
+            "avg_bytes": 10.240306366682622,
+            "bytes": 21392,
+            "count": 2089,
+            "max_bytes": 14
+          },
+          "aligned_error_path": {
+            "avg_bytes": 161.29631402584968,
+            "bytes": 336948,
+            "count": 2089,
+            "max_bytes": 212
+          },
+          "antibody_type": {
+            "avg_bytes": 3.0,
+            "bytes": 60849,
+            "count": 20283,
+            "max_bytes": 3
+          },
+          "artifact_class": {
+            "avg_bytes": 18.196164955070603,
+            "bytes": 226797,
+            "count": 12464,
+            "max_bytes": 34
+          },
+          "artifact_group": {
+            "avg_bytes": 5.2211705238118835,
+            "bytes": 105358,
+            "count": 20179,
+            "max_bytes": 18
+          },
+          "cdr_h1": {
+            "avg_bytes": 14.072164948453608,
+            "bytes": 1365,
+            "count": 97,
+            "max_bytes": 20
+          },
+          "cdr_h2": {
+            "avg_bytes": 13.536082474226804,
+            "bytes": 1313,
+            "count": 97,
+            "max_bytes": 20
+          },
+          "cdr_h3": {
+            "avg_bytes": 17.690721649484537,
+            "bytes": 1716,
+            "count": 97,
+            "max_bytes": 28
+          },
+          "cdr_l1": {
+            "avg_bytes": 12.633333333333333,
+            "bytes": 4169,
+            "count": 330,
+            "max_bytes": 18
+          },
+          "cdr_l2": {
+            "avg_bytes": 20.963636363636365,
+            "bytes": 6918,
+            "count": 330,
+            "max_bytes": 26
+          },
+          "cdr_l3": {
+            "avg_bytes": 25.096969696969698,
+            "bytes": 8282,
+            "count": 330,
+            "max_bytes": 41
+          },
+          "de_loop": {
+            "avg_bytes": 3.076923076923077,
+            "bytes": 160,
+            "count": 52,
+            "max_bytes": 4
+          },
+          "detected_antibody_chains": {
+            "avg_bytes": 1.0,
+            "bytes": 23071,
+            "count": 23071,
+            "max_bytes": 1
+          },
+          "detected_target_chain": {
+            "avg_bytes": 1.0,
+            "bytes": 23150,
+            "count": 23150,
+            "max_bytes": 1
+          },
+          "epitope_mapping_mode": {
+            "avg_bytes": 15.001315418584985,
+            "bytes": 319318,
+            "count": 21286,
+            "max_bytes": 17
+          },
+          "epitope_nearest_antibody_atom": {
+            "avg_bytes": 9.878478751410304,
+            "bytes": 210135,
+            "count": 21272,
+            "max_bytes": 12
+          },
+          "epitope_nearest_antibody_residue": {
+            "avg_bytes": 7.670693869875893,
+            "bytes": 163171,
+            "count": 21272,
+            "max_bytes": 8
+          },
+          "epitope_nearest_target_atom": {
+            "avg_bytes": 10.175206844678451,
+            "bytes": 216447,
+            "count": 21272,
+            "max_bytes": 11
+          },
+          "epitope_nearest_target_residue": {
+            "avg_bytes": 7.94894697254607,
+            "bytes": 169090,
+            "count": 21272,
+            "max_bytes": 8
+          },
+          "fr2_contacts": {
+            "avg_bytes": 5.0,
+            "bytes": 260,
+            "count": 52,
+            "max_bytes": 5
+          },
+          "fr3_contacts": {
+            "avg_bytes": 6.0,
+            "bytes": 312,
+            "count": 52,
+            "max_bytes": 6
+          },
+          "fr4_contacts": {
+            "avg_bytes": 3.0,
+            "bytes": 156,
+            "count": 52,
+            "max_bytes": 3
+          },
+          "frustrampnn_contract_version": {
+            "avg_bytes": 3.0,
+            "bytes": 24,
+            "count": 8,
+            "max_bytes": 3
+          },
+          "frustrampnn_landscape_relpath": {
+            "avg_bytes": 29.0,
+            "bytes": 232,
+            "count": 8,
+            "max_bytes": 29
+          },
+          "frustrampnn_manifest_relpath": {
+            "avg_bytes": 35.0,
+            "bytes": 280,
+            "count": 8,
+            "max_bytes": 35
+          },
+          "frustrampnn_runtime_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 512,
+            "count": 8,
+            "max_bytes": 64
+          },
+          "frustrampnn_source_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 512,
+            "count": 8,
+            "max_bytes": 64
+          },
+          "frustrampnn_status": {
+            "avg_bytes": 9.0,
+            "bytes": 72,
+            "count": 8,
+            "max_bytes": 9
+          },
+          "frustrampnn_summary_relpath": {
+            "avg_bytes": 27.0,
+            "bytes": 216,
+            "count": 8,
+            "max_bytes": 27
+          },
+          "frustration_csv_path": {
+            "avg_bytes": 122.65,
+            "bytes": 9812,
+            "count": 80,
+            "max_bytes": 138
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 1341576,
+            "count": 37266,
+            "max_bytes": 36
+          },
+          "ipsae_chain_pair": {
+            "avg_bytes": 4.0,
+            "bytes": 8268,
+            "count": 2067,
+            "max_bytes": 4
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 1341576,
+            "count": 37266,
+            "max_bytes": 36
+          },
+          "json_path": {
+            "avg_bytes": 164.8572806171649,
+            "bytes": 512871,
+            "count": 3111,
+            "max_bytes": 267
+          },
+          "lineage_root_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 888408,
+            "count": 24678,
+            "max_bytes": 36
+          },
+          "name": {
+            "avg_bytes": 26.659662963559278,
+            "bytes": 993499,
+            "count": 37266,
+            "max_bytes": 243
+          },
+          "numbering_scheme": {
+            "avg_bytes": 4.0,
+            "bytes": 148668,
+            "count": 37167,
+            "max_bytes": 4
+          },
+          "origin_backbone_design_id": {
+            "avg_bytes": 36.0,
+            "bytes": 57312,
+            "count": 1592,
+            "max_bytes": 36
+          },
+          "origin_design_id": {
+            "avg_bytes": 36.0,
+            "bytes": 57312,
+            "count": 1592,
+            "max_bytes": 36
+          },
+          "origin_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 152316,
+            "count": 4231,
+            "max_bytes": 36
+          },
+          "parent_design_id": {
+            "avg_bytes": 36.0,
+            "bytes": 57312,
+            "count": 1592,
+            "max_bytes": 36
+          },
+          "pdb_path": {
+            "avg_bytes": 126.66363441206461,
+            "bytes": 4720247,
+            "count": 37266,
+            "max_bytes": 353
+          },
+          "ppiflow_filter_reason": {
+            "avg_bytes": 6.177809388335704,
+            "bytes": 4343,
+            "count": 703,
+            "max_bytes": 31
+          },
+          "ppiflow_objective_mode": {
+            "avg_bytes": 8.0,
+            "bytes": 5624,
+            "count": 703,
+            "max_bytes": 8
+          },
+          "ppiflow_primary_loop": {
+            "avg_bytes": 2.0,
+            "bytes": 1406,
+            "count": 703,
+            "max_bytes": 2
+          },
+          "provenance": {
+            "avg_bytes": 2965.628426458759,
+            "bytes": 47927521,
+            "count": 16161,
+            "max_bytes": 117644
+          },
+          "review_contract_source": {
+            "avg_bytes": 15.095019588901412,
+            "bytes": 562531,
+            "count": 37266,
+            "max_bytes": 18
+          },
+          "review_profile_id": {
+            "avg_bytes": 21.077899425750015,
+            "bytes": 785489,
+            "count": 37266,
+            "max_bytes": 36
+          },
+          "rfa_device": {
+            "avg_bytes": 23.0,
+            "bytes": 441255,
+            "count": 19185,
+            "max_bytes": 23
+          },
+          "screening_reason": {
+            "avg_bytes": 8.002605732611746,
+            "bytes": 159700,
+            "count": 19956,
+            "max_bytes": 49
+          },
+          "source_design_name": {
+            "avg_bytes": 35.17418981481482,
+            "bytes": 60781,
+            "count": 1728,
+            "max_bytes": 56
+          },
+          "source_pdb_path": {
+            "avg_bytes": 134.18844807467912,
+            "bytes": 229999,
+            "count": 1714,
+            "max_bytes": 192
+          },
+          "source_stage": {
+            "avg_bytes": 14.967786836349175,
+            "bytes": 301092,
+            "count": 20116,
+            "max_bytes": 21
+          },
+          "source_stage_family": {
+            "avg_bytes": 8.817512877115526,
+            "bytes": 11983,
+            "count": 1359,
+            "max_bytes": 20
+          },
+          "source_stage_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 60228,
+            "count": 1673,
+            "max_bytes": 36
+          },
+          "source_stage_mode": {
+            "avg_bytes": 16.184010152284262,
+            "bytes": 25506,
+            "count": 1576,
+            "max_bytes": 40
+          },
+          "stage_family": {
+            "avg_bytes": 9.869037858011254,
+            "bytes": 349058,
+            "count": 35369,
+            "max_bytes": 33
+          },
+          "stage_mode": {
+            "avg_bytes": 15.721608900299529,
+            "bytes": 551121,
+            "count": 35055,
+            "max_bytes": 28
+          },
+          "target_nearest_antibody_atom": {
+            "avg_bytes": 9.83413190529876,
+            "bytes": 209349,
+            "count": 21288,
+            "max_bytes": 12
+          },
+          "target_nearest_antibody_residue": {
+            "avg_bytes": 7.736940999624202,
+            "bytes": 164704,
+            "count": 21288,
+            "max_bytes": 8
+          },
+          "target_nearest_target_atom": {
+            "avg_bytes": 10.043968432919955,
+            "bytes": 213816,
+            "count": 21288,
+            "max_bytes": 12
+          },
+          "target_nearest_target_residue": {
+            "avg_bytes": 7.948703494926719,
+            "bytes": 169212,
+            "count": 21288,
+            "max_bytes": 8
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "provider_id",
+          "resource_type",
+          "provider_job_id",
+          "state",
+          "source_path",
+          "source_fingerprint",
+          "run_metadata_sha256",
+          "archive_sha256",
+          "normalized_manifest_path",
+          "bms_job_id",
+          "dataset_name",
+          "job_name",
+          "failure_code",
+          "failure_message",
+          "provider_metadata",
+          "schema_version",
+          "created_at",
+          "updated_at",
+          "imported_at"
+        ],
+        "name": "external_result_imports",
+        "row_count": 1,
+        "text_columns": {
+          "archive_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "bms_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 36,
+            "count": 1,
+            "max_bytes": 36
+          },
+          "dataset_name": {
+            "avg_bytes": 31.0,
+            "bytes": 31,
+            "count": 1,
+            "max_bytes": 31
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 36,
+            "count": 1,
+            "max_bytes": 36
+          },
+          "job_name": {
+            "avg_bytes": 28.0,
+            "bytes": 28,
+            "count": 1,
+            "max_bytes": 28
+          },
+          "normalized_manifest_path": {
+            "avg_bytes": 208.0,
+            "bytes": 208,
+            "count": 1,
+            "max_bytes": 208
+          },
+          "provider_id": {
+            "avg_bytes": 9.0,
+            "bytes": 9,
+            "count": 1,
+            "max_bytes": 9
+          },
+          "provider_job_id": {
+            "avg_bytes": 29.0,
+            "bytes": 29,
+            "count": 1,
+            "max_bytes": 29
+          },
+          "resource_type": {
+            "avg_bytes": 33.0,
+            "bytes": 33,
+            "count": 1,
+            "max_bytes": 33
+          },
+          "run_metadata_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "source_fingerprint": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "source_path": {
+            "avg_bytes": 65.0,
+            "bytes": 65,
+            "count": 1,
+            "max_bytes": 65
+          },
+          "state": {
+            "avg_bytes": 9.0,
+            "bytes": 9,
+            "count": 1,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "artifact_id",
+          "parent_job_id",
+          "invocation_id",
+          "role",
+          "relative_path",
+          "storage_path",
+          "content_sha256",
+          "size_bytes",
+          "media_type",
+          "metadata_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_artifacts",
+        "row_count": 245,
+        "text_columns": {
+          "artifact_id": {
+            "avg_bytes": 64.0,
+            "bytes": 15680,
+            "count": 245,
+            "max_bytes": 64
+          },
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 15680,
+            "count": 245,
+            "max_bytes": 64
+          },
+          "invocation_id": {
+            "avg_bytes": 65.18367346938776,
+            "bytes": 15970,
+            "count": 245,
+            "max_bytes": 96
+          },
+          "media_type": {
+            "avg_bytes": 13.910204081632653,
+            "bytes": 3408,
+            "count": 245,
+            "max_bytes": 16
+          },
+          "metadata_json": {
+            "avg_bytes": 231.9265306122449,
+            "bytes": 56822,
+            "count": 245,
+            "max_bytes": 268
+          },
+          "parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 8820,
+            "count": 245,
+            "max_bytes": 36
+          },
+          "relative_path": {
+            "avg_bytes": 27.60816326530612,
+            "bytes": 6764,
+            "count": 245,
+            "max_bytes": 39
+          },
+          "role": {
+            "avg_bytes": 11.236734693877551,
+            "bytes": 2753,
+            "count": 245,
+            "max_bytes": 20
+          },
+          "storage_path": {
+            "avg_bytes": 205.5469387755102,
+            "bytes": 50359,
+            "count": 245,
+            "max_bytes": 317
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "comparison_id",
+          "row_index",
+          "entity_instance_id",
+          "auth_asym_id",
+          "auth_seq_id",
+          "insertion_code",
+          "sequence_index",
+          "mutation_aa",
+          "mapping_state",
+          "missingness_state",
+          "biological_status",
+          "reference_score",
+          "target_score",
+          "raw_score_delta",
+          "reference_class",
+          "target_class",
+          "classification_transition",
+          "row_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_comparison_rows",
+        "row_count": 3040,
+        "text_columns": {
+          "auth_asym_id": {
+            "avg_bytes": 1.0,
+            "bytes": 3040,
+            "count": 3040,
+            "max_bytes": 1
+          },
+          "auth_seq_id": {
+            "avg_bytes": 1.881578947368421,
+            "bytes": 5720,
+            "count": 3040,
+            "max_bytes": 2
+          },
+          "biological_status": {
+            "avg_bytes": 15.5,
+            "bytes": 47120,
+            "count": 3040,
+            "max_bytes": 19
+          },
+          "comparison_id": {
+            "avg_bytes": 36.0,
+            "bytes": 109440,
+            "count": 3040,
+            "max_bytes": 36
+          },
+          "entity_instance_id": {
+            "avg_bytes": 5.0,
+            "bytes": 15200,
+            "count": 3040,
+            "max_bytes": 5
+          },
+          "id": {
+            "avg_bytes": 64.0,
+            "bytes": 194560,
+            "count": 3040,
+            "max_bytes": 64
+          },
+          "mapping_state": {
+            "avg_bytes": 6.0,
+            "bytes": 18240,
+            "count": 3040,
+            "max_bytes": 6
+          },
+          "missingness_state": {
+            "avg_bytes": 4.0,
+            "bytes": 12160,
+            "count": 3040,
+            "max_bytes": 4
+          },
+          "mutation_aa": {
+            "avg_bytes": 1.0,
+            "bytes": 3040,
+            "count": 3040,
+            "max_bytes": 1
+          },
+          "reference_class": {
+            "avg_bytes": 6.470065789473685,
+            "bytes": 19669,
+            "count": 3040,
+            "max_bytes": 7
+          },
+          "row_json": {
+            "avg_bytes": 545.5328947368421,
+            "bytes": 1658420,
+            "count": 3040,
+            "max_bytes": 557
+          },
+          "target_class": {
+            "avg_bytes": 6.470065789473685,
+            "bytes": 19669,
+            "count": 3040,
+            "max_bytes": 7
+          }
+        }
+      },
+      {
+        "columns": [
+          "comparison_id",
+          "reference_parent_job_id",
+          "reference_invocation_id",
+          "target_parent_job_id",
+          "target_invocation_id",
+          "reference_landscape_sha256",
+          "target_landscape_sha256",
+          "configuration_id",
+          "configuration_sha256",
+          "status",
+          "comparison_sha256",
+          "payload_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_comparisons",
+        "row_count": 2,
+        "text_columns": {
+          "comparison_id": {
+            "avg_bytes": 36.0,
+            "bytes": 72,
+            "count": 2,
+            "max_bytes": 36
+          },
+          "comparison_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 128,
+            "count": 2,
+            "max_bytes": 64
+          },
+          "configuration_id": {
+            "avg_bytes": 21.0,
+            "bytes": 21,
+            "count": 1,
+            "max_bytes": 21
+          },
+          "configuration_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "payload_json": {
+            "avg_bytes": 831670.5,
+            "bytes": 1663341,
+            "count": 2,
+            "max_bytes": 836412
+          },
+          "reference_invocation_id": {
+            "avg_bytes": 48.0,
+            "bytes": 96,
+            "count": 2,
+            "max_bytes": 48
+          },
+          "reference_landscape_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 128,
+            "count": 2,
+            "max_bytes": 64
+          },
+          "reference_parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 72,
+            "count": 2,
+            "max_bytes": 36
+          },
+          "status": {
+            "avg_bytes": 11.0,
+            "bytes": 22,
+            "count": 2,
+            "max_bytes": 12
+          },
+          "target_invocation_id": {
+            "avg_bytes": 48.0,
+            "bytes": 96,
+            "count": 2,
+            "max_bytes": 48
+          },
+          "target_landscape_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 128,
+            "count": 2,
+            "max_bytes": 64
+          },
+          "target_parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 72,
+            "count": 2,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "export_id",
+          "review_id",
+          "parent_job_id",
+          "invocation_id",
+          "created_by",
+          "format",
+          "content_sha256",
+          "row_count",
+          "total_matching_rows",
+          "complete",
+          "payload_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_exports",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "guidance_id",
+          "source_landscape_sha256",
+          "source_comparison_id",
+          "source_parent_job_id",
+          "source_invocation_id",
+          "configuration_id",
+          "configuration_sha256",
+          "guidance_sha256",
+          "payload_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_guidance_plans",
+        "row_count": 1,
+        "text_columns": {
+          "configuration_id": {
+            "avg_bytes": 21.0,
+            "bytes": 21,
+            "count": 1,
+            "max_bytes": 21
+          },
+          "configuration_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "guidance_id": {
+            "avg_bytes": 36.0,
+            "bytes": 36,
+            "count": 1,
+            "max_bytes": 36
+          },
+          "guidance_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "payload_json": {
+            "avg_bytes": 11335.0,
+            "bytes": 11335,
+            "count": 1,
+            "max_bytes": 11335
+          },
+          "source_invocation_id": {
+            "avg_bytes": 48.0,
+            "bytes": 48,
+            "count": 1,
+            "max_bytes": 48
+          },
+          "source_landscape_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "source_parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 36,
+            "count": 1,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "parent_job_id",
+          "invocation_id",
+          "target_id",
+          "entity_instance_id",
+          "auth_asym_id",
+          "auth_seq_id",
+          "insertion_code",
+          "sequence_index",
+          "wt",
+          "mutation_aa",
+          "score",
+          "score_class",
+          "scoreable",
+          "status",
+          "reason",
+          "row_json",
+          "provenance_json"
+        ],
+        "name": "frustrampnn_landscape_rows",
+        "row_count": 213620,
+        "text_columns": {
+          "auth_asym_id": {
+            "avg_bytes": 1.0,
+            "bytes": 213620,
+            "count": 213620,
+            "max_bytes": 1
+          },
+          "auth_seq_id": {
+            "avg_bytes": 2.742065349686359,
+            "bytes": 585760,
+            "count": 213620,
+            "max_bytes": 3
+          },
+          "entity_instance_id": {
+            "avg_bytes": 3.3608276378616235,
+            "bytes": 717940,
+            "count": 213620,
+            "max_bytes": 11
+          },
+          "id": {
+            "avg_bytes": 64.0,
+            "bytes": 13671680,
+            "count": 213620,
+            "max_bytes": 64
+          },
+          "invocation_id": {
+            "avg_bytes": 72.64507068626533,
+            "bytes": 15518440,
+            "count": 213620,
+            "max_bytes": 96
+          },
+          "mutation_aa": {
+            "avg_bytes": 1.0,
+            "bytes": 213620,
+            "count": 213620,
+            "max_bytes": 1
+          },
+          "parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 7690320,
+            "count": 213620,
+            "max_bytes": 36
+          },
+          "provenance_json": {
+            "avg_bytes": 862.3496863589552,
+            "bytes": 184215140,
+            "count": 213620,
+            "max_bytes": 1129
+          },
+          "row_json": {
+            "avg_bytes": 404.5488250163842,
+            "bytes": 86419720,
+            "count": 213620,
+            "max_bytes": 473
+          },
+          "score_class": {
+            "avg_bytes": 6.471776987173485,
+            "bytes": 1382501,
+            "count": 213620,
+            "max_bytes": 7
+          },
+          "status": {
+            "avg_bytes": 2.0,
+            "bytes": 427240,
+            "count": 213620,
+            "max_bytes": 2
+          },
+          "target_id": {
+            "avg_bytes": 27.206066847673437,
+            "bytes": 5811760,
+            "count": 213620,
+            "max_bytes": 36
+          },
+          "wt": {
+            "avg_bytes": 1.0,
+            "bytes": 213620,
+            "count": 213620,
+            "max_bytes": 1
+          }
+        }
+      },
+      {
+        "columns": [
+          "parent_job_id",
+          "invocation_id",
+          "parent_workflow_id",
+          "candidate_id",
+          "design_id",
+          "requiredness",
+          "request_sha256",
+          "source_artifact_id",
+          "source_artifact_sha256",
+          "manifest_sha256",
+          "manifest_json",
+          "summary_sha256",
+          "summary_json",
+          "runtime_identity_json",
+          "assigned_gpu_json",
+          "terminal_result_json",
+          "parent_metadata_json",
+          "created_at",
+          "settings_sha256",
+          "effective_settings_sha256",
+          "effective_settings_json",
+          "capability_inventory_sha256",
+          "statistics_sha256",
+          "statistics_json",
+          "comparison_compatibility_id"
+        ],
+        "name": "frustrampnn_results",
+        "row_count": 26,
+        "text_columns": {
+          "assigned_gpu_json": {
+            "avg_bytes": 46.19230769230769,
+            "bytes": 1201,
+            "count": 26,
+            "max_bytes": 59
+          },
+          "candidate_id": {
+            "avg_bytes": 31.423076923076923,
+            "bytes": 817,
+            "count": 26,
+            "max_bytes": 47
+          },
+          "capability_inventory_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 896,
+            "count": 14,
+            "max_bytes": 64
+          },
+          "comparison_compatibility_id": {
+            "avg_bytes": 64.0,
+            "bytes": 896,
+            "count": 14,
+            "max_bytes": 64
+          },
+          "design_id": {
+            "avg_bytes": 36.0,
+            "bytes": 288,
+            "count": 8,
+            "max_bytes": 36
+          },
+          "effective_settings_json": {
+            "avg_bytes": 128021.07142857143,
+            "bytes": 1792295,
+            "count": 14,
+            "max_bytes": 168803
+          },
+          "effective_settings_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 896,
+            "count": 14,
+            "max_bytes": 64
+          },
+          "invocation_id": {
+            "avg_bytes": 66.96153846153847,
+            "bytes": 1741,
+            "count": 26,
+            "max_bytes": 96
+          },
+          "manifest_json": {
+            "avg_bytes": 2795.5384615384614,
+            "bytes": 72684,
+            "count": 26,
+            "max_bytes": 3231
+          },
+          "manifest_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1664,
+            "count": 26,
+            "max_bytes": 64
+          },
+          "parent_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 936,
+            "count": 26,
+            "max_bytes": 36
+          },
+          "parent_metadata_json": {
+            "avg_bytes": 77.07692307692308,
+            "bytes": 2004,
+            "count": 26,
+            "max_bytes": 384
+          },
+          "parent_workflow_id": {
+            "avg_bytes": 20.53846153846154,
+            "bytes": 534,
+            "count": 26,
+            "max_bytes": 22
+          },
+          "request_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1664,
+            "count": 26,
+            "max_bytes": 64
+          },
+          "requiredness": {
+            "avg_bytes": 8.0,
+            "bytes": 208,
+            "count": 26,
+            "max_bytes": 8
+          },
+          "runtime_identity_json": {
+            "avg_bytes": 2175.230769230769,
+            "bytes": 56556,
+            "count": 26,
+            "max_bytes": 2796
+          },
+          "settings_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 896,
+            "count": 14,
+            "max_bytes": 64
+          },
+          "source_artifact_id": {
+            "avg_bytes": 39.84615384615385,
+            "bytes": 518,
+            "count": 13,
+            "max_bytes": 46
+          },
+          "source_artifact_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1664,
+            "count": 26,
+            "max_bytes": 64
+          },
+          "statistics_json": {
+            "avg_bytes": 7164902.857142857,
+            "bytes": 100308640,
+            "count": 14,
+            "max_bytes": 9229151
+          },
+          "statistics_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 896,
+            "count": 14,
+            "max_bytes": 64
+          },
+          "summary_json": {
+            "avg_bytes": 1696.3461538461538,
+            "bytes": 44105,
+            "count": 26,
+            "max_bytes": 2103
+          },
+          "summary_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1664,
+            "count": 26,
+            "max_bytes": 64
+          },
+          "terminal_result_json": {
+            "avg_bytes": 1858.8076923076924,
+            "bytes": 48329,
+            "count": 26,
+            "max_bytes": 3300
+          }
+        }
+      },
+      {
+        "columns": [
+          "artifact_id",
+          "review_id",
+          "parent_job_id",
+          "created_by",
+          "role",
+          "media_type",
+          "content_sha256",
+          "size_bytes",
+          "payload_blob",
+          "generation_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_review_artifacts",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "review_id",
+          "parent_job_id",
+          "invocation_id",
+          "landscape_sha256",
+          "effective_settings_sha256",
+          "review_sha256",
+          "supersedes_review_id",
+          "created_by",
+          "title",
+          "notes",
+          "result_references_json",
+          "selected_residues_json",
+          "filters_json",
+          "viewer_state_json",
+          "tags_json",
+          "created_at"
+        ],
+        "name": "frustrampnn_reviews",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "filename",
+          "file_type",
+          "directory",
+          "size_bytes",
+          "uploaded_at"
+        ],
+        "name": "input_files",
+        "row_count": 3,
+        "text_columns": {
+          "directory": {
+            "avg_bytes": 24.666666666666668,
+            "bytes": 74,
+            "count": 3,
+            "max_bytes": 37
+          },
+          "file_type": {
+            "avg_bytes": 3.6666666666666665,
+            "bytes": 11,
+            "count": 3,
+            "max_bytes": 4
+          },
+          "filename": {
+            "avg_bytes": 44.333333333333336,
+            "bytes": 133,
+            "count": 3,
+            "max_bytes": 77
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "owner_job_id",
+          "attempt",
+          "logical_path",
+          "storage_path",
+          "sha256",
+          "bytes",
+          "media_type",
+          "provenance",
+          "created_at"
+        ],
+        "name": "job_artifacts",
+        "row_count": 17,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 442,
+            "count": 17,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 612,
+            "count": 17,
+            "max_bytes": 36
+          },
+          "logical_path": {
+            "avg_bytes": 44.0,
+            "bytes": 748,
+            "count": 17,
+            "max_bytes": 54
+          },
+          "media_type": {
+            "avg_bytes": 19.352941176470587,
+            "bytes": 329,
+            "count": 17,
+            "max_bytes": 24
+          },
+          "owner_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 612,
+            "count": 17,
+            "max_bytes": 36
+          },
+          "provenance": {
+            "avg_bytes": 262.4117647058824,
+            "bytes": 4461,
+            "count": 17,
+            "max_bytes": 383
+          },
+          "sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1088,
+            "count": 17,
+            "max_bytes": 64
+          },
+          "storage_path": {
+            "avg_bytes": 122.0,
+            "bytes": 2074,
+            "count": 17,
+            "max_bytes": 132
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "status",
+          "model_id",
+          "mode",
+          "params",
+          "created_at",
+          "started_at",
+          "completed_at",
+          "output_dir",
+          "nextflow_run_id",
+          "error_message",
+          "batch_id",
+          "batch_name",
+          "lineage_root_job_id",
+          "stage_family",
+          "stage_mode",
+          "source_stage_job_id",
+          "source_stage_family",
+          "source_stage_mode",
+          "source_selection_manifest_path",
+          "source_selection_count",
+          "selected_input_artifact_class",
+          "selected_input_schema_version",
+          "selection_source_type",
+          "selection_source_job_id",
+          "selection_dataset_name",
+          "selected_loop_scope",
+          "provenance",
+          "saved_selection_sets",
+          "queue_status",
+          "paused",
+          "pinned_gpu",
+          "assigned_gpu",
+          "priority",
+          "vram_estimate_mb",
+          "sequence_length",
+          "retry_count",
+          "max_retries",
+          "oom_tolerance",
+          "parent_job_id",
+          "job_phase",
+          "msa_sequences",
+          "msa_manifest_path",
+          "child_stage",
+          "child_output_dir",
+          "aggregated_by_parent",
+          "child_design_count",
+          "current_stage",
+          "stage_progress",
+          "stage_work_dir",
+          "completed_stages",
+          "stage_outputs",
+          "awaiting_input",
+          "awaiting_stage",
+          "awaiting_payload",
+          "decision_history"
+        ],
+        "name": "jobs",
+        "row_count": 1936,
+        "text_columns": {
+          "awaiting_payload": {
+            "avg_bytes": 1857.5064540622627,
+            "bytes": 2446336,
+            "count": 1317,
+            "max_bytes": 879708
+          },
+          "awaiting_stage": {
+            "avg_bytes": 15.352941176470589,
+            "bytes": 261,
+            "count": 17,
+            "max_bytes": 25
+          },
+          "batch_id": {
+            "avg_bytes": 35.97828232971372,
+            "bytes": 36446,
+            "count": 1013,
+            "max_bytes": 36
+          },
+          "batch_name": {
+            "avg_bytes": 53.418254764292875,
+            "bytes": 53258,
+            "count": 997,
+            "max_bytes": 96
+          },
+          "child_output_dir": {
+            "avg_bytes": 83.15789473684211,
+            "bytes": 6320,
+            "count": 76,
+            "max_bytes": 119
+          },
+          "child_stage": {
+            "avg_bytes": 11.077966101694916,
+            "bytes": 9804,
+            "count": 885,
+            "max_bytes": 20
+          },
+          "completed_at": {
+            "avg_bytes": 26.003126628452318,
+            "bytes": 49900,
+            "count": 1919,
+            "max_bytes": 32
+          },
+          "created_at": {
+            "avg_bytes": 26.003100775193797,
+            "bytes": 50316,
+            "count": 1935,
+            "max_bytes": 32
+          },
+          "current_stage": {
+            "avg_bytes": 10.028481012658228,
+            "bytes": 15845,
+            "count": 1580,
+            "max_bytes": 39
+          },
+          "error_message": {
+            "avg_bytes": 43.62359063313096,
+            "bytes": 50298,
+            "count": 1153,
+            "max_bytes": 7572
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 69696,
+            "count": 1936,
+            "max_bytes": 36
+          },
+          "job_phase": {
+            "avg_bytes": 9.012933264355924,
+            "bytes": 17422,
+            "count": 1933,
+            "max_bytes": 14
+          },
+          "lineage_root_job_id": {
+            "avg_bytes": 35.98807588075881,
+            "bytes": 66398,
+            "count": 1845,
+            "max_bytes": 36
+          },
+          "mode": {
+            "avg_bytes": 12.634297520661157,
+            "bytes": 24460,
+            "count": 1936,
+            "max_bytes": 28
+          },
+          "model_id": {
+            "avg_bytes": 16.079545454545453,
+            "bytes": 31130,
+            "count": 1936,
+            "max_bytes": 33
+          },
+          "msa_manifest_path": {
+            "avg_bytes": 88.0,
+            "bytes": 352,
+            "count": 4,
+            "max_bytes": 88
+          },
+          "name": {
+            "avg_bytes": 42.84349173553719,
+            "bytes": 82945,
+            "count": 1936,
+            "max_bytes": 137
+          },
+          "nextflow_run_id": {
+            "avg_bytes": 9.371546149323928,
+            "bytes": 15941,
+            "count": 1701,
+            "max_bytes": 82
+          },
+          "oom_tolerance": {
+            "avg_bytes": 5.0,
+            "bytes": 9665,
+            "count": 1933,
+            "max_bytes": 5
+          },
+          "output_dir": {
+            "avg_bytes": 89.51758014477767,
+            "bytes": 173127,
+            "count": 1934,
+            "max_bytes": 176
+          },
+          "parent_job_id": {
+            "avg_bytes": 35.97752808988764,
+            "bytes": 35222,
+            "count": 979,
+            "max_bytes": 36
+          },
+          "provenance": {
+            "avg_bytes": 4315.0771428571425,
+            "bytes": 4530831,
+            "count": 1050,
+            "max_bytes": 314729
+          },
+          "queue_status": {
+            "avg_bytes": 7.734504132231405,
+            "bytes": 14974,
+            "count": 1936,
+            "max_bytes": 9
+          },
+          "selected_input_artifact_class": {
+            "avg_bytes": 19.857142857142858,
+            "bytes": 417,
+            "count": 21,
+            "max_bytes": 25
+          },
+          "selection_dataset_name": {
+            "avg_bytes": 22.15,
+            "bytes": 443,
+            "count": 20,
+            "max_bytes": 39
+          },
+          "selection_source_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 22536,
+            "count": 626,
+            "max_bytes": 36
+          },
+          "selection_source_type": {
+            "avg_bytes": 15.647887323943662,
+            "bytes": 1111,
+            "count": 71,
+            "max_bytes": 18
+          },
+          "source_selection_manifest_path": {
+            "avg_bytes": 134.66666666666666,
+            "bytes": 12928,
+            "count": 96,
+            "max_bytes": 208
+          },
+          "source_stage_family": {
+            "avg_bytes": 8.511904761904763,
+            "bytes": 715,
+            "count": 84,
+            "max_bytes": 22
+          },
+          "source_stage_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 2556,
+            "count": 71,
+            "max_bytes": 36
+          },
+          "source_stage_mode": {
+            "avg_bytes": 11.55813953488372,
+            "bytes": 994,
+            "count": 86,
+            "max_bytes": 15
+          },
+          "stage_family": {
+            "avg_bytes": 10.556570625439212,
+            "bytes": 15022,
+            "count": 1423,
+            "max_bytes": 22
+          },
+          "stage_mode": {
+            "avg_bytes": 10.867132867132867,
+            "bytes": 17094,
+            "count": 1573,
+            "max_bytes": 29
+          },
+          "stage_progress": {
+            "avg_bytes": 14.291139240506329,
+            "bytes": 1129,
+            "count": 79,
+            "max_bytes": 41
+          },
+          "stage_work_dir": {
+            "avg_bytes": 70.32881355932203,
+            "bytes": 62241,
+            "count": 885,
+            "max_bytes": 74
+          },
+          "started_at": {
+            "avg_bytes": 26.003434459072697,
+            "bytes": 45428,
+            "count": 1747,
+            "max_bytes": 32
+          },
+          "status": {
+            "avg_bytes": 7.81301652892562,
+            "bytes": 15126,
+            "count": 1936,
+            "max_bytes": 14
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "replica_run_id",
+          "segment_index",
+          "state",
+          "source_segment_id",
+          "source_checkpoint_id",
+          "execution_plan_sha256",
+          "compatibility_key",
+          "launch_identity",
+          "reservation_token",
+          "start_step",
+          "end_step",
+          "start_time_ps",
+          "end_time_ps",
+          "created_at",
+          "completed_at"
+        ],
+        "name": "md_attempt_segments",
+        "row_count": 5,
+        "text_columns": {
+          "compatibility_key": {
+            "avg_bytes": 64.0,
+            "bytes": 320,
+            "count": 5,
+            "max_bytes": 64
+          },
+          "completed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 130,
+            "count": 5,
+            "max_bytes": 26
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 130,
+            "count": 5,
+            "max_bytes": 26
+          },
+          "execution_plan_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 320,
+            "count": 5,
+            "max_bytes": 64
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 180,
+            "count": 5,
+            "max_bytes": 36
+          },
+          "replica_run_id": {
+            "avg_bytes": 36.0,
+            "bytes": 180,
+            "count": 5,
+            "max_bytes": 36
+          },
+          "state": {
+            "avg_bytes": 7.8,
+            "bytes": 39,
+            "count": 5,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "segment_id",
+          "logical_role",
+          "relative_path",
+          "sha256",
+          "bytes",
+          "step",
+          "time_ps",
+          "compatibility_key",
+          "accepted",
+          "created_at"
+        ],
+        "name": "md_checkpoints",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "md_job_id",
+          "idempotency_key",
+          "event_type",
+          "expected_state_version",
+          "resulting_state_version",
+          "payload",
+          "created_at"
+        ],
+        "name": "md_events",
+        "row_count": 18,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 468,
+            "count": 18,
+            "max_bytes": 26
+          },
+          "event_type": {
+            "avg_bytes": 10.833333333333334,
+            "bytes": 195,
+            "count": 18,
+            "max_bytes": 13
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 648,
+            "count": 18,
+            "max_bytes": 36
+          },
+          "idempotency_key": {
+            "avg_bytes": 53.72222222222222,
+            "bytes": 967,
+            "count": 18,
+            "max_bytes": 65
+          },
+          "md_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 648,
+            "count": 18,
+            "max_bytes": 36
+          },
+          "payload": {
+            "avg_bytes": 29.944444444444443,
+            "bytes": 539,
+            "count": 18,
+            "max_bytes": 53
+          }
+        }
+      },
+      {
+        "columns": [
+          "name",
+          "owner_id",
+          "expires_at",
+          "updated_at"
+        ],
+        "name": "md_reconciler_leases",
+        "row_count": 1,
+        "text_columns": {
+          "expires_at": {
+            "avg_bytes": 26.0,
+            "bytes": 26,
+            "count": 1,
+            "max_bytes": 26
+          },
+          "name": {
+            "avg_bytes": 12.0,
+            "bytes": 12,
+            "count": 1,
+            "max_bytes": 12
+          },
+          "owner_id": {
+            "avg_bytes": 51.0,
+            "bytes": 51,
+            "count": 1,
+            "max_bytes": 51
+          },
+          "updated_at": {
+            "avg_bytes": 26.0,
+            "bytes": 26,
+            "count": 1,
+            "max_bytes": 26
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "child_job_id",
+          "md_job_id",
+          "replica_index",
+          "attempt",
+          "state",
+          "active",
+          "engine",
+          "failure",
+          "created_at",
+          "completed_at"
+        ],
+        "name": "md_replica_runs",
+        "row_count": 5,
+        "text_columns": {
+          "child_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 180,
+            "count": 5,
+            "max_bytes": 36
+          },
+          "completed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 130,
+            "count": 5,
+            "max_bytes": 26
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 130,
+            "count": 5,
+            "max_bytes": 26
+          },
+          "engine": {
+            "avg_bytes": 7.0,
+            "bytes": 35,
+            "count": 5,
+            "max_bytes": 7
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 180,
+            "count": 5,
+            "max_bytes": 36
+          },
+          "md_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 180,
+            "count": 5,
+            "max_bytes": 36
+          },
+          "state": {
+            "avg_bytes": 7.8,
+            "bytes": 39,
+            "count": 5,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "job_id",
+          "normalized_request",
+          "request_sha256",
+          "phase",
+          "state_version",
+          "chemistry_profile_id",
+          "chemistry_profile_sha256",
+          "chemistry_assurance",
+          "verification_status",
+          "controls_blocked",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "md_runs",
+        "row_count": 6,
+        "text_columns": {
+          "chemistry_assurance": {
+            "avg_bytes": 15.0,
+            "bytes": 90,
+            "count": 6,
+            "max_bytes": 15
+          },
+          "chemistry_profile_id": {
+            "avg_bytes": 27.0,
+            "bytes": 162,
+            "count": 6,
+            "max_bytes": 27
+          },
+          "chemistry_profile_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 156,
+            "count": 6,
+            "max_bytes": 26
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 216,
+            "count": 6,
+            "max_bytes": 36
+          },
+          "phase": {
+            "avg_bytes": 7.0,
+            "bytes": 42,
+            "count": 6,
+            "max_bytes": 9
+          },
+          "request_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "updated_at": {
+            "avg_bytes": 26.0,
+            "bytes": 156,
+            "count": 6,
+            "max_bytes": 26
+          },
+          "verification_status": {
+            "avg_bytes": 7.166666666666667,
+            "bytes": 43,
+            "count": 6,
+            "max_bytes": 8
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "sequence_id",
+          "revision_id",
+          "revision_sha256",
+          "reference_snapshot_path",
+          "reference_snapshot_sha256",
+          "expires_at",
+          "consumed_at",
+          "consumed_job_id",
+          "created_at"
+        ],
+        "name": "molbio_ngs_receipts",
+        "row_count": 4,
+        "text_columns": {
+          "consumed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 104,
+            "count": 4,
+            "max_bytes": 26
+          },
+          "consumed_job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 144,
+            "count": 4,
+            "max_bytes": 36
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 104,
+            "count": 4,
+            "max_bytes": 26
+          },
+          "expires_at": {
+            "avg_bytes": 26.0,
+            "bytes": 104,
+            "count": 4,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 144,
+            "count": 4,
+            "max_bytes": 36
+          },
+          "reference_snapshot_path": {
+            "avg_bytes": 117.0,
+            "bytes": 468,
+            "count": 4,
+            "max_bytes": 117
+          },
+          "reference_snapshot_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 256,
+            "count": 4,
+            "max_bytes": 64
+          },
+          "revision_id": {
+            "avg_bytes": 36.0,
+            "bytes": 144,
+            "count": 4,
+            "max_bytes": 36
+          },
+          "revision_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 256,
+            "count": 4,
+            "max_bytes": 64
+          },
+          "sequence_id": {
+            "avg_bytes": 36.0,
+            "bytes": 144,
+            "count": 4,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "panel_id",
+          "panel_version",
+          "panel_snapshot_path",
+          "panel_snapshot_sha256",
+          "expected_receipt_id",
+          "expires_at",
+          "consumed_at",
+          "consumed_job_id",
+          "created_at"
+        ],
+        "name": "ngs_comparison_panel_receipts",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "release_id",
+          "assignment_job_id",
+          "reference_set_id",
+          "target_id",
+          "child_job_id",
+          "sequence_id",
+          "revision_id",
+          "revision_sha256",
+          "receipt_id",
+          "fasta_path",
+          "fasta_sha256",
+          "assigned_fastq_path",
+          "assigned_fastq_sha256",
+          "assigned_read_count",
+          "created_at"
+        ],
+        "name": "ngs_pooled_assignment_release_targets",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "assignment_job_id",
+          "reference_set_id",
+          "idempotency_key",
+          "request_fingerprint",
+          "target_workflow",
+          "assignment_summary_path",
+          "assignment_summary_sha256",
+          "created_at"
+        ],
+        "name": "ngs_pooled_assignment_releases",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "reference_set_id",
+          "target_id",
+          "label",
+          "indistinguishable_group",
+          "sequence_id",
+          "revision_id",
+          "revision_sha256",
+          "receipt_id",
+          "fasta_path",
+          "fasta_sha256",
+          "created_at"
+        ],
+        "name": "ngs_pooled_reference_targets",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "manifest_schema",
+          "mode",
+          "source_job_id",
+          "target_workflow",
+          "idempotency_key",
+          "request_fingerprint",
+          "manifest_path",
+          "manifest_sha256",
+          "manifest_json",
+          "created_at"
+        ],
+        "name": "ngs_reference_set_manifests",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "reference_set_id",
+          "child_job_id",
+          "unit_id",
+          "sample_alias",
+          "sequence_id",
+          "revision_id",
+          "revision_sha256",
+          "receipt_id",
+          "fasta_snapshot_sha256",
+          "source_bam_path",
+          "source_bam_sha256",
+          "source_calls_sha256",
+          "preflight_sha256",
+          "demux_manifest_sha256",
+          "unit_manifest_sha256",
+          "created_at"
+        ],
+        "name": "ngs_reference_set_mappings",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "description",
+          "sequence",
+          "sequence_type",
+          "molecule_strandedness",
+          "molecule_orientation",
+          "is_circular",
+          "length",
+          "features",
+          "primers",
+          "analysis_tracks",
+          "organism",
+          "accession",
+          "source_file",
+          "parent_id",
+          "operation",
+          "operation_params",
+          "version",
+          "gc_content",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "nucleotide_sequences",
+        "row_count": 1,
+        "text_columns": {
+          "description": {
+            "avg_bytes": 41.0,
+            "bytes": 41,
+            "count": 1,
+            "max_bytes": 41
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 36,
+            "count": 1,
+            "max_bytes": 36
+          },
+          "molecule_orientation": {
+            "avg_bytes": 14.0,
+            "bytes": 14,
+            "count": 1,
+            "max_bytes": 14
+          },
+          "molecule_strandedness": {
+            "avg_bytes": 6.0,
+            "bytes": 6,
+            "count": 1,
+            "max_bytes": 6
+          },
+          "name": {
+            "avg_bytes": 10.0,
+            "bytes": 10,
+            "count": 1,
+            "max_bytes": 10
+          },
+          "sequence": {
+            "avg_bytes": 2686.0,
+            "bytes": 2686,
+            "count": 1,
+            "max_bytes": 2686
+          },
+          "sequence_type": {
+            "avg_bytes": 3.0,
+            "bytes": 3,
+            "count": 1,
+            "max_bytes": 3
+          },
+          "source_file": {
+            "avg_bytes": 11.0,
+            "bytes": 11,
+            "count": 1,
+            "max_bytes": 11
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "candidate_id",
+          "run_id",
+          "observed_generation",
+          "raw_representation_id",
+          "server_relative_path",
+          "root_device",
+          "root_inode",
+          "file_device",
+          "file_inode",
+          "file_mtime_ns",
+          "file_ctime_ns",
+          "artifact_sha256",
+          "artifact_size_bytes",
+          "molecule_type",
+          "created_at"
+        ],
+        "name": "ont_external_move_bam_registration_receipts",
+        "row_count": 1,
+        "text_columns": {
+          "artifact_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "candidate_id": {
+            "avg_bytes": 64.0,
+            "bytes": 64,
+            "count": 1,
+            "max_bytes": 64
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 26,
+            "count": 1,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 82.0,
+            "bytes": 82,
+            "count": 1,
+            "max_bytes": 82
+          },
+          "molecule_type": {
+            "avg_bytes": 3.0,
+            "bytes": 3,
+            "count": 1,
+            "max_bytes": 3
+          },
+          "raw_representation_id": {
+            "avg_bytes": 44.0,
+            "bytes": 44,
+            "count": 1,
+            "max_bytes": 44
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 49,
+            "count": 1,
+            "max_bytes": 49
+          },
+          "server_relative_path": {
+            "avg_bytes": 27.0,
+            "bytes": 27,
+            "count": 1,
+            "max_bytes": 27
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "event_type",
+          "state",
+          "observed_at",
+          "observed_generation",
+          "minknow_payload",
+          "output_files"
+        ],
+        "name": "ont_instrument_run_events",
+        "row_count": 3,
+        "text_columns": {
+          "event_type": {
+            "avg_bytes": 30.0,
+            "bytes": 90,
+            "count": 3,
+            "max_bytes": 30
+          },
+          "id": {
+            "avg_bytes": 42.0,
+            "bytes": 126,
+            "count": 3,
+            "max_bytes": 42
+          },
+          "minknow_payload": {
+            "avg_bytes": 275.3333333333333,
+            "bytes": 826,
+            "count": 3,
+            "max_bytes": 336
+          },
+          "observed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 147,
+            "count": 3,
+            "max_bytes": 49
+          },
+          "state": {
+            "avg_bytes": 9.0,
+            "bytes": 27,
+            "count": 3,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "option_receipt_id",
+          "selected_option_id",
+          "flow_cell_identity_sha256",
+          "source_digest",
+          "capability_digest",
+          "source_snapshot",
+          "expires_at",
+          "invalidated_at",
+          "invalidation_reason",
+          "created_at"
+        ],
+        "name": "ont_instrument_run_preflights",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "position_id",
+          "minknow_run_id",
+          "state",
+          "observed_at",
+          "observed_generation",
+          "sample_id",
+          "experiment_group",
+          "kit",
+          "output_directories",
+          "output_files",
+          "handoff_ready",
+          "last_minknow_payload",
+          "created_at",
+          "terminal_artifact_manifest",
+          "terminal_artifact_manifest_sha256",
+          "external_registration_key",
+          "external_source_device",
+          "external_source_inode",
+          "external_source_bytes",
+          "external_source_mtime_ns",
+          "external_source_ctime_ns",
+          "external_source_root_device",
+          "external_source_root_inode",
+          "external_source_relative_path"
+        ],
+        "name": "ont_instrument_runs",
+        "row_count": 3,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "experiment_group": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          },
+          "external_registration_key": {
+            "avg_bytes": 64.0,
+            "bytes": 192,
+            "count": 3,
+            "max_bytes": 64
+          },
+          "external_source_relative_path": {
+            "avg_bytes": 28.0,
+            "bytes": 56,
+            "count": 2,
+            "max_bytes": 28
+          },
+          "id": {
+            "avg_bytes": 49.0,
+            "bytes": 147,
+            "count": 3,
+            "max_bytes": 49
+          },
+          "last_minknow_payload": {
+            "avg_bytes": 336.0,
+            "bytes": 1008,
+            "count": 3,
+            "max_bytes": 336
+          },
+          "observed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "position_id": {
+            "avg_bytes": 8.0,
+            "bytes": 24,
+            "count": 3,
+            "max_bytes": 8
+          },
+          "state": {
+            "avg_bytes": 9.0,
+            "bytes": 27,
+            "count": 3,
+            "max_bytes": 9
+          },
+          "terminal_artifact_manifest_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 192,
+            "count": 3,
+            "max_bytes": 64
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "observed_generation",
+          "raw_representation_id",
+          "input_file_id",
+          "source_job_id",
+          "external_registration_receipt_id",
+          "artifact_sha256",
+          "artifact_size_bytes",
+          "bam_header_sha256",
+          "record_count",
+          "unique_read_count",
+          "mv_tag_count",
+          "ts_tag_count",
+          "ns_tag_count",
+          "basecall_model_id",
+          "molecule_type",
+          "source_runtime_identity",
+          "read_inventory_sha256",
+          "validation_state",
+          "reason_code",
+          "validation_receipt",
+          "claim_token",
+          "lease_expires_at",
+          "created_at",
+          "validated_at",
+          "attempt_number",
+          "predecessor_move_source_id"
+        ],
+        "name": "ont_move_table_sources",
+        "row_count": 2,
+        "text_columns": {
+          "artifact_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 128,
+            "count": 2,
+            "max_bytes": 64
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 52,
+            "count": 2,
+            "max_bytes": 26
+          },
+          "external_registration_receipt_id": {
+            "avg_bytes": 82.0,
+            "bytes": 164,
+            "count": 2,
+            "max_bytes": 82
+          },
+          "id": {
+            "avg_bytes": 42.0,
+            "bytes": 84,
+            "count": 2,
+            "max_bytes": 42
+          },
+          "input_file_id": {
+            "avg_bytes": 36.0,
+            "bytes": 72,
+            "count": 2,
+            "max_bytes": 36
+          },
+          "molecule_type": {
+            "avg_bytes": 3.0,
+            "bytes": 6,
+            "count": 2,
+            "max_bytes": 3
+          },
+          "predecessor_move_source_id": {
+            "avg_bytes": 42.0,
+            "bytes": 42,
+            "count": 1,
+            "max_bytes": 42
+          },
+          "raw_representation_id": {
+            "avg_bytes": 44.0,
+            "bytes": 88,
+            "count": 2,
+            "max_bytes": 44
+          },
+          "reason_code": {
+            "avg_bytes": 35.0,
+            "bytes": 70,
+            "count": 2,
+            "max_bytes": 41
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 98,
+            "count": 2,
+            "max_bytes": 49
+          },
+          "validated_at": {
+            "avg_bytes": 26.0,
+            "bytes": 26,
+            "count": 1,
+            "max_bytes": 26
+          },
+          "validation_state": {
+            "avg_bytes": 6.0,
+            "bytes": 12,
+            "count": 2,
+            "max_bytes": 6
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "option_id",
+          "position_id",
+          "flow_cell_identity_sha256",
+          "source_digest",
+          "capability_digest",
+          "source_snapshot",
+          "expires_at",
+          "consumed_at",
+          "created_at"
+        ],
+        "name": "ont_protocol_option_receipts",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "job_id",
+          "state",
+          "reason_code",
+          "receipt",
+          "created_at"
+        ],
+        "name": "ont_raw_signal_derivation_events",
+        "row_count": 54,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 1404,
+            "count": 54,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 46.0,
+            "bytes": 2484,
+            "count": 54,
+            "max_bytes": 46
+          },
+          "job_id": {
+            "avg_bytes": 44.0,
+            "bytes": 2376,
+            "count": 54,
+            "max_bytes": 44
+          },
+          "reason_code": {
+            "avg_bytes": 26.85185185185185,
+            "bytes": 1450,
+            "count": 54,
+            "max_bytes": 37
+          },
+          "state": {
+            "avg_bytes": 10.981481481481481,
+            "bytes": 593,
+            "count": 54,
+            "max_bytes": 19
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "observed_generation",
+          "source_representation_id",
+          "output_representation_id",
+          "requested_preference",
+          "consumer_id",
+          "profile_id",
+          "state",
+          "reason_code",
+          "resource_snapshot",
+          "attempt",
+          "claim_token",
+          "lease_expires_at",
+          "cancel_requested_at",
+          "stage_receipts",
+          "failure_code",
+          "failure_message",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "name": "ont_raw_signal_derivation_jobs",
+        "row_count": 3,
+        "text_columns": {
+          "completed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "consumer_id": {
+            "avg_bytes": 22.333333333333332,
+            "bytes": 67,
+            "count": 3,
+            "max_bytes": 25
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 44.0,
+            "bytes": 132,
+            "count": 3,
+            "max_bytes": 44
+          },
+          "output_representation_id": {
+            "avg_bytes": 44.0,
+            "bytes": 132,
+            "count": 3,
+            "max_bytes": 44
+          },
+          "profile_id": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          },
+          "reason_code": {
+            "avg_bytes": 19.0,
+            "bytes": 57,
+            "count": 3,
+            "max_bytes": 19
+          },
+          "requested_preference": {
+            "avg_bytes": 4.666666666666667,
+            "bytes": 14,
+            "count": 3,
+            "max_bytes": 5
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 147,
+            "count": 3,
+            "max_bytes": 49
+          },
+          "source_representation_id": {
+            "avg_bytes": 44.0,
+            "bytes": 132,
+            "count": 3,
+            "max_bytes": 44
+          },
+          "state": {
+            "avg_bytes": 5.0,
+            "bytes": 15,
+            "count": 3,
+            "max_bytes": 5
+          },
+          "updated_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "observed_generation",
+          "representation_id",
+          "read_id",
+          "state",
+          "reason_code",
+          "claim_token",
+          "lease_expires_at",
+          "sample_count",
+          "samples",
+          "receipt",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "name": "ont_raw_signal_lookups",
+        "row_count": 2,
+        "text_columns": {
+          "completed_at": {
+            "avg_bytes": 26.0,
+            "bytes": 52,
+            "count": 2,
+            "max_bytes": 26
+          },
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 52,
+            "count": 2,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 45.0,
+            "bytes": 90,
+            "count": 2,
+            "max_bytes": 45
+          },
+          "read_id": {
+            "avg_bytes": 36.0,
+            "bytes": 72,
+            "count": 2,
+            "max_bytes": 36
+          },
+          "reason_code": {
+            "avg_bytes": 26.0,
+            "bytes": 52,
+            "count": 2,
+            "max_bytes": 26
+          },
+          "representation_id": {
+            "avg_bytes": 44.0,
+            "bytes": 88,
+            "count": 2,
+            "max_bytes": 44
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 98,
+            "count": 2,
+            "max_bytes": 49
+          },
+          "state": {
+            "avg_bytes": 5.0,
+            "bytes": 10,
+            "count": 2,
+            "max_bytes": 5
+          },
+          "updated_at": {
+            "avg_bytes": 26.0,
+            "bytes": 52,
+            "count": 2,
+            "max_bytes": 26
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "observed_generation",
+          "role",
+          "source_kind",
+          "format",
+          "source_fidelity",
+          "state",
+          "reason_code",
+          "artifact_manifest",
+          "manifest_sha256",
+          "parent_representation_ids",
+          "parent_manifest_sha256s",
+          "compression",
+          "runtime_identity",
+          "validation_receipts",
+          "profile_id",
+          "acquisition_id",
+          "read_count",
+          "published_at",
+          "retention_pinned_at",
+          "created_at"
+        ],
+        "name": "ont_raw_signal_representations",
+        "row_count": 6,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 156,
+            "count": 6,
+            "max_bytes": 26
+          },
+          "format": {
+            "avg_bytes": 4.5,
+            "bytes": 27,
+            "count": 6,
+            "max_bytes": 5
+          },
+          "id": {
+            "avg_bytes": 44.0,
+            "bytes": 264,
+            "count": 6,
+            "max_bytes": 44
+          },
+          "manifest_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "profile_id": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          },
+          "published_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "reason_code": {
+            "avg_bytes": 39.0,
+            "bytes": 234,
+            "count": 6,
+            "max_bytes": 52
+          },
+          "retention_pinned_at": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "role": {
+            "avg_bytes": 6.5,
+            "bytes": 39,
+            "count": 6,
+            "max_bytes": 7
+          },
+          "run_id": {
+            "avg_bytes": 49.0,
+            "bytes": 294,
+            "count": 6,
+            "max_bytes": 49
+          },
+          "source_fidelity": {
+            "avg_bytes": 29.0,
+            "bytes": 174,
+            "count": 6,
+            "max_bytes": 52
+          },
+          "source_kind": {
+            "avg_bytes": 14.0,
+            "bytes": 84,
+            "count": 6,
+            "max_bytes": 15
+          },
+          "state": {
+            "avg_bytes": 8.0,
+            "bytes": 48,
+            "count": 6,
+            "max_bytes": 11
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "raw_representation_id",
+          "move_source_id",
+          "basecall_model_id",
+          "sample_selection",
+          "recommended_kmer_length",
+          "recommended_signal_move_offset",
+          "score_evidence",
+          "runtime_identity",
+          "parent_sha256s",
+          "artifact_sha256",
+          "created_at"
+        ],
+        "name": "ont_signal_calibration_artifacts",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "run_id",
+          "observed_generation",
+          "raw_representation_id",
+          "move_source_id",
+          "sample_count",
+          "request_fingerprint",
+          "state",
+          "reason_code",
+          "attempt",
+          "claim_token",
+          "lease_expires_at",
+          "cancel_requested_at",
+          "resource_snapshot",
+          "stage_receipts",
+          "calibration_artifact_id",
+          "failure_code",
+          "failure_message",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "name": "ont_signal_calibration_jobs",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "mapping_job_id",
+          "kind",
+          "managed_relative_path",
+          "media_type",
+          "sha256",
+          "size_bytes",
+          "parent_identities",
+          "runtime_identity",
+          "validation_receipt",
+          "created_at"
+        ],
+        "name": "ont_signal_mapping_artifacts",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "job_id",
+          "state",
+          "reason_code",
+          "receipt",
+          "created_at"
+        ],
+        "name": "ont_signal_mapping_events",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "mode",
+          "run_id",
+          "observed_generation",
+          "raw_representation_id",
+          "move_source_id",
+          "mapping_profile_id",
+          "reference_revision_id",
+          "alignment_job_id",
+          "alignment_session_id",
+          "parent_mapping_job_id",
+          "request_fingerprint",
+          "state",
+          "reason_code",
+          "attempt",
+          "claim_token",
+          "lease_expires_at",
+          "cancel_requested_at",
+          "resource_snapshot",
+          "stage_receipts",
+          "failure_code",
+          "failure_message",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "name": "ont_signal_mapping_jobs",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "molecule_type",
+          "basecall_model_id",
+          "kmer_length",
+          "signal_move_offset",
+          "parameter_source",
+          "calibration_artifact_id",
+          "primary_alignment_policy",
+          "minimum_mapq",
+          "include_supplementary",
+          "read_set_selection",
+          "approval_receipt",
+          "approved_at",
+          "approved_by",
+          "created_at"
+        ],
+        "name": "ont_signal_mapping_profiles",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "dataset_id",
+          "run_id",
+          "observed_generation",
+          "alignment_job_id",
+          "alignment_session_id",
+          "reference_revision_id",
+          "raw_representation_id",
+          "move_source_id",
+          "mapping_profile_id",
+          "contig",
+          "locus_start",
+          "locus_end",
+          "selected_read_id",
+          "igv_state",
+          "signal_state",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "ont_signal_viewer_sessions",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "mapping_artifact_id",
+          "mode",
+          "read_id",
+          "reference_contig",
+          "reference_start",
+          "reference_end",
+          "render_params",
+          "request_fingerprint",
+          "state",
+          "reason_code",
+          "attempt",
+          "claim_token",
+          "lease_expires_at",
+          "cancel_requested_at",
+          "output_manifest",
+          "render_receipt",
+          "failure_code",
+          "failure_message",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "name": "ont_squigualiser_view_jobs",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "sequence",
+          "sequence_type",
+          "length",
+          "tm",
+          "gc_percent",
+          "tm_algorithm",
+          "tm_salt_correction",
+          "tm_settings",
+          "primer_type",
+          "description",
+          "target_sequence_id",
+          "binding_start",
+          "binding_end",
+          "binding_strand",
+          "tags",
+          "is_favorite",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "primers",
+        "row_count": 0,
+        "text_columns": {}
+      },
+      {
+        "columns": [
+          "artifact_id",
+          "request_id",
+          "candidate_id",
+          "role",
+          "relative_path",
+          "storage_path",
+          "content_sha256",
+          "size_bytes",
+          "media_type",
+          "metadata_json",
+          "created_at"
+        ],
+        "name": "rfd3_local_redesign_artifacts",
+        "row_count": 40,
+        "text_columns": {
+          "artifact_id": {
+            "avg_bytes": 64.0,
+            "bytes": 2560,
+            "count": 40,
+            "max_bytes": 64
+          },
+          "candidate_id": {
+            "avg_bytes": 70.0,
+            "bytes": 840,
+            "count": 12,
+            "max_bytes": 70
+          },
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 2560,
+            "count": 40,
+            "max_bytes": 64
+          },
+          "media_type": {
+            "avg_bytes": 18.4,
+            "bytes": 736,
+            "count": 40,
+            "max_bytes": 24
+          },
+          "metadata_json": {
+            "avg_bytes": 85.0,
+            "bytes": 3400,
+            "count": 40,
+            "max_bytes": 85
+          },
+          "relative_path": {
+            "avg_bytes": 65.625,
+            "bytes": 2625,
+            "count": 40,
+            "max_bytes": 108
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 1440,
+            "count": 40,
+            "max_bytes": 36
+          },
+          "role": {
+            "avg_bytes": 17.75,
+            "bytes": 710,
+            "count": 40,
+            "max_bytes": 26
+          },
+          "storage_path": {
+            "avg_bytes": 166.8,
+            "bytes": 6672,
+            "count": 40,
+            "max_bytes": 222
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "request_id",
+          "candidate_id",
+          "result_set",
+          "stage",
+          "status",
+          "artifact_manifest_sha256",
+          "metrics_json",
+          "metadata_json",
+          "created_at"
+        ],
+        "name": "rfd3_local_redesign_candidates",
+        "row_count": 4,
+        "text_columns": {
+          "artifact_manifest_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 256,
+            "count": 4,
+            "max_bytes": 64
+          },
+          "candidate_id": {
+            "avg_bytes": 70.0,
+            "bytes": 280,
+            "count": 4,
+            "max_bytes": 70
+          },
+          "id": {
+            "avg_bytes": 64.0,
+            "bytes": 256,
+            "count": 4,
+            "max_bytes": 64
+          },
+          "metadata_json": {
+            "avg_bytes": 162.0,
+            "bytes": 648,
+            "count": 4,
+            "max_bytes": 162
+          },
+          "metrics_json": {
+            "avg_bytes": 25.0,
+            "bytes": 100,
+            "count": 4,
+            "max_bytes": 25
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 144,
+            "count": 4,
+            "max_bytes": 36
+          },
+          "result_set": {
+            "avg_bytes": 30.0,
+            "bytes": 120,
+            "count": 4,
+            "max_bytes": 30
+          },
+          "stage": {
+            "avg_bytes": 8.0,
+            "bytes": 32,
+            "count": 4,
+            "max_bytes": 8
+          },
+          "status": {
+            "avg_bytes": 9.0,
+            "bytes": 36,
+            "count": 4,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "request_id",
+          "job_id",
+          "schema_version",
+          "request_sha256",
+          "profile_id",
+          "profile_registry_sha256",
+          "redesign_mode",
+          "sequence_policy",
+          "status",
+          "request_json",
+          "preparation_receipt_json",
+          "runtime_identity_json",
+          "result_manifest_sha256",
+          "failure_receipt_json",
+          "created_at",
+          "updated_at",
+          "terminal_at"
+        ],
+        "name": "rfd3_local_redesign_requests",
+        "row_count": 6,
+        "text_columns": {
+          "failure_receipt_json": {
+            "avg_bytes": 249.0,
+            "bytes": 498,
+            "count": 2,
+            "max_bytes": 249
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 216,
+            "count": 6,
+            "max_bytes": 36
+          },
+          "preparation_receipt_json": {
+            "avg_bytes": 5247.0,
+            "bytes": 20988,
+            "count": 4,
+            "max_bytes": 8284
+          },
+          "profile_id": {
+            "avg_bytes": 25.0,
+            "bytes": 150,
+            "count": 6,
+            "max_bytes": 25
+          },
+          "profile_registry_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "redesign_mode": {
+            "avg_bytes": 17.0,
+            "bytes": 102,
+            "count": 6,
+            "max_bytes": 17
+          },
+          "request_id": {
+            "avg_bytes": 36.0,
+            "bytes": 216,
+            "count": 6,
+            "max_bytes": 36
+          },
+          "request_json": {
+            "avg_bytes": 19877.0,
+            "bytes": 119262,
+            "count": 6,
+            "max_bytes": 40305
+          },
+          "request_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "result_manifest_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 256,
+            "count": 4,
+            "max_bytes": 64
+          },
+          "sequence_policy": {
+            "avg_bytes": 4.0,
+            "bytes": 24,
+            "count": 6,
+            "max_bytes": 4
+          },
+          "status": {
+            "avg_bytes": 8.0,
+            "bytes": 48,
+            "count": 6,
+            "max_bytes": 9
+          }
+        }
+      },
+      {
+        "columns": [
+          "version",
+          "name",
+          "applied_at",
+          "content_sha256"
+        ],
+        "name": "schema_migrations",
+        "row_count": 34,
+        "text_columns": {
+          "applied_at": {
+            "avg_bytes": 26.0,
+            "bytes": 884,
+            "count": 34,
+            "max_bytes": 26
+          },
+          "content_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 128,
+            "count": 2,
+            "max_bytes": 64
+          },
+          "name": {
+            "avg_bytes": 29.294117647058822,
+            "bytes": 996,
+            "count": 34,
+            "max_bytes": 51
+          }
+        }
+      },
+      {
+        "columns": [
+          "source_id",
+          "source_sha256",
+          "size_bytes",
+          "original_filename",
+          "relative_path",
+          "created_at"
+        ],
+        "name": "shape_cad_sources",
+        "row_count": 6,
+        "text_columns": {
+          "created_at": {
+            "avg_bytes": 26.0,
+            "bytes": 156,
+            "count": 6,
+            "max_bytes": 26
+          },
+          "original_filename": {
+            "avg_bytes": 30.666666666666668,
+            "bytes": 184,
+            "count": 6,
+            "max_bytes": 44
+          },
+          "relative_path": {
+            "avg_bytes": 83.0,
+            "bytes": 498,
+            "count": 6,
+            "max_bytes": 83
+          },
+          "source_id": {
+            "avg_bytes": 36.0,
+            "bytes": 216,
+            "count": 6,
+            "max_bytes": 36
+          },
+          "source_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          }
+        }
+      },
+      {
+        "columns": [
+          "geometry_id",
+          "source_id",
+          "geometry_sha256",
+          "conversion_sha256",
+          "angstrom_per_unit",
+          "vertex_count",
+          "face_count",
+          "point_count",
+          "manifest",
+          "artifacts",
+          "created_at"
+        ],
+        "name": "shape_design_geometries",
+        "row_count": 6,
+        "text_columns": {
+          "conversion_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "geometry_id": {
+            "avg_bytes": 37.0,
+            "bytes": 222,
+            "count": 6,
+            "max_bytes": 37
+          },
+          "geometry_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 384,
+            "count": 6,
+            "max_bytes": 64
+          },
+          "source_id": {
+            "avg_bytes": 36.0,
+            "bytes": 216,
+            "count": 6,
+            "max_bytes": 36
+          }
+        }
+      },
+      {
+        "columns": [
+          "request_id",
+          "geometry_id",
+          "request_sha256",
+          "request_spec",
+          "stage_relative_path",
+          "job_id",
+          "created_at"
+        ],
+        "name": "shape_design_requests",
+        "row_count": 18,
+        "text_columns": {
+          "geometry_id": {
+            "avg_bytes": 37.0,
+            "bytes": 666,
+            "count": 18,
+            "max_bytes": 37
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 648,
+            "count": 18,
+            "max_bytes": 36
+          },
+          "request_id": {
+            "avg_bytes": 42.0,
+            "bytes": 756,
+            "count": 18,
+            "max_bytes": 42
+          },
+          "request_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 1152,
+            "count": 18,
+            "max_bytes": 64
+          },
+          "stage_relative_path": {
+            "avg_bytes": 51.0,
+            "bytes": 918,
+            "count": 18,
+            "max_bytes": 51
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "sequence",
+          "description",
+          "length",
+          "organism",
+          "uniprot_id",
+          "ncbi_id",
+          "is_preset",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "user_sequences",
+        "row_count": 39,
+        "text_columns": {
+          "description": {
+            "avg_bytes": 84.28125,
+            "bytes": 2697,
+            "count": 32,
+            "max_bytes": 311
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 1404,
+            "count": 39,
+            "max_bytes": 36
+          },
+          "name": {
+            "avg_bytes": 30.102564102564102,
+            "bytes": 1174,
+            "count": 39,
+            "max_bytes": 46
+          },
+          "ncbi_id": {
+            "avg_bytes": 20.571428571428573,
+            "bytes": 144,
+            "count": 7,
+            "max_bytes": 40
+          },
+          "organism": {
+            "avg_bytes": 24.666666666666668,
+            "bytes": 222,
+            "count": 9,
+            "max_bytes": 41
+          },
+          "sequence": {
+            "avg_bytes": 368.7435897435897,
+            "bytes": 14381,
+            "count": 39,
+            "max_bytes": 792
+          },
+          "uniprot_id": {
+            "avg_bytes": 6.0,
+            "bytes": 42,
+            "count": 7,
+            "max_bytes": 6
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "name",
+          "description",
+          "icon",
+          "color",
+          "base_template_id",
+          "model_id",
+          "mode",
+          "params",
+          "created_at",
+          "updated_at"
+        ],
+        "name": "user_templates",
+        "row_count": 35,
+        "text_columns": {
+          "base_template_id": {
+            "avg_bytes": 16.45,
+            "bytes": 329,
+            "count": 20,
+            "max_bytes": 21
+          },
+          "color": {
+            "avg_bytes": 7.0,
+            "bytes": 245,
+            "count": 35,
+            "max_bytes": 7
+          },
+          "description": {
+            "avg_bytes": 151.14285714285714,
+            "bytes": 1058,
+            "count": 7,
+            "max_bytes": 221
+          },
+          "icon": {
+            "avg_bytes": 6.742857142857143,
+            "bytes": 236,
+            "count": 35,
+            "max_bytes": 8
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 1260,
+            "count": 35,
+            "max_bytes": 36
+          },
+          "mode": {
+            "avg_bytes": 19.133333333333333,
+            "bytes": 574,
+            "count": 30,
+            "max_bytes": 24
+          },
+          "model_id": {
+            "avg_bytes": 19.914285714285715,
+            "bytes": 697,
+            "count": 35,
+            "max_bytes": 24
+          },
+          "name": {
+            "avg_bytes": 23.571428571428573,
+            "bytes": 825,
+            "count": 35,
+            "max_bytes": 72
+          }
+        }
+      },
+      {
+        "columns": [
+          "id",
+          "job_id",
+          "label",
+          "created_by",
+          "schema_version",
+          "snapshot_sha256",
+          "snapshot_json",
+          "created_at"
+        ],
+        "name": "viewer_snapshots",
+        "row_count": 3,
+        "text_columns": {
+          "created_by": {
+            "avg_bytes": 26.0,
+            "bytes": 78,
+            "count": 3,
+            "max_bytes": 26
+          },
+          "id": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          },
+          "job_id": {
+            "avg_bytes": 36.0,
+            "bytes": 108,
+            "count": 3,
+            "max_bytes": 36
+          },
+          "label": {
+            "avg_bytes": 15.0,
+            "bytes": 45,
+            "count": 3,
+            "max_bytes": 15
+          },
+          "snapshot_json": {
+            "avg_bytes": 154194.66666666666,
+            "bytes": 462584,
+            "count": 3,
+            "max_bytes": 459222
+          },
+          "snapshot_sha256": {
+            "avg_bytes": 64.0,
+            "bytes": 192,
+            "count": 3,
+            "max_bytes": 64
+          }
+        }
+      }
+    ]
+  },
+  "telemetry": {
+    "foreign_key_errors": [],
+    "freelist_count": 35,
+    "journal_mode": "wal",
+    "objects": [
+      {
+        "bytes": 2821943296,
+        "name": "raw_samples",
+        "pages": 688951
+      },
+      {
+        "bytes": 61173760,
+        "name": "minute_aggregates",
+        "pages": 14935
+      },
+      {
+        "bytes": 4096,
+        "name": "sqlite_schema",
+        "pages": 1
+      }
+    ],
+    "page_count": 703923,
+    "page_size": 4096,
+    "path": "/home/dalab/.biomodstack-dev/json-data-plane-repair-baseline-20260821/telemetry.sqlite3",
+    "quick_check": "ok",
+    "sha256": "31c028e4076fc54c078908b26807d8073dc910be6791a741de2de4ab8ef13f64",
+    "size_bytes": 2883268608,
+    "synchronous": 2,
+    "tables": [
+      {
+        "columns": [
+          "bucket_ms",
+          "sample_count",
+          "payload_json"
+        ],
+        "name": "minute_aggregates",
+        "row_count": 13067,
+        "text_columns": {
+          "payload_json": {
+            "avg_bytes": 3370.8378357694955,
+            "bytes": 44046738,
+            "count": 13067,
+            "max_bytes": 3777
+          }
+        }
+      },
+      {
+        "columns": [
+          "timestamp_ms",
+          "payload_json"
+        ],
+        "name": "raw_samples",
+        "row_count": 602830,
+        "text_columns": {
+          "payload_json": {
+            "avg_bytes": 2512.9674866877895,
+            "bytes": 1514892190,
+            "count": 602830,
+            "max_bytes": 4583
+          }
+        }
+      }
+    ]
+  }
+}

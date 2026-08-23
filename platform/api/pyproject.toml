@@ -20,6 +20,8 @@ dependencies = [
     "numpy>=2.2.6",
     "pod5==0.3.35",
     "pandas>=2.0.0",  # Required for FrustraMPNN API
+    "pyarrow>=22.0.0,<23",
+    "duckdb>=1.4.0,<2",
     "biotite>=0.42.0",  # Structure analysis (PDB/CIF parsing, RMSD, SSE, etc.)
     "biopython>=1.87,<2",
     "pydna==5.5.16",

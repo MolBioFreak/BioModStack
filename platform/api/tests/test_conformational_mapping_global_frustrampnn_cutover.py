@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 from pydantic import ValidationError
@@ -90,6 +92,15 @@ def _load_cm_preparer():
 def _load_cm_postprocessor():
     path = Path(__file__).resolve().parents[3] / "scripts" / "postprocess_conformational_mapping_frustrampnn_v2.py"
     spec = importlib.util.spec_from_file_location("cm_frustrampnn_postprocessor_under_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_component_fixture():
+    path = Path(__file__).with_name("test_frustrampnn_component_phase3.py")
+    spec = importlib.util.spec_from_file_location("cm_frustrampnn_component_fixture", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -342,6 +353,287 @@ def test_cm_candidate_v2_preparation_binds_snapshot_source_settings_and_invocati
     assert json.loads(request["producer_provenance"]["producer_sample"])[
         "backend"
     ] == "protenix_v2_ensemble"
+
+
+def test_cm_external_v2_component_seals_identity_authority_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.conformational_mapping.frustrampnn_adapter import prepare_cm_candidate_v2
+    from services.frustrampnn.contracts import (
+        canonical_json_bytes,
+        canonical_json_loads,
+        canonical_sha256,
+    )
+    from services.frustrampnn.manifests import (
+        ManifestValidationError,
+        validate_external_authority_artifact,
+        validate_result_manifest,
+    )
+    from services.frustrampnn.persistence import (
+        _artifact_values,
+        load_and_validate_result_bundle,
+    )
+
+    source_bytes = _candidate_pdb()
+    source = tmp_path / "candidate.pdb"
+    source.write_bytes(source_bytes)
+    snapshot = _candidate_snapshot(hashlib.sha256(source_bytes).hexdigest())
+    candidate = {
+        "candidate_id": "candidate-a",
+        "authoritative_structure_path": "native/candidate.pdb",
+        "backend_coordinates": {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 7,
+            "sample_index": 2,
+        },
+    }
+    request_path = tmp_path / "workflow_component_request_v2.json"
+    normalized_path = tmp_path / "canonical_source.pdb"
+    structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
+    authority_path = tmp_path / "authority_artifact_v1.json"
+    request = prepare_cm_candidate_v2(
+        source=source,
+        output_pdb_path=normalized_path,
+        structure_map_path=structure_map_path,
+        request_path=request_path,
+        authority_artifact_path=authority_path,
+        parent_job_id="cm-parent-job",
+        parent_workflow_id="conformational_mapping",
+        candidate=candidate,
+        complex_snapshot=snapshot,
+        requested_settings=default_settings(),
+    )
+    fixture = _load_component_fixture()
+    authority_bytes = base64.b64decode(
+        request["identity_authority_artifact"]["canonical_json_base64"],
+        validate=True,
+    )
+    component = fixture._component()
+    fixture._mock_v2_runtime(component, monkeypatch, tmp_path)
+    runtime = __import__("services.frustrampnn.runtime", fromlist=["execute_frustrampnn"])
+
+    def execute_all_protein(invocation, _pinned, **_kwargs):
+        argv = list(invocation.argv)
+        binds = [argv[index + 1] for index, token in enumerate(argv) if token == "--bind"]
+        output_root = Path(next(value.split(":", 1)[0] for value in binds if value.endswith(":/bms/output:rw")))
+        output = output_root / Path(argv[argv.index("--output") + 1]).name
+        rows = ["frustration_pred,position,wildtype,mutation,chain,pdb"]
+        rows.extend(f"0.0,0,G,{mutation},X,normalized" for mutation in "ACDEFGHIKLMNPQRSTVWY")
+        output.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(runtime, "execute_frustrampnn", execute_all_protein)
+    output = tmp_path / "candidate_bundle"
+
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized_path,
+        structure_map=structure_map_path,
+        output_dir=output,
+        container=tmp_path / "mock.sif",
+        physical_gpu_id=3,
+    )
+
+    assert (output / "authority_artifact_v1.json").read_bytes() == authority_bytes
+    assert manifest["artifact_count"] == 11
+    assert [record["relative_path"] for record in manifest["artifacts"]] == [
+        "workflow_component_request_v2.json",
+        "authority_artifact_v1.json",
+        "normalized_input.pdb",
+        "frustrampnn_structure_map_v1.json",
+        "raw_frustrampnn.csv",
+        "frustrampnn_landscape_v2.json",
+        "frustrampnn_summary_v2.json",
+        "frustrampnn_stdout.log",
+        "frustrampnn_stderr.log",
+        "frustrampnn_execution_receipt_v2.json",
+        "frustrampnn_statistics_v1.json",
+    ]
+    assert canonical_json_loads((output / "authority_artifact_v1.json").read_bytes())["schema_name"] == "producer_manifest"
+    validate_result_manifest(output, manifest)
+    bundle = load_and_validate_result_bundle(
+        output,
+        expected_parent_job_id="cm-parent-job",
+        terminal_envelope=canonical_json_loads(
+            (output / "workflow_component_result_v2.json").read_bytes()
+        ),
+    )
+    authority_value = next(
+        value
+        for value in _artifact_values(bundle)
+        if value["relative_path"] == "authority_artifact_v1.json"
+    )
+    assert authority_value["role"] == "identity_authority"
+    assert authority_value["media_type"] == "application/json"
+
+    manifest_path = output / "frustrampnn_result_manifest_v2.json"
+    terminal_path = output / "workflow_component_result_v2.json"
+    original_manifest = canonical_json_loads(manifest_path.read_bytes())
+    original_terminal = canonical_json_loads(terminal_path.read_bytes())
+
+    forged = canonical_json_loads(authority_bytes)
+    forged["entities"][0]["sequence"] = "A"
+    forged_bytes = canonical_json_bytes(forged)
+    forged_manifest = canonical_json_loads(canonical_json_bytes(original_manifest))
+    authority_record = forged_manifest["artifacts"][1]
+    authority_record["sha256"] = hashlib.sha256(forged_bytes).hexdigest()
+    authority_record["bytes"] = len(forged_bytes)
+    forged_terminal = canonical_json_loads(canonical_json_bytes(original_terminal))
+    forged_terminal["result_manifest"]["sha256"] = canonical_sha256(forged_manifest)
+    (output / "authority_artifact_v1.json").write_bytes(forged_bytes)
+    manifest_path.write_bytes(canonical_json_bytes(forged_manifest))
+    terminal_path.write_bytes(canonical_json_bytes(forged_terminal))
+    with pytest.raises(
+        ManifestValidationError,
+        match="physical authority bytes disagree with the request-bound authority artifact",
+    ):
+        validate_result_manifest(output, forged_manifest)
+
+    tampered_request = canonical_json_loads(canonical_json_bytes(request))
+    tampered_request["identity_authority_artifact"]["canonical_json_base64"] = (
+        base64.b64encode(forged_bytes).decode("ascii")
+    )
+    tampered_request["identity_authority_artifact"]["sha256"] = hashlib.sha256(
+        forged_bytes
+    ).hexdigest()
+    tampered_structure = canonical_json_loads(structure_map_path.read_bytes())
+    tampered_structure["authority_artifact_sha256"] = hashlib.sha256(forged_bytes).hexdigest()
+    with pytest.raises(
+        ManifestValidationError,
+        match="external authority sequence identity disagrees with structure map",
+    ):
+        validate_external_authority_artifact(
+            tampered_request,
+            tampered_structure,
+            forged_bytes,
+        )
+
+    legacy_manifest = canonical_json_loads(canonical_json_bytes(original_manifest))
+    legacy_manifest["artifacts"].pop(1)
+    legacy_manifest["artifact_count"] = 10
+    legacy_request = canonical_json_loads(
+        (output / "workflow_component_request_v2.json").read_bytes()
+    )
+    del legacy_request["identity_authority_artifact"]["bytes"]
+    legacy_request_bytes = canonical_json_bytes(legacy_request)
+    (output / "workflow_component_request_v2.json").write_bytes(legacy_request_bytes)
+    legacy_manifest["request_sha256"] = hashlib.sha256(legacy_request_bytes).hexdigest()
+    legacy_request_record = legacy_manifest["artifacts"][0]
+    legacy_request_record["sha256"] = hashlib.sha256(legacy_request_bytes).hexdigest()
+    legacy_request_record["bytes"] = len(legacy_request_bytes)
+    legacy_terminal = canonical_json_loads(canonical_json_bytes(original_terminal))
+    legacy_terminal["request_sha256"] = legacy_manifest["request_sha256"]
+    legacy_terminal["result_manifest"]["sha256"] = canonical_sha256(legacy_manifest)
+    (output / "authority_artifact_v1.json").unlink()
+    manifest_path.write_bytes(canonical_json_bytes(legacy_manifest))
+    terminal_path.write_bytes(canonical_json_bytes(legacy_terminal))
+    with pytest.raises(ManifestValidationError):
+        validate_result_manifest(output, legacy_manifest)
+    validate_result_manifest(
+        output,
+        legacy_manifest,
+        allow_legacy_v2_external_authority=True,
+    )
+
+
+def test_self_authoritative_v2_rejects_external_authority_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+    from services.frustrampnn.manifests import ManifestValidationError, build_result_manifest
+
+    fixture = _load_component_fixture()
+    component = fixture._component()
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = fixture._v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    fixture._mock_v2_runtime(component, monkeypatch, inputs)
+    output = tmp_path / "bundle"
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=output,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    assert manifest["artifact_count"] == 10
+    (output / "frustrampnn_result_manifest_v2.json").unlink()
+    (output / "workflow_component_result_v2.json").unlink()
+    authority = {
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": request["source_artifact"]["sha256"],
+        "entities": [],
+    }
+    (output / "authority_artifact_v1.json").write_bytes(canonical_json_bytes(authority))
+    with pytest.raises(
+        ManifestValidationError,
+        match="external identity authority artifact presence disagrees with request authority",
+    ):
+        build_result_manifest(output)
+
+
+def test_external_authority_without_residue_mappings_does_not_invent_label_mapping() -> None:
+    from services.frustrampnn.contracts import canonical_json_bytes
+    from services.frustrampnn.manifests import validate_external_authority_artifact
+
+    authority = {
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": "a" * 64,
+        "cm_complex_snapshot_sha256": "b" * 64,
+        "entities": [
+            {
+                "entity_type": "protein",
+                "entity_instance_id": "A",
+                "source_entity_id": "1",
+                "label_asym_id": "A",
+                "auth_asym_id": "A",
+                "sequence": "MG",
+            }
+        ],
+    }
+    payload = canonical_json_bytes(authority)
+    digest = hashlib.sha256(payload).hexdigest()
+    request = {
+        "identity_authority": "cm_complex_snapshot",
+        "identity_authority_artifact": {
+            "relative_path": "authority_artifact_v1.json",
+            "media_type": "application/json",
+            "sha256": digest,
+            "canonical_json_base64": base64.b64encode(payload).decode("ascii"),
+            "cm_complex_snapshot_sha256": "b" * 64,
+        },
+        "source_artifact": {"sha256": "a" * 64},
+    }
+    structure = {
+        "authority_artifact_sha256": digest,
+        "source_sha256": "a" * 64,
+        "rows": [
+            {
+                "entity_instance_id": "A",
+                "source_entity_id": "1",
+                "label_asym_id": "A",
+                "auth_asym_id": "A",
+                "sequence_index": index,
+                "label_seq_id": index,
+                "auth_seq_id": index,
+                "insertion_code": "",
+                "wt": wt,
+            }
+            for index, wt in enumerate("MG", start=1)
+        ],
+    }
+
+    validate_external_authority_artifact(request, structure, payload)
 
 
 @pytest.mark.parametrize(

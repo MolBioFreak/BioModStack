@@ -43,6 +43,7 @@ from database import (
     Job,
     Design,
     FrustraMPNNResult,
+    ConformationalMappingRequest,
     RFD3LocalRedesignRequest,
     RFD3LocalRedesignCandidate,
     RFD3LocalRedesignArtifact,
@@ -5129,6 +5130,16 @@ async def list_jobs(
             str(parent_job_id): int(result_count)
             for parent_job_id, result_count in frustrampnn_counts.all()
         }
+    conformational_mapping_request_id_by_job: dict[str, str] = {}
+    if listed_job_ids:
+        cm_request_rows = await session.execute(
+            select(ConformationalMappingRequest.job_id, ConformationalMappingRequest.request_id)
+            .where(ConformationalMappingRequest.job_id.in_(listed_job_ids))
+        )
+        conformational_mapping_request_id_by_job = {
+            str(job_id): str(request_id)
+            for job_id, request_id in cm_request_rows.all()
+        }
     child_design_count_by_parent: dict[str, int] = {}
     if listed_job_ids:
         child_count_result = await session.execute(
@@ -5219,6 +5230,7 @@ async def list_jobs(
                 {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
                 if frustrampnn_result_count else None
             ),
+            conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -6347,6 +6359,14 @@ async def create_job(
             params=dict(job_data.params or {}),
             pinned_gpu=job_data.pinned_gpu,
         )
+        if _preallocated_job_id:
+            existing_job = await session.get(Job, str(_preallocated_job_id))
+            if existing_job is not None:
+                raise LaunchContextError(
+                    "launch_context_claimed",
+                    "The canonical Job already exists for this launch context.",
+                    status_code=409,
+                )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
@@ -7003,6 +7023,13 @@ async def get_job(
     frustrampnn_result_count = int((await session.execute(
         select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
     )).scalar_one())
+    conformational_mapping_request_id = None
+    if job.model_id in {"conformational_mapping", "confornets_experimental"}:
+        conformational_mapping_request_id = await session.scalar(
+            select(ConformationalMappingRequest.request_id).where(
+                ConformationalMappingRequest.job_id == job.id,
+            )
+        )
 
     return JobResponse(
         id=job.id,
@@ -7051,6 +7078,7 @@ async def get_job(
             {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
             if frustrampnn_result_count else None
         ),
+        conformational_mapping_request_id=conformational_mapping_request_id,
     )
 
 

@@ -946,6 +946,10 @@
     "identityAuthorityArtifact": {
       "additionalProperties": false,
       "properties": {
+        "bytes": {
+          "minimum": 1,
+          "type": "integer"
+        },
         "canonical_json_base64": {
           "maxLength": 22369624,
           "minLength": 4,
@@ -971,6 +975,7 @@
         "relative_path",
         "media_type",
         "sha256",
+        "bytes",
         "canonical_json_base64"
       ],
       "type": "object"

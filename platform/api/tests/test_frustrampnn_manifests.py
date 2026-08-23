@@ -366,6 +366,54 @@ def test_v1_and_v2_manifests_validate_complete_exact_generations(
     module.validate_result_manifest(v2, v2_manifest)
 
 
+def test_v2_manifest_rejects_rebound_authority_byte_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _manifests()
+    v2 = tmp_path / "v2"
+    _v2_bundle(v2, monkeypatch)
+    from services.frustrampnn.contracts import canonical_json_loads
+
+    request = canonical_json_loads((v2 / "workflow_component_request_v2.json").read_bytes())
+    structure = canonical_json_loads((v2 / "frustrampnn_structure_map_v1.json").read_bytes())
+    row = structure["rows"][0]
+    authority = {
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": request["source_artifact"]["sha256"],
+        "entities": [{
+            "entity_type": "protein",
+            "entity_instance_id": row["entity_instance_id"],
+            "source_entity_id": row["source_entity_id"],
+            "label_asym_id": row["label_asym_id"],
+            "auth_asym_id": row["auth_asym_id"],
+            "sequence": structure["model_ready_sequence"],
+            "residue_mappings": [{
+                "auth_seq_id": row["auth_seq_id"],
+                "insertion_code": row["insertion_code"],
+                "label_seq_id": row["label_seq_id"],
+            }],
+        }],
+    }
+    authority_payload = canonical_json_bytes(authority)
+    authority_digest = hashlib.sha256(authority_payload).hexdigest()
+    request["identity_authority"] = "producer_manifest"
+    request["identity_authority_artifact"] = {
+        "relative_path": "authority_artifact_v1.json",
+        "media_type": "application/json",
+        "bytes": len(authority_payload) + 1,
+        "sha256": authority_digest,
+        "canonical_json_base64": base64.b64encode(authority_payload).decode("ascii"),
+    }
+    structure["identity_authority"] = "producer_manifest_v1"
+    structure["identity_domain"] = "source_authoritative"
+    structure["authority_artifact_sha256"] = authority_digest
+
+    with pytest.raises(module.ManifestValidationError, match="byte count"):
+        module.validate_external_authority_artifact(request, structure, authority_payload)
+
+
 def test_v2_manifest_rejects_mixed_v1_filename_even_when_bytes_are_valid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

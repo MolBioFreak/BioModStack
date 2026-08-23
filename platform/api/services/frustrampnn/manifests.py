@@ -58,8 +58,17 @@ V2_MANIFEST_ARTIFACT_PATHS = (
     "frustrampnn_execution_receipt_v2.json",
     "frustrampnn_statistics_v1.json",
 )
+V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v2.json",
+    AUTHORITY_ARTIFACT_PATH,
+    *V2_MANIFEST_ARTIFACT_PATHS[1:],
+)
 V2_CANONICAL_ARTIFACT_PATHS = (
     *V2_MANIFEST_ARTIFACT_PATHS,
+    "workflow_component_result_v2.json",
+)
+V2_EXTERNAL_CANONICAL_ARTIFACT_PATHS = (
+    *V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS,
     "workflow_component_result_v2.json",
 )
 _V1_SCHEMA_KEYS = {
@@ -452,6 +461,8 @@ def _record(
     relative: str,
     payload: bytes,
     declared_cardinality: Mapping[str, Any] | None,
+    *,
+    allow_legacy_external_authority: bool = False,
 ) -> dict[str, Any]:
     schema_name: str | None = None
     schema_version: int | None = None
@@ -477,7 +488,19 @@ def _record(
         if schema_name != expected_name or schema_version != expected_version:
             raise ManifestValidationError(f"schema identity mismatch for {relative}")
         try:
-            validate_schema(schema_key, instance)
+            schema_instance = instance
+            if (
+                allow_legacy_external_authority
+                and schema_key == "workflow_component_request_v2"
+                and isinstance(instance, Mapping)
+                and instance.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+                and "bytes" not in instance.get("identity_authority_artifact", {})
+            ):
+                schema_instance = dict(instance)
+                envelope = dict(instance["identity_authority_artifact"])
+                envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+                schema_instance["identity_authority_artifact"] = envelope
+            validate_schema(schema_key, schema_instance)
         except Exception as exc:
             raise ManifestValidationError(f"schema validation failed for {relative}: {exc}") from exc
     elif relative == AUTHORITY_ARTIFACT_PATH:
@@ -584,6 +607,9 @@ def _validate_external_authority(
     payloads: Mapping[str, bytes],
     request: Mapping[str, Any],
     structure: Mapping[str, Any],
+    *,
+    allow_embedded_only: bool = False,
+    allow_legacy_missing_bytes: bool = False,
 ) -> None:
     """Close canonical producer authority bytes against source and mapped identities."""
 
@@ -591,18 +617,13 @@ def _validate_external_authority(
     external = request["identity_authority"] in {
         "producer_manifest", "cm_complex_snapshot",
     }
-    if external != (authority_payload is not None):
+    embedded_only = external and authority_payload is None and allow_embedded_only
+    if external != (authority_payload is not None) and not embedded_only:
         raise ManifestValidationError(
             "external identity authority artifact presence disagrees with request authority"
         )
-    if authority_payload is None:
+    if authority_payload is None and not embedded_only:
         return
-    schema_name, schema_version, authority = _json_identity(
-        authority_payload, AUTHORITY_ARTIFACT_PATH,
-    )
-    if schema_name != "producer_manifest" or schema_version != 1:
-        raise ManifestValidationError("external authority artifact typed schema is invalid")
-    authority_digest = hashlib.sha256(authority_payload).hexdigest()
     envelope = request.get("identity_authority_artifact")
     if not isinstance(envelope, Mapping):
         raise ManifestValidationError("request lacks the external authority artifact envelope")
@@ -612,6 +633,27 @@ def _validate_external_authority(
         )
     except Exception as exc:
         raise ManifestValidationError("request authority artifact base64 is invalid") from exc
+    if request.get("schema_version") == 2:
+        declared_bytes = envelope.get("bytes")
+        if (
+            isinstance(declared_bytes, bool)
+            or not isinstance(declared_bytes, int)
+            or declared_bytes <= 0
+            or declared_bytes != len(request_bound_payload)
+        ):
+            if not (allow_legacy_missing_bytes and declared_bytes is None):
+                raise ManifestValidationError(
+                    "request authority artifact byte count does not match canonical bytes"
+                )
+    if embedded_only:
+        authority_payload = request_bound_payload
+    assert authority_payload is not None
+    schema_name, schema_version, authority = _json_identity(
+        authority_payload, AUTHORITY_ARTIFACT_PATH,
+    )
+    if schema_name != "producer_manifest" or schema_version != 1:
+        raise ManifestValidationError("external authority artifact typed schema is invalid")
+    authority_digest = hashlib.sha256(authority_payload).hexdigest()
     if (
         envelope.get("relative_path") != AUTHORITY_ARTIFACT_PATH
         or envelope.get("media_type") != "application/json"
@@ -718,9 +760,26 @@ def _validate_external_authority(
             if row["wt"] is not None and row["wt"] != expected_wt:
                 raise ManifestValidationError("external authority sequence identity disagrees with structure map")
             mapping_key = (row["auth_seq_id"], row["insertion_code"])
-            expected_label = residue_mappings.get(mapping_key)
-            if row["label_seq_id"] != expected_label:
+            if (
+                residue_mappings
+                and row["label_seq_id"] != residue_mappings.get(mapping_key)
+            ):
                 raise ManifestValidationError("external authority residue mapping disagrees with structure map")
+
+
+def validate_external_authority_artifact(
+    request: Mapping[str, Any],
+    structure: Mapping[str, Any],
+    authority_payload: bytes | None,
+) -> None:
+    """Validate one physical external-authority artifact against v2 input authority."""
+
+    payloads = (
+        {AUTHORITY_ARTIFACT_PATH: authority_payload}
+        if authority_payload is not None
+        else {}
+    )
+    _validate_external_authority(payloads, request, structure)
 
 
 def _pdb_rows(payload: bytes) -> tuple[list[tuple[str, int, str, str]], dict[tuple[str, int, str], list[str]]]:
@@ -1124,15 +1183,21 @@ def _snapshot_v2(
             if not entry.is_file(follow_symlinks=False):
                 raise ManifestValidationError(f"bundle contains nonregular entry: {entry.name}")
             observed.add(entry.name)
-        expected = set(
-            V2_CANONICAL_ARTIFACT_PATHS if require_manifest else V2_MANIFEST_ARTIFACT_PATHS
+        path_options = (
+            (V2_CANONICAL_ARTIFACT_PATHS, V2_EXTERNAL_CANONICAL_ARTIFACT_PATHS)
+            if require_manifest
+            else (V2_MANIFEST_ARTIFACT_PATHS, V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS)
         )
-        if saw_manifest != require_manifest or observed != expected:
+        matching_paths = [paths for paths in path_options if observed == set(paths)]
+        if saw_manifest != require_manifest or len(matching_paths) != 1:
+            expected_sets = [set(paths) for paths in path_options]
             raise ManifestValidationError(
                 "v2 bundle generation/path set mismatch; "
-                f"missing={sorted(expected-observed)}, unmanifested={sorted(observed-expected)}"
+                f"observed={sorted(observed)}, expected_one_of="
+                f"{[sorted(expected) for expected in expected_sets]}"
             )
-        paths = V2_CANONICAL_ARTIFACT_PATHS if require_manifest else V2_MANIFEST_ARTIFACT_PATHS
+        paths = matching_paths[0]
+        manifest_artifact_paths = paths[:-1] if require_manifest else paths
         payloads: dict[str, bytes] = {}
         if require_manifest:
             physical, physical_bytes = _load_manifest_bytes(root_fd, V2_MANIFEST_PATH)
@@ -1144,7 +1209,7 @@ def _snapshot_v2(
                 validate_schema("frustrampnn_result_manifest_v2", physical)
             except Exception as exc:
                 raise ManifestValidationError(f"v2 manifest schema failed: {exc}") from exc
-            limits = _declared_read_limits(physical, V2_MANIFEST_ARTIFACT_PATHS)
+            limits = _declared_read_limits(physical, manifest_artifact_paths)
             limits["workflow_component_result_v2.json"] = _artifact_limit(
                 "workflow_component_result_v2.json"
             )
@@ -1160,7 +1225,7 @@ def _snapshot_v2(
         _enforce_actual_bundle_size(payloads)
         generation_after = _root_generation(root_fd)
         final_names = {entry.name for entry in os.scandir(root_fd)}
-        expected_names = expected | ({V2_MANIFEST_PATH} if require_manifest else set())
+        expected_names = set(paths) | ({V2_MANIFEST_PATH} if require_manifest else set())
         if generation_after != generation_before or final_names != expected_names:
             raise ManifestValidationError(
                 "v2 bundle path set or root directory generation mutated during validation"
@@ -1174,6 +1239,8 @@ def validate_v2_input_closure(
     request: Mapping[str, Any],
     normalized_pdb: bytes,
     structure_map_payload: bytes,
+    *,
+    allow_legacy_external_authority: bool = False,
 ):
     """Validate the exact three-file v2 execution authority before runtime access."""
 
@@ -1185,7 +1252,17 @@ def validate_v2_input_closure(
     )
 
     try:
-        validate_schema("workflow_component_request_v2", request)
+        schema_request = request
+        if (
+            allow_legacy_external_authority
+            and request.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+            and "bytes" not in request.get("identity_authority_artifact", {})
+        ):
+            schema_request = dict(request)
+            envelope = dict(request["identity_authority_artifact"])
+            envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+            schema_request["identity_authority_artifact"] = envelope
+        validate_schema("workflow_component_request_v2", schema_request)
         structure = canonical_json_loads(structure_map_payload)
         if not isinstance(structure, dict):
             raise ManifestValidationError("v2 structure map is not an object")
@@ -1416,6 +1493,7 @@ def _validate_receipt_argv_v2(receipt: Mapping[str, Any], configuration: Any) ->
 
 def _validate_v2_closure(
     payloads: Mapping[str, bytes], manifest: Mapping[str, Any], *, require_result: bool,
+    allow_legacy_external_authority: bool = False,
 ) -> None:
     from .analysis import finalize_landscape_v2
     from .analytics import build_statistics_receipt, validate_statistics_receipt
@@ -1429,12 +1507,41 @@ def _validate_v2_closure(
     for relative in schema_paths:
         _, _, values[relative] = _json_identity(payloads[relative], relative)
         try:
-            validate_schema(_V2_SCHEMA_KEYS[relative], values[relative])
+            schema_instance = values[relative]
+            if (
+                allow_legacy_external_authority
+                and relative == "workflow_component_request_v2.json"
+                and isinstance(schema_instance, Mapping)
+                and schema_instance.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+                and "bytes" not in schema_instance.get("identity_authority_artifact", {})
+            ):
+                schema_instance = dict(schema_instance)
+                envelope = dict(schema_instance["identity_authority_artifact"])
+                envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+                schema_instance["identity_authority_artifact"] = envelope
+            validate_schema(_V2_SCHEMA_KEYS[relative], schema_instance)
         except Exception as exc:
             raise ManifestValidationError(f"v2 schema validation failed for {relative}: {exc}") from exc
     request = values["workflow_component_request_v2.json"]
     structure, effective, configuration = validate_v2_input_closure(
-        request, payloads["normalized_input.pdb"], payloads["frustrampnn_structure_map_v1.json"]
+        request,
+        payloads["normalized_input.pdb"],
+        payloads["frustrampnn_structure_map_v1.json"],
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
+    authority_envelope = request.get("identity_authority_artifact")
+    legacy_missing_bytes = (
+        allow_legacy_external_authority
+        and request.get("schema_version") == 2
+        and isinstance(authority_envelope, Mapping)
+        and "bytes" not in authority_envelope
+    )
+    _validate_external_authority(
+        payloads,
+        request,
+        structure,
+        allow_embedded_only=legacy_missing_bytes,
+        allow_legacy_missing_bytes=legacy_missing_bytes,
     )
     landscape = values["frustrampnn_landscape_v2.json"]
     summary = values["frustrampnn_summary_v2.json"]
@@ -1485,6 +1592,7 @@ def _validate_v2_closure(
             structure_map=structure,
             capability_inventory=capability_inventory,
             capability_inventory_bytes=capability_inventory_bytes,
+            allow_legacy_external_authority=allow_legacy_external_authority,
         )
         validate_statistics_receipt(statistics)
     except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
@@ -1562,6 +1670,7 @@ def _build_result_manifest_v2(root: Path | str) -> dict[str, Any]:
     landscape = instances["frustrampnn_landscape_v2.json"]
     cardinalities = {
         "workflow_component_request_v2.json": None,
+        AUTHORITY_ARTIFACT_PATH: {"kind": "records", "count": 1},
         "normalized_input.pdb": {
             "kind": "residues",
             "count": sum(row["status"] == "mapped" for row in structure["rows"]),
@@ -1581,10 +1690,16 @@ def _build_result_manifest_v2(root: Path | str) -> dict[str, Any]:
         "frustrampnn_execution_receipt_v2.json": {"kind": "records", "count": 1},
         "frustrampnn_statistics_v1.json": {"kind": "records", "count": 1},
     }
-    artifacts = [
-        _record(relative, payloads[relative], cardinalities[relative])
-        for relative in V2_MANIFEST_ARTIFACT_PATHS
-    ]
+    artifact_paths = (
+        V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS
+        if AUTHORITY_ARTIFACT_PATH in payloads
+        else V2_MANIFEST_ARTIFACT_PATHS
+    )
+    artifacts = []
+    for relative in artifact_paths:
+        record = _record(relative, payloads[relative], cardinalities[relative])
+        record.pop("role", None)
+        artifacts.append(record)
     manifest = {
         "schema_name": "frustrampnn_result_manifest",
         "schema_version": 2,
@@ -1612,7 +1727,10 @@ def _build_result_manifest_v2(root: Path | str) -> dict[str, Any]:
 
 
 def _validate_result_manifest_v2(
-    root: Path | str, manifest: Mapping[str, Any],
+    root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    allow_legacy_external_authority: bool = False,
 ) -> dict[str, bytes]:
     try:
         validate_schema("frustrampnn_result_manifest_v2", manifest)
@@ -1622,20 +1740,31 @@ def _validate_result_manifest_v2(
     physical = _json_identity(payloads[V2_MANIFEST_PATH], V2_MANIFEST_PATH)[2]
     if physical != dict(manifest) or payloads[V2_MANIFEST_PATH] != canonical_json_bytes(physical):
         raise ManifestValidationError("physical v2 result manifest is not exact canonical supplied bytes")
-    if [record["relative_path"] for record in manifest["artifacts"]] != list(
-        V2_MANIFEST_ARTIFACT_PATHS
-    ):
+    artifact_paths = (
+        V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS
+        if AUTHORITY_ARTIFACT_PATH in payloads
+        else V2_MANIFEST_ARTIFACT_PATHS
+    )
+    if [record["relative_path"] for record in manifest["artifacts"]] != list(artifact_paths):
         raise ManifestValidationError("v2 manifest path order/set is not canonical")
     for declared in manifest["artifacts"]:
         observed = _record(
-            declared["relative_path"], payloads[declared["relative_path"]],
+            declared["relative_path"],
+            payloads[declared["relative_path"]],
             declared["cardinality"],
+            allow_legacy_external_authority=allow_legacy_external_authority,
         )
+        observed.pop("role", None)
         if dict(declared) != observed:
             raise ManifestValidationError(
                 f"v2 hash/size/schema/cardinality mismatch for {declared['relative_path']}"
             )
-    _validate_v2_closure(payloads, manifest, require_result=True)
+    _validate_v2_closure(
+        payloads,
+        manifest,
+        require_result=True,
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
     return dict(payloads)
 
 
@@ -1651,11 +1780,18 @@ def build_result_manifest(root: Path | str) -> dict[str, Any]:
 
 
 def validate_result_manifest(
-    root: Path | str, manifest: Mapping[str, Any],
+    root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    allow_legacy_v2_external_authority: bool = False,
 ) -> dict[str, bytes]:
     version = manifest.get("schema_version") if isinstance(manifest, Mapping) else None
     if version == 2:
-        return _validate_result_manifest_v2(root, manifest)
+        return _validate_result_manifest_v2(
+            root,
+            manifest,
+            allow_legacy_external_authority=allow_legacy_v2_external_authority,
+        )
     if version == 1:
         return _validate_result_manifest_v1(root, manifest)
     raise ManifestValidationError("result manifest schema generation is unsupported")
@@ -1702,5 +1838,6 @@ __all__ = [
     "V2_MANIFEST_ARTIFACT_PATHS", "V2_MANIFEST_PATH", "ManifestValidationError",
     "build_result_manifest", "load_result_manifest", "load_result_manifest_bytes_and_document",
     "result_manifest_path",
-    "summarize_landscape_v2", "validate_result_manifest", "validate_v2_input_closure",
+    "summarize_landscape_v2", "validate_external_authority_artifact",
+    "validate_result_manifest", "validate_v2_input_closure",
 ]

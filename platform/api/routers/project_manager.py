@@ -407,6 +407,32 @@ async def list_domain_adapters() -> dict:
     return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
 
 
+async def _launch_context_document(
+    session: AsyncSession,
+    context: ExperimentLaunchContext,
+) -> dict[str, object]:
+    document = context_document(context)
+    if context.preparation_id:
+        preparation = await session.get(ExperimentWorkflowPreparation, context.preparation_id)
+        if preparation is not None:
+            try:
+                scheduler = json.loads(preparation.scheduler_payload_json)
+            except (TypeError, ValueError) as exc:
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is invalid.",
+                    status_code=409,
+                ) from exc
+            if not isinstance(scheduler, dict):
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is not an object.",
+                    status_code=409,
+                )
+            document["pinned_scheduler"] = scheduler
+    return document
+
+
 @router.post(
     "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/launch-contexts",
     response_model=LaunchContextResponse,
@@ -431,7 +457,7 @@ async def issue_launch_context(
             workflow_revision_id=payload.workflow_revision_id,
             return_uri=payload.return_uri,
         )
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         await session.commit()
         return document
@@ -448,7 +474,7 @@ async def get_launch_context(
 ) -> dict[str, object]:
     try:
         context = await resolve_launch_context_for_display(session, launch_context_id)
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         if context.canonical_job_id is None:
             job_ids = list((await core_session.scalars(
@@ -1297,14 +1323,23 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                 raise IdempotencyConflict("preparation replay conflicts with its immutable launch authority")
         else:
             prior = await session.scalar(select(ExperimentWorkflowPreparation).join(ExperimentRevision, ExperimentRevision.resource_id == ExperimentWorkflowPreparation.workflow_revision_id).where(ExperimentRevision.subject_id == plan_id).order_by(ExperimentWorkflowPreparation.created_at.desc(), ExperimentWorkflowPreparation.resource_id.desc()))
-            preparation = await prepare_workflow(
-                session,
-                revision_id,
-                {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
-                core_session=core_session,
-            )
-            if prior is not None and prior.resource_id != preparation.resource_id:
-                session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
+            prior_authority = None
+            if prior is not None:
+                try:
+                    prior_authority = json.loads(prior.normalized_request_json).get("launch_authority")
+                except (TypeError, ValueError):
+                    prior_authority = None
+            if prior is not None and prior_authority == launch_authority:
+                preparation = prior
+            else:
+                preparation = await prepare_workflow(
+                    session,
+                    revision_id,
+                    {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
+                    core_session=core_session,
+                )
+                if prior is not None and prior.resource_id != preparation.resource_id:
+                    session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
             session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=preparation.resource_id, response_json=json.dumps({"preparation_id": preparation.resource_id}), created_at=datetime.now(timezone.utc).isoformat()))
         await session.commit()
         return _preparation_document(preparation)

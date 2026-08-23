@@ -57,7 +57,7 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
-import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
+import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
@@ -5023,7 +5023,12 @@ export function ResultsViewer() {
         .filter((design): design is Design => Boolean(design));
 
     if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
-        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} job={activeJob} />;
+        if (!activeJob.conformational_mapping_request_id) {
+            return <div role="alert" className="mx-auto mt-12 max-w-3xl rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
+                Conformational Mapping request identity is unavailable for this job.
+            </div>;
+        }
+        return <ConformationalMappingViewer requestId={activeJob.conformational_mapping_request_id} title={activeJob.name} job={activeJob} />;
     }
     if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
         return <FrustraMpnnWorkbench
@@ -5199,8 +5204,8 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    activeJob.model_id === 'protein_local_redesign' ? (
-                        <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    isProteinLocalRedesignResultJob(activeJob) ? (
+                        <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : (

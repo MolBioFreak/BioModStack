@@ -401,7 +401,7 @@ class OperatorDashboardXJsonSafeEvidence(RootModel[JsonValue]):
 
 
 class OperatorDashboardXFailedLifecycleEvidence(RootModel[JsonValue]):
-    """Bounded robot evidence accepted only while the X lifecycle is failed-latched."""
+    """Bounded robot-owned X diagnostic evidence retained without reclassifying lifecycle state."""
 
     @model_validator(mode="after")
     def enforce_failed_projection_bounds(self):
@@ -2995,12 +2995,7 @@ class OperatorDashboardXLifecycle(BaseModel):
     generation: StrictInt | None
     board_lifecycle_generation: StrictInt | None
     reference_state: Literal["unknown", "referenced", "desynced"]
-    prepared_receipt: (
-        OperatorDashboardXPreparationReceipt
-        | OperatorDashboardXOmissionMarker
-        | OperatorDashboardXFailedLifecycleEvidence
-        | None
-    )
+    prepared_receipt: OperatorDashboardXPreparationReceipt | OperatorDashboardXOmissionMarker | None
     active_receipt: OperatorDashboardXActiveReceipt | OperatorDashboardXOmissionMarker | None
     pending_ticket: OperatorDashboardXPendingTicket | OperatorDashboardXOmissionMarker | None
     awaiting_observation_receipt_id: str | None = Field(max_length=160)
@@ -3010,21 +3005,6 @@ class OperatorDashboardXLifecycle(BaseModel):
     receipt_detail_on_request: Literal[True]
     recent_receipt_count: StrictInt = Field(ge=0)
     latest_receipt: OperatorDashboardXReceiptSummary | None
-
-    @model_validator(mode="after")
-    def bind_generic_evidence_to_lifecycle_state(self):
-        if isinstance(self.prepared_receipt, OperatorDashboardXFailedLifecycleEvidence) and self.state not in {
-            "prepared_unreferenced",
-            "executing",
-            "awaiting_operator_observation",
-            "referenced_ready",
-            "failed_latched",
-        }:
-            raise ValueError("generic X preparation evidence requires a prepared lifecycle state")
-        if isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence) and self.state != "failed_latched":
-            raise ValueError("generic X failure evidence requires failed_latched state")
-        return self
-
 
 class OperatorDashboardXLiveStatusSuccess(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -3052,6 +3032,7 @@ class OperatorDashboardXLiveStatusSuccess(BaseModel):
     failure: Literal[
         "x_terminal_speed_not_typed_integer_zero",
         "x_terminal_readback_not_verified",
+        "x_oem_profile_or_switch_mask_mismatch",
     ] | None
 
     _normalize_expected_profile_keys = field_validator("expected_profile", mode="before")(
@@ -3071,7 +3052,7 @@ class OperatorDashboardXLiveStatusSuccess(BaseModel):
     def bind_live_status_authority(self):
         if set(self.expected_profile) != {4, 5, 6, 205}:
             raise ValueError("serial-206 X live expected profile keys are incomplete")
-        if self.expected_switch_masks != {12: 1, 13: 0}:
+        if self.expected_switch_masks not in ({12: 1, 13: 0}, {12: 0, 13: 0}):
             raise ValueError("serial-206 X live expected switch masks are invalid")
         if set(self.switch_mask_tuple) != {12, 13}:
             raise ValueError("serial-206 X switch-mask tuple is incomplete")
@@ -3111,7 +3092,7 @@ class OperatorDashboardXSwitchMasks(BaseModel):
 
     @model_validator(mode="after")
     def bind_expected_switch_masks(self):
-        if self.expected != {12: 1, 13: 0}:
+        if self.expected not in ({12: 1, 13: 0}, {12: 0, 13: 0}):
             raise ValueError("serial-206 X switch-mask authority is invalid")
         return self
 
@@ -3206,15 +3187,6 @@ class OperatorDashboardXAxis(BaseModel):
     latest_receipt: OperatorDashboardXReceiptSummary | None = None
     authority: str = Field(min_length=1, max_length=120)
     physical_position_verified: Literal[False]
-
-    @model_validator(mode="after")
-    def bind_generic_failure_to_failed_latch(self):
-        if isinstance(self.last_failure, OperatorDashboardXFailedLifecycleEvidence):
-            provider = self.provider.root
-            if not isinstance(provider, OperatorDashboardXProviderSuccess) or provider.lifecycle.state != "failed_latched":
-                raise ValueError("generic X-axis failure evidence requires failed_latched provider state")
-        return self
-
 
 class OperatorDashboardTemperature(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -3352,6 +3324,8 @@ class PipetteReceipt(BaseModel):
     ownership_epoch: StrictInt
     source_identity: PipetteReceiptSourceIdentity
     deployment_identity: PipetteReceiptDeploymentIdentity
+    response: dict[str, JsonValue] | None = None
+    stage_receipts: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=256)
 
 
 class OperatorDashboardPipetteChannel(BaseModel):
@@ -3644,6 +3618,7 @@ class OperatorDashboard(BaseModel):
     successive_move_queue: dict[str, OperatorDashboardQueueAxis] = Field(
         default_factory=dict, max_length=8
     )
+    command_queue: dict[str, Any] = Field(default_factory=dict)
 
 
 class OperatorActionSpec(BaseModel):
@@ -3696,7 +3671,7 @@ class OperatorControlCatalog(BaseModel):
     evidence_lock_sha256: str = Field(pattern=r"^(?:[0-9a-f]{64}|unavailable)$")
     source_authority_verified: StrictBool
     dashboard: OperatorDashboard
-    actions: list[OperatorActionSpec] = Field(max_length=256)
+    actions: list[OperatorActionSpec] = Field(max_length=512)
 
     @field_validator("actions")
     @classmethod
@@ -3967,7 +3942,7 @@ class OperatorActionReceipt(BaseModel):
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
-    receipts: list[OperatorActionReceipt] = Field(max_length=500)
+    receipts: list[OperatorActionReceipt | PipetteReceipt] = Field(max_length=500)
 
 
 # Serial-206 operator wire contracts. Keep these separate from the strict v1
@@ -4931,13 +4906,22 @@ class OperatorReportAuditHealthV1(BaseModel):
     status: Literal["ok"]
     store: OperatorReportSnapshotV1
     database_bytes: StrictInt = Field(ge=0)
+    database_file_bytes: StrictInt = Field(ge=0)
     wal_bytes: StrictInt = Field(ge=0)
+    shm_bytes: StrictInt = Field(ge=0)
+    backup_units: list[str]
+    backup_bytes: StrictInt = Field(ge=0)
+    evidence_bytes: StrictInt = Field(ge=0)
+    free_bytes: StrictInt = Field(ge=0)
+    storage_capacity_status: Literal["ok", "fail"]
     commands: StrictInt = Field(ge=0)
     pipette_operations: StrictInt = Field(ge=0)
     retained_evidence: StrictInt = Field(ge=0)
     pending_expiry_evidence: StrictInt = Field(ge=0)
     integrity_failures: StrictInt = Field(ge=0)
     migration_receipts: StrictInt = Field(ge=0)
+    migration_retirements: StrictInt = Field(ge=0)
+    migration_evidence: StrictInt = Field(ge=0)
     exports: StrictInt = Field(ge=0)
 
 

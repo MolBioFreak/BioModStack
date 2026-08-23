@@ -1,5 +1,5 @@
 {
-  "content_sha256": "e92ddeaceb095329cee24d0df61588eac2519b25ec6878c7985cdbba0d375afc",
+  "content_sha256": "64f620461f320f6097c4e8cb50dde7190c0594a239cb637bcd1ba3a0640f268c",
   "paths": [
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
@@ -21,6 +21,7 @@
     "platform/api/experiment_operations.py",
     "platform/api/experiment_services.py",
     "platform/api/main.py",
+    "platform/api/migrations/add_ont_move_source_attempt_lineage.py",
     "platform/api/migrations/add_ont_signal_workbench.py",
     "platform/api/migrations/runner.py",
     "platform/api/migrations/sqlite_sha256.py",

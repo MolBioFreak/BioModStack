@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
     admissionCalls: 0,
+    v1DashboardEnabled: null as boolean | null,
+    v1CatalogEnabled: null as boolean | null,
     invokeCalls: [] as Array<Record<string, unknown>>,
     invokePending: false,
     catalog: {
@@ -267,7 +269,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         },
         error: null,
     }),
-    useBioXpOperatorDashboard: () => state.dashboard,
+    useBioXpOperatorDashboard: (_generation: number, enabled: boolean) => {
+        state.v1DashboardEnabled = enabled;
+        return state.dashboard;
+    },
     useBioXpOperatorDashboardV2: () => state.v2Dashboard,
     useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
     useBioXpOperatorReceiptV2: () => state.yReceipt,
@@ -282,7 +287,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         && receipt.status !== 'rejected'
         && receipt.status !== 'blocked'
         && receipt.status !== 'cleared',
-    useBioXpOperatorControlCatalog: () => state.catalog,
+    useBioXpOperatorControlCatalog: (_generation: number, enabled: boolean) => {
+        state.v1CatalogEnabled = enabled;
+        return state.catalog;
+    },
     useBioXpOperatorActionAdmission: (...args: unknown[]) => {
         state.admissionCalls += 1;
         return { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
@@ -383,6 +391,8 @@ const xReceipt = (status: string, index = 0) => ({
 
 beforeEach(() => {
     state.admissionCalls = 0;
+    state.v1DashboardEnabled = null;
+    state.v1CatalogEnabled = null;
     state.connectionGeneration = 1;
     state.invokeCalls = [];
     state.invokePending = false;
@@ -428,6 +438,7 @@ beforeEach(() => {
         }]),
     };
     state.history.data.receipts = [];
+    state.dashboard.data.motion = { enabled: true, reason: null };
     state.dashboard.data.x_axis.latest_receipt = null;
     state.dashboard.data.successive_move_queue = {};
     state.catalog.data.actions = [
@@ -525,6 +536,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         expect(state.admissionCalls).toBe(0);
+        expect(state.v1DashboardEnabled).toBe(true);
+        expect(state.v1CatalogEnabled).toBe(true);
         expect(document.body.textContent).not.toContain('Checking exact robot admission.');
 
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('X Axis')) as HTMLElement;
@@ -563,9 +576,14 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('keeps X move controls fail-closed while Home stays available when the axis is unprepared', async () => {
+    it('does not add BMS lifecycle, motion-banner, receipt, or queue gates to robot-authorized X actions', async () => {
         state.dashboard.data.x_axis.provider.lifecycle.state = 'unprepared';
         state.dashboard.data.x_axis.status.reference = 'desynced';
+        state.dashboard.data.motion = { enabled: false, reason: 'stale dashboard blocker' };
+        state.history.data.receipts = [xReceipt('acknowledged')];
+        state.dashboard.data.successive_move_queue = {
+            x: { active_command_id: 'cmd_prev', depth: 8, head_action_id: 'oem.x.move_steps', state: 'queued' },
+        };
 
         await act(async () => {
             root.render(<BioXpCockpit />);
@@ -578,11 +596,16 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const goAbsolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
 
-        expect(movePositive.disabled).toBe(true);
-        expect(movePositive.title).toContain("Current X lifecycle state 'unprepared'");
-        expect(goAbsolute.disabled).toBe(true);
-        expect(goAbsolute.title).toContain("Current X lifecycle state 'unprepared'");
+        expect(movePositive.disabled).toBe(false);
+        expect(goAbsolute.disabled).toBe(false);
         expect(home.disabled).toBe(false);
+        await act(async () => movePositive.click());
+        expect(state.invokeCalls[0]).toEqual({
+            actionId: 'oem.x.move_steps',
+            connectionGeneration: 1,
+            ownershipGeneration: 1,
+            inputs: { steps: 10000 },
+        });
         expect(state.admissionCalls).toBe(0);
     });
 
@@ -601,7 +624,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('queues successive X moves while an X command is active and keeps Home fail-closed (R-B1/R-B2)', async () => {
+    it('leaves successive X move and Home admission to the robot while an X command is active', async () => {
         state.history.data.receipts = [xReceipt('acknowledged')];
         state.dashboard.data.successive_move_queue = {
             x: { active_command_id: 'cmd_prev', depth: 1, head_action_id: 'oem.x.move_steps', state: 'queued' },
@@ -619,8 +642,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
         expect(movePositive.disabled).toBe(false);
         expect(movePositive.title).not.toContain('in progress');
-        expect(home.disabled).toBe(true);
-        expect(home.title).toContain('acknowledged');
+        expect(home.disabled).toBe(false);
+        expect(home.title).not.toContain('acknowledged');
 
         const queueStrip = article.querySelector('[data-testid="successive-move-queue"]') as HTMLElement;
         expect(queueStrip).not.toBeNull();
@@ -629,7 +652,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.admissionCalls).toBe(0);
     });
 
-    it('disables X moves when the successive-move queue is full (R-B1 depth bound)', async () => {
+    it('leaves X queue admission to the robot when the cached queue projection is full', async () => {
         state.history.data.receipts = [xReceipt('acknowledged')];
         state.dashboard.data.successive_move_queue = {
             x: { active_command_id: 'cmd_prev', depth: 8, head_action_id: 'oem.x.move_steps', state: 'queued' },
@@ -644,8 +667,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
 
-        expect(movePositive.disabled).toBe(true);
-        expect(movePositive.title).toContain('queue is full');
+        expect(movePositive.disabled).toBe(false);
         expect(state.admissionCalls).toBe(0);
     });
 

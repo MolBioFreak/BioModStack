@@ -134,6 +134,7 @@ class JobResponse(BaseModel):
     return_uri: Optional[str] = None
     frustrampnn_result_count: int = 0
     frustrampnn_reopen_destination: Optional[dict] = None
+    conformational_mapping_request_id: Optional[str] = None
     
     model_config = ConfigDict(from_attributes=True)
     
@@ -188,6 +189,7 @@ class LaunchContextResponse(BaseModel):
     canonical_job_id: Optional[str] = None
     recovery_job_id: Optional[str] = None
     binding_receipt: Optional[dict] = None
+    pinned_scheduler: Optional[dict] = None
     issued_at: datetime
     expires_at: datetime
 

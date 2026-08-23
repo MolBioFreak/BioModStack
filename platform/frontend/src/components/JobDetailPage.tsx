@@ -118,7 +118,12 @@ export function JobDetailPage() {
     }
 
     if (isConformationalMappingJob) {
-        return <ConformationalMappingViewer requestId={job.id} title={job.name} job={job} />;
+        if (!job.conformational_mapping_request_id) {
+            return <div role="alert" className="max-w-3xl mx-auto px-4 py-12 text-red-200">
+                Conformational Mapping request identity is unavailable for this job.
+            </div>;
+        }
+        return <ConformationalMappingViewer requestId={job.conformational_mapping_request_id} title={job.name} job={job} />;
     }
 
     return (

@@ -153,7 +153,7 @@ _CAPABILITY: dict[str, Any] = {
     "scientific_role": "folding_structure_prediction",
     "plannable": True,
     "exposure_state": "accepted",
-    "allowed_domain_modes": ["folding_structure_prediction"],
+    "allowed_domain_modes": ["prediction"],
     "workflow_family": "typed_core_job",
     "workflow_adapter_id": ADAPTER_ID,
     "launch_mode": "typed_launcher_handoff",

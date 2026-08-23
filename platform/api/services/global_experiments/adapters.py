@@ -173,7 +173,6 @@ class AdapterRegistry:
                 "display_name": item.display_name,
                 "entity_kind": item.entity_kind,
                 "domain_kind": item.domain_kind,
-                "store_id": item.store_id,
             }
             for item in self._items.values()
         ]

@@ -219,6 +219,99 @@ def _mock_v2_runtime(
     return calls
 
 
+def test_default_runtime_identity_is_resolved_at_call_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    runtime = importlib.import_module("services.frustrampnn.runtime")
+    module_name = "scripts.run_frustrampnn_component"
+    original_component = sys.modules.pop(module_name, None)
+    current_identity = runtime.FRUSTRAMPNN_RUNTIME_IDENTITY
+    stale_container = tmp_path / "stale-at-import.sif"
+    stale_container.write_bytes(b"stale import identity")
+    stale_identity = _stub_identity(stale_container)
+    try:
+        monkeypatch.setattr(runtime, "FRUSTRAMPNN_RUNTIME_IDENTITY", stale_identity)
+        component = importlib.import_module(module_name)
+        monkeypatch.setattr(runtime, "FRUSTRAMPNN_RUNTIME_IDENTITY", current_identity)
+        request, normalized, structure_map_path, _ = _v2_inputs(
+            tmp_path,
+            residues=[("A", 1)],
+            selected=[("A", 0)],
+        )
+        calls = _mock_v2_runtime(component, monkeypatch, tmp_path)
+
+        component.run_component(
+            request=request,
+            source_structure=normalized,
+            structure_map=structure_map_path,
+            output_dir=tmp_path / "candidate_bundle",
+            container=tmp_path / "mock.sif",
+            physical_gpu_id=3,
+        )
+
+        assert calls
+    finally:
+        sys.modules.pop(module_name, None)
+        if original_component is not None:
+            sys.modules[module_name] = original_component
+
+
+def test_preflight_default_runtime_identity_is_resolved_at_call_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    runtime = importlib.import_module("services.frustrampnn.runtime")
+    module_name = "scripts.run_frustrampnn_component"
+    original_component = sys.modules.pop(module_name, None)
+    stale_container = tmp_path / "stale-preflight.sif"
+    current_container = tmp_path / "current-preflight.sif"
+    stale_container.write_bytes(b"stale preflight identity")
+    current_container.write_bytes(b"current preflight identity")
+    stale_identity = _stub_identity(stale_container)
+    current_identity = _stub_identity(current_container)
+    seen: list[FrustraMPNNRuntimeIdentity] = []
+    try:
+        monkeypatch.setattr(runtime, "FRUSTRAMPNN_RUNTIME_IDENTITY", stale_identity)
+        component = importlib.import_module(module_name)
+        monkeypatch.setattr(runtime, "FRUSTRAMPNN_RUNTIME_IDENTITY", current_identity)
+
+        def validate(path, *, identity):
+            seen.append(identity)
+            assert identity is current_identity
+            return Path(path)
+
+        class Pinned:
+            sha256 = current_identity.sif_sha256
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(runtime, "validate_configured_container_path", validate)
+        monkeypatch.setattr(runtime, "open_verified_container", lambda path, expected: Pinned())
+        monkeypatch.setattr(
+            runtime,
+            "verify_container_assets",
+            lambda apptainer, pinned, *, identity: {
+                "executable_sha256": identity.executable_sha256,
+                "checkpoint_sha256": identity.checkpoint_sha256,
+            },
+        )
+
+        result = component.preflight_runtime(container=current_container)
+
+        assert seen == [current_identity]
+        assert result["checkpoint_id"] == current_identity.checkpoint_id
+    finally:
+        sys.modules.pop(module_name, None)
+        if original_component is not None:
+            sys.modules[module_name] = original_component
+
+
 def _request(source: Path, **updates: object) -> dict[str, object]:
     request: dict[str, object] = {
         "schema_name": "workflow_component_request",
@@ -960,6 +1053,37 @@ def test_invalid_request_bound_authority_never_reaches_runtime(
 
     assert not capture.exists()
     assert not (tmp_path / "candidate_bundle").exists()
+
+
+def test_malformed_external_authority_is_request_invalid_not_keyerror() -> None:
+    component = _component()
+    payload = canonical_json_bytes({
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": "a" * 64,
+        "entities": [],
+    })
+    request = {
+        "schema_version": 2,
+        "identity_authority": "producer_manifest",
+        "source_artifact": {"sha256": "a" * 64},
+        "identity_authority_artifact": {
+            "relative_path": "authority_artifact_v1.json",
+            "media_type": "application/json",
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "canonical_json_base64": base64.b64encode(payload).decode("ascii"),
+        },
+    }
+    for field in ("identity_authority", "source_artifact"):
+        malformed = dict(request)
+        malformed.pop(field)
+        with pytest.raises(component.ComponentRunError, match="request_invalid"):
+            component._external_authority_payload(malformed)
+    malformed = dict(request)
+    malformed["identity_authority"] = []
+    with pytest.raises(component.ComponentRunError, match="request_invalid"):
+        component._external_authority_payload(malformed)
 
 
 def test_nextflow_stub_smoke_preserves_candidate_identity(tmp_path: Path) -> None:
