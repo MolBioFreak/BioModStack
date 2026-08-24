@@ -1394,6 +1394,7 @@ async def append_attempt_log_chunk(
                 created_at=now(),
             )
         )
+        await session.flush()
         stream = ExperimentLogStream(
             resource_id=stream_id,
             attempt_id=attempt.resource_id,
