@@ -467,7 +467,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Reconnect is a trusted local BMS-host recovery action; it is not available through Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Analyze existing data</button>
+                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
                     <button
                         type="button"
                         disabled={reconnectMk1d.isPending}

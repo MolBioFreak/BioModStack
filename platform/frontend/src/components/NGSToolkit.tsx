@@ -4156,30 +4156,27 @@ export function NGSToolkit() {
                         <button
                             onClick={() => selectView('launch')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'launch'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'launch' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
-                            Analyze existing data
+                            Data Analysis
                         </button>
                         <button
                             onClick={() => selectView('instrument')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'instrument'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'instrument' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
                             Instrument setup
                         </button>
                         <button
                             onClick={() => selectView('runs')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'runs'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'runs' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
                             Runs
                         </button>

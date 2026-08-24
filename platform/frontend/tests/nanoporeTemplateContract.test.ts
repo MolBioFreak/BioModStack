@@ -214,7 +214,12 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     );
 
     assert.match(ngsToolkit, /type ToolkitView = NgsToolkitView/u);
+    assert.match(ngsToolkit, /Data Analysis/u);
     assert.match(ngsToolkit, /Instrument setup/u);
+    assert.doesNotMatch(ngsToolkit, /Analyze existing data/u);
+    assert.doesNotMatch(ngsToolkit, /style=\{view === '(?:launch|instrument|runs)' \? \{ backgroundColor: 'var\(--accent-secondary\)' \} : undefined\}/u);
+    assert.match(ngsToolkit, /bg-\[var\(--accent-primary\)\]\/20 ring-1 ring-\[var\(--accent-primary\)\]\/50 text-\[var\(--accent-primary\)\]/u);
+    assert.match(panel, /Data Analysis/u);
     assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);
     assert.match(api, /fetchOntDeviceStatus/u);
