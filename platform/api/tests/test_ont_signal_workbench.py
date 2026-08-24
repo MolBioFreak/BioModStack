@@ -2434,7 +2434,7 @@ async def test_leased_calibration_worker_recovers_cancels_and_publishes_only_onc
         assert recovered.claim_token is None
         assert recovered.lease_expires_at is None
         assert recovered.attempt == 1
-        assert recovered.stage_receipts["lease_recovery"]["expired_attempt"] == 1
+        assert recovered.stage_receipts["lease_recoveries"][-1]["expired_attempt"] == 1
 
 
 @pytest.mark.asyncio

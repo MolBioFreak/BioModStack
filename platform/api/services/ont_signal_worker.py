@@ -427,6 +427,29 @@ class RetainedParentSet:
         self.close()
 
 
+def _append_lease_recovery_receipt(
+    receipts: dict[str, Any],
+    *,
+    expired_attempt: int,
+    recovered_at: datetime,
+    max_attempts: int,
+) -> dict[str, Any]:
+    prior = receipts.get("lease_recoveries", [])
+    if not isinstance(prior, list):
+        raise RuntimeError("lease recovery receipt history is malformed")
+    return {
+        **receipts,
+        "lease_recoveries": [
+            *prior,
+            {
+                "recovered_at": recovered_at.isoformat(),
+                "expired_attempt": expired_attempt,
+                "max_attempts": max_attempts,
+            },
+        ],
+    }
+
+
 class OntSignalWorker:
     """Single-owner leased worker for move validation, reusable mapping, and bounded renders."""
 
@@ -1141,14 +1164,12 @@ class OntSignalWorker:
                         else "stage_receipts"
                     )
                     receipts = dict(getattr(row, receipt_field, {}) or {})
-                    values[receipt_field] = {
-                        **receipts,
-                        "lease_recovery": {
-                            "recovered_at": now.isoformat(),
-                            "expired_attempt": row.attempt,
-                            "max_attempts": SIGNAL_JOB_MAX_ATTEMPTS,
-                        },
-                    }
+                    values[receipt_field] = _append_lease_recovery_receipt(
+                        receipts,
+                        expired_attempt=row.attempt,
+                        recovered_at=now,
+                        max_attempts=SIGNAL_JOB_MAX_ATTEMPTS,
+                    )
                     if not cancelled and row.attempt >= SIGNAL_JOB_MAX_ATTEMPTS:
                         values.update(
                             {

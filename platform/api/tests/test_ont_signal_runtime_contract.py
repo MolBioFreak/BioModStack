@@ -374,6 +374,30 @@ def test_calibration_fasta_index_cleanup_rejects_symlink(tmp_path: Path) -> None
     assert target.read_text(encoding="utf-8") == "authority"
 
 
+def test_lease_recovery_receipt_preserves_legacy_and_appends() -> None:
+    recovered_at = datetime(2026, 8, 24, 18, 31, 10)
+    legacy = {"expired_attempt": 1, "max_attempts": 3, "recovered_at": "legacy"}
+
+    receipts = worker_module._append_lease_recovery_receipt(
+        {
+            "request_identity_sha256": "9" * 64,
+            "lease_recovery": legacy,
+        },
+        expired_attempt=2,
+        recovered_at=recovered_at,
+        max_attempts=3,
+    )
+
+    assert receipts["lease_recovery"] == legacy
+    assert receipts["lease_recoveries"] == [
+        {
+            "expired_attempt": 2,
+            "max_attempts": 3,
+            "recovered_at": recovered_at.isoformat(),
+        }
+    ]
+
+
 def test_legacy_bam_model_provenance_requires_exact_exhaustive_read_groups() -> None:
     model = "dna_r10.4.1_e8.2_400bps_sup@v4.3.0"
     header = {
