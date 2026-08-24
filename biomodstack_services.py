@@ -1166,6 +1166,33 @@ def render_workflow_slice(lane: str) -> str:
     )
 
 
+def _ont_squigualiser_runtime_identity(project_root: Path) -> tuple[str, str]:
+    policy_path = (
+        project_root
+        / "platform"
+        / "api"
+        / "config"
+        / "ont_signal_workbench"
+        / "runtime_policy_v1.json"
+    )
+    if not policy_path.is_file():
+        return "", ""
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ServiceManagerError("ONT Squigualiser runtime policy is unreadable") from exc
+    if not isinstance(policy, Mapping):
+        raise ServiceManagerError("ONT Squigualiser runtime policy must be an object")
+    runtime_id = str(policy.get("runtime_id", "")).strip().lower()
+    oci_digest = str(policy.get("oci_digest", "")).strip().lower()
+    if (
+        runtime_id != oci_digest
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", runtime_id)
+    ):
+        raise ServiceManagerError("ONT Squigualiser runtime policy identity is invalid")
+    return runtime_id, runtime_id.removeprefix("sha256:")
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -1381,6 +1408,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     ont_container_runtime = os.environ.get("BMS_ONT_CONTAINER_RUNTIME", "docker").strip() or "docker"
     ont_runtime_image = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE", "").strip()
     ont_runtime_digest = os.environ.get("BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST", "").strip()
+    ont_squigualiser_image, ont_squigualiser_digest = _ont_squigualiser_runtime_identity(root)
     ont_staging_root = os.environ.get(
         "BMS_ONT_RAW_SIGNAL_STAGING_ROOT",
         str(shared_data_root / "ont-raw-signal-staging"),
@@ -1510,6 +1538,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}
         Environment=BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}
         Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}
+        Environment=BMS_ONT_SQUIGUALISER_IMAGE={ont_squigualiser_image}
+        Environment=BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={ont_squigualiser_digest}
         Environment=BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}
         Environment=BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}
         Environment=BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}
