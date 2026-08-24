@@ -4,10 +4,14 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type Poi
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
     createLaunchContext,
+    getDomainRunGroup,
     getProjectSummary,
     getResultSurface,
     internalRouteHref,
     isPermissionError,
+    issuePreparedLaunchContext,
+    prepareDomainWorkflowPlanRevision,
+    retryDomainRunGroup,
     searchProjects,
     projectManagerErrorMessage,
     type JsonObject,
@@ -475,6 +479,54 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     ?? focusIdFromReadModel(summary);
                 if (!globalExperimentId || !domainExperimentId) {
                     throw new Error('The run has no validated Domain Experiment context.');
+                }
+                if (action === 'retry' && run.adapter_id === 'bms.core-job.esmfold2.adapter.v1') {
+                    const sourceAttempt = run.attempts.at(-1);
+                    const binding = sourceAttempt?.binding_receipt;
+                    const workflowRevisionId = binding && typeof binding.workflow_revision_id === 'string'
+                        ? binding.workflow_revision_id
+                        : null;
+                    if (!workflowRevisionId) {
+                        throw new Error('The failed ESMFold2 attempt has no immutable workflow revision binding.');
+                    }
+                    const group = await getDomainRunGroup(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.batch_or_run_group_id,
+                    );
+                    const preparation = await prepareDomainWorkflowPlanRevision(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.workflow_id,
+                        workflowRevisionId,
+                        [],
+                    );
+                    const returnQuery = new URLSearchParams({
+                        focus: globalExperimentId,
+                        selected: `workflow_run:${run.run_id}`,
+                    });
+                    const launchContext = await issuePreparedLaunchContext(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        preparation.preparation_id,
+                        `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`,
+                    );
+                    await retryDomainRunGroup(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.batch_or_run_group_id,
+                        group.generation,
+                        [{
+                            run_id: run.run_id,
+                            preparation_id: preparation.preparation_id,
+                            launch_context_id: launchContext.launch_context_id,
+                        }],
+                    );
+                    return { kind: 'refresh' as const };
                 }
                 const query = new URLSearchParams({
                     workspace_id: projectId,
