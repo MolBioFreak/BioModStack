@@ -30,4 +30,5 @@ test('BioXP v2 Y wire types match the robot-owned authority schema', () => {
     assert.match(client, /command_queue/);
     assert.match(client, /request_schema_version/);
     assert.match(client, /physical_position_verified/);
+    assert.match(client, /lifecycle_state: 'unbound' \| 'unprepared'/);
 });

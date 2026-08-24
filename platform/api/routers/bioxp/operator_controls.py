@@ -22,6 +22,9 @@ from services.bioxp.operator_models import (
     OperatorActionHistoryV2,
     OperatorActionRequestV2,
     OperatorEmptyInputsV2,
+    OperatorMoveAbsoluteInputsV2,
+    OperatorMoveStepsInputsV2,
+    OperatorMoveXYInputsV2,
     OperatorInterruptRequestV1,
     OperatorInterruptReceiptV1,
     OperatorMethodRequestV1,
@@ -38,6 +41,7 @@ from services.bioxp.operator_models import (
     OperatorReportCommandPageV1,
     OperatorReportCommandDetailV1,
     OperatorReportTransitionsV1,
+    OperatorReportCommandEvidencePageV1,
     OperatorReportPipettePageV1,
     OperatorReportPipetteDetailV1,
     OperatorReportPipetteChannelsV1,
@@ -48,6 +52,7 @@ from services.bioxp.operator_models import (
     OperatorReportPressureDetailV1,
     OperatorReportPressureSamplesV1,
     OperatorReportExportV1,
+    OperatorReportExportListV1,
     OperatorReportAuditHealthV1,
     OperatorReportExportRequestV1,
     OperatorReportExportMetadataV1,
@@ -79,6 +84,7 @@ def _report_params(
     protocol_job_id: str | None = None,
     protocol_action_id: str | None = None,
     lifecycle_stage_id: str | None = None,
+    lifecycle_attempt_id: str | None = None,
     outcome: str | None = None,
     event_source: str | None = None,
     pressure_stream_id: str | None = None,
@@ -109,6 +115,7 @@ def _report_params(
         "protocol_job_id": protocol_job_id,
         "protocol_action_id": protocol_action_id,
         "lifecycle_stage_id": lifecycle_stage_id,
+        "lifecycle_attempt_id": lifecycle_attempt_id,
         "outcome": outcome,
         "event_source": event_source,
         "pressure_stream_id": pressure_stream_id,
@@ -166,6 +173,8 @@ async def _proxy_operator_report_model(
 
 
 def _bms_export_download(model: Any, export_id: str) -> Any:
+    if getattr(model, "download", None) is None:
+        return model
     return model.model_copy(update={"download": f"/api/bioxp/operator-controls/reports/exports/{export_id}/download"})
 
 
@@ -282,19 +291,30 @@ def _translate_robot_error(exc: Exception) -> HTTPException:
 
 
 _V2_NORMAL_INPUT_TYPES = {
+    "oem.x.manual_panel_home": OperatorEmptyInputsV2,
+    "oem.x.move_steps": OperatorMoveStepsInputsV2,
+    "oem.x.move_absolute": OperatorMoveAbsoluteInputsV2,
     "oem.y.move_steps": OperatorYMoveStepsInputsV2,
     "oem.y.move_absolute": OperatorYMoveAbsoluteInputsV2,
     "oem.y.manual_panel_home": OperatorEmptyInputsV2,
-    "oem.y.diagnostic_home": OperatorEmptyInputsV2,
+    "oem.z.manual_home": OperatorEmptyInputsV2,
+    "oem.z.clear": OperatorEmptyInputsV2,
+    "oem.z.move_steps": OperatorMoveStepsInputsV2,
+    "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,
+    "oem.xy.move_absolute": OperatorMoveXYInputsV2,
+    "oem.xy.home": OperatorEmptyInputsV2,
 }
 
 
-def _validate_v2_action_inputs(action_id: str, request: OperatorActionRequestV2) -> None:
+def _validate_v2_action_inputs(action_id: str, request: OperatorActionRequestV2) -> dict[str, Any]:
     expected_type = _V2_NORMAL_INPUT_TYPES.get(action_id)
     if expected_type is None:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 normal operator action")
-    if not isinstance(request.inputs, expected_type):
-        raise HTTPException(status_code=422, detail="Action inputs do not match the closed action schema")
+    try:
+        validated = expected_type.model_validate(request.inputs)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Action inputs do not match the closed action schema") from exc
+    return validated.model_dump(mode="json")
 
 
 def _robot_request_body(request: Any) -> dict[str, Any]:
@@ -351,13 +371,15 @@ async def invoke_operator_action_v2(
     request: OperatorActionRequestV2,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceiptV2:
-    _validate_v2_action_inputs(action_id, request)
+    validated_inputs = _validate_v2_action_inputs(action_id, request)
+    robot_body = _robot_request_body(request)
+    robot_body["inputs"] = validated_inputs
     try:
         payload = await runtime.connection.request_active_v2_enqueue(
             "invoke_operator_action_v2",
             expected_generation=request.expected_connection_generation,
             path_params={"action_id": action_id},
-            json_data=_robot_request_body(request),
+            json_data=robot_body,
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
@@ -378,7 +400,7 @@ async def interrupt_operator_action_v1(
     request: OperatorInterruptRequestV1,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorInterruptReceiptV1:
-    if action_id != "oem.y.stop":
+    if action_id not in {"oem.x.stop", "oem.y.stop", "oem.z.stop", "oem.z.abort", "oem.abort_all"}:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 interrupt action")
     try:
         payload = await runtime.connection.request_active_safety_interrupt(
@@ -389,7 +411,10 @@ async def interrupt_operator_action_v1(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorInterruptReceiptV1, payload)
+    receipt = _validate(OperatorInterruptReceiptV1, payload)
+    if receipt.action_id != action_id:
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched interrupt receipt")
+    return receipt
 
 
 @router.get("/operator-controls/v2/history", response_model=OperatorActionHistoryV2)
@@ -777,6 +802,22 @@ async def operator_report_command_transitions(command_id: str, runtime: BioXpRun
     return await _proxy_operator_report_model(runtime, "operator_report_command_transitions", OperatorReportTransitionsV1, path_params={"command_id": command_id})
 
 
+@router.get("/operator-controls/reports/commands/{command_id}/evidence", response_model=OperatorReportCommandEvidencePageV1)
+async def operator_report_command_evidence(
+    command_id: str,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> OperatorReportCommandEvidencePageV1:
+    return await _proxy_operator_report_model(
+        runtime,
+        "operator_report_command_evidence",
+        OperatorReportCommandEvidencePageV1,
+        params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+        path_params={"command_id": command_id},
+    )
+
+
 @router.get("/operator-controls/reports/pipette", response_model=OperatorReportPipettePageV1)
 async def operator_report_pipette(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
@@ -867,6 +908,27 @@ async def operator_report_export_create(
         raise _translate_robot_error(exc) from exc
     receipt = _validate(OperatorReportExportV1, payload)
     return _bms_export_download(receipt, receipt.export_id)
+
+
+@router.get("/operator-controls/reports/exports", response_model=OperatorReportExportListV1)
+async def operator_report_export_list(
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> OperatorReportExportListV1:
+    listing = await _proxy_operator_report_model(
+        runtime,
+        "operator_report_export_list",
+        OperatorReportExportListV1,
+        params={"limit": limit},
+    )
+    return listing.model_copy(
+        update={
+            "items": [
+                _bms_export_download(item, item.export_id) if item.download else item
+                for item in listing.items
+            ]
+        }
+    )
 
 
 @router.get("/operator-controls/reports/exports/{export_id}", response_model=OperatorReportExportMetadataV1)

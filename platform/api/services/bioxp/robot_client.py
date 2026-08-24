@@ -74,6 +74,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_report_commands": ("GET", "/operator/reports/commands", 10.0),
     "operator_report_command_detail": ("GET", "/operator/reports/commands/{command_id}", 10.0),
     "operator_report_command_transitions": ("GET", "/operator/reports/commands/{command_id}/transitions", 10.0),
+    "operator_report_command_evidence": ("GET", "/operator/reports/commands/{command_id}/evidence", 10.0),
     "operator_report_pipette": ("GET", "/operator/reports/pipette", 10.0),
     "operator_report_pipette_detail": ("GET", "/operator/reports/pipette/{pipette_operation_id}", 10.0),
     "operator_report_pipette_channels": ("GET", "/operator/reports/pipette/{pipette_operation_id}/channels", 10.0),
@@ -85,6 +86,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_report_pressure_samples": ("GET", "/operator/reports/pressure-streams/{stream_session_id}/samples", 10.0),
     "operator_report_audit_health": ("GET", "/operator/audit-health", 10.0),
     "operator_report_export_create": ("POST", "/operator/reports/exports", 30.0),
+    "operator_report_export_list": ("GET", "/operator/reports/exports", 10.0),
     "operator_report_export_detail": ("GET", "/operator/reports/exports/{export_id}", 10.0),
     "operator_report_export_download": ("GET", "/operator/reports/exports/{export_id}/download", 30.0),
 }

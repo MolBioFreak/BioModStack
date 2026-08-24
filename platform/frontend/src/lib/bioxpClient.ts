@@ -201,10 +201,17 @@ export interface BioXpOperatorDashboardXAxis {
             left_switch_disabled?: boolean | null;
             right_switch_disabled?: boolean | null;
             profile_verified?: boolean;
-            switch_mask_verified?: boolean;
+            switch_mask_verified?: boolean | null;
+            switch_mask_tuple?: Record<string, number | null>;
+            switch_mask_policy?: 'observed_only_oem_source_omits_x_writes';
         };
         profile?: { verified?: boolean };
-        switch_masks?: { verified?: boolean };
+        switch_masks?: {
+            expected?: Record<string, number>;
+            verified?: boolean | null;
+            observed?: Record<string, number | null> | null;
+            policy?: 'observed_only_oem_source_omits_x_writes';
+        };
         bound: boolean;
         physical_position_verified: false;
     };
@@ -235,9 +242,19 @@ export interface BioXpOperatorDashboard {
         status: BioXpOperatorDashboardAxis | null;
         provider: {
             bound?: boolean;
+            board?: 4;
+            motor?: 1;
             state?: string;
             expected_startup_stage?: string | null;
             startup_terminal_state?: string | null;
+            switch_mask_policy?: 'observed_only_oem_source_omits_z_writes' | null;
+            switch_mask_tuple?: Record<'12' | '13', number | null> | null;
+            terminal_state?: {
+                switch_mask_policy?: 'observed_only_oem_source_omits_z_writes' | null;
+                switch_mask_tuple?: Record<'12' | '13', number | null> | null;
+                position_steps?: number | null;
+                speed_steps_s?: number | null;
+            } | null;
             reference_state?: string;
             awaiting_observation_receipt_id?: string | null;
             last_failure?: unknown;
@@ -245,8 +262,6 @@ export interface BioXpOperatorDashboard {
         snapshot_freshness: Record<string, unknown>;
         last_failure: unknown;
         authority: string;
-        board: number;
-        motor: number;
     };
     temperatures: Array<{ sensor: string; label: string; unit: '°C'; temperature_c: number | null; available: boolean }>;
     pipettes: BioXpPipettes;
@@ -316,7 +331,7 @@ export interface BioXpYAxisV2 {
     prior_board_epoch: number | null;
     active_board_epoch: number | null;
     prepared_board_epoch: number | null;
-    lifecycle_state: 'unprepared' | 'prepared_unreferenced' | 'referenced_ready' | 'generation_stale' | 'reconciliation_required' | 'faulted';
+    lifecycle_state: 'unbound' | 'unprepared' | 'prepared_unreferenced' | 'referenced_ready' | 'generation_stale' | 'reconciliation_required' | 'faulted';
     reference_state: 'unreferenced' | 'referenced' | 'generation_stale' | 'reconciliation_required';
     position_steps: number | null;
     position_reply_valid: boolean;
@@ -430,6 +445,19 @@ interface BioXpOperatorMethodV1Envelope {
 export type BioXpOperatorMethodV1Request =
     | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.move_absolute'; inputs: { x_steps: number; y_steps: number } })
     | (BioXpOperatorMethodV1Envelope & { method_action_id: 'oem.xy.home'; inputs: Record<string, never> });
+
+export function assertBioXpOperatorMethodV1Request(request: BioXpOperatorMethodV1Request): void {
+    assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.method_action_id === 'oem.xy.move_absolute'
+        && (!Number.isSafeInteger(request.inputs.x_steps)
+            || !Number.isSafeInteger(request.inputs.y_steps)
+            || request.inputs.x_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.x_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS
+            || request.inputs.y_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.y_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
+        throw new Error('XY method positions must fit signed int32');
+    }
+}
 export interface BioXpPipetteHardwareEvidence {
     ok: boolean;
     hardware_truth_level?: 'hardware_query' | 'unparsed_hardware_reply' | 'no_readback' | null;
@@ -888,10 +916,10 @@ export interface BioXpOperatorReportFilters {
 }
 
 export interface BioXpOperatorReportSnapshot {
-    database_identity?: string;
-    schema_version?: number;
-    identity_version?: number | null;
-    database_path_exposed?: boolean;
+    database_incarnation_id?: string;
+    schema_identity?: Record<string, unknown>;
+    release_identity?: Record<string, unknown>;
+    source_high_waters?: Record<string, number>;
     high_water_sequence?: number;
     high_water_rowid?: number;
 }
@@ -928,6 +956,7 @@ export interface BioXpOperatorReportCommandRow {
     delivery_verified?: boolean;
     controller_acknowledged?: boolean;
     completion_verified?: boolean;
+    semantic_query_response_verified?: boolean;
     physical_effect_verified?: boolean;
     evidence_state?: string | null;
 }
@@ -959,12 +988,23 @@ export interface BioXpOperatorReportPipette {
     delivery_verified?: boolean;
     controller_acknowledged?: boolean;
     completion_verified?: boolean;
+    semantic_query_response_verified?: boolean;
     physical_effect_verified?: boolean;
     evidence_state?: string | null;
     channels?: Array<Record<string, unknown>>;
     exchanges?: Array<Record<string, unknown>>;
     events?: Array<Record<string, unknown>>;
     pressure_streams?: Array<Record<string, unknown>>;
+}
+
+export interface BioXpOperatorReportPipettePage {
+    filters?: BioXpOperatorReportFilters;
+    snapshot?: BioXpOperatorReportSnapshot;
+    returned_count?: number;
+    filtered_total?: number;
+    has_more?: boolean;
+    next_cursor?: string | null;
+    pipette?: BioXpOperatorReportPipette[];
 }
 
 export interface BioXpOperatorReportCommandDetail extends BioXpOperatorReportCommandRow {
@@ -988,12 +1028,33 @@ export interface BioXpOperatorReportPressureStreams {
 
 export interface BioXpOperatorReportExport {
     export_id: string;
+    evidence_artifact_id: string;
     status: string;
     format: 'json' | 'csv';
     row_count: number;
     sha256: string;
     byte_count: number;
+    release_identity: Record<string, unknown>;
     download: string;
+}
+
+export interface BioXpOperatorReportExportList {
+    items: Array<{
+        export_id: string;
+        format: string;
+        row_count: number;
+        sha256: string;
+        byte_count: number;
+        status: string;
+        created_at: number | string;
+        publication_state: string;
+        evidence_state: string;
+        legal_hold: boolean;
+        evidence_available: boolean;
+        download: string | null;
+    }>;
+    returned_count: number;
+    limit: number;
 }
 
 const operatorReportSummaryKey = ['bioxp', 'operator-reports', 'summary'] as const;
@@ -1167,10 +1228,10 @@ export const useBioXpOperatorControlCatalogV2 = (
     refetchIntervalInBackground: false,
 });
 
-export const BIOXP_Y_RELATIVE_MIN_STEPS = -102_936;
-export const BIOXP_Y_RELATIVE_MAX_STEPS = 102_936;
-export const BIOXP_Y_ABSOLUTE_MIN_STEPS = 0;
-export const BIOXP_Y_ABSOLUTE_MAX_STEPS = 102_956;
+export const BIOXP_Y_RELATIVE_MIN_STEPS = -(2 ** 31);
+export const BIOXP_Y_RELATIVE_MAX_STEPS = 2 ** 31 - 1;
+export const BIOXP_Y_ABSOLUTE_MIN_STEPS = -(2 ** 31);
+export const BIOXP_Y_ABSOLUTE_MAX_STEPS = 2 ** 31 - 1;
 
 function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
     for (const [key, epoch] of Object.entries(value)) {
@@ -1182,17 +1243,32 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
 
 function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
-    if (request.action_id === 'oem.y.move_steps'
+    if ((request.action_id === 'oem.x.move_steps' || request.action_id === 'oem.y.move_steps' || request.action_id === 'oem.z.move_steps')
         && (!Number.isSafeInteger(request.inputs.steps)
             || request.inputs.steps < BIOXP_Y_RELATIVE_MIN_STEPS
             || request.inputs.steps > BIOXP_Y_RELATIVE_MAX_STEPS)) {
-        throw new Error('Y relative steps must be an integer from -102936 through 102936');
+        throw new Error('Relative steps must fit signed int32');
     }
     if (request.action_id === 'oem.y.move_absolute'
         && (!Number.isSafeInteger(request.inputs.target_steps)
             || request.inputs.target_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
             || request.inputs.target_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
-        throw new Error('Y absolute target must be an integer from 0 through 102956');
+        throw new Error('Y absolute target must fit signed int32');
+    }
+    if ((request.action_id === 'oem.x.move_absolute' || request.action_id === 'oem.z.move_absolute')
+        && (!Number.isSafeInteger(request.inputs.position_steps)
+            || request.inputs.position_steps < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.position_steps > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
+        throw new Error('Absolute position must fit signed int32');
+    }
+    if (request.action_id === 'oem.xy.move_absolute'
+        && (!Number.isSafeInteger(request.inputs.x)
+            || !Number.isSafeInteger(request.inputs.y)
+            || request.inputs.x < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.x > BIOXP_Y_ABSOLUTE_MAX_STEPS
+            || request.inputs.y < BIOXP_Y_ABSOLUTE_MIN_STEPS
+            || request.inputs.y > BIOXP_Y_ABSOLUTE_MAX_STEPS)) {
+        throw new Error('XY absolute positions must fit signed int32');
     }
 }
 
@@ -1205,13 +1281,18 @@ interface BioXpOperatorActionV2Envelope {
 }
 
 export type BioXpOperatorActionV2Request =
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home' | 'oem.y.diagnostic_home'; inputs: Record<string, never> });
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> });
 
 export interface BioXpOperatorInterruptV1Request {
     expected_connection_generation: number;
     schema_version: 'bioxp.operator_interrupt_request.v1';
+    idempotency_key: string;
     reason: string;
     observed_ownership_generation: number | null;
     observed_board_epoch_by_board: Record<string, number>;
@@ -1225,8 +1306,8 @@ export interface BioXpOperatorInterruptReceiptV1 {
     observed_board_epoch_by_board: Record<string, number>;
     interrupt_attempt_id: string;
     interrupt_id: string;
-    action_id: 'oem.y.stop';
-    scope: 'y';
+    action_id: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all';
+    scope: 'x' | 'y' | 'z' | 'aggregate';
     cutoff: number | null;
     active_command_id: string | null;
     active_command_ids: string[];
@@ -1234,21 +1315,25 @@ export interface BioXpOperatorInterruptReceiptV1 {
     x_safety_epoch: number | null;
     y_safety_epoch: number | null;
     z_safety_epoch: number | null;
-    oem_abort_latched: false;
+    oem_abort_latched: boolean;
     controller_stop_attempted: true;
+    source_call_completed: boolean;
+    source_return_ok: boolean;
     controller_stop_acknowledged: boolean;
     controller_response: unknown;
+    controller_response_evidence?: {
+        evidence_id: string;
+        evidence_kind: 'controller_response';
+        content_sha256: string;
+        payload_bytes: number;
+    } | null;
     error: string | null;
     physical_effect_verified: false;
-    persistence_state: 'committed' | 'recovery_required' | 'fsync_fallback';
+    persistence_state: 'committed' | 'recovery_required';
     recovery_hold: boolean;
     transition_sequence: number | null;
     terminal_transition_sequences: number[];
-    persistence_fallback?: {
-        kind: 'serial206_interrupt_jsonl';
-        reason: string;
-        recorded_at: number;
-    } | null;
+    idempotent_replay?: boolean;
 }
 
 export const useInvokeBioXpOperatorActionV2 = () => {
@@ -1273,7 +1358,7 @@ export const useInvokeBioXpOperatorActionV2 = () => {
 export const useInterruptBioXpOperatorActionV1 = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: async ({ actionId, request }: { actionId: 'oem.y.stop'; request: BioXpOperatorInterruptV1Request }) => {
+        mutationFn: async ({ actionId, request }: { actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all'; request: BioXpOperatorInterruptV1Request }) => {
             assertCanonicalBoardEpochMap(request.observed_board_epoch_by_board);
             return (
                 await api.post<BioXpOperatorInterruptReceiptV1>(
@@ -1317,7 +1402,7 @@ export const useBioXpOperatorReceiptV2 = (
 
 export const useSubmitBioXpOperatorMethodV1 = () => useMutation({
     mutationFn: async (request: BioXpOperatorMethodV1Request) => {
-        assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+        assertBioXpOperatorMethodV1Request(request);
         return (
             await api.post<BioXpOperatorMethodV1>('/api/bioxp/operator-controls/v2/methods', request)
         ).data;
@@ -1481,6 +1566,19 @@ export const useBioXpOperatorReportCommandDetail = (commandId: string | null, en
     retry: false,
 });
 
+export const useBioXpOperatorReportPipette = (
+    connectionGeneration: number,
+    enabled = true,
+    filters?: BioXpOperatorReportFilters,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pipette', connectionGeneration, filters ?? null],
+    queryFn: async () => (await api.get<BioXpOperatorReportPipettePage>('/api/bioxp/operator-controls/reports/pipette', {
+        params: operatorReportParams(filters, 20),
+    })).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
+});
+
 export const useBioXpOperatorReportEvents = (
     connectionGeneration: number,
     enabled = true,
@@ -1518,6 +1616,19 @@ export const useCreateBioXpOperatorReportExport = () => useMutation({
         limit,
         ...(filters ?? {}),
     })).data,
+});
+
+export const useBioXpOperatorReportExports = (
+    connectionGeneration: number,
+    enabled = true,
+) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'exports', connectionGeneration],
+    queryFn: async () => (await api.get<BioXpOperatorReportExportList>(
+        '/api/bioxp/operator-controls/reports/exports',
+        { params: { limit: 20 } },
+    )).data,
+    enabled: enabled && connectionGeneration > 0,
+    retry: false,
 });
 
 export const useBioXpCameraStatus = (

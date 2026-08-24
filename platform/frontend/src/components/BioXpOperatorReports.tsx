@@ -4,8 +4,10 @@ import {
     useBioXpOperatorReportCommands,
     useBioXpOperatorReportCommandDetail,
     useBioXpOperatorReportEvents,
+    useBioXpOperatorReportPipette,
     useBioXpOperatorReportPressureStreams,
     useBioXpOperatorReportSummary,
+    useBioXpOperatorReportExports,
     useCreateBioXpOperatorReportExport,
 } from '../lib/bioxpClient';
 import type { BioXpOperatorReportCommandRow, BioXpOperatorReportFilters } from '../lib/bioxpClient';
@@ -76,7 +78,9 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
     const commandsQuery = useBioXpOperatorReportCommands(generation, connected, 25, cursor, filters);
     const detailQuery = useBioXpOperatorReportCommandDetail(selectedCommand, connected);
     const eventsQuery = useBioXpOperatorReportEvents(generation, connected, filters);
+    const pipetteQuery = useBioXpOperatorReportPipette(generation, connected, filters);
     const pressureQuery = useBioXpOperatorReportPressureStreams(generation, connected, filters);
+    const exportsQuery = useBioXpOperatorReportExports(generation, connected);
     const exportMutation = useCreateBioXpOperatorReportExport();
     const summary = connected && !summaryQuery.isError ? summaryQuery.data : undefined;
     const rows = connected && !commandsQuery.isError ? (commandsQuery.data?.commands ?? []) : [];
@@ -131,7 +135,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                 </div>
                 <div className="flex items-center gap-2 text-xs text-slate-300">
                     <span className="rounded bg-slate-900 px-2 py-1 font-mono">generation {generation || '—'}</span>
-                    <button type="button" className="rounded border border-slate-700 px-2 py-1 hover:border-cyan-500" onClick={() => void Promise.all([summaryQuery.refetch(), commandsQuery.refetch(), eventsQuery.refetch(), pressureQuery.refetch()])} disabled={!connected || summaryQuery.isFetching}>
+                    <button type="button" className="rounded border border-slate-700 px-2 py-1 hover:border-cyan-500" onClick={() => void Promise.all([summaryQuery.refetch(), commandsQuery.refetch(), eventsQuery.refetch(), pipetteQuery.refetch(), pressureQuery.refetch(), exportsQuery.refetch()])} disabled={!connected || summaryQuery.isFetching}>
                         Refresh
                     </button>
                 </div>
@@ -213,6 +217,8 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Recent runtime events</h3><p className="mt-1 text-xs text-slate-400">{eventsQuery.data?.returned_count ?? 0} events in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(eventsQuery.data?.events ?? []).map((event, index) => <li key={String(event.event_id ?? index)}>{display(event.observed_at)} · {display(event.event_kind)} · {display(event.command_id)}</li>)}</ul></div>
                     <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Pressure evidence</h3><p className="mt-1 text-xs text-slate-400">{pressureQuery.data?.returned_count ?? 0} pressure streams in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(pressureQuery.data?.pressure_streams ?? []).map((stream, index) => <li key={String(stream.stream_session_id ?? index)}>{display(stream.stream_session_id)} · channels {display(stream.channels)} · {display(stream.terminal_state)}</li>)}</ul></div>
+                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Pipette operations</h3><p className="mt-1 text-xs text-slate-400">{pipetteQuery.data?.returned_count ?? 0} pipette operations in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(pipetteQuery.data?.pipette ?? []).map((item, index) => <li key={String(item.pipette_operation_id ?? index)}>{display(item.operation)} · {display(item.status)} · {display(item.pipette_operation_id)}</li>)}</ul></div>
+                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Report exports</h3><p className="mt-1 text-xs text-slate-400">{exportsQuery.data?.returned_count ?? 0} retained exports.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(exportsQuery.data?.items ?? []).map((item) => <li key={item.export_id}>{display(item.format)} · {display(item.publication_state)} · {item.download ? <a className="text-cyan-200 underline" href={item.download}>download</a> : 'unavailable'}</li>)}</ul></div>
                 </div>
             )}
 

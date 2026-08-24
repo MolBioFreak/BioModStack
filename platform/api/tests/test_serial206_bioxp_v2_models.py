@@ -1,13 +1,14 @@
 import math
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from services.bioxp import operator_models
 from services.bioxp.operator_models import (
     OperatorActionReceiptV2,
     OperatorActionRequestV2,
     OperatorControlCatalogV2,
+    OperatorDashboard,
     OperatorDashboardV2,
     OperatorInterruptRequestV1,
     OperatorMethodRequestV1,
@@ -122,6 +123,42 @@ def test_v2_dashboard_requires_strict_y_axis_and_catalog_embeds_it():
     assert catalog.actions[0].action_id == "oem.y.move_steps"
 
 
+def test_v2_dashboard_accepts_robot_unbound_y_runtime_projection():
+    payload = dashboard_payload(board_state="unknown")
+    payload["y_axis"].update({
+        "lifecycle_state": "unbound",
+        "reference_state": "unreferenced",
+        "prior_board_epoch": None,
+        "active_board_epoch": None,
+        "prepared_board_epoch": None,
+        "profile_fingerprint": None,
+        "profile_readback_valid": False,
+    })
+    dashboard = OperatorDashboardV2.model_validate(payload)
+    assert dashboard.y_axis.lifecycle_state == "unbound"
+
+
+def test_v1_dashboard_z_axis_is_closed_and_requires_observed_only_switch_metadata():
+    adapter = TypeAdapter(OperatorDashboard.model_fields["z_axis"].annotation)
+    with pytest.raises(ValidationError):
+        adapter.validate_python({
+            "status": None,
+            "provider": {"bound": False},
+            "snapshot_freshness": {},
+            "last_failure": None,
+            "authority": "unbound",
+            "unexpected": True,
+        })
+    with pytest.raises(ValidationError):
+        adapter.validate_python({
+            "status": None,
+            "provider": {"bound": True},
+            "snapshot_freshness": {},
+            "last_failure": None,
+            "authority": "Serial206OemInitializationProvider",
+        })
+
+
 def test_v2_catalog_accepts_exact_y_stop_pair_and_unknown_board_authority():
     payload = dashboard_payload(board_state="unknown")
     payload["board4"]["prior_board_epoch"] = None
@@ -171,8 +208,6 @@ def test_v2_catalog_rejects_mismatched_interrupt_schema_pairs(interrupt, request
 
 @pytest.mark.parametrize("mutate", [
     lambda payload: payload["y_axis"].__setitem__("ownership_generation", 2),
-    lambda payload: payload["y_axis"].__setitem__("active_board_epoch", 3),
-    lambda payload: payload["y_axis"].__setitem__("prior_board_epoch", 0),
 ])
 def test_v2_dashboard_rejects_cross_field_authority_mismatch(mutate):
     payload = dashboard_payload()
@@ -213,7 +248,7 @@ def test_v2_requests_reject_noncanonical_board_epoch_keys(model, payload, field)
     assert field in str(caught.value)
 
 
-@pytest.mark.parametrize("steps", [-102_937, 102_937])
+@pytest.mark.parametrize("steps", [-(2 ** 31) - 1, 2 ** 31])
 def test_y_move_steps_rejects_values_outside_exact_robot_envelope(steps):
     with pytest.raises(ValidationError):
         OperatorActionRequestV2.model_validate({
@@ -263,8 +298,16 @@ def interrupt_receipt_payload(**overrides):
         "z_safety_epoch": 1,
         "oem_abort_latched": False,
         "controller_stop_attempted": True,
+        "source_call_completed": True,
+        "source_return_ok": True,
         "controller_stop_acknowledged": True,
         "controller_response": {"ok": True},
+        "controller_response_evidence": {
+            "evidence_id": "attempt:controller_response:digest",
+            "evidence_kind": "controller_response",
+            "content_sha256": "a" * 64,
+            "payload_bytes": 11,
+        },
         "error": None,
         "physical_effect_verified": False,
         "persistence_state": "committed",
@@ -276,10 +319,50 @@ def interrupt_receipt_payload(**overrides):
     return payload
 
 
+def test_action_request_keeps_wire_inputs_unambiguous_until_route_validation():
+    parsed = OperatorActionRequestV2.model_validate({
+        "expected_connection_generation": 2,
+        "schema_version": "bioxp.operator_action_request.v2",
+        "idempotency_key": "typed-action-inputs",
+        "expected_ownership_generation": 7,
+        "expected_board_epoch_by_board": {},
+        "inputs": {"steps": -123},
+    })
+    assert type(parsed.inputs) is dict
+    assert parsed.inputs == {"steps": -123}
+
+
+def test_interrupt_evidence_pointer_rejects_extra_or_malformed_fields():
+    assert OperatorInterruptReceiptV1 is not None
+    malformed = interrupt_receipt_payload()
+    malformed["controller_response_evidence"] = {
+        **malformed["controller_response_evidence"],
+        "content_sha256": "not-a-digest",
+        "unexpected": True,
+    }
+    with pytest.raises(ValidationError):
+        OperatorInterruptReceiptV1.model_validate(malformed)
+
+
+def test_interrupt_receipt_rejects_success_without_completed_source_call():
+    assert OperatorInterruptReceiptV1 is not None
+    with pytest.raises(ValidationError):
+        OperatorInterruptReceiptV1.model_validate(
+            interrupt_receipt_payload(
+                source_call_completed=False,
+                source_return_ok=True,
+                error="source_call_not_completed",
+            )
+        )
+
+
 def test_interrupt_receipt_closes_identity_controller_persistence_and_recovery_semantics():
     assert OperatorInterruptReceiptV1 is not None
     committed = OperatorInterruptReceiptV1.model_validate(interrupt_receipt_payload())
     assert committed.action_id == "oem.y.stop"
+    assert committed.controller_response_evidence.payload_bytes == 11
+    replay = OperatorInterruptReceiptV1.model_validate(interrupt_receipt_payload(idempotent_replay=True))
+    assert replay.idempotent_replay is True
     fallback_payload = interrupt_receipt_payload(
         interrupt_id="attempt-2",
         interrupt_attempt_id="attempt-2",
@@ -303,13 +386,13 @@ def test_interrupt_receipt_closes_identity_controller_persistence_and_recovery_s
         transition_sequence=None,
         terminal_transition_sequences=[],
     )
-    assert OperatorInterruptReceiptV1.model_validate(fallback_payload).recovery_hold is True
+    with pytest.raises(ValidationError):
+        OperatorInterruptReceiptV1.model_validate(fallback_payload)
     for invalid in [
         interrupt_receipt_payload(action_id="oem.x.stop"),
         interrupt_receipt_payload(controller_stop_attempted=False),
         interrupt_receipt_payload(physical_effect_verified=True),
         interrupt_receipt_payload(persistence_state="committed", recovery_hold=True),
-        interrupt_receipt_payload(controller_stop_acknowledged=False, error=None),
     ]:
         with pytest.raises(ValidationError):
             OperatorInterruptReceiptV1.model_validate(invalid)

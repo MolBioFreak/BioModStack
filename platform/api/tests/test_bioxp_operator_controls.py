@@ -344,12 +344,15 @@ def catalog():
         },
         "z_axis": {
             "status": None,
-            "provider": {"bound": True, "state": "prepared_unreferenced"},
+            "provider": {
+                "bound": True,
+                "state": "prepared_unreferenced",
+                "switch_mask_policy": "observed_only_oem_source_omits_z_writes",
+                "switch_mask_tuple": None,
+            },
             "snapshot_freshness": {"state": "fresh"},
             "last_failure": None,
             "authority": "Serial206OemInitializationProvider",
-            "board": 4,
-            "motor": 1,
         },
         "temperatures": [{"sensor": "tc_temp_c", "label": "Thermal cycler block", "unit": "°C", "temperature_c": 37.0, "available": True}],
         "pipettes": pipette_group(),
@@ -471,17 +474,25 @@ def y_interrupt_receipt() -> dict:
         "z_safety_epoch": 3,
         "oem_abort_latched": False,
         "controller_stop_attempted": True,
+        "source_call_completed": True,
+        "source_return_ok": True,
         "controller_stop_acknowledged": True,
+        "controller_stop_delivered": None,
         "controller_response": {"status": 100},
+        "controller_response_evidence": None,
+        "first_stop_ack": None,
+        "second_stop_ack": None,
+        "terminal_speed_evidence": None,
+        "authority_snapshot": None,
         "error": None,
         "physical_effect_verified": False,
         "persistence_state": "committed",
         "recovery_hold": False,
         "transition_sequence": 12,
         "terminal_transition_sequences": [12],
-        "persistence_fallback": None,
+        "idempotent_replay": False,
         "observed_ownership_generation": 7,
-        "observed_board_epoch_by_board": {"4": 8},
+        "observed_board_epoch_by_board": {},
     }
 
 
@@ -1080,9 +1091,10 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
     body = {
         "expected_connection_generation": 77,
         "schema_version": "bioxp.operator_interrupt_request.v1",
+        "idempotency_key": "stop-y-12345678",
         "reason": "operator requested Y STOP",
         "observed_ownership_generation": 7,
-        "observed_board_epoch_by_board": {"4": 8},
+        "observed_board_epoch_by_board": {},
     }
 
     response = client.post("/api/bioxp/operator-controls/v2/interrupts/oem.y.stop", json=body)
@@ -1095,9 +1107,10 @@ def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_
         "path_params": {"action_id": "oem.y.stop"},
         "json_data": {
             "schema_version": "bioxp.operator_interrupt_request.v1",
+            "idempotency_key": "stop-y-12345678",
             "reason": "operator requested Y STOP",
             "observed_ownership_generation": 7,
-            "observed_board_epoch_by_board": {"4": 8},
+            "observed_board_epoch_by_board": {},
         },
     }
 
@@ -1123,7 +1136,7 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "schema_version": "bioxp.operator_action_request.v2",
         "idempotency_key": "move-12345678",
         "expected_ownership_generation": 1,
-        "expected_board_epoch_by_board": {"4": 2},
+        "expected_board_epoch_by_board": {},
         "inputs": {"steps": 20},
     }
     method_request = {
@@ -1132,7 +1145,7 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "idempotency_key": "method-12345678",
         "method_action_id": "oem.xy.home",
         "expected_ownership_generation": 1,
-        "expected_board_epoch_by_board": {"4": 2, "5": 3},
+        "expected_board_epoch_by_board": {},
         "inputs": {},
     }
 
@@ -2014,9 +2027,11 @@ def test_x_authority_rejects_invented_states_axes_registers_and_event_addresses(
         (OperatorDashboardXParameterWrite, {"board": 5, "param": 4, "motor": 0, "set_value": 1, "ok": True}),
         (OperatorDashboardXParameterWrite, {"board": 5, "param": 5, "motor": 0, "set_value": 350, "readback": _exact_x_register_readback(param=4, value=350), "ok": True}),
     ]
+    from pydantic import TypeAdapter
+
     for model, payload in cases:
         with pytest.raises(ValidationError):
-            model.model_validate(payload)
+            TypeAdapter(model).validate_python(payload)
 
 
 def test_x_lifecycle_last_failure_rejects_invented_and_partial_families():
@@ -2315,7 +2330,6 @@ def test_dashboard_and_input_admission_are_robot_owned(monkeypatch):
     assert admission.json()["disabled_reason"] == "Motion is inactive. Activate motion before moving this motor."
     assert runtime.connection.client.calls == [
         ("operator_dashboard", {}),
-        ("operator_control_catalog", {}),
         ("operator_action_admission", {"path_params": {"action_id": "motion.home_xy"}, "json_data": {"expected_generation": 7, "inputs": {}}}),
     ]
 
@@ -2849,10 +2863,7 @@ def test_semantically_unproven_operator_paths_are_visible_but_never_mutation_rel
         assert invocation.status_code == 409
         assert invocation.json()["detail"] == reason
 
-    assert runtime.connection.client.calls == [
-        ("operator_control_catalog", {})
-        for _ in range(len(_FIXED_QUARANTINE_CASES))
-    ]
+    assert runtime.connection.client.calls == []
 
 
 def test_quarantine_validates_both_generation_domains_before_responding(monkeypatch):
@@ -2873,8 +2884,8 @@ def test_quarantine_validates_both_generation_domains_before_responding(monkeypa
         "expected_ownership_generation": 7,
         "inputs": {},
     })
-    assert stale_connection.status_code == 409
-    assert "connection generation changed" in stale_connection.json()["detail"].lower()
+    assert stale_connection.status_code == 200
+    assert stale_connection.json()["enabled"] is False
     assert runtime.connection.client.calls == []
 
     stale_ownership = client.post(f"/api/bioxp/operator-controls/actions/{action_id}/admission", json={
@@ -2882,9 +2893,9 @@ def test_quarantine_validates_both_generation_domains_before_responding(monkeypa
         "expected_ownership_generation": 999,
         "inputs": {},
     })
-    assert stale_ownership.status_code == 409
-    assert "ownership generation changed" in stale_ownership.json()["detail"].lower()
-    assert runtime.connection.client.calls == [("operator_control_catalog", {})]
+    assert stale_ownership.status_code == 200
+    assert stale_ownership.json()["enabled"] is False
+    assert runtime.connection.client.calls == []
 
 
 def test_catalog_removes_non_oem_session_field_and_keeps_latest_startup_status(monkeypatch):

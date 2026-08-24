@@ -103,6 +103,7 @@ const state = vi.hoisted(() => ({
     historyCalls: [] as number[],
     yInvokeCalls: [] as Array<Record<string, unknown>>,
     yInterruptCalls: [] as Array<Record<string, unknown>>,
+    methodCalls: [] as Array<Record<string, unknown>>,
     yInvokeError: null as unknown,
     yInterruptError: null as unknown,
     yInvokeData: undefined as Record<string, unknown> | undefined,
@@ -278,16 +279,17 @@ const xHomeAction = () => ({
 });
 
 vi.mock('../../src/lib/bioxpClient', () => ({
-    BIOXP_Y_RELATIVE_MIN_STEPS: -102_936,
-    BIOXP_Y_RELATIVE_MAX_STEPS: 102_936,
-    BIOXP_Y_ABSOLUTE_MIN_STEPS: 0,
-    BIOXP_Y_ABSOLUTE_MAX_STEPS: 102_956,
+    BIOXP_Y_RELATIVE_MIN_STEPS: -2_147_483_648,
+    BIOXP_Y_RELATIVE_MAX_STEPS: 2_147_483_647,
+    BIOXP_Y_ABSOLUTE_MIN_STEPS: -2_147_483_648,
+    BIOXP_Y_ABSOLUTE_MAX_STEPS: 2_147_483_647,
     useBioXpStatus: () => ({
         data: {
             connection: {
                 active: true,
                 reachable: true,
                 configured: true,
+                runtime_ready: true,
                 generation: state.connectionGeneration,
                 freshness_budget_seconds: 1800,
                 last_error: null,
@@ -340,6 +342,13 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: state.yInterruptError,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.yInterruptCalls.push(payload),
+        reset: vi.fn(),
+    }),
+    useSubmitBioXpOperatorMethodV1: () => ({
+        data: undefined,
+        error: null,
+        isPending: false,
+        mutate: (payload: Record<string, unknown>) => state.methodCalls.push(payload),
         reset: vi.fn(),
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
@@ -437,6 +446,7 @@ beforeEach(() => {
     state.historyCalls = [];
     state.yInvokeCalls = [];
     state.yInterruptCalls = [];
+    state.methodCalls = [];
     state.yInvokeError = null;
     state.yInterruptError = null;
     state.yInvokeData = undefined;
@@ -455,10 +465,17 @@ beforeEach(() => {
         schema_version: 'bioxp.operator_control_catalog.v2',
         dashboard: structuredClone(state.v2Dashboard.data),
         actions: [
+            'oem.x.move_steps',
+            'oem.x.move_absolute',
+            'oem.x.manual_panel_home',
             'oem.y.move_steps',
             'oem.y.move_absolute',
             'oem.y.manual_panel_home',
             'oem.y.diagnostic_home',
+            'oem.z.move_steps',
+            'oem.z.move_absolute',
+            'oem.z.manual_home',
+            'oem.z.clear',
         ].map((action_id) => ({
             action_id,
             request_schema_version: 'bioxp.operator_action_request.v2',
@@ -466,14 +483,20 @@ beforeEach(() => {
             interrupt: false,
             enabled: true,
             disabled_reason: null,
-        })).concat([{
-            action_id: 'oem.y.stop',
+        })).concat([
+            'oem.x.stop',
+            'oem.y.stop',
+            'oem.z.stop',
+            'oem.z.abort',
+            'oem.abort_all',
+        ].map((action_id) => ({
+            action_id,
             request_schema_version: 'bioxp.operator_interrupt_request.v1',
             response_schema_version: 'bioxp.operator_interrupt_receipt.v1',
             interrupt: true,
             enabled: true,
             disabled_reason: null,
-        }]),
+        }))),
     };
     state.history.data.receipts = [];
     state.dashboard.data.motion = { enabled: true, reason: null };
@@ -592,28 +615,31 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(goAbsolute.disabled).toBe(false);
 
         await act(async () => movePositive.click());
-        expect(state.invokeCalls[0]).toEqual({
-            actionId: 'oem.x.move_steps',
-            connectionGeneration: 1,
-            ownershipGeneration: 1,
+        expect(state.yInvokeCalls[0]).toMatchObject({ request: {
+            action_id: 'oem.x.move_steps',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: {},
             inputs: { steps: 10000 },
-        });
+        } });
 
         await act(async () => home.click());
-        expect(state.invokeCalls[1]).toEqual({
-            actionId: 'oem.x.manual_panel_home',
-            connectionGeneration: 1,
-            ownershipGeneration: 1,
+        expect(state.yInvokeCalls[1]).toMatchObject({ request: {
+            action_id: 'oem.x.manual_panel_home',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: {},
             inputs: {},
-        });
+        } });
 
         await act(async () => goAbsolute.click());
-        expect(state.invokeCalls[2]).toEqual({
-            actionId: 'oem.x.move_absolute',
-            connectionGeneration: 1,
-            ownershipGeneration: 1,
+        expect(state.yInvokeCalls[2]).toMatchObject({ request: {
+            action_id: 'oem.x.move_absolute',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: {},
             inputs: { position_steps: 60 },
-        });
+        } });
         expect(state.admissionCalls).toBe(0);
     });
 
@@ -641,11 +667,13 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(goAbsolute.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         await act(async () => movePositive.click());
-        expect(state.invokeCalls[0]).toEqual({
-            actionId: 'oem.x.move_steps',
-            connectionGeneration: 1,
-            ownershipGeneration: 1,
-            inputs: { steps: 10000 },
+        expect(state.yInvokeCalls[0]).toMatchObject({
+            request: {
+                action_id: 'oem.x.move_steps',
+                expected_connection_generation: 1,
+                expected_ownership_generation: 1,
+                inputs: { steps: 10000 },
+            },
         });
         expect(state.admissionCalls).toBe(0);
     });
@@ -681,7 +709,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         await act(async () => xGoAbsolute.click());
         await act(async () => zMovePositive.click());
         await act(async () => zGoAbsolute.click());
-        expect(state.invokeCalls.map((call) => ({ actionId: call.actionId, inputs: call.inputs }))).toEqual([
+        expect(state.yInvokeCalls.map((call) => {
+            const request = call.request as Record<string, unknown>;
+            return { actionId: request.action_id, inputs: request.inputs };
+        })).toEqual([
             { actionId: 'oem.x.move_steps', inputs: { steps: 10000 } },
             { actionId: 'oem.x.move_absolute', inputs: { position_steps: 100000 } },
             { actionId: 'oem.z.move_steps', inputs: { steps: 200000 } },
@@ -692,6 +723,12 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
     it('uses the robot action enabled flag as final X command authority', async () => {
         const xHome = state.catalog.data.actions.find((row) => row.action_id === 'oem.x.manual_panel_home')!;
         Object.assign(xHome, {
+            enabled: false,
+            disabled_reason: 'Robot denied X Home.',
+        });
+        const v2XHome = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
+            .find((row) => row.action_id === 'oem.x.manual_panel_home')!;
+        Object.assign(v2XHome, {
             enabled: false,
             disabled_reason: 'Robot denied X Home.',
         });
@@ -820,8 +857,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
 
-        expect(state.invokeCalls).toHaveLength(1);
-        expect(state.invokeCalls[0]).toMatchObject({ actionId: 'oem.x.move_steps' });
+        expect(state.yInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls[0]).toMatchObject({ request: { action_id: 'oem.x.move_steps' } });
     });
 
     it('re-enables X controls from the terminal receipt even when the dashboard snapshot lags (R-A3)', async () => {
@@ -907,10 +944,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(manualControls.textContent).toContain('Z Axis');
         expect(manualControls.textContent).toContain('Gripper');
         const inputs = [...section.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
-        expect(inputs[0]?.min).toBe('-102936');
-        expect(inputs[0]?.max).toBe('102936');
-        expect(inputs[1]?.min).toBe('0');
-        expect(inputs[1]?.max).toBe('102956');
+        expect(inputs[0]?.min).toBe('-2147483648');
+        expect(inputs[0]?.max).toBe('2147483647');
+        expect(inputs[1]?.min).toBe('-2147483648');
+        expect(inputs[1]?.max).toBe('2147483647');
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
         const stop = buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement;
@@ -924,36 +961,37 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
                 expected_connection_generation: 1,
                 schema_version: 'bioxp.operator_action_request.v2',
                 expected_ownership_generation: 1,
-                expected_board_epoch_by_board: { '4': 2 },
+                expected_board_epoch_by_board: {},
                 inputs: { steps: 1000 },
             },
         });
         await act(async () => stop.click());
-        expect(state.yInterruptCalls[0]).toEqual({
+        expect(state.yInterruptCalls[0]).toMatchObject({
             actionId: 'oem.y.stop',
             request: {
                 expected_connection_generation: 1,
                 schema_version: 'bioxp.operator_interrupt_request.v1',
-                reason: 'BMS operator requested addressed Serial-206 Y STOP',
+                reason: 'BMS operator requested recovered-OEM addressed Y STOP',
                 observed_ownership_generation: 1,
-                observed_board_epoch_by_board: { '4': 2 },
+                observed_board_epoch_by_board: {},
             },
         });
+        expect((state.yInterruptCalls[0].request as { idempotency_key?: unknown }).idempotency_key).toEqual(expect.any(String));
         const yCards = [...container.querySelectorAll('article')].filter((node) => node.querySelector('h3')?.textContent === 'Y Axis');
         expect(yCards).toEqual([section]);
     });
 
-    it('fails normal Y closed on any authority-version mismatch but keeps STOP independent', async () => {
-        (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).y_axis.state_version = 3;
+    it('treats ownership-generation mismatch as observational while keeping normal Y and STOP reachable', async () => {
+        (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).ownership_generation = 2;
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
-        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
+        expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
         expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
-        expect(section.textContent).toContain('matching v2 catalog and dashboard authority is unavailable');
+        expect(section.textContent).not.toContain('matching v2 catalog and dashboard authority is unavailable');
     });
 
     it('renders bounded structured enqueue and STOP errors adjacent to Y with status and raw evidence', async () => {
@@ -987,7 +1025,37 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
         expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
-        expect(section.textContent).toContain('matching v2 catalog and dashboard authority is unavailable');
+        expect(section.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable');
+    });
+
+    it('disables Z normal controls when fresh v2 authority is unavailable instead of rendering dead controls', async () => {
+        state.catalog.data.actions.push({
+            ...xAbsoluteAction(),
+            action_id: 'oem.z.move_absolute',
+            enabled: true,
+            disabled_reason: null,
+            inputs: [{ name: 'position_steps', type: 'integer', required: true, minimum: 0, maximum: 160000 }],
+        });
+        state.v2Dashboard.isStale = true;
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
+        const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'OEM Z Home') as HTMLButtonElement;
+        const absolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
+        expect(movePositive.disabled).toBe(true);
+        expect(home.disabled).toBe(true);
+        expect(absolute.disabled).toBe(true);
+        await act(async () => {
+            movePositive.click();
+            home.click();
+            absolute.click();
+            await Promise.resolve();
+        });
+        expect(state.yInvokeCalls).toHaveLength(0);
     });
 
     it('renders successful detailed Y action and independent STOP receipts', async () => {
@@ -1030,5 +1098,36 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
         expect(raw).toContain('"addressed_event_128": true');
         expect(raw).toContain('"status": 100');
+    });
+
+    it('submits recovered OEM moveXY and HomeXY through the typed method route', async () => {
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
+        expect(panel).not.toBeNull();
+        const buttons = [...panel.querySelectorAll('button')] as HTMLButtonElement[];
+        const move = buttons.find((button) => button.textContent === 'OEM moveXY') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'OEM HomeXY') as HTMLButtonElement;
+        expect(move.disabled).toBe(false);
+        expect(home.disabled).toBe(false);
+        await act(async () => move.click());
+        await act(async () => home.click());
+        expect(state.methodCalls).toHaveLength(2);
+        expect(state.methodCalls[0]).toMatchObject({
+            method_action_id: 'oem.xy.move_absolute',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: {},
+            inputs: { x_steps: 60, y_steps: 0 },
+        });
+        expect(state.methodCalls[1]).toMatchObject({
+            method_action_id: 'oem.xy.home',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: {},
+            inputs: {},
+        });
     });
 });
