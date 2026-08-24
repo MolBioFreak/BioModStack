@@ -398,6 +398,24 @@ def test_lease_recovery_receipt_preserves_legacy_and_appends() -> None:
     ]
 
 
+def test_worker_managed_output_root_is_retained_parent_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_root = tmp_path / "results" / "ont_signal_workbench"
+    monkeypatch.setattr(worker_module, "get_allowed_roots", lambda: {})
+    monkeypatch.setattr(worker_module, "get_results_dir", lambda: tmp_path / "results")
+    monkeypatch.delenv(
+        worker_module.ont_signal_workbench.EXTERNAL_MOVE_BAM_ROOT_ENV,
+        raising=False,
+    )
+    monkeypatch.setenv(
+        worker_module.ont_raw_signal.BLOW5_STAGING_ROOT_ENV,
+        str(tmp_path / "raw" / "representations"),
+    )
+
+    assert output_root in OntSignalWorker._governed_parent_roots()
+
+
 def test_legacy_bam_model_provenance_requires_exact_exhaustive_read_groups() -> None:
     model = "dna_r10.4.1_e8.2_400bps_sup@v4.3.0"
     header = {

@@ -1349,6 +1349,9 @@ class OntSignalWorker:
     @staticmethod
     def _governed_parent_roots() -> tuple[Path, ...]:
         roots = [Path(value) for value in get_allowed_roots().values()]
+        managed_output_root = _lexical_absolute(OntSignalWorker._output_root())
+        if managed_output_root not in roots:
+            roots.append(managed_output_root)
         raw_signal_root = _lexical_absolute(
             Path(
                 os.getenv(
