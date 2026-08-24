@@ -37,13 +37,20 @@ export const selectResidueKeysFromRanges = (
     return selected;
 };
 
+const IMMUTABLE_RFD3_SOURCE_BASENAME_RE = /^[A-Za-z0-9_.-]{1,160}-[0-9a-f]{64}\.pdb$/;
+const IMMUTABLE_RFD3_SOURCE_ROOT = 'inputs/protein_local_redesign';
+
 export const resolveProteinLocalRedesignSourcePath = (
     initialValues?: Record<string, unknown>,
 ): string | null => {
     if (!initialValues) return null;
     for (const key of ['input_pdb', 'input_structure'] as const) {
         const value = initialValues[key];
-        if (typeof value === 'string' && value.trim()) return value.trim();
+        if (typeof value !== 'string' || !value.trim()) continue;
+        const normalized = value.trim();
+        return IMMUTABLE_RFD3_SOURCE_BASENAME_RE.test(normalized)
+            ? `${IMMUTABLE_RFD3_SOURCE_ROOT}/${normalized}`
+            : normalized;
     }
     return null;
 };

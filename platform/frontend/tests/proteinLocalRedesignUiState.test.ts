@@ -32,10 +32,15 @@ test('native clone source hydration accepts input_structure with input_pdb prece
         resolveProteinLocalRedesignSourcePath({ input_structure: 'inputs/native-clone.pdb' }),
         'inputs/native-clone.pdb',
     );
+    const immutableBasename = 'rfd3_input_sample-e01da3a4f399dd0dbc43fd3595e1ba9763d13b209e10eb728cd582ecdc438caa.pdb';
+    assert.equal(
+        resolveProteinLocalRedesignSourcePath({ input_structure: immutableBasename }),
+        `inputs/protein_local_redesign/${immutableBasename}`,
+    );
     assert.equal(
         resolveProteinLocalRedesignSourcePath({
             input_pdb: 'inputs/validated-clone.pdb',
-            input_structure: 'inputs/native-clone.pdb',
+            input_structure: immutableBasename,
         }),
         'inputs/validated-clone.pdb',
     );
