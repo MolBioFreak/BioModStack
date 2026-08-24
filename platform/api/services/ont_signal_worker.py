@@ -1929,7 +1929,7 @@ class OntSignalWorker:
             await session.commit()
 
     async def _process_view(self, item_id: str, token: str) -> None:
-        with RetainedParentSet(tuple(Path(value) for value in get_allowed_roots().values())) as parents:
+        with RetainedParentSet(self._governed_parent_roots()) as parents:
             await self._process_view_retained(item_id, token, parents)
 
     async def _process_view_retained(
