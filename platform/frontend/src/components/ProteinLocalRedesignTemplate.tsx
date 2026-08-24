@@ -14,6 +14,8 @@ import {
     getProteinLocalRedesignUiState,
     resolveProteinLocalRedesignSourcePath,
     selectResidueKeysFromRanges,
+    summarizeChainsFromPdbContent,
+    type ProteinLocalChainType,
 } from './proteinLocalRedesignUiState';
 import {
     PROTEIN_LOCAL_VALIDATORS,
@@ -36,23 +38,8 @@ type NativeRedesignMode = 'partial_diffusion' | 'minimal_insertion';
 type ExecutionDepth = 'native' | 'validated';
 type ResidueRole = 'static' | 'coordinate' | 'recall';
 type SourcePredictor = 'boltz' | 'all';
-type ChainType = 'protein' | 'dna' | 'rna' | 'other';
+type ChainType = ProteinLocalChainType;
 type ReviewPauseStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
-
-interface ChainSummary {
-    id: string;
-    residueCount: number;
-    type: ChainType;
-}
-
-const PROTEIN_RESIDUES = new Set([
-    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-    'MSE', 'SEC', 'PYL', 'HYP',
-]);
-
-const DNA_RESIDUES = new Set(['DA', 'DC', 'DG', 'DT', 'DI', 'ADE', 'CYT', 'GUA', 'THY']);
-const RNA_RESIDUES = new Set(['A', 'C', 'G', 'U', 'I', 'URA', 'PSU', '1MA', '5MC']);
 
 const themedPanelStyle: CSSProperties = {
     backgroundColor: 'var(--bg-secondary)',
@@ -110,55 +97,6 @@ const normalizeChainList = (value: unknown): string[] => {
 };
 
 const residueKey = (chain: Chain, residue: Chain['residues'][number]) => `${chain.id}${residue.resNum}${residue.iCode || ''}`;
-
-const summarizeChainsFromPdbContent = (content: string): ChainSummary[] => {
-    const chainMap = new Map<string, { residueKeys: Set<string>; counts: Record<ChainType, number> }>();
-
-    for (const rawLine of content.split(/\r?\n/)) {
-        if (!rawLine.startsWith('ATOM') && !rawLine.startsWith('HETATM')) continue;
-        const chainId = rawLine.slice(21, 22).trim() || 'A';
-        const resName = rawLine.slice(17, 20).trim().toUpperCase();
-        const resNum = rawLine.slice(22, 26).trim();
-        const iCode = rawLine.slice(26, 27).trim();
-        const residueId = `${resNum}${iCode}`;
-
-        if (!chainMap.has(chainId)) {
-            chainMap.set(chainId, {
-                residueKeys: new Set<string>(),
-                counts: { protein: 0, dna: 0, rna: 0, other: 0 },
-            });
-        }
-
-        const chain = chainMap.get(chainId)!;
-        const uniqueKey = `${chainId}:${residueId}`;
-        if (chain.residueKeys.has(uniqueKey)) continue;
-        chain.residueKeys.add(uniqueKey);
-
-        const type: ChainType = PROTEIN_RESIDUES.has(resName)
-            ? 'protein'
-            : DNA_RESIDUES.has(resName)
-                ? 'dna'
-                : RNA_RESIDUES.has(resName)
-                    ? 'rna'
-                    : 'other';
-        chain.counts[type] += 1;
-    }
-
-    const typePriority: ChainType[] = ['protein', 'dna', 'rna', 'other'];
-
-    return Array.from(chainMap.entries())
-        .map(([id, entry]) => {
-            const type = typePriority.reduce((best, candidate) => (
-                entry.counts[candidate] > entry.counts[best] ? candidate : best
-            ), 'other' as ChainType);
-            return {
-                id,
-                residueCount: entry.residueKeys.size,
-                type,
-            };
-        })
-        .sort((a, b) => a.id.localeCompare(b.id));
-};
 
 const buildManualRangeString = (chain: Chain | null, selectedResidues: Set<string>): string => {
     if (!chain) return '';
