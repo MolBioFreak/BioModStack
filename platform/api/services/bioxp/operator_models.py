@@ -3660,6 +3660,7 @@ class OperatorDashboardZProvider(BaseModel):
     receipt_detail_on_request: StrictBool | None = None
     recent_receipt_count: NonnegativeStrictInt | None = None
     latest_receipt: JsonValue | None = None
+    last_observation: JsonValue | None = None
     available: StrictBool | None = None
     ownership_generation: NonnegativeStrictInt | None = None
     current_board_lifecycle_generation: NonnegativeStrictInt | None = None

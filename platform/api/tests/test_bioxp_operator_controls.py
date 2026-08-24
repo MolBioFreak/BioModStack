@@ -2278,6 +2278,44 @@ def test_catalog_is_robot_owned_and_strict(monkeypatch):
     assert runtime.connection.client.calls == [("operator_control_catalog", {})]
 
 
+def test_catalog_accepts_typed_z_provider_last_observation(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    observation = {
+        "command_id": "operator-observation-1",
+        "observes_command_id": "operator-home-1",
+        "verdict": "pass",
+        "physical_motion_observed": True,
+        "expected_direction_observed": True,
+        "home_endpoint_observed": True,
+        "stopped_observed": True,
+        "source_already_home_short_circuit": False,
+        "physical_effect_verified": True,
+        "reference_eligible": True,
+        "authority_current": True,
+        "observed_at": 1785873899.8462605,
+        "note": "Operator-confirmed OEM home observation.",
+        "reference_persistence": {
+            "ok": True,
+            "axis": "z",
+            "state": "referenced",
+            "origin_position_steps": 0,
+            "source": "serial206.z.operator_observation",
+            "note": None,
+            "updated_at": "2026-08-04T20:04:59.850580+00:00",
+            "last_motion_kind": "home",
+            "persisted": True,
+            "verified": True,
+            "durable_clean": True,
+        },
+    }
+    runtime.connection.client.responses["operator_control_catalog"]["dashboard"]["z_axis"]["provider"]["last_observation"] = observation
+
+    response = client.get("/api/bioxp/operator-controls/catalog")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["dashboard"]["z_axis"]["provider"]["last_observation"] == observation
+
+
 def test_shared_xz_catalog_and_dashboard_query_robot_without_bms_freshness_gate(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
 
