@@ -57,6 +57,11 @@ import { DataViewerLanding } from './DataViewerLanding';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
+import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
+import {
+    getRFD3LocalRedesignCandidateLabel,
+    isRFD3LocalRedesignResultJob,
+} from './rfd3LocalRedesignResultsView';
 import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
@@ -1936,6 +1941,8 @@ export function ResultsViewer() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
+                if (rfd3CandidateLabel) return rfd3CandidateLabel;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -2385,7 +2392,10 @@ export function ResultsViewer() {
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        enabled: !!activeJob && activeJob.model_id !== 'molecular_dynamics' && !reviewSelectionRequired,
+        enabled: !!activeJob
+            && activeJob.model_id !== 'molecular_dynamics'
+            && !isRFD3LocalRedesignResultJob(activeJob)
+            && !reviewSelectionRequired,
     });
     const rawDesigns = useMemo(
         () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
@@ -3073,7 +3083,9 @@ export function ResultsViewer() {
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
     const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
+    const activeRFD3CandidateLabel = getRFD3LocalRedesignCandidateLabel(activeJob);
     const activeBadgeLabel = useMemo(() => {
+        if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
         }
@@ -3084,7 +3096,7 @@ export function ResultsViewer() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -5204,7 +5216,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    isProteinLocalRedesignResultJob(activeJob) ? (
+                    isRFD3LocalRedesignResultJob(activeJob) ? (
+                        <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : isProteinLocalRedesignResultJob(activeJob) ? (
                         <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />

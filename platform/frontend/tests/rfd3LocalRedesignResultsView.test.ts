@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import type { RFD3LocalRedesignReadModel } from '../src/lib/api';
+import type { Job, RFD3LocalRedesignReadModel } from '../src/lib/api';
 import { resolveRFD3LocalRedesignRequestView } from '../src/components/rfd3LocalRedesignResultsView';
 
 test('RFD3 result view keeps envelope provenance separate from canonical request fields', () => {
@@ -38,4 +39,44 @@ test('RFD3 result view remains render-safe before data is available', () => {
         profileId: undefined,
         profileRegistrySha256: undefined,
     });
+});
+
+test('native RFD3 jobs have an exact typed result discriminator and candidate label', async () => {
+    const module = await import('../src/components/rfd3LocalRedesignResultsView');
+    const isNative = (module as typeof module & {
+        isRFD3LocalRedesignResultJob?: (job: Job | null | undefined) => boolean;
+    }).isRFD3LocalRedesignResultJob;
+    const label = (module as typeof module & {
+        getRFD3LocalRedesignCandidateLabel?: (job: Job | null | undefined) => string | null;
+    }).getRFD3LocalRedesignCandidateLabel;
+    assert.equal(typeof isNative, 'function');
+    assert.equal(typeof label, 'function');
+
+    const nativeJob = {
+        model_id: 'protein_local_redesign',
+        mode: 'local_redesign',
+        requested_design_count: 8,
+        params: { num_designs: 8 },
+    } as unknown as Job;
+    const validatedJob = {
+        model_id: 'protein_modification_experimental',
+        mode: 'region_redesign',
+        requested_design_count: 1,
+        params: { num_designs: 1 },
+    } as unknown as Job;
+
+    assert.equal(isNative?.(nativeJob), true);
+    assert.equal(label?.(nativeJob), '8 RFD3 candidates');
+    assert.equal(isNative?.(validatedJob), false);
+    assert.equal(label?.(validatedJob), null);
+});
+
+test('Results Viewer routes native RFD3 to its typed pane before generic redesign data', () => {
+    const source = readFileSync('src/components/ResultsViewer.tsx', 'utf8');
+    assert.match(source, /import RFD3LocalRedesignResultsPane/);
+    const nativeBranch = source.indexOf('isRFD3LocalRedesignResultJob(activeJob)');
+    const genericBranch = source.indexOf('isProteinLocalRedesignResultJob(activeJob)');
+    assert.ok(nativeBranch >= 0 && nativeBranch < genericBranch);
+    assert.match(source, /<RFD3LocalRedesignResultsPane key=\{activeJob\.id\} jobId=\{activeJob\.id\}/);
+    assert.match(source, /!isRFD3LocalRedesignResultJob\(activeJob\)/);
 });

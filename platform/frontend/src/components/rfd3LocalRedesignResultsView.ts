@@ -1,4 +1,19 @@
-import type { RFD3LocalRedesignReadModel } from '../lib/api';
+import type { Job, RFD3LocalRedesignReadModel } from '../lib/api';
+
+export function isRFD3LocalRedesignResultJob(job: Job | null | undefined): boolean {
+    if (!job) return false;
+    return String(job.model_id || '').toLowerCase() === 'protein_local_redesign'
+        && String(job.mode || '').toLowerCase() === 'local_redesign';
+}
+
+export function getRFD3LocalRedesignCandidateLabel(job: Job | null | undefined): string | null {
+    if (!isRFD3LocalRedesignResultJob(job)) return null;
+    const requestedCount = Number(job?.requested_design_count ?? job?.params?.num_designs);
+    if (Number.isInteger(requestedCount) && requestedCount >= 0) {
+        return `${requestedCount.toLocaleString()} RFD3 candidates`;
+    }
+    return 'RFD3 candidates';
+}
 
 export interface RFD3LocalRedesignRequestView {
     request: RFD3LocalRedesignReadModel['request']['request'] | undefined;
