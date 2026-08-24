@@ -1343,7 +1343,7 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                     core_session=core_session,
                 )
                 if prior is not None and prior.resource_id != preparation.resource_id:
-                    session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
+                    session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="retry_of", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
             session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=preparation.resource_id, response_json=json.dumps({"preparation_id": preparation.resource_id}), created_at=datetime.now(timezone.utc).isoformat()))
         await session.commit()
         return _preparation_document(preparation)
