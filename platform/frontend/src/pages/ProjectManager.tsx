@@ -5,12 +5,16 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
     createLaunchContext,
     getDomainRunGroup,
+    getDomainWorkflowPlan,
     getProjectSummary,
     getResultSurface,
     internalRouteHref,
     isPermissionError,
     issuePreparedLaunchContext,
+    listDomainWorkflowPlanRevisions,
     prepareDomainWorkflowPlanRevision,
+    publishDomainWorkflowPlanRevision,
+    replaceDomainWorkflowPlanDraft,
     retryDomainRunGroup,
     searchProjects,
     projectManagerErrorMessage,
@@ -489,18 +493,55 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     if (!workflowRevisionId) {
                         throw new Error('The failed ESMFold2 attempt has no immutable workflow revision binding.');
                     }
-                    const group = await getDomainRunGroup(
+                    const [group, plan, revisions] = await Promise.all([
+                        getDomainRunGroup(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.batch_or_run_group_id,
+                        ),
+                        getDomainWorkflowPlan(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.workflow_id,
+                        ),
+                        listDomainWorkflowPlanRevisions(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.workflow_id,
+                        ),
+                    ]);
+                    const sourceRevision = revisions.items.find((item) => item.revision_id === workflowRevisionId);
+                    if (!sourceRevision || plan.draft_generation === null) {
+                        throw new Error('The failed ESMFold2 revision cannot be copied into a fresh immutable retry revision.');
+                    }
+                    const draft = await replaceDomainWorkflowPlanDraft(
                         projectId,
                         globalExperimentId,
                         domainExperimentId,
-                        run.batch_or_run_group_id,
+                        run.workflow_id,
+                        plan.draft_generation,
+                        sourceRevision.payload,
+                    );
+                    const retryRevision = await publishDomainWorkflowPlanRevision(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.workflow_id,
+                        {
+                            expected_head_generation: plan.head_generation,
+                            expected_draft_generation: draft.generation,
+                            change_summary: `Retry failed ESMFold2 attempt ${sourceAttempt?.attempt_id ?? run.run_id}`,
+                        },
                     );
                     const preparation = await prepareDomainWorkflowPlanRevision(
                         projectId,
                         globalExperimentId,
                         domainExperimentId,
                         run.workflow_id,
-                        workflowRevisionId,
+                        retryRevision.revision_id,
                         [],
                     );
                     const returnQuery = new URLSearchParams({
