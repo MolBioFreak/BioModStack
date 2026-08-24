@@ -11,6 +11,7 @@ from .contracts import canonical_sha256
 from .runtime import FRUSTRAMPNN_RUNTIME_IDENTITY, runtime_identity_dict
 from .settings import (
     FrustraMPNNEffectiveSettings,
+    compatible_effective_settings_payload,
     default_settings,
     effective_settings_sha256,
     load_capability_inventory,
@@ -164,11 +165,16 @@ _LEGACY_BASE_CONFIGURATION: dict[str, Any] = {
 def configuration_sha256(configuration: Mapping[str, Any] | BaseModel) -> str:
     """Hash a complete configuration except its self-referential digest."""
 
-    source = (
+    source = copy.deepcopy(
         configuration.model_dump(mode="json", exclude_none=False)
         if isinstance(configuration, BaseModel)
         else dict(configuration)
     )
+    effective = source.get("effective_settings")
+    if isinstance(effective, Mapping):
+        source["effective_settings"] = compatible_effective_settings_payload(
+            effective
+        )
     return canonical_sha256(
         {
             key: value

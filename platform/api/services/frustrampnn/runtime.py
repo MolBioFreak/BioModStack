@@ -509,22 +509,34 @@ def compile_frustrampnn_command_plan(effective_settings: Any) -> FrustraMPNNComm
             tuple[tuple[str, ...] | None, tuple[int, ...] | None], ...
         ] = ((None, None),)
     elif selection.mode == "selected_entities":
-        selected_identities = {entity.canonical_key() for entity in selection.entities}
-        resolved_identities = {chain.entity.canonical_key() for chain in resolved}
-        if selected_identities != resolved_identities:
+        if len(resolved) != len(selection.entities) or any(
+            sum(
+                entity.matches_entity_key(chain.entity.canonical_key())
+                for chain in resolved
+            )
+            != 1
+            for entity in selection.entities
+        ):
             raise RuntimeValidationError(
                 "selected entity identities mismatch effective resolved identities"
             )
         selections = ((chains, None),)
     else:
-        selected_identities = {residue.canonical_key() for residue in selection.residues}
-        resolved_residues = [
-            residue for chain in resolved for residue in chain.residues
-        ]
-        if selected_identities != {residue.source_key() for residue in resolved_residues}:
-            raise RuntimeValidationError(
-                "selected residue identities mismatch effective resolved identities"
-            )
+        if selection.mode == "selected_residues":
+            selected_identities = {
+                residue.canonical_key() for residue in selection.residues
+            }
+            resolved_residues = [
+                residue for chain in resolved for residue in chain.residues
+            ]
+            if selected_identities != {
+                residue.source_key() for residue in resolved_residues
+            }:
+                raise RuntimeValidationError(
+                    "selected residue identities mismatch effective resolved identities"
+                )
+        elif selection.mode != "selected_regions":
+            raise RuntimeValidationError("unsupported protein selection mode")
         positions_by_chain: dict[str, tuple[int, ...]] = {}
         for chain in resolved:
             positions = _validated_positions(

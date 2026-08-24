@@ -155,6 +155,20 @@ def test_managed_launcher_transports_only_known_settings_as_exact_compact_canoni
     assert "--frustrampnn_physical_gpu_id" in command
 
 
+def test_managed_launcher_backfills_regions_for_pre_region_persisted_settings() -> None:
+    settings = _selected_settings().model_dump(mode="json", exclude_none=False)
+    settings["protein_selection"].pop("regions")
+
+    command = _managed_command(settings)
+
+    encoded = command[command.index("--frustrampnn_settings") + 1]
+    transported = json.loads(encoded)
+    assert transported["protein_selection"]["regions"] == []
+    assert set(transported["protein_selection"]) == {
+        "mode", "entities", "regions", "residues",
+    }
+
+
 @pytest.mark.parametrize("origin", [None, "request", "bms_default ", "unknown"])
 def test_managed_launcher_rejects_missing_or_noncanonical_settings_origin(origin) -> None:
     settings = _selected_settings().model_dump(mode="json", exclude_none=False)

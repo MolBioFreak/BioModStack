@@ -1,6 +1,7 @@
 export type FrustraMpnnProteinSelectionMode =
     | 'all_protein_entities'
     | 'selected_entities'
+    | 'selected_regions'
     | 'selected_residues';
 export type FrustraMpnnClassificationMode = 'canonical' | 'custom';
 
@@ -8,29 +9,44 @@ export interface FrustraMpnnEntitySelector {
     entity_instance_id: string;
     source_entity_id: string | null;
     label_asym_id: string | null;
-    auth_asym_id: string;
+    auth_asym_id: string | null;
 }
 
-export interface FrustraMpnnResidueSelector extends FrustraMpnnEntitySelector {
+export interface FrustraMpnnResidueSelector extends Omit<FrustraMpnnEntitySelector, 'auth_asym_id'> {
+    auth_asym_id: string;
     auth_seq_id: number;
     insertion_code: string;
     sequence_index: number;
+}
+
+export interface FrustraMpnnRegionSelector extends FrustraMpnnEntitySelector {
+    sequence_start: number;
+    sequence_end: number;
 }
 
 export type FrustraMpnnProteinSelection =
     | {
         mode: 'all_protein_entities';
         entities: [];
+        regions: [];
         residues: [];
     }
     | {
         mode: 'selected_entities';
         entities: FrustraMpnnEntitySelector[];
+        regions: [];
+        residues: [];
+    }
+    | {
+        mode: 'selected_regions';
+        entities: [];
+        regions: FrustraMpnnRegionSelector[];
         residues: [];
     }
     | {
         mode: 'selected_residues';
         entities: [];
+        regions: [];
         residues: FrustraMpnnResidueSelector[];
     };
 
@@ -54,7 +70,7 @@ export interface FrustraMpnnRequestedSettings {
 }
 
 export interface FrustraMpnnInspectableEntity extends FrustraMpnnEntitySelector {
-    pdb_chain_id: string;
+    pdb_chain_id: string | null;
 }
 
 export interface FrustraMpnnInspectableResidue extends FrustraMpnnResidueSelector {
@@ -67,6 +83,7 @@ export interface FrustraMpnnSourceInspection {
     observed_altlocs: string[];
     selected_altloc: string;
     protein_entities: FrustraMpnnInspectableEntity[];
+    protein_sequence_spans?: FrustraMpnnRegionSelector[];
     mapped_residues: FrustraMpnnInspectableResidue[];
 }
 
@@ -83,14 +100,16 @@ const SETTINGS_KEYS = [
     'source_structure',
     'classification_policy',
 ] as const;
-const SELECTION_KEYS = ['mode', 'entities', 'residues'] as const;
+const SELECTION_KEYS = ['mode', 'entities', 'regions', 'residues'] as const;
 const ENTITY_KEYS = ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id'] as const;
+const REGION_KEYS = [...ENTITY_KEYS, 'sequence_start', 'sequence_end'] as const;
 const RESIDUE_KEYS = [...ENTITY_KEYS, 'auth_seq_id', 'insertion_code', 'sequence_index'] as const;
 const SOURCE_STRUCTURE_KEYS = ['selected_model_number', 'preferred_altloc'] as const;
 const CLASSIFICATION_KEYS = ['mode', 'high_max', 'minimal_min'] as const;
 const PROTEIN_SELECTION_MODES = new Set<FrustraMpnnProteinSelectionMode>([
     'all_protein_entities',
     'selected_entities',
+    'selected_regions',
     'selected_residues',
 ]);
 
@@ -162,7 +181,7 @@ const parseEntity = (value: unknown, label: string): FrustraMpnnEntitySelector =
         entity_instance_id: requireNonEmptyString(record.entity_instance_id, `${label}.entity_instance_id`),
         source_entity_id: requireNullableNonEmptyString(record.source_entity_id, `${label}.source_entity_id`),
         label_asym_id: requireNullableNonEmptyString(record.label_asym_id, `${label}.label_asym_id`),
-        auth_asym_id: requireNonEmptyString(record.auth_asym_id, `${label}.auth_asym_id`),
+        auth_asym_id: requireNullableNonEmptyString(record.auth_asym_id, `${label}.auth_asym_id`),
     };
 };
 
@@ -179,10 +198,26 @@ const parseResidue = (value: unknown, label: string): FrustraMpnnResidueSelector
     }
     return {
         ...entity,
+        auth_asym_id: requireNonEmptyString(record.auth_asym_id, `${label}.auth_asym_id`),
         auth_seq_id: requireInteger(record.auth_seq_id, `${label}.auth_seq_id`),
         insertion_code: insertionCode,
         sequence_index: requireInteger(record.sequence_index, `${label}.sequence_index`, 1),
     };
+};
+
+const parseRegion = (value: unknown, label: string): FrustraMpnnRegionSelector => {
+    const record = requireRecord(value, label);
+    requireExactKeys(record, REGION_KEYS, label);
+    const entity = parseEntity(
+        Object.fromEntries(ENTITY_KEYS.map((key) => [key, record[key]])),
+        label,
+    );
+    const sequenceStart = requireInteger(record.sequence_start, `${label}.sequence_start`, 1);
+    const sequenceEnd = requireInteger(record.sequence_end, `${label}.sequence_end`, 1);
+    if (sequenceStart > sequenceEnd) {
+        throw new Error(`${label}.sequence_start must be less than or equal to sequence_end`);
+    }
+    return { ...entity, sequence_start: sequenceStart, sequence_end: sequenceEnd };
 };
 
 const entityKey = (entity: FrustraMpnnEntitySelector): string => JSON.stringify([
@@ -198,6 +233,19 @@ const residueKey = (residue: FrustraMpnnResidueSelector): string => JSON.stringi
     residue.insertion_code,
     residue.sequence_index,
 ]);
+
+const regionKey = (region: FrustraMpnnRegionSelector): string => JSON.stringify([
+    entityKey(region),
+    region.sequence_start,
+    region.sequence_end,
+]);
+
+const compareRegions = (left: FrustraMpnnRegionSelector, right: FrustraMpnnRegionSelector): number => {
+    const entityOrder = entityKey(left).localeCompare(entityKey(right));
+    if (entityOrder !== 0) return entityOrder;
+    if (left.sequence_start !== right.sequence_start) return left.sequence_start - right.sequence_start;
+    return left.sequence_end - right.sequence_end;
+};
 
 const parseArray = <T>(
     value: unknown,
@@ -230,31 +278,49 @@ export const parseFrustraMpnnRequestedSettings = (value: unknown): FrustraMpnnRe
     const mode = selectionRecord.mode as FrustraMpnnProteinSelectionMode;
     const entities = parseArray(selectionRecord.entities, 'frustrampnn_settings.protein_selection.entities', parseEntity)
         .sort((left, right) => entityKey(left).localeCompare(entityKey(right)));
+    const regions = parseArray(selectionRecord.regions, 'frustrampnn_settings.protein_selection.regions', parseRegion)
+        .sort(compareRegions);
     const residues = parseArray(selectionRecord.residues, 'frustrampnn_settings.protein_selection.residues', parseResidue)
         .sort((left, right) => residueKey(left).localeCompare(residueKey(right)));
     ensureUnique(entities, (item) => item.entity_instance_id, 'selected entities');
+    ensureUnique(regions, regionKey, 'selected regions');
     ensureUnique(
         residues,
         (item) => JSON.stringify([item.entity_instance_id, item.auth_asym_id, item.auth_seq_id, item.insertion_code]),
         'selected residues',
     );
+    for (let index = 1; index < regions.length; index += 1) {
+        const previous = regions[index - 1];
+        const current = regions[index];
+        if (
+            entityKey(previous) === entityKey(current)
+            && current.sequence_start <= previous.sequence_end
+        ) {
+            throw new Error('selected regions cannot overlap');
+        }
+    }
 
     let proteinSelection: FrustraMpnnProteinSelection;
     if (mode === 'all_protein_entities') {
-        if (entities.length !== 0 || residues.length !== 0) {
-            throw new Error('all_protein_entities cannot contain entity or residue selectors');
+        if (entities.length !== 0 || regions.length !== 0 || residues.length !== 0) {
+            throw new Error('all_protein_entities cannot contain entity, region, or residue selectors');
         }
-        proteinSelection = { mode, entities: [], residues: [] };
+        proteinSelection = { mode, entities: [], regions: [], residues: [] };
     } else if (mode === 'selected_entities') {
-        if (entities.length === 0 || residues.length !== 0) {
-            throw new Error('selected_entities requires entities and cannot contain residues');
+        if (entities.length === 0 || regions.length !== 0 || residues.length !== 0) {
+            throw new Error('selected_entities requires entities and cannot contain regions or residues');
         }
-        proteinSelection = { mode, entities, residues: [] };
+        proteinSelection = { mode, entities, regions: [], residues: [] };
+    } else if (mode === 'selected_regions') {
+        if (regions.length === 0 || entities.length !== 0 || residues.length !== 0) {
+            throw new Error('selected_regions requires regions and cannot contain entities or residues');
+        }
+        proteinSelection = { mode, entities: [], regions, residues: [] };
     } else {
-        if (residues.length === 0 || entities.length !== 0) {
-            throw new Error('selected_residues requires residues and cannot contain entities');
+        if (residues.length === 0 || entities.length !== 0 || regions.length !== 0) {
+            throw new Error('selected_residues requires residues and cannot contain entities or regions');
         }
-        proteinSelection = { mode, entities: [], residues };
+        proteinSelection = { mode, entities: [], regions: [], residues };
     }
 
     const source = requireRecord(settings.source_structure, 'frustrampnn_settings.source_structure');
@@ -316,6 +382,7 @@ export const CANONICAL_FRUSTRAMPNN_SETTINGS: FrustraMpnnRequestedSettings = Obje
         protein_selection: {
             mode: 'all_protein_entities',
             entities: [],
+            regions: [],
             residues: [],
         },
         source_structure: {
@@ -334,8 +401,15 @@ export const hydrateFrustraMpnnSettings = (value: unknown): FrustraMpnnRequested
     if (value === undefined) return parseFrustraMpnnRequestedSettings(CANONICAL_FRUSTRAMPNN_SETTINGS);
 
     const persisted = requireRecord(value, 'persisted frustrampnn_settings');
+    const selection = requireRecord(
+        persisted.protein_selection,
+        'persisted frustrampnn_settings.protein_selection',
+    );
+    const withRegions = Object.prototype.hasOwnProperty.call(selection, 'regions')
+        ? persisted
+        : { ...persisted, protein_selection: { ...selection, regions: [] } };
     if (!Object.prototype.hasOwnProperty.call(persisted, 'settings_value_origin')) {
-        return parseFrustraMpnnRequestedSettings(persisted);
+        return parseFrustraMpnnRequestedSettings(withRegions);
     }
     requireExactKeys(
         persisted,
@@ -346,7 +420,7 @@ export const hydrateFrustraMpnnSettings = (value: unknown): FrustraMpnnRequested
         throw new Error('persisted frustrampnn_settings.settings_value_origin is invalid');
     }
     return parseFrustraMpnnRequestedSettings(
-        Object.fromEntries(SETTINGS_KEYS.map((key) => [key, persisted[key]])),
+        Object.fromEntries(SETTINGS_KEYS.map((key) => [key, withRegions[key]])),
     );
 };
 
@@ -403,6 +477,28 @@ export const mergeFrustraMpnnLaunchParams = <T extends Record<string, unknown>>(
     };
 };
 
+export const getFrustraMpnnInspectionRegionBounds = (
+    inspection: FrustraMpnnSourceInspection,
+    entity: FrustraMpnnEntitySelector,
+): { start: number; end: number } | null => {
+    const key = entityKey(entity);
+    const spans = (inspection.protein_sequence_spans ?? []).filter((span) => (
+        entityKey(span) === key
+    ));
+    if (spans.length > 1) {
+        throw new Error('source inspection has ambiguous sequence spans for one protein entity');
+    }
+    if (spans.length === 1) {
+        return { start: spans[0].sequence_start, end: spans[0].sequence_end };
+    }
+    const indices = inspection.mapped_residues
+        .filter((residue) => entityKey(residue) === key)
+        .map((residue) => residue.sequence_index);
+    return indices.length > 0
+        ? { start: Math.min(...indices), end: Math.max(...indices) }
+        : null;
+};
+
 export const getFrustraMpnnSelectionModeOptions = (
     inspection?: FrustraMpnnSourceInspection | null,
 ): FrustraMpnnSelectionModeOption[] => [
@@ -412,6 +508,17 @@ export const getFrustraMpnnSelectionModeOptions = (
         available: Boolean(inspection && inspection.protein_entities.length > 0),
         ...(!inspection || inspection.protein_entities.length === 0
             ? { reason: 'Exact source entity identity is unavailable until source inspection is produced.' }
+            : {}),
+    },
+    {
+        mode: 'selected_regions',
+        available: Boolean(inspection && inspection.protein_entities.some((entity) => (
+            getFrustraMpnnInspectionRegionBounds(inspection, entity) !== null
+        ))),
+        ...(!inspection || !inspection.protein_entities.some((entity) => (
+            getFrustraMpnnInspectionRegionBounds(inspection, entity) !== null
+        ))
+            ? { reason: 'Exact source sequence identity is unavailable until source inspection is produced.' }
             : {}),
     },
     {
@@ -430,17 +537,57 @@ export const selectFrustraMpnnProteinSelectionMode = (
 ): FrustraMpnnRequestedSettings => {
     let proteinSelection: FrustraMpnnProteinSelection;
     if (mode === 'all_protein_entities') {
-        proteinSelection = { mode, entities: [], residues: [] };
+        proteinSelection = { mode, entities: [], regions: [], residues: [] };
     } else if (mode === 'selected_entities') {
         const first = inspection?.protein_entities[0];
         if (!first) throw new Error('selected entity mode is unavailable without exact source inspection');
-        const { pdb_chain_id: _pdbChainId, ...entity } = first;
-        proteinSelection = { mode, entities: [entity], residues: [] };
+        const entity: FrustraMpnnEntitySelector = {
+            entity_instance_id: first.entity_instance_id,
+            source_entity_id: first.source_entity_id,
+            label_asym_id: first.label_asym_id,
+            auth_asym_id: first.auth_asym_id,
+        };
+        proteinSelection = { mode, entities: [entity], regions: [], residues: [] };
+    } else if (mode === 'selected_regions') {
+        const first = inspection?.protein_entities.find((entity) => (
+            getFrustraMpnnInspectionRegionBounds(inspection, entity) !== null
+        ));
+        if (!first || !inspection) {
+            throw new Error('selected region mode is unavailable without exact source inspection');
+        }
+        const bounds = getFrustraMpnnInspectionRegionBounds(inspection, first);
+        if (!bounds) {
+            throw new Error('selected region mode is unavailable without exact source inspection');
+        }
+        const entity: FrustraMpnnEntitySelector = {
+            entity_instance_id: first.entity_instance_id,
+            source_entity_id: first.source_entity_id,
+            label_asym_id: first.label_asym_id,
+            auth_asym_id: first.auth_asym_id,
+        };
+        proteinSelection = {
+            mode,
+            entities: [],
+            regions: [{
+                ...entity,
+                sequence_start: bounds.start,
+                sequence_end: bounds.end,
+            }],
+            residues: [],
+        };
     } else {
         const first = inspection?.mapped_residues[0];
         if (!first) throw new Error('selected residue mode is unavailable without exact source inspection');
-        const { wt: _wt, ...residue } = first;
-        proteinSelection = { mode, entities: [], residues: [residue] };
+        const residue: FrustraMpnnResidueSelector = {
+            entity_instance_id: first.entity_instance_id,
+            source_entity_id: first.source_entity_id,
+            label_asym_id: first.label_asym_id,
+            auth_asym_id: first.auth_asym_id,
+            auth_seq_id: first.auth_seq_id,
+            insertion_code: first.insertion_code,
+            sequence_index: first.sequence_index,
+        };
+        proteinSelection = { mode, entities: [], regions: [], residues: [residue] };
     }
     return parseFrustraMpnnRequestedSettings({ ...settings, protein_selection: proteinSelection });
 };
@@ -453,7 +600,12 @@ export const setFrustraMpnnEntitySelected = (
     if (settings.protein_selection.mode !== 'selected_entities') {
         throw new Error('entity selection requires selected_entities mode');
     }
-    const { pdb_chain_id: _pdbChainId, ...selector } = entity;
+    const selector: FrustraMpnnEntitySelector = {
+        entity_instance_id: entity.entity_instance_id,
+        source_entity_id: entity.source_entity_id,
+        label_asym_id: entity.label_asym_id,
+        auth_asym_id: entity.auth_asym_id,
+    };
     const key = entityKey(selector);
     const current = settings.protein_selection.entities;
     const entities = selected
@@ -462,7 +614,87 @@ export const setFrustraMpnnEntitySelected = (
     if (entities.length === 0) throw new Error('selected_entities requires at least one entity');
     return parseFrustraMpnnRequestedSettings({
         ...settings,
-        protein_selection: { mode: 'selected_entities', entities, residues: [] },
+        protein_selection: { mode: 'selected_entities', entities, regions: [], residues: [] },
+    });
+};
+
+export const setFrustraMpnnRegion = (
+    settings: FrustraMpnnRequestedSettings,
+    index: number,
+    region: FrustraMpnnRegionSelector,
+): FrustraMpnnRequestedSettings => {
+    if (settings.protein_selection.mode !== 'selected_regions') {
+        throw new Error('region editing requires selected_regions mode');
+    }
+    if (!Number.isInteger(index) || index < 0 || index >= settings.protein_selection.regions.length) {
+        throw new Error('selected region index is invalid');
+    }
+    const regions = settings.protein_selection.regions.map((current, currentIndex) => (
+        currentIndex === index ? region : current
+    ));
+    return parseFrustraMpnnRequestedSettings({
+        ...settings,
+        protein_selection: { mode: 'selected_regions', entities: [], regions, residues: [] },
+    });
+};
+
+export const addFrustraMpnnRegion = (
+    settings: FrustraMpnnRequestedSettings,
+    inspection: FrustraMpnnSourceInspection,
+): FrustraMpnnRequestedSettings => {
+    if (settings.protein_selection.mode !== 'selected_regions') {
+        throw new Error('region editing requires selected_regions mode');
+    }
+    for (const inspectedEntity of inspection.protein_entities) {
+        const entity: FrustraMpnnEntitySelector = {
+            entity_instance_id: inspectedEntity.entity_instance_id,
+            source_entity_id: inspectedEntity.source_entity_id,
+            label_asym_id: inspectedEntity.label_asym_id,
+            auth_asym_id: inspectedEntity.auth_asym_id,
+        };
+        const bounds = getFrustraMpnnInspectionRegionBounds(inspection, entity);
+        if (!bounds) continue;
+        const existing = settings.protein_selection.regions
+            .filter((region) => entityKey(region) === entityKey(entity))
+            .sort((left, right) => left.sequence_start - right.sequence_start);
+        let uncovered = bounds.start;
+        for (const region of existing) {
+            if (region.sequence_end < uncovered) continue;
+            if (region.sequence_start > uncovered) break;
+            uncovered = region.sequence_end + 1;
+        }
+        if (uncovered <= bounds.end) {
+            return parseFrustraMpnnRequestedSettings({
+                ...settings,
+                protein_selection: {
+                    mode: 'selected_regions',
+                    entities: [],
+                    regions: [
+                        ...settings.protein_selection.regions,
+                        { ...entity, sequence_start: uncovered, sequence_end: uncovered },
+                    ],
+                    residues: [],
+                },
+            });
+        }
+    }
+    throw new Error('every inspected protein sequence position is already covered');
+};
+
+export const removeFrustraMpnnRegion = (
+    settings: FrustraMpnnRequestedSettings,
+    index: number,
+): FrustraMpnnRequestedSettings => {
+    if (settings.protein_selection.mode !== 'selected_regions') {
+        throw new Error('region editing requires selected_regions mode');
+    }
+    if (settings.protein_selection.regions.length === 1) {
+        throw new Error('selected_regions requires at least one region');
+    }
+    const regions = settings.protein_selection.regions.filter((_region, currentIndex) => currentIndex !== index);
+    return parseFrustraMpnnRequestedSettings({
+        ...settings,
+        protein_selection: { mode: 'selected_regions', entities: [], regions, residues: [] },
     });
 };
 
@@ -474,7 +706,15 @@ export const setFrustraMpnnResidueSelected = (
     if (settings.protein_selection.mode !== 'selected_residues') {
         throw new Error('residue selection requires selected_residues mode');
     }
-    const { wt: _wt, ...selector } = residue;
+    const selector: FrustraMpnnResidueSelector = {
+        entity_instance_id: residue.entity_instance_id,
+        source_entity_id: residue.source_entity_id,
+        label_asym_id: residue.label_asym_id,
+        auth_asym_id: residue.auth_asym_id,
+        auth_seq_id: residue.auth_seq_id,
+        insertion_code: residue.insertion_code,
+        sequence_index: residue.sequence_index,
+    };
     const key = residueKey(selector);
     const current = settings.protein_selection.residues;
     const residues = selected
@@ -483,7 +723,7 @@ export const setFrustraMpnnResidueSelected = (
     if (residues.length === 0) throw new Error('selected_residues requires at least one residue');
     return parseFrustraMpnnRequestedSettings({
         ...settings,
-        protein_selection: { mode: 'selected_residues', entities: [], residues },
+        protein_selection: { mode: 'selected_residues', entities: [], regions: [], residues },
     });
 };
 
@@ -504,4 +744,5 @@ export const updateFrustraMpnnClassificationPolicy = (
 });
 
 export const frustraMpnnEntitySelectorKey = entityKey;
+export const frustraMpnnRegionSelectorKey = regionKey;
 export const frustraMpnnResidueSelectorKey = residueKey;

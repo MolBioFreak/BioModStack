@@ -1,4 +1,4 @@
-import type { CmArtifact, CmLandscapeRow, CmRecord, CmResults } from './conformationalMappingApi';
+import type { CmArtifact, CmLandscapeRow, CmLegacyLandscapeRow, CmRecord, CmResults } from './conformationalMappingApi';
 
 export const APPROVED_CM_CONTRACTS = new Set([
     'conformational_mapping_protenix_v1',
@@ -127,6 +127,19 @@ export interface CmLandscapeResidue {
     model_position: number;
     residue_name: string | null;
     slots: CmLandscapeRow[];
+}
+
+export interface LegacyCmLandscapeResidue {
+    key: string;
+    candidate_id: string;
+    entity_instance_id: string;
+    auth_asym_id: string;
+    auth_seq_id: string;
+    insertion_code: string;
+    sequence_index: number;
+    wt: string;
+    slots: CmLegacyLandscapeRow[];
+    provenance: Record<string, unknown>;
 }
 
 const object = (value: unknown, message: string): Record<string, unknown> => {
@@ -395,6 +408,154 @@ export const groupExact20Landscape = (rows: CmLandscapeRow[]): CmLandscapeResidu
             pdb_chain_id: first.pdb_chain_id, pdb_residue_id: first.pdb_residue_id,
             pdb_insertion_code: first.pdb_insertion_code, model_position: first.model_position,
             residue_name: first.residue_name, slots,
+        });
+    }
+    return residues;
+};
+
+const LEGACY_CM_LANDSCAPE_STATUSES = new Set([
+    'ok',
+    'unscoreable_residue',
+    'missing_row',
+    'duplicate_row',
+    'malformed_row',
+    'nonfinite_score',
+    'mapping_failed',
+    'conformer_missing',
+]);
+
+const LEGACY_CM_LANDSCAPE_ROW_KEYS = [
+    'candidate_id',
+    'entity_instance_id',
+    'auth_asym_id',
+    'auth_seq_id',
+    'insertion_code',
+    'sequence_index',
+    'wt',
+    'mutation_aa',
+    'score',
+    'class',
+    'scoreable',
+    'status',
+    'reason',
+    'provenance',
+] as const;
+const LEGACY_CM_LANDSCAPE_ROW_KEY_SET = new Set<string>(LEGACY_CM_LANDSCAPE_ROW_KEYS);
+
+const LEGACY_CM_PROVENANCE_REQUIRED_KEYS = [
+    'raw_csv_sha256',
+    'checkpoint_sha256',
+    'tool_sha256',
+    'threshold_policy_sha256',
+] as const;
+
+const legacyCmProvenanceIdentity = (value: unknown): string => {
+    const provenance = object(value, 'Landscape slot provenance is malformed');
+    const expectedKeys = Object.hasOwn(provenance, 'container_sha256')
+        ? [...LEGACY_CM_PROVENANCE_REQUIRED_KEYS, 'container_sha256']
+        : [...LEGACY_CM_PROVENANCE_REQUIRED_KEYS];
+    const actualKeys = Object.keys(provenance).sort();
+    const sortedExpectedKeys = [...expectedKeys].sort();
+    if (actualKeys.length !== sortedExpectedKeys.length
+        || actualKeys.some((key, index) => key !== sortedExpectedKeys[index])
+        || expectedKeys.some((key) => typeof provenance[key] !== 'string'
+            || !SHA256.test(provenance[key] as string))) {
+        throw new Error('Landscape slot provenance must contain exact SHA-256 identity fields');
+    }
+    return JSON.stringify(expectedKeys.map((key) => [key, provenance[key]]));
+};
+
+const legacyCmScoreClass = (score: number): 'high' | 'neutral' | 'minimally_frustrated' =>
+    score <= -1.0 ? 'high' : score >= 0.58 ? 'minimally_frustrated' : 'neutral';
+
+const validateLegacyCmLandscapeSlot = (
+    slot: CmLegacyLandscapeRow,
+    expectedCandidateId: string,
+    expectedProvenance: string,
+): void => {
+    const keys = Object.keys(slot);
+    if (keys.length !== LEGACY_CM_LANDSCAPE_ROW_KEYS.length
+        || keys.some((key) => !LEGACY_CM_LANDSCAPE_ROW_KEY_SET.has(key))
+        || LEGACY_CM_LANDSCAPE_ROW_KEYS.some((key) => !Object.hasOwn(slot, key))) {
+        throw new Error('Landscape slot fields do not match the historical API contract');
+    }
+    if (slot.candidate_id !== expectedCandidateId) {
+        throw new Error('Landscape slot does not match the selected candidate');
+    }
+    if (typeof slot.entity_instance_id !== 'string' || !slot.entity_instance_id
+        || typeof slot.auth_asym_id !== 'string' || !slot.auth_asym_id
+        || typeof slot.auth_seq_id !== 'string' || !/^-?(?:0|[1-9]\d*)$/.test(slot.auth_seq_id)
+        || typeof slot.insertion_code !== 'string' || slot.insertion_code.length > 1
+        || !Number.isInteger(slot.sequence_index) || slot.sequence_index < 1
+        || !CANONICAL_AMINO_ACIDS.includes(slot.wt as typeof CANONICAL_AMINO_ACIDS[number])
+        || !CANONICAL_AMINO_ACIDS.includes(slot.mutation_aa as typeof CANONICAL_AMINO_ACIDS[number])) {
+        throw new Error('Landscape slot residue identity is malformed');
+    }
+    const provenance = object(slot.provenance, 'Landscape slot provenance is malformed');
+    if (legacyCmProvenanceIdentity(provenance) !== expectedProvenance) {
+        throw new Error('Landscape slot provenance is inconsistent');
+    }
+    if (!LEGACY_CM_LANDSCAPE_STATUSES.has(slot.status)) {
+        throw new Error('Landscape slot status is unknown');
+    }
+    if (typeof slot.scoreable !== 'boolean') {
+        throw new Error('Landscape slot scoreable value is malformed');
+    }
+    if (slot.status === 'ok') {
+        if (!slot.scoreable || typeof slot.score !== 'number' || !Number.isFinite(slot.score)
+            || slot.class !== legacyCmScoreClass(slot.score) || slot.reason !== null) {
+            throw new Error('Landscape slot score, class, or availability semantics are invalid');
+        }
+        return;
+    }
+    if (slot.scoreable || slot.score !== null || slot.class !== null
+        || typeof slot.reason !== 'string' || !slot.reason) {
+        throw new Error('Landscape slot missingness semantics are invalid');
+    }
+};
+
+export const groupLegacyExact20Landscape = (
+    rows: CmLegacyLandscapeRow[],
+    expectedCandidateId: string,
+): LegacyCmLandscapeResidue[] => {
+    if (!expectedCandidateId) throw new Error('Landscape selected candidate is missing');
+    if (rows.length === 0) throw new Error('Canonical candidate landscape is explicitly unavailable');
+    if (rows.length % CANONICAL_AMINO_ACIDS.length !== 0) {
+        throw new Error('Landscape page does not contain complete exact-20 residues');
+    }
+    const firstProvenance = object(rows[0]?.provenance, 'Landscape slot provenance is malformed');
+    const provenanceIdentity = legacyCmProvenanceIdentity(firstProvenance);
+    const residues: LegacyCmLandscapeResidue[] = [];
+    const seenResidueIdentities = new Set<string>();
+    for (let offset = 0; offset < rows.length; offset += CANONICAL_AMINO_ACIDS.length) {
+        const slots = rows.slice(offset, offset + CANONICAL_AMINO_ACIDS.length);
+        slots.forEach((slot) => validateLegacyCmLandscapeSlot(
+            slot,
+            expectedCandidateId,
+            provenanceIdentity,
+        ));
+        const first = slots[0];
+        const identity = `${first.candidate_id}\u0000${first.entity_instance_id}\u0000${first.auth_asym_id}\u0000${first.auth_seq_id}\u0000${first.insertion_code}\u0000${first.sequence_index}`;
+        if (slots.some((slot) => `${slot.candidate_id}\u0000${slot.entity_instance_id}\u0000${slot.auth_asym_id}\u0000${slot.auth_seq_id}\u0000${slot.insertion_code}\u0000${slot.sequence_index}` !== identity)
+            || slots.some((slot) => slot.wt !== first.wt)
+            || slots.some((slot, index) => slot.mutation_aa !== CANONICAL_AMINO_ACIDS[index])) {
+            throw new Error('Landscape slots do not match the canonical exact-20 API order');
+        }
+        if (seenResidueIdentities.has(identity)) {
+            throw new Error('Landscape page repeats one residue identity');
+        }
+        seenResidueIdentities.add(identity);
+        residues.push({
+            key: `${first.candidate_id}:${first.entity_instance_id}:${first.auth_asym_id}:${first.auth_seq_id}${first.insertion_code}:${first.sequence_index}`,
+            candidate_id: first.candidate_id,
+            entity_instance_id: first.entity_instance_id,
+            auth_asym_id: first.auth_asym_id,
+            auth_seq_id: first.auth_seq_id,
+            insertion_code: first.insertion_code,
+            sequence_index: first.sequence_index,
+            wt: first.wt,
+            slots,
+            provenance: firstProvenance,
         });
     }
     return residues;

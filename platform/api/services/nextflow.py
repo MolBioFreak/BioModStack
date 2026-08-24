@@ -25,6 +25,7 @@ from services import ont_submission_trust, stage_reporting
 from services.frustrampnn.contracts import canonical_json_bytes
 
 
+
 logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
@@ -4181,6 +4182,15 @@ def build_nextflow_command(
             elif isinstance(value, dict):
                 if key == "frustrampnn_settings":
                     transport_value = dict(value)
+                    protein_selection = transport_value.get("protein_selection")
+                    if (
+                        isinstance(protein_selection, dict)
+                        and "regions" not in protein_selection
+                    ):
+                        transport_value["protein_selection"] = {
+                            **protein_selection,
+                            "regions": [],
+                        }
                     settings_value_origin = transport_value.pop(
                         "settings_value_origin", None
                     )

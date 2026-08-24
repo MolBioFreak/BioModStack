@@ -51,7 +51,12 @@ from services.conformational_mapping.import_stager import (
 from services.conformational_mapping.import_snapshot import (
     ImportSnapshotError,
     MAX_IMPORT_MMCIF_BYTES,
+    build_import_snapshot_from_mmcif,
     build_staged_import_snapshots,
+)
+from services.conformational_mapping.frustrampnn_adapter import (
+    FrustraMPNNAdapterError,
+    build_cm_frustrampnn_source_inspection,
 )
 from services.conformational_mapping.persistence import (
     ConformationalPersistenceError,
@@ -262,6 +267,58 @@ class RcsbSelection(BaseModel):
                 raise ValueError("RCSB accession must be exactly four letters or digits")
             self.accession = normalized
         return self
+
+
+class CmFrustraMPNNInspectableEntity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    entity_instance_id: str = Field(min_length=1)
+    source_entity_id: str | None
+    label_asym_id: str | None
+    auth_asym_id: str | None
+    pdb_chain_id: str | None
+
+
+class CmFrustraMPNNSequenceSpan(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    entity_instance_id: str = Field(min_length=1)
+    source_entity_id: str | None
+    label_asym_id: str | None
+    auth_asym_id: str | None
+    sequence_start: int = Field(ge=1)
+    sequence_end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "CmFrustraMPNNSequenceSpan":
+        if self.sequence_start > self.sequence_end:
+            raise ValueError("sequence span start must not exceed end")
+        return self
+
+
+class CmFrustraMPNNInspectableResidue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    entity_instance_id: str = Field(min_length=1)
+    source_entity_id: str | None
+    label_asym_id: str | None
+    auth_asym_id: str = Field(min_length=1)
+    auth_seq_id: int
+    insertion_code: str = Field(pattern=r"^(?:|[A-Za-z0-9])$")
+    sequence_index: int = Field(ge=1)
+    wt: str = Field(pattern=r"^[ACDEFGHIKLMNPQRSTVWY]$")
+
+
+class CmFrustraMPNNSourceInspectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_models: list[int]
+    selected_source_model: int = Field(ge=1)
+    observed_altlocs: list[str]
+    selected_altloc: str = Field(pattern=r"^(?:|[A-Za-z0-9])$")
+    protein_entities: list[CmFrustraMPNNInspectableEntity]
+    protein_sequence_spans: list[CmFrustraMPNNSequenceSpan]
+    mapped_residues: list[CmFrustraMPNNInspectableResidue]
 
 
 class HandoffRequest(BaseModel):
@@ -1655,6 +1712,95 @@ def _registered(source: ConformationalMappingSource) -> RegisteredArtifact:
         storage_root=Path(source.storage_root), relative_path=source.relative_path,
         content_sha256=source.content_sha256, size_bytes=source.size_bytes,
     )
+
+
+@router.get(
+    "/sources/{source_id}/frustrampnn-inspection",
+    response_model=CmFrustraMPNNSourceInspectionResponse,
+)
+async def source_frustrampnn_inspection(
+    source_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    principal_id = _principal(request)
+    source = await _source(
+        session,
+        source_id,
+        principal_id,
+        {
+            "protein_sequence",
+            "complex_snapshot",
+            "structure_upload",
+            "structure_artifact",
+        },
+    )
+    try:
+        payload = read_registered_artifact(
+            _registered(source),
+            principal_id=principal_id,
+            maximum_bytes=_SOURCE_MAX_BYTES[source.source_kind],
+        )
+    except ImportStagingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        if source.source_kind == "protein_sequence":
+            sequence = "".join(payload.decode("utf-8").split()).upper()
+            if not sequence or any(residue not in "ACDEFGHIKLMNPQRSTVWY" for residue in sequence):
+                raise FrustraMPNNAdapterError("registered protein sequence is invalid")
+            recorded_sequence = str(source.metadata_json.get("sequence") or "")
+            if recorded_sequence != sequence:
+                raise FrustraMPNNAdapterError(
+                    "registered protein sequence bytes disagree with source metadata"
+                )
+            target_id = str(source.metadata_json.get("target_id") or source.source_id)
+            snapshot = _confornets_snapshot(
+                target_id=target_id,
+                sequence=sequence,
+                chain_id=_CONFORNETS_CHAIN_ID,
+                source_sha256=source.content_sha256,
+                coordinates=[{
+                    "backend": "confornets",
+                    "target_id": target_id,
+                    "task": "source_inspection",
+                    "test_case_id": _CONFORNETS_TEST_CASE_ID,
+                    "reference_id": None,
+                    "run_index": 0,
+                    "saved_step": 0,
+                    "confornet_index": 0,
+                    "sample_index": 0,
+                }],
+            )
+        elif source.source_kind == "complex_snapshot":
+            decoded = json.loads(payload.decode("utf-8"))
+            snapshots = decoded if isinstance(decoded, list) else [decoded]
+            if len(snapshots) != 1 or not isinstance(snapshots[0], Mapping):
+                raise FrustraMPNNAdapterError(
+                    "FrustraMPNN region inspection requires exactly one snapshot target"
+                )
+            snapshot = snapshots[0]
+        else:
+            snapshot = build_import_snapshot_from_mmcif(
+                payload,
+                target_id=str(
+                    source.metadata_json.get("target_id") or source.source_id
+                ),
+                candidate_id="source-inspection",
+                original_source_path=source.relative_path,
+            )
+        inspection = build_cm_frustrampnn_source_inspection(snapshot)
+        return CmFrustraMPNNSourceInspectionResponse.model_validate(
+            inspection,
+            strict=True,
+        ).model_dump(mode="json")
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        FrustraMPNNAdapterError,
+        ImportSnapshotError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/sources/{source_id}/content")
@@ -3138,13 +3284,22 @@ async def request_landscape(
             sequence_start=sequence_start, sequence_end=sequence_end,
             offset=offset, limit=limit,
         )
+        has_more = False
+        if len(rows) == limit:
+            lookahead = await paged_landscape(
+                session, request_id, candidate_id=candidate_id,
+                entity_instance_id=entity_instance_id,
+                sequence_start=sequence_start, sequence_end=sequence_end,
+                offset=offset + len(rows), limit=1,
+            )
+            has_more = bool(lookahead)
     except ConformationalPersistenceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "request_id": request_id, "offset": offset, "limit": limit,
         "candidate_id": candidate_id, "entity_instance_id": entity_instance_id,
         "sequence_start": sequence_start, "sequence_end": sequence_end,
-        "next_offset": offset + len(rows) if len(rows) == limit else None,
+        "next_offset": offset + len(rows) if has_more else None,
         "rows": [
             {
                 "candidate_id": row.candidate_id, "entity_instance_id": row.entity_instance_id,

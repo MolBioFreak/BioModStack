@@ -78,6 +78,39 @@ def test_registered_source_format_is_server_normalized() -> None:
     assert _registered_source_format("legacy/content.pdb") == "pdb"
 
 
+@pytest.mark.asyncio
+async def test_landscape_terminal_full_page_uses_one_row_lookahead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+    rows = [
+        SimpleNamespace(
+            candidate_id="candidate-a", entity_instance_id="A", auth_asym_id="A",
+            auth_seq_id=str(index + 1), insertion_code="", sequence_index=index + 1,
+            wt="A", mutation_aa="A", score=0.0, score_class="neutral",
+            scoreable=True, status="ok", reason=None, provenance_json={},
+        )
+        for index in range(2)
+    ]
+
+    async def authorized(*_args):
+        return None
+
+    async def page(*_args, offset: int, limit: int, **_kwargs):
+        calls.append((offset, limit))
+        return rows if offset == 0 else []
+
+    monkeypatch.setattr(cm_router, "_authorized_record", authorized)
+    monkeypatch.setattr(cm_router, "paged_landscape", page)
+    result = await cm_router.request_landscape(
+        "request-a", _http_request(client_host="127.0.0.1"),
+        candidate_id="candidate-a", entity_instance_id=None,
+        sequence_start=None, sequence_end=None, offset=0, limit=2, session=object(),
+    )
+    assert result["next_offset"] is None
+    assert calls == [(0, 2), (2, 1)]
+
+
 def test_cm_authorization_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BMS_CM_AUTHORIZATION_ENABLED", raising=False)
     monkeypatch.delenv("BMS_CM_TRUSTED_PROXY_SECRET", raising=False)
@@ -743,6 +776,137 @@ async def test_cm_source_lookup_rejects_cross_principal_source() -> None:
     session.get = get
     with pytest.raises(HTTPException, match="registered source is unavailable"):
         await cm_router._source(session, "foreign", "owner", {"structure_upload"})
+
+
+@pytest.mark.asyncio
+async def test_cm_frustrampnn_source_inspection_reads_registered_sequence_bytes_and_uses_generated_chain_identity(
+    tmp_path: Path,
+) -> None:
+    payload = b"MKT\n"
+    source_path = tmp_path / "sequence.txt"
+    source_path.write_bytes(payload)
+    source = SimpleNamespace(
+        source_id="sequence-source",
+        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        source_kind="protein_sequence",
+        immutable=True,
+        storage_root=str(tmp_path),
+        relative_path="sequence.txt",
+        content_sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        metadata_json={"sequence": "MKT", "target_id": "target-a"},
+    )
+
+    class SourceSession:
+        async def get(self, model, source_id):
+            assert model is ConformationalMappingSource
+            assert source_id == source.source_id
+            return source
+
+    inspection = await cm_router.source_frustrampnn_inspection(
+        source.source_id,
+        _http_request(client_host="127.0.0.1"),
+        SourceSession(),  # type: ignore[arg-type]
+    )
+    cm_router.CmFrustraMPNNSourceInspectionResponse.model_validate(
+        inspection, strict=True
+    )
+    assert inspection["protein_entities"] == [{
+        "entity_instance_id": "A", "source_entity_id": "1",
+        "label_asym_id": None, "auth_asym_id": None, "pdb_chain_id": None,
+    }]
+    assert inspection["protein_sequence_spans"] == [{
+        "entity_instance_id": "A", "source_entity_id": "1",
+        "label_asym_id": None, "auth_asym_id": None,
+        "sequence_start": 1, "sequence_end": 3,
+    }]
+    assert inspection["mapped_residues"] == []
+
+
+@pytest.mark.asyncio
+async def test_cm_frustrampnn_source_inspection_projects_one_registered_snapshot_bundle(
+    tmp_path: Path,
+) -> None:
+    snapshot = cm_router._confornets_snapshot(
+        target_id="target-a",
+        sequence="MKT",
+        chain_id="A",
+        source_sha256="0" * 64,
+        coordinates=[{
+            "backend": "confornets", "target_id": "target-a", "task": "mse",
+            "test_case_id": "case-a", "reference_id": None, "run_index": 0,
+            "saved_step": 25, "confornet_index": 0, "sample_index": 0,
+        }],
+    )
+    payload = json.dumps([snapshot], sort_keys=True, separators=(",", ":")).encode("utf-8")
+    source_path = tmp_path / "snapshot.json"
+    source_path.write_bytes(payload)
+    source = SimpleNamespace(
+        source_id="snapshot-source",
+        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        source_kind="complex_snapshot",
+        immutable=True,
+        storage_root=str(tmp_path),
+        relative_path="snapshot.json",
+        content_sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        metadata_json={"target_ids": ["target-a"]},
+    )
+
+    class SourceSession:
+        async def get(self, _model, _source_id):
+            return source
+
+    inspection = await cm_router.source_frustrampnn_inspection(
+        source.source_id,
+        _http_request(client_host="127.0.0.1"),
+        SourceSession(),  # type: ignore[arg-type]
+    )
+    cm_router.CmFrustraMPNNSourceInspectionResponse.model_validate(
+        inspection, strict=True
+    )
+    assert inspection["protein_sequence_spans"][0]["sequence_end"] == 3
+    assert inspection["protein_entities"][0]["auth_asym_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_cm_frustrampnn_source_inspection_accepts_registered_external_import_mmcif(
+    tmp_path: Path,
+) -> None:
+    from tests.test_conformational_mapping_import_snapshot import MMCIF
+
+    source_path = tmp_path / "external.cif"
+    source_path.write_bytes(MMCIF)
+    source = SimpleNamespace(
+        source_id="external-source",
+        principal_id=cm_router._PERSONAL_WORKFLOW_PRINCIPAL,
+        source_kind="structure_upload",
+        immutable=True,
+        storage_root=str(tmp_path),
+        relative_path="external.cif",
+        content_sha256=hashlib.sha256(MMCIF).hexdigest(),
+        size_bytes=len(MMCIF),
+        metadata_json={"target_id": "external-target"},
+    )
+
+    class SourceSession:
+        async def get(self, _model, _source_id):
+            return source
+
+    inspection = await cm_router.source_frustrampnn_inspection(
+        source.source_id,
+        _http_request(client_host="127.0.0.1"),
+        SourceSession(),  # type: ignore[arg-type]
+    )
+
+    assert inspection["protein_entities"] == [{
+        "entity_instance_id": "ASYM_A",
+        "source_entity_id": "1",
+        "label_asym_id": None,
+        "auth_asym_id": None,
+        "pdb_chain_id": None,
+    }]
+    assert inspection["protein_sequence_spans"][0]["sequence_end"] == 2
 
 
 @pytest.mark.asyncio

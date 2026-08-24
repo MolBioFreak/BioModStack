@@ -247,9 +247,13 @@ def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
                 "auth_seq_id": position + 10,
                 "insertion_code": "",
                 "sequence_index": position + 1,
+                "label_seq_id": position + 1,
                 "wt": "G",
                 "pdb_chain_id": chain_id,
+                "pdb_residue_id": position + 10,
+                "pdb_insertion_code": "",
                 "model_position": position,
+                "residue_name": "GLY",
             }
             residues.append(residue)
             selectors.append({
@@ -266,11 +270,22 @@ def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
                 "residues": residues,
             })
         )
-    selection = {"mode": mode, "entities": [], "residues": []}
+    selection = {"mode": mode, "entities": [], "residues": [], "regions": []}
     if mode == "selected_entities":
         selection["entities"] = entities
     elif mode == "selected_residues":
         selection["residues"] = selectors
+    elif mode == "selected_regions":
+        selection["regions"] = [
+            {
+                **entity,
+                "sequence_start": min(positions) + 1,
+                "sequence_end": max(positions) + 1,
+            }
+            for entity, positions in zip(
+                entities, chain_positions.values(), strict=True
+            )
+        ]
     requested = settings.FrustraMPNNRequestedSettings.model_validate({
         "protein_selection": selection,
     })
@@ -319,6 +334,35 @@ def test_command_plan_compiles_all_and_selected_entities_without_positions() -> 
     ]
 
 
+def test_selected_entity_plan_matches_source_only_intent_to_generated_chains() -> None:
+    runtime = _runtime()
+    settings = importlib.import_module("services.frustrampnn.settings")
+    exact_effective = _effective_settings("selected_entities", {"X": (0,)})
+    source_only_entities = tuple(
+        entity.model_copy(update={"label_asym_id": None, "auth_asym_id": None})
+        for entity in exact_effective.requested_settings.protein_selection.entities
+    )
+    requested = exact_effective.requested_settings.model_copy(
+        update={
+            "protein_selection": exact_effective.requested_settings.protein_selection.model_copy(
+                update={"entities": source_only_entities}
+            )
+        }
+    )
+    effective = settings._build_effective_settings(
+        requested,
+        resolved_chains=exact_effective.resolved_chains,
+        resolution_identity=exact_effective.resolution_identity,
+    )
+
+    plan = runtime.compile_frustrampnn_command_plan(effective)
+
+    assert [
+        (entry.ordinal, entry.chains, entry.positions)
+        for entry in plan.entries
+    ] == [(0, ("X",), None)]
+
+
 def test_selected_residue_plan_groups_only_identical_position_tuples_stably() -> None:
     runtime = _runtime()
     effective = _effective_settings(
@@ -336,6 +380,21 @@ def test_selected_residue_plan_groups_only_identical_position_tuples_stably() ->
         (1, ("B",), (1,), "raw_frustrampnn_shard_0001.csv"),
     ]
     assert plan == runtime.compile_frustrampnn_command_plan(effective)
+
+
+def test_selected_region_plan_compiles_contiguous_sequence_ranges_to_model_positions() -> None:
+    runtime = _runtime()
+    effective = _effective_settings(
+        "selected_regions",
+        {"B": (4, 5, 6), "A": (4, 5, 6)},
+    )
+
+    plan = runtime.compile_frustrampnn_command_plan(effective)
+
+    assert [
+        (entry.ordinal, entry.chains, entry.positions)
+        for entry in plan.entries
+    ] == [(0, ("A", "B"), (4, 5, 6))]
 
 
 def test_typed_selection_argv_preserves_base_and_binds_canonical_hash(tmp_path: Path) -> None:

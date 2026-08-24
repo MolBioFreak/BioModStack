@@ -256,8 +256,21 @@ def test_no_follow_reader_rechecks_stream_bound_after_fstat(
         structure_module.read_structure_bytes(source, max_bytes=8)
 
 
-def test_pure_resolver_uses_only_mapped_source_rows_and_cross_binds_exact_map() -> None:
+def test_pure_resolver_rejects_partial_all_protein_scope() -> None:
+    with pytest.raises(
+        settings_module.SourceResolutionError,
+        match="all-protein|excluded|unscoreable|partial",
+    ):
+        resolve_effective_settings(_settings(), structure_map_fixture())
+
+
+def test_pure_resolver_cross_binds_exact_complete_map() -> None:
     structure_map = structure_map_fixture()
+    rows = structure_map["rows"]
+    assert isinstance(rows, list)
+    structure_map["rows"] = [
+        row for row in rows if row["status"] == "mapped"
+    ]
 
     effective = resolve_effective_settings(_settings(), structure_map)
     configuration = execution_configuration(effective)
@@ -284,8 +297,49 @@ def test_pure_resolver_uses_only_mapped_source_rows_and_cross_binds_exact_map() 
     assert resolve_effective_settings(_settings(), structure_map).model_dump() == effective.model_dump()
 
 
+def test_region_resolution_never_expands_caller_controlled_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_range = range
+
+    def bounded_range(*values: int):
+        if any(abs(value) > 10_000 for value in values):
+            raise RuntimeError("caller-controlled interval was expanded")
+        return real_range(*values)
+
+    monkeypatch.setattr(settings_module, "range", bounded_range, raising=False)
+    requested = _settings(
+        {
+            "mode": "selected_regions",
+            "regions": [{
+                **_entity("entity-1", "1", "AA", "X"),
+                "sequence_start": 1,
+                "sequence_end": 10**12,
+            }],
+        }
+    )
+
+    with pytest.raises(
+        settings_module.SourceResolutionError,
+        match="coverage|outside|span",
+    ):
+        resolve_effective_settings(requested, structure_map_fixture())
+
+
 def test_resolver_requires_exact_entity_and_residue_selector_coverage() -> None:
     structure_map = structure_map_fixture()
+    partial_entity = _settings(
+        {
+            "mode": "selected_entities",
+            "entities": [_entity("entity-1", "1", "AA", "X")],
+        }
+    )
+    with pytest.raises(
+        settings_module.SourceResolutionError,
+        match="excluded|unscoreable|partial",
+    ):
+        resolve_effective_settings(partial_entity, structure_map)
+
     selected_entity = _settings(
         {
             "mode": "selected_entities",

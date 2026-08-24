@@ -14,12 +14,14 @@ export interface FrustraMpnnRequestedEffectiveSummary {
     };
     counts: {
         selectedEntities: number;
+        selectedRegions: number;
         selectedResidues: number;
         resolvedEntities: number;
         resolvedChains: number;
         resolvedResidues: number;
     };
     selectedEntities: string[];
+    selectedRegions: string[];
     selectedResidues: string[];
     resolvedEntities: string[];
     resolvedResidues: string[];
@@ -30,10 +32,12 @@ const entityLabel = (entity: {
     entity_instance_id: string;
     source_entity_id: string | null;
     label_asym_id: string | null;
-    auth_asym_id: string;
+    auth_asym_id: string | null;
 }): string => [
-    `entity ${entity.entity_instance_id}`,
-    `author chain ${entity.auth_asym_id}`,
+    entity.auth_asym_id
+        ? `entity ${entity.entity_instance_id}`
+        : `source instance ${entity.entity_instance_id}`,
+    entity.auth_asym_id ? `author chain ${entity.auth_asym_id}` : null,
     entity.source_entity_id ? `source entity ${entity.source_entity_id}` : null,
     entity.label_asym_id ? `label chain ${entity.label_asym_id}` : null,
 ].filter(Boolean).join(' · ');
@@ -48,12 +52,26 @@ const residueLabel = (residue: {
     `entity ${residue.entity_instance_id} · ${residue.auth_asym_id}:${residue.auth_seq_id}${residue.insertion_code} · sequence ${residue.sequence_index}`
 );
 
+const regionLabel = (region: {
+    entity_instance_id: string;
+    auth_asym_id: string | null;
+    sequence_start: number;
+    sequence_end: number;
+}): string => (
+    region.auth_asym_id
+        ? `entity ${region.entity_instance_id} · author chain ${region.auth_asym_id} · sequence ${region.sequence_start}–${region.sequence_end}`
+        : `source instance ${region.entity_instance_id} · sequence ${region.sequence_start}–${region.sequence_end}`
+);
+
 export const buildFrustraMpnnRequestedEffectiveSummary = (
     effective: FrustraMpnnEffectiveSettingsProjection,
 ): FrustraMpnnRequestedEffectiveSummary => {
     const requested = effective.requested_settings;
     const selectedEntities = requested.protein_selection.mode === 'selected_entities'
         ? requested.protein_selection.entities.map(entityLabel)
+        : [];
+    const selectedRegions = requested.protein_selection.mode === 'selected_regions'
+        ? requested.protein_selection.regions.map(regionLabel)
         : [];
     const selectedResidues = requested.protein_selection.mode === 'selected_residues'
         ? requested.protein_selection.residues.map(residueLabel)
@@ -67,6 +85,7 @@ export const buildFrustraMpnnRequestedEffectiveSummary = (
     const valueOrigins = {
         'protein selection mode': effective.value_sources.protein_selection.mode,
         'selected entities': effective.value_sources.protein_selection.entities,
+        'selected regions': effective.value_sources.protein_selection.regions,
         'selected residues': effective.value_sources.protein_selection.residues,
         'selected model number': effective.value_sources.source_structure.selected_model_number,
         'preferred altloc': effective.value_sources.source_structure.preferred_altloc,
@@ -98,12 +117,14 @@ export const buildFrustraMpnnRequestedEffectiveSummary = (
         },
         counts: {
             selectedEntities: selectedEntities.length,
+            selectedRegions: selectedRegions.length,
             selectedResidues: selectedResidues.length,
             resolvedEntities: resolvedEntities.length,
             resolvedChains: effective.resolved_chains.length,
             resolvedResidues: resolvedResidues.length,
         },
         selectedEntities,
+        selectedRegions,
         selectedResidues,
         resolvedEntities,
         resolvedResidues,

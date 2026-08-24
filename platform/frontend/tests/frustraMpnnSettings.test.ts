@@ -68,6 +68,7 @@ const customSettings = (): FrustraMpnnRequestedSettings => ({
     protein_selection: {
         mode: 'selected_residues',
         entities: [],
+        regions: [],
         residues: [residueB, residueA],
     },
     source_structure: {
@@ -103,7 +104,7 @@ const validationWire = () => {
             normalized_pdb_sha256: '6'.repeat(64),
         },
         value_sources: {
-            protein_selection: { mode: 'operator_request', entities: 'operator_request', residues: 'operator_request' },
+            protein_selection: { mode: 'operator_request', entities: 'operator_request', regions: 'operator_request', residues: 'operator_request' },
             source_structure: { selected_model_number: 'operator_request', preferred_altloc: 'operator_request' },
             classification_policy: { mode: 'operator_request', high_max: 'operator_request', minimal_min: 'operator_request' },
         },
@@ -171,6 +172,7 @@ test('canonical FrustraMPNN settings hydrate as a complete closed v1 object', ()
         protein_selection: {
             mode: 'all_protein_entities',
             entities: [],
+            regions: [],
             residues: [],
         },
         source_structure: {
@@ -331,6 +333,38 @@ test('source inspection parser admits only bounded source models, observed altlo
     assert.deepEqual(parsed.mapped_residues.map((residue) => residue.sequence_index), [1, 2]);
     assert.equal('model_position' in parsed.mapped_residues[0], false);
 
+    const sourceOnly = parseFrustraMpnnSourceInspection({
+        ...sourceInspection,
+        protein_entities: [{
+            entity_instance_id: 'protein-instance-1',
+            source_entity_id: 'source-protein',
+            label_asym_id: null,
+            auth_asym_id: null,
+            pdb_chain_id: null,
+        }],
+        protein_sequence_spans: [{
+            entity_instance_id: 'protein-instance-1',
+            source_entity_id: 'source-protein',
+            label_asym_id: null,
+            auth_asym_id: null,
+            sequence_start: 1,
+            sequence_end: 25,
+        }],
+        mapped_residues: [],
+    });
+    assert.equal(sourceOnly.protein_entities[0]?.pdb_chain_id, null);
+    assert.equal(sourceOnly.protein_entities[0]?.auth_asym_id, null);
+
+    const multiCharacterChain = parseFrustraMpnnSourceInspection({
+        ...sourceInspection,
+        protein_entities: [{
+            ...entityA,
+            auth_asym_id: 'CHAIN_ALPHA',
+            pdb_chain_id: 'CHAIN_ALPHA',
+        }],
+    });
+    assert.equal(multiCharacterChain.protein_entities[0]?.pdb_chain_id, 'CHAIN_ALPHA');
+
     assert.throws(
         () => parseFrustraMpnnSourceInspection({ ...sourceInspection, source_path: '/private/source.cif' }),
         /unknown|forbidden/i,
@@ -345,6 +379,7 @@ test('selection modes are unavailable without exact inspection metadata and use 
     assert.deepEqual(getFrustraMpnnSelectionModeOptions(undefined), [
         { mode: 'all_protein_entities', available: true },
         { mode: 'selected_entities', available: false, reason: 'Exact source entity identity is unavailable until source inspection is produced.' },
+        { mode: 'selected_regions', available: false, reason: 'Exact source sequence identity is unavailable until source inspection is produced.' },
         { mode: 'selected_residues', available: false, reason: 'Exact source residue identity is unavailable until source inspection is produced.' },
     ]);
 
@@ -353,6 +388,7 @@ test('selection modes are unavailable without exact inspection metadata and use 
         [
             ['all_protein_entities', true],
             ['selected_entities', true],
+            ['selected_regions', true],
             ['selected_residues', true],
         ],
     );
@@ -362,17 +398,90 @@ test('selection modes are unavailable without exact inspection metadata and use 
     assert.deepEqual(entities.protein_selection, {
         mode: 'selected_entities',
         entities: [entityA],
+        regions: [],
+        residues: [],
+    });
+    const regions = selectFrustraMpnnProteinSelectionMode(CANONICAL_FRUSTRAMPNN_SETTINGS, 'selected_regions', inspection);
+    assert.deepEqual(regions.protein_selection, {
+        mode: 'selected_regions',
+        entities: [],
+        regions: [{ ...entityA, sequence_start: 1, sequence_end: 1 }],
         residues: [],
     });
     const residues = selectFrustraMpnnProteinSelectionMode(CANONICAL_FRUSTRAMPNN_SETTINGS, 'selected_residues', inspection);
     assert.deepEqual(residues.protein_selection, {
         mode: 'selected_residues',
         entities: [],
+        regions: [],
         residues: [residueA],
     });
     assert.throws(
         () => selectFrustraMpnnProteinSelectionMode(CANONICAL_FRUSTRAMPNN_SETTINGS, 'selected_entities', undefined),
         /unavailable/i,
+    );
+});
+
+test('sequence-span inspection enables regions without fabricating mapped author residues', () => {
+    const inspection = parseFrustraMpnnSourceInspection({
+        source_models: [1],
+        selected_source_model: 1,
+        observed_altlocs: [''],
+        selected_altloc: '',
+        protein_entities: [{ ...entityA, pdb_chain_id: 'A' }],
+        protein_sequence_spans: [{ ...entityA, sequence_start: 1, sequence_end: 50 }],
+        mapped_residues: [],
+    });
+
+    const options = getFrustraMpnnSelectionModeOptions(inspection);
+    assert.equal(options.find((option) => option.mode === 'selected_regions')?.available, true);
+    assert.equal(options.find((option) => option.mode === 'selected_residues')?.available, false);
+    assert.deepEqual(
+        selectFrustraMpnnProteinSelectionMode(
+            CANONICAL_FRUSTRAMPNN_SETTINGS,
+            'selected_regions',
+            inspection,
+        ).protein_selection,
+        {
+            mode: 'selected_regions',
+            entities: [],
+            regions: [{ ...entityA, sequence_start: 1, sequence_end: 50 }],
+            residues: [],
+        },
+    );
+});
+
+
+test('selected regions canonicalize stable entity sequence ranges and reject overlap', () => {
+    const parsed = parseFrustraMpnnRequestedSettings({
+        ...CANONICAL_FRUSTRAMPNN_SETTINGS,
+        protein_selection: {
+            mode: 'selected_regions',
+            entities: [],
+            regions: [
+                { ...entityA, sequence_start: 30, sequence_end: 40 },
+                { ...entityA, sequence_start: 10, sequence_end: 20 },
+            ],
+            residues: [],
+        },
+    });
+    assert.deepEqual(parsed.protein_selection.regions.map((region) => [
+        region.sequence_start,
+        region.sequence_end,
+    ]), [[10, 20], [30, 40]]);
+    assert.throws(
+        () => parseFrustraMpnnRequestedSettings({
+            ...CANONICAL_FRUSTRAMPNN_SETTINGS,
+            protein_selection: {
+                mode: 'selected_regions',
+                entities: [],
+                regions: [
+                    { ...entityA, sequence_start: 10, sequence_end: 20 },
+                    { ...entityA, sequence_start: 20, sequence_end: 30 },
+                ],
+                residues: [],
+            },
+        }),
+        /overlap/i,
     );
 });
 
@@ -407,6 +516,24 @@ test('settings validation client projection excludes execution, runtime, path, c
     for (const forbidden of ['path', 'runtime', 'command', 'scheduler', 'storage', 'gpu']) {
         assert.doesNotMatch(serialized, new RegExp(forbidden));
     }
+});
+
+test('historical effective settings hydrate missing additive region fields', () => {
+    const wire = JSON.parse(JSON.stringify(validationWire()));
+    delete wire.normalized_requested_settings.protein_selection.regions;
+    delete wire.effective_settings.requested_settings.protein_selection.regions;
+    delete wire.effective_settings.value_sources.protein_selection.regions;
+    delete wire.execution_configuration.effective_settings.requested_settings.protein_selection.regions;
+    delete wire.execution_configuration.effective_settings.value_sources.protein_selection.regions;
+
+    const preview = parseFrustraMpnnSettingsValidationPreview(wire);
+
+    assert.deepEqual(preview.normalized_requested_settings.protein_selection.regions, []);
+    assert.deepEqual(preview.effective_settings.requested_settings.protein_selection.regions, []);
+    assert.equal(
+        preview.effective_settings.value_sources.protein_selection.regions,
+        'operator_request',
+    );
 });
 
 test('governed owned and upload clients use the exact closed OpenAPI request shapes', async () => {
