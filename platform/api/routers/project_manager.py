@@ -1329,7 +1329,11 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                     prior_authority = json.loads(prior.normalized_request_json).get("launch_authority")
                 except (TypeError, ValueError):
                     prior_authority = None
-            if prior is not None and prior_authority == launch_authority:
+            if (
+                prior is not None
+                and prior.workflow_revision_id == revision_id
+                and prior_authority == launch_authority
+            ):
                 preparation = prior
             else:
                 preparation = await prepare_workflow(
