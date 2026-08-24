@@ -95,7 +95,7 @@ const WORKFLOW_CHOICES: readonly WorkflowChoice[] = [
 ];
 
 const neutralCard = 'border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)]';
-const selectedCard = 'border-[var(--accent-secondary)] bg-[color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] ring-1 ring-[var(--accent-secondary)]';
+const selectedCard = 'border-[var(--accent-primary)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] ring-1 ring-[var(--accent-primary)]';
 
 type NanoporeWorkflowChooserProps = {
     selectedWorkflow: WorkflowKey;
@@ -127,8 +127,8 @@ export function NanoporeWorkflowChooser({
                             data-ngs-workflow-key={workflow.key}
                             onClick={() => onSelect(workflow.key)}
                             aria-pressed={selected}
-                            className={`relative min-h-[104px] rounded-xl border p-3 text-left transition-all motion-reduce:transform-none motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-secondary)] hover:-translate-y-0.5 motion-reduce:hover:translate-y-0 hover:border-[var(--border-secondary)] hover:bg-[var(--bg-tertiary)] ${selected ? selectedCard : neutralCard}`}
-                            style={selected ? { boxShadow: '0 0 24px color-mix(in srgb, var(--accent-secondary) 24%, transparent)' } : undefined}
+                            className={`relative min-h-[104px] rounded-xl border p-3 text-left transition-all motion-reduce:transform-none motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] hover:-translate-y-0.5 motion-reduce:hover:translate-y-0 hover:border-[var(--border-secondary)] hover:bg-[var(--bg-tertiary)] ${selected ? selectedCard : neutralCard}`}
+                            style={selected ? { boxShadow: '0 0 24px color-mix(in srgb, var(--accent-primary) 24%, transparent)' } : undefined}
                         >
                             {workflow.badge && (
                                 <span className="absolute right-2 top-2 rounded-full border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-[9px] font-bold tracking-wide text-[var(--text-secondary)]">

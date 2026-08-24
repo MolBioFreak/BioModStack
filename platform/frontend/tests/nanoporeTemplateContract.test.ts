@@ -53,6 +53,8 @@ test('NGS exposes named workflow choices with input and output expectations befo
         'How to use this page:',
     ]) assert.match(chooser, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u'));
     assert.match(chooser, /aria-pressed=\{selected\}/u);
+    assert.match(chooser, /border-\[var\(--accent-primary\)\].*ring-\[var\(--accent-primary\)\]/u);
+    assert.doesNotMatch(chooser, /accent-secondary/u);
 });
 
 test('Clone-validation tuning controls serialize bounded vendor-supported settings without unsupported switches', () => {
