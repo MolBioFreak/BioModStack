@@ -32,6 +32,16 @@ from services.global_experiments import launch_contexts
 import workflow_job_runner
 
 
+def test_esmfold2_resource_admission_meets_nextflow_memory_floor() -> None:
+    request = ngs_molbio_n5._resource_request({
+        "model_id": "esmfold2",
+        "resources": {"cpu_threads": 1, "dram_gib": 1},
+    })
+
+    assert request["cpu_threads"] == 1
+    assert request["dram_bytes"] == 8 * 1024**3
+
+
 def _handoff(*, gpu_index: int | None = None, gpu_uuid: str | None = None) -> dict[str, object]:
     return resource_evidence.build_resource_admission_handoff(
         admission_id="admission-1",

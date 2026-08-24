@@ -522,6 +522,10 @@ def _resource_request(scheduler: Mapping[str, Any]) -> dict[str, Any]:
     resources = scheduler.get("resources") if isinstance(scheduler.get("resources"), Mapping) else {}
     cpu = resources.get("cpu_threads", resources.get("cpus", 1))
     dram_gib = resources.get("dram_gib", resources.get("memory_gib", 1))
+    if str(scheduler.get("model_id") or "").strip().lower() == "esmfold2":
+        if not isinstance(dram_gib, (int, float)) or isinstance(dram_gib, bool):
+            raise ResourceAdmissionDenied("invalid_dram_request", "effective DRAM request must be numeric", [])
+        dram_gib = max(float(dram_gib), 8.0)
     gpu = resources.get("pinned_gpu", resources.get("gpu_index"))
     if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1 or cpu > CPU_THREAD_LIMIT:
         raise ResourceAdmissionDenied("invalid_cpu_request", "effective CPU request is outside 1..24 threads", [])
