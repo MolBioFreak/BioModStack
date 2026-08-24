@@ -49,7 +49,9 @@ MIGRATION_V17_VERSION = 17
 MIGRATION_V17_NAME = "resource_admission_operational_receipt_authority"
 MIGRATION_V18_VERSION = 18
 MIGRATION_V18_NAME = "resource_usage_operational_receipt_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V18_VERSION
+MIGRATION_V19_VERSION = 19
+MIGRATION_V19_NAME = "log_stream_attempt_foreign_key_authority"
+LATEST_MIGRATION_VERSION = MIGRATION_V19_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2141,6 +2143,24 @@ PRAGMA foreign_key_check;
 
 MIGRATION_V18_CHECKSUM = hashlib.sha256(MIGRATION_V18_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V19_SQL = r'''
+ALTER TABLE log_streams RENAME TO log_streams_v19;
+CREATE TABLE log_streams (
+    resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    attempt_id TEXT NOT NULL REFERENCES run_attempts(resource_id),
+    stream_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('open', 'closed', 'unavailable')),
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    UNIQUE(attempt_id, stream_name)
+);
+INSERT INTO log_streams(resource_id, attempt_id, stream_name, state, created_at, closed_at)
+SELECT resource_id, attempt_id, stream_name, state, created_at, closed_at
+FROM log_streams_v19;
+DROP TABLE log_streams_v19;
+'''.strip()
+MIGRATION_V19_CHECKSUM = hashlib.sha256(MIGRATION_V19_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2256,6 +2276,10 @@ def _migration_v17_checksum() -> str:
 
 def _migration_v18_checksum() -> str:
     return MIGRATION_V18_CHECKSUM
+
+
+def _migration_v19_checksum() -> str:
+    return MIGRATION_V19_CHECKSUM
 
 
 def _migration_v9_checksum() -> str:
@@ -2389,10 +2413,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
     v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
     v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
+    v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19],
     )
 
 
@@ -2560,6 +2585,7 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         _apply_run_control_upgrade(expected)
         _apply_operational_receipt_upgrade(expected)
         _apply_resource_usage_receipt_upgrade(expected)
+        _apply_log_stream_attempt_fk_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -3405,6 +3431,41 @@ def _apply_resource_usage_receipt_upgrade(connection: sqlite3.Connection) -> Non
         connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
 
 
+def _apply_log_stream_attempt_fk_upgrade(connection: sqlite3.Connection) -> None:
+    """Restore log-stream ownership to the canonical run-attempt table."""
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter_table = int(connection.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.executescript("BEGIN IMMEDIATE;\n" + MIGRATION_V19_SQL)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(f"V19 foreign-key violations: {violations!r}")
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V19_VERSION,
+                MIGRATION_V19_NAME,
+                _migration_v19_checksum(),
+                "Canonical run-attempt ownership for log streams",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA legacy_alter_table = {legacy_alter_table}")
+        connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
+
+
 def run_all(db_path: str | Path) -> None:
     _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
@@ -3427,6 +3488,7 @@ def run_all(db_path: str | Path) -> None:
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
     v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
     v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
+    v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     try:
         connection.execute(
             """
@@ -3601,6 +3663,15 @@ def run_all(db_path: str | Path) -> None:
             [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
         ):
             _apply_resource_usage_receipt_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
+        ):
+            _apply_log_stream_attempt_fk_upgrade(connection)
 
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
