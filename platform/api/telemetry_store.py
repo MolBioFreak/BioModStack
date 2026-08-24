@@ -2,140 +2,380 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import json
 import os
 from pathlib import Path
 import sqlite3
+import tempfile
 import time
 from typing import Any, Literal
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from services.scientific_artifacts import (
-    InstalledArtifact,
-    artifact_reference,
-    artifact_row_reference,
-    canonical_json_bytes,
-    canonical_sha256,
-    envelope_rows,
-    install_parquet_rows,
-    read_rows,
-    reconstruct_envelope,
-    require_row_reference,
-    resolve_json_value,
-    verify_artifact,
-)
-
 RAW_RETENTION_SECONDS = 7 * 24 * 60 * 60
 AGGREGATE_RETENTION_SECONDS = 90 * 24 * 60 * 60
 MAX_HISTORY_POINTS = 10_000
 TELEMETRY_FRESHNESS_STALE_AFTER_MS = 15_000
+TELEMETRY_SCHEMA_VERSION = 2
 
-_TELEMETRY_SCHEMA = pa.schema(
+_GPU_PROCESS_TYPE = pa.struct(
     [
-        ("row_index", pa.int64()),
-        ("timestamp_ms", pa.int64()),
-        ("bucket_ms", pa.int64()),
-        ("sample_count", pa.int64()),
-        ("timestamp", pa.string()),
-        ("payload_json", pa.string()),
-        ("cpu_utilization", pa.float64()),
-        ("ram_utilization", pa.float64()),
-        ("gpu_utilization", pa.list_(pa.float64())),
-        ("gpu_memory_used_mb", pa.list_(pa.float64())),
-        ("gpu_names", pa.list_(pa.string())),
+        pa.field("pid", pa.int64()),
+        pa.field("name", pa.string()),
+        pa.field("memory_mb", pa.int64()),
     ]
 )
-_ENVELOPE_SCHEMA = pa.schema(
-    [("key", pa.string()), ("item_index", pa.int64()), ("payload_json", pa.string())]
+_GPU_TYPE = pa.struct(
+    [
+        pa.field("index", pa.int64()),
+        pa.field("name", pa.string()),
+        pa.field("utilization", pa.float64()),
+        pa.field("memory_utilization", pa.float64()),
+        pa.field("memory_used_mb", pa.float64()),
+        pa.field("memory_total_mb", pa.float64()),
+        pa.field("reserved_memory_mb", pa.float64()),
+        pa.field("power_draw_w", pa.float64()),
+        pa.field("power_limit_w", pa.float64()),
+        pa.field("min_power_watts", pa.float64()),
+        pa.field("default_power_watts", pa.float64()),
+        pa.field("max_power_watts", pa.float64()),
+        pa.field("temperature", pa.float64()),
+        pa.field("fan_speed", pa.float64()),
+        pa.field("clock_graphics_mhz", pa.float64()),
+        pa.field("clock_memory_mhz", pa.float64()),
+        pa.field("clock_max_graphics_mhz", pa.float64()),
+        pa.field("clock_max_memory_mhz", pa.float64()),
+        pa.field("processes", pa.list_(_GPU_PROCESS_TYPE)),
+    ]
+)
+_RAW_PARTITION_SCHEMA = pa.schema(
+    [
+        pa.field("timestamp_ms", pa.int64(), nullable=False),
+        pa.field("timestamp", pa.string(), nullable=False),
+        pa.field("gpu_error", pa.string()),
+        pa.field("cpu_name", pa.string(), nullable=False),
+        pa.field("cpu_cores_physical", pa.int64(), nullable=False),
+        pa.field("cpu_cores_logical", pa.int64(), nullable=False),
+        pa.field("cpu_utilization", pa.float64()),
+        pa.field("cpu_per_core_utilization", pa.list_(pa.float64()), nullable=False),
+        pa.field("cpu_frequency_current_mhz", pa.float64()),
+        pa.field("cpu_frequency_max_mhz", pa.float64()),
+        pa.field("cpu_temperature", pa.float64()),
+        pa.field("cpu_power_watts", pa.float64()),
+        pa.field("cpu_power_source", pa.string(), nullable=False),
+        pa.field("cpu_power_available", pa.bool_(), nullable=False),
+        pa.field("cpu_power_status", pa.string(), nullable=False),
+        pa.field("cpu_power_message", pa.string(), nullable=False),
+        pa.field("cpu_power_discovered_sources", pa.int64(), nullable=False),
+        pa.field("cpu_power_readable_sources", pa.int64(), nullable=False),
+        pa.field("cpu_power_setup_hint", pa.string()),
+        pa.field("ram_total_gb", pa.float64()),
+        pa.field("ram_used_gb", pa.float64()),
+        pa.field("ram_available_gb", pa.float64()),
+        pa.field("ram_utilization", pa.float64()),
+        pa.field("ram_swap_total_gb", pa.float64()),
+        pa.field("ram_swap_used_gb", pa.float64()),
+        pa.field("ram_swap_percent", pa.float64()),
+        pa.field("gpus", pa.list_(_GPU_TYPE), nullable=False),
+    ]
 )
 
-_SCHEMA = """
+_BASE_COLUMNS = """
+    timestamp_ms INTEGER PRIMARY KEY,
+    timestamp TEXT NOT NULL,
+    sample_count INTEGER NOT NULL CHECK(sample_count > 0),
+    gpu_error TEXT,
+    cpu_name TEXT NOT NULL,
+    cpu_cores_physical INTEGER NOT NULL,
+    cpu_cores_logical INTEGER NOT NULL,
+    cpu_utilization REAL,
+    cpu_frequency_current_mhz REAL,
+    cpu_frequency_max_mhz REAL,
+    cpu_temperature REAL,
+    cpu_power_watts REAL,
+    cpu_power_source TEXT NOT NULL,
+    cpu_power_available INTEGER NOT NULL CHECK(cpu_power_available IN (0, 1)),
+    cpu_power_status TEXT NOT NULL,
+    cpu_power_message TEXT NOT NULL,
+    cpu_power_discovered_sources INTEGER NOT NULL,
+    cpu_power_readable_sources INTEGER NOT NULL,
+    cpu_power_setup_hint TEXT,
+    ram_total_gb REAL,
+    ram_used_gb REAL,
+    ram_available_gb REAL,
+    ram_utilization REAL,
+    ram_swap_total_gb REAL,
+    ram_swap_used_gb REAL,
+    ram_swap_percent REAL
+"""
+
+_SCHEMA = f"""
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=FULL;
 PRAGMA foreign_keys=ON;
 PRAGMA busy_timeout=5000;
-CREATE TABLE IF NOT EXISTS raw_samples (
-    timestamp_ms INTEGER PRIMARY KEY,
-    payload_json TEXT NOT NULL,
-    cpu_utilization REAL,
-    ram_utilization REAL,
-    gpu_utilization_json TEXT,
-    gpu_memory_used_json TEXT,
-    gpu_names_json TEXT,
-    staging_relative_path TEXT,
-    staging_row_locator INTEGER
+BEGIN IMMEDIATE;
+PRAGMA user_version={TELEMETRY_SCHEMA_VERSION};
+CREATE TABLE telemetry_schema (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    version INTEGER NOT NULL
 ) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS minute_aggregates (
-    bucket_ms INTEGER PRIMARY KEY,
-    sample_count INTEGER NOT NULL,
-    payload_json TEXT NOT NULL,
-    cpu_utilization REAL,
-    ram_utilization REAL,
-    gpu_utilization_json TEXT,
-    gpu_memory_used_json TEXT,
-    gpu_names_json TEXT
+INSERT INTO telemetry_schema(singleton, version) VALUES (1, {TELEMETRY_SCHEMA_VERSION});
+CREATE TABLE raw_samples ({_BASE_COLUMNS}) WITHOUT ROWID;
+CREATE TABLE raw_cpu_cores (
+    timestamp_ms INTEGER NOT NULL REFERENCES raw_samples(timestamp_ms) ON DELETE CASCADE,
+    core_index INTEGER NOT NULL,
+    utilization REAL NOT NULL,
+    PRIMARY KEY(timestamp_ms, core_index)
 ) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS scientific_artifact_receipts (
-    artifact_id TEXT PRIMARY KEY,
-    owner_kind TEXT NOT NULL,
-    owner_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    schema_id TEXT NOT NULL,
-    artifact_schema_version INTEGER NOT NULL,
-    storage_root TEXT NOT NULL,
-    relative_path TEXT NOT NULL,
-    content_sha256 TEXT NOT NULL,
-    size_bytes INTEGER NOT NULL,
-    row_count INTEGER NOT NULL,
-    column_schema_sha256 TEXT NOT NULL,
-    media_type TEXT NOT NULL,
-    availability TEXT NOT NULL,
-    source_receipts_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(owner_kind, owner_id, role, content_sha256)
-);
-CREATE TABLE IF NOT EXISTS scientific_payload_migrations (
-    migration_id TEXT PRIMARY KEY,
-    source_store TEXT NOT NULL,
-    source_table TEXT NOT NULL,
-    source_column TEXT NOT NULL,
-    source_key TEXT NOT NULL,
-    source_sha256 TEXT NOT NULL,
-    artifact_id TEXT NOT NULL,
-    artifact_sha256 TEXT NOT NULL,
-    equivalence_sha256 TEXT NOT NULL,
-    state TEXT NOT NULL,
-    diagnostic TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS telemetry_sample_artifact_refs (
-    timestamp_ms INTEGER PRIMARY KEY,
-    artifact_ref TEXT NOT NULL
+CREATE TABLE raw_gpu_samples (
+    timestamp_ms INTEGER NOT NULL REFERENCES raw_samples(timestamp_ms) ON DELETE CASCADE,
+    gpu_index INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    utilization REAL,
+    memory_utilization REAL,
+    memory_used_mb REAL,
+    memory_total_mb REAL,
+    reserved_memory_mb REAL,
+    power_draw_w REAL,
+    power_limit_w REAL,
+    min_power_watts REAL,
+    default_power_watts REAL,
+    max_power_watts REAL,
+    temperature REAL,
+    fan_speed REAL,
+    clock_graphics_mhz REAL,
+    clock_memory_mhz REAL,
+    clock_max_graphics_mhz REAL,
+    clock_max_memory_mhz REAL,
+    PRIMARY KEY(timestamp_ms, gpu_index)
 ) WITHOUT ROWID;
+CREATE TABLE raw_gpu_processes (
+    timestamp_ms INTEGER NOT NULL,
+    gpu_index INTEGER NOT NULL,
+    pid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    memory_mb INTEGER NOT NULL,
+    PRIMARY KEY(timestamp_ms, gpu_index, pid),
+    FOREIGN KEY(timestamp_ms, gpu_index) REFERENCES raw_gpu_samples(timestamp_ms, gpu_index) ON DELETE CASCADE
+) WITHOUT ROWID;
+CREATE TABLE minute_aggregates ({_BASE_COLUMNS}) WITHOUT ROWID;
+CREATE TABLE minute_cpu_cores (
+    timestamp_ms INTEGER NOT NULL REFERENCES minute_aggregates(timestamp_ms) ON DELETE CASCADE,
+    core_index INTEGER NOT NULL,
+    utilization REAL NOT NULL,
+    PRIMARY KEY(timestamp_ms, core_index)
+) WITHOUT ROWID;
+CREATE TABLE minute_gpu_samples (
+    timestamp_ms INTEGER NOT NULL REFERENCES minute_aggregates(timestamp_ms) ON DELETE CASCADE,
+    gpu_index INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    utilization REAL,
+    memory_utilization REAL,
+    memory_used_mb REAL,
+    memory_total_mb REAL,
+    reserved_memory_mb REAL,
+    power_draw_w REAL,
+    power_limit_w REAL,
+    min_power_watts REAL,
+    default_power_watts REAL,
+    max_power_watts REAL,
+    temperature REAL,
+    fan_speed REAL,
+    clock_graphics_mhz REAL,
+    clock_memory_mhz REAL,
+    clock_max_graphics_mhz REAL,
+    clock_max_memory_mhz REAL,
+    PRIMARY KEY(timestamp_ms, gpu_index)
+) WITHOUT ROWID;
+CREATE TABLE minute_gpu_processes (
+    timestamp_ms INTEGER NOT NULL,
+    gpu_index INTEGER NOT NULL,
+    pid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    memory_mb INTEGER NOT NULL,
+    PRIMARY KEY(timestamp_ms, gpu_index, pid),
+    FOREIGN KEY(timestamp_ms, gpu_index) REFERENCES minute_gpu_samples(timestamp_ms, gpu_index) ON DELETE CASCADE
+) WITHOUT ROWID;
+CREATE TABLE telemetry_partitions (
+    partition_start_ms INTEGER PRIMARY KEY,
+    partition_end_ms INTEGER NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    content_sha256 TEXT NOT NULL CHECK(length(content_sha256) = 64),
+    size_bytes INTEGER NOT NULL CHECK(size_bytes > 0),
+    row_count INTEGER NOT NULL CHECK(row_count > 0),
+    created_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TRIGGER raw_samples_guard_update BEFORE UPDATE ON raw_samples
+BEGIN SELECT RAISE(ABORT, 'raw_samples is append-only'); END;
+CREATE TRIGGER raw_samples_guard_delete BEFORE DELETE ON raw_samples
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw_samples retention authorization required'); END;
+CREATE TRIGGER minute_aggregates_guard_update BEFORE UPDATE ON minute_aggregates
+BEGIN SELECT RAISE(ABORT, 'minute_aggregates is append-only'); END;
+CREATE TRIGGER minute_aggregates_guard_delete BEFORE DELETE ON minute_aggregates
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute_aggregates retention authorization required'); END;
+CREATE TRIGGER raw_cpu_cores_guard_update BEFORE UPDATE ON raw_cpu_cores
+BEGIN SELECT RAISE(ABORT, 'raw_cpu_cores is append-only'); END;
+CREATE TRIGGER raw_cpu_cores_guard_delete BEFORE DELETE ON raw_cpu_cores
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw_cpu_cores retention authorization required'); END;
+CREATE TRIGGER raw_gpu_samples_guard_update BEFORE UPDATE ON raw_gpu_samples
+BEGIN SELECT RAISE(ABORT, 'raw_gpu_samples is append-only'); END;
+CREATE TRIGGER raw_gpu_samples_guard_delete BEFORE DELETE ON raw_gpu_samples
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw_gpu_samples retention authorization required'); END;
+CREATE TRIGGER raw_gpu_processes_guard_update BEFORE UPDATE ON raw_gpu_processes
+BEGIN SELECT RAISE(ABORT, 'raw_gpu_processes is append-only'); END;
+CREATE TRIGGER raw_gpu_processes_guard_delete BEFORE DELETE ON raw_gpu_processes
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw_gpu_processes retention authorization required'); END;
+CREATE TRIGGER minute_cpu_cores_guard_update BEFORE UPDATE ON minute_cpu_cores
+BEGIN SELECT RAISE(ABORT, 'minute_cpu_cores is append-only'); END;
+CREATE TRIGGER minute_cpu_cores_guard_delete BEFORE DELETE ON minute_cpu_cores
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute_cpu_cores retention authorization required'); END;
+CREATE TRIGGER minute_gpu_samples_guard_update BEFORE UPDATE ON minute_gpu_samples
+BEGIN SELECT RAISE(ABORT, 'minute_gpu_samples is append-only'); END;
+CREATE TRIGGER minute_gpu_samples_guard_delete BEFORE DELETE ON minute_gpu_samples
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute_gpu_samples retention authorization required'); END;
+CREATE TRIGGER minute_gpu_processes_guard_update BEFORE UPDATE ON minute_gpu_processes
+BEGIN SELECT RAISE(ABORT, 'minute_gpu_processes is append-only'); END;
+CREATE TRIGGER minute_gpu_processes_guard_delete BEFORE DELETE ON minute_gpu_processes
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute_gpu_processes retention authorization required'); END;
+CREATE TRIGGER telemetry_partitions_guard_update BEFORE UPDATE ON telemetry_partitions
+BEGIN SELECT RAISE(ABORT, 'telemetry_partitions is append-only'); END;
+CREATE TRIGGER telemetry_partitions_guard_delete BEFORE DELETE ON telemetry_partitions
+WHEN telemetry_retention_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'telemetry_partitions retention authorization required'); END;
+CREATE TRIGGER raw_samples_guard_finalized_hour BEFORE INSERT ON raw_samples
+WHEN EXISTS (
+    SELECT 1 FROM telemetry_partitions
+    WHERE NEW.timestamp_ms >= partition_start_ms AND NEW.timestamp_ms < partition_end_ms
+) OR EXISTS (
+    SELECT 1 FROM minute_aggregates
+    WHERE timestamp_ms = (NEW.timestamp_ms / 60000) * 60000
+)
+BEGIN SELECT RAISE(ABORT, 'raw sample belongs to a finalized telemetry period'); END;
+CREATE TRIGGER raw_samples_guard_insert_authority BEFORE INSERT ON raw_samples
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw sample insert authority required'); END;
+CREATE TRIGGER minute_aggregates_guard_insert_authority BEFORE INSERT ON minute_aggregates
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute aggregate insert authority required'); END;
+CREATE TRIGGER raw_cpu_cores_guard_insert_authority BEFORE INSERT ON raw_cpu_cores
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw CPU core insert authority required'); END;
+CREATE TRIGGER raw_gpu_samples_guard_insert_authority BEFORE INSERT ON raw_gpu_samples
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw GPU sample insert authority required'); END;
+CREATE TRIGGER raw_gpu_processes_guard_insert_authority BEFORE INSERT ON raw_gpu_processes
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'raw GPU process insert authority required'); END;
+CREATE TRIGGER minute_cpu_cores_guard_insert_authority BEFORE INSERT ON minute_cpu_cores
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute CPU core insert authority required'); END;
+CREATE TRIGGER minute_gpu_samples_guard_insert_authority BEFORE INSERT ON minute_gpu_samples
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute GPU sample insert authority required'); END;
+CREATE TRIGGER minute_gpu_processes_guard_insert_authority BEFORE INSERT ON minute_gpu_processes
+WHEN telemetry_writer_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'minute GPU process insert authority required'); END;
+CREATE TRIGGER telemetry_partitions_guard_insert_authority BEFORE INSERT ON telemetry_partitions
+WHEN telemetry_partition_authorized() = 0
+BEGIN SELECT RAISE(ABORT, 'telemetry partition insert authority required'); END;
+COMMIT;
 """
+
+_EXPECTED_SCHEMA_OBJECTS: dict[tuple[str, str], str] | None = None
+
+
+def _schema_objects(connection: sqlite3.Connection) -> dict[tuple[str, str], str]:
+    return {
+        (str(row[0]), str(row[1])): " ".join(str(row[2]).split())
+        for row in connection.execute(
+            """SELECT type, name, sql FROM sqlite_master
+            WHERE type IN ('table', 'trigger')
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY type, name"""
+        )
+    }
+
+
+def _expected_schema_objects() -> dict[tuple[str, str], str]:
+    global _EXPECTED_SCHEMA_OBJECTS
+    if _EXPECTED_SCHEMA_OBJECTS is None:
+        connection = sqlite3.connect(":memory:", isolation_level=None)
+        connection.create_function("telemetry_retention_authorized", 0, lambda: 0)
+        try:
+            connection.executescript(_SCHEMA)
+            _EXPECTED_SCHEMA_OBJECTS = _schema_objects(connection)
+        finally:
+            connection.close()
+    return dict(_EXPECTED_SCHEMA_OBJECTS)
+
+
+def _validate_schema(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT version FROM telemetry_schema WHERE singleton = 1"
+    ).fetchone()
+    schema_rows = connection.execute("SELECT COUNT(*) FROM telemetry_schema").fetchone()
+    if (
+        row is None
+        or schema_rows is None
+        or int(schema_rows[0]) != 1
+        or int(row[0]) != TELEMETRY_SCHEMA_VERSION
+        or int(connection.execute("PRAGMA user_version").fetchone()[0]) != TELEMETRY_SCHEMA_VERSION
+        or _schema_objects(connection) != _expected_schema_objects()
+        or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
+    ):
+        raise RuntimeError("unsupported or incomplete typed telemetry store schema")
+
+_BASE_INSERT_COLUMNS = (
+    "timestamp_ms", "timestamp", "sample_count", "gpu_error", "cpu_name",
+    "cpu_cores_physical", "cpu_cores_logical", "cpu_utilization",
+    "cpu_frequency_current_mhz", "cpu_frequency_max_mhz", "cpu_temperature",
+    "cpu_power_watts", "cpu_power_source", "cpu_power_available",
+    "cpu_power_status", "cpu_power_message", "cpu_power_discovered_sources",
+    "cpu_power_readable_sources", "cpu_power_setup_hint", "ram_total_gb",
+    "ram_used_gb", "ram_available_gb", "ram_utilization", "ram_swap_total_gb",
+    "ram_swap_used_gb", "ram_swap_percent",
+)
+_GPU_COLUMNS = (
+    "timestamp_ms", "gpu_index", "name", "utilization", "memory_utilization",
+    "memory_used_mb", "memory_total_mb", "reserved_memory_mb", "power_draw_w",
+    "power_limit_w", "min_power_watts", "default_power_watts", "max_power_watts",
+    "temperature", "fan_speed", "clock_graphics_mhz", "clock_memory_mhz",
+    "clock_max_graphics_mhz", "clock_max_memory_mhz",
+)
 
 
 def telemetry_db_path() -> Path:
     explicit = os.getenv("BMS_TELEMETRY_DB_PATH")
-    if explicit:
-        path = Path(explicit).expanduser().resolve()
-    else:
-        path = Path("/mnt/BioModStack/telemetry/telemetry.sqlite3").resolve()
+    path = Path(explicit).expanduser().resolve() if explicit else Path("/mnt/BioModStack/telemetry/telemetry.sqlite3").resolve()
     jobs = os.getenv("BMS_DB_PATH")
     if jobs and path == Path(jobs).expanduser().resolve():
         raise ValueError("telemetry database must be separate from the jobs database")
     return path
 
 
-def _connect(path: Path, *, maintenance: bool = False) -> sqlite3.Connection:
+def _connect(
+    path: Path,
+    *,
+    maintenance: bool = False,
+    writer: bool = False,
+    publisher: bool = False,
+) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=30, isolation_level=None)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA busy_timeout=30000")
     connection.create_function("telemetry_retention_authorized", 0, lambda: 1 if maintenance else 0)
+    connection.create_function("telemetry_writer_authorized", 0, lambda: 1 if writer else 0)
+    connection.create_function("telemetry_partition_authorized", 0, lambda: 1 if publisher else 0)
     return connection
 
 
@@ -144,6 +384,22 @@ def open_read_only(path: Path) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only=ON")
     return connection
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    return float(value)
+
+
+def _integer(value: Any, default: int = 0) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    return int(value)
+
+
+def _object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _average_values(values: list[Any]) -> Any:
@@ -164,621 +420,530 @@ def _average_values(values: list[Any]) -> Any:
     return present[-1]
 
 
-def _projection(payload: dict[str, Any]) -> tuple[float | None, float | None, list[float], list[float], list[str]]:
-    cpu = payload.get("cpu") or {}
-    ram = payload.get("ram") or {}
-    gpus = payload.get("gpus") or []
-    gpu_util = [float(item.get("utilization")) for item in gpus if isinstance(item, dict) and item.get("utilization") is not None]
-    gpu_memory = [float(item.get("memory_used_mb")) for item in gpus if isinstance(item, dict) and item.get("memory_used_mb") is not None]
-    gpu_names = [str(item.get("name", item.get("index", ""))) for item in gpus if isinstance(item, dict)]
-    return (
-        float(cpu["utilization"]) if cpu.get("utilization") is not None else None,
-        float(ram["utilization"]) if ram.get("utilization") is not None else None,
-        gpu_util,
-        gpu_memory,
-        gpu_names,
-    )
+def _aggregate_samples(samples: list[dict[str, Any]], bucket: int) -> dict[str, Any]:
+    aggregate = _average_values(samples)
+    aggregate["timestamp_ms"] = bucket
+    aggregate["timestamp"] = datetime.fromtimestamp(bucket / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+    last_gpus = (samples[-1].get("gpus") or []) if samples else []
+    for index, gpu in enumerate(aggregate.get("gpus") or []):
+        if index < len(last_gpus):
+            gpu["processes"] = list(last_gpus[index].get("processes") or [])
+    return aggregate
 
 
-def _encoded(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
-
-
-def _artifact_source_sha(rows: list[dict[str, Any]]) -> str:
+def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    for row in rows:
-        digest.update(canonical_json_bytes(row))
-        digest.update(b"\n")
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
     return digest.hexdigest()
-
-
-def _schema_digest(schema: pa.Schema) -> str:
-    fields = [
-        {"name": field.name, "type": str(field.type), "nullable": field.nullable}
-        for field in schema
-    ]
-    return hashlib.sha256(canonical_json_bytes(fields)).hexdigest()
-
-
-def _type_signature(data_type: pa.DataType) -> Any:
-    if pa.types.is_list(data_type):
-        return ("list", _type_signature(data_type.value_type))
-    return str(data_type)
-
-
-def _schema_signature(schema: pa.Schema) -> tuple[Any, ...]:
-    return tuple(
-        (field.name, _type_signature(field.type), field.nullable)
-        for field in schema
-    )
-
-
-def _safe_staging_path(root: Path, relative: str) -> Path:
-    path = (root / relative).resolve()
-    path.relative_to(root.resolve())
-    if path.exists() and path.is_symlink():
-        raise ValueError("staging path must not be a symlink")
-    return path
-
-
-def _receipt_values(artifact: Any, source: dict[str, Any]) -> tuple[Any, ...]:
-    ref = artifact.reference()
-    return (
-        artifact.artifact_id,
-        artifact.owner_kind,
-        artifact.owner_id,
-        artifact.role,
-        artifact.schema_id,
-        artifact.schema_version,
-        "scientific_artifact_root",
-        artifact.relative_path,
-        artifact.content_sha256,
-        artifact.size_bytes,
-        artifact.row_count,
-        artifact.column_schema_sha256,
-        artifact.media_type,
-        "available",
-        _encoded(source),
-        datetime.now(timezone.utc).isoformat(),
-    )
-
-
-_RECEIPT_COLUMNS = (
-    "artifact_id", "owner_kind", "owner_id", "role", "schema_id",
-    "artifact_schema_version", "storage_root", "relative_path",
-    "content_sha256", "size_bytes", "row_count", "column_schema_sha256",
-    "media_type", "availability", "source_receipts_json", "created_at",
-)
-
-
-def _rebuild_legacy_receipt_table(connection: sqlite3.Connection) -> None:
-    columns = {
-        str(row[1])
-        for row in connection.execute(
-            "PRAGMA table_info(scientific_artifact_receipts)"
-        )
-    }
-    if columns == set(_RECEIPT_COLUMNS):
-        return
-    version_column = (
-        "artifact_schema_version"
-        if "artifact_schema_version" in columns
-        else "schema_version"
-    )
-    if version_column not in columns:
-        raise ValueError("telemetry artifact receipt schema has no version column")
-    storage_expression = (
-        "storage_root" if "storage_root" in columns
-        else "'scientific_artifact_root'"
-    )
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        connection.execute(
-            "ALTER TABLE scientific_artifact_receipts "
-            "RENAME TO scientific_artifact_receipts_legacy"
-        )
-        connection.execute(
-            """CREATE TABLE scientific_artifact_receipts (
-                artifact_id TEXT PRIMARY KEY,
-                owner_kind TEXT NOT NULL,
-                owner_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                schema_id TEXT NOT NULL,
-                artifact_schema_version INTEGER NOT NULL,
-                storage_root TEXT NOT NULL,
-                relative_path TEXT NOT NULL,
-                content_sha256 TEXT NOT NULL,
-                size_bytes INTEGER NOT NULL,
-                row_count INTEGER NOT NULL,
-                column_schema_sha256 TEXT NOT NULL,
-                media_type TEXT NOT NULL,
-                availability TEXT NOT NULL,
-                source_receipts_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE(owner_kind, owner_id, role, content_sha256)
-            )"""
-        )
-        connection.execute(
-            """INSERT INTO scientific_artifact_receipts(
-                artifact_id, owner_kind, owner_id, role, schema_id,
-                artifact_schema_version, storage_root, relative_path,
-                content_sha256, size_bytes, row_count, column_schema_sha256,
-                media_type, availability, source_receipts_json, created_at
-            )
-            SELECT artifact_id, owner_kind, owner_id, role, schema_id,
-                   """ + version_column + ", " + storage_expression + """,
-                   relative_path, content_sha256, size_bytes, row_count,
-                   column_schema_sha256, media_type, availability,
-                   source_receipts_json, created_at
-            FROM scientific_artifact_receipts_legacy"""
-        )
-        connection.execute("DROP TABLE scientific_artifact_receipts_legacy")
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
 
 
 class TelemetryStore:
     def __init__(self, path: Path):
         self.path = path.resolve()
-        self.artifact_root = Path(
-            os.getenv("BMS_TELEMETRY_ARTIFACT_ROOT", str(self.path.parent / "scientific_artifacts"))
+        self.partition_root = Path(
+            os.getenv("BMS_TELEMETRY_PARTITION_ROOT", str(self.path.parent / "partitions"))
         ).expanduser().resolve()
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.artifact_root.mkdir(parents=True, exist_ok=True)
+        self.partition_root.mkdir(parents=True, exist_ok=True)
         with _connect(self.path) as connection:
-            connection.executescript(_SCHEMA)
-            _rebuild_legacy_receipt_table(connection)
-            ledger_columns = {row[1] for row in connection.execute("PRAGMA table_info(scientific_payload_migrations)")}
-            if "attempt_count" not in ledger_columns:
-                connection.execute(
-                    "ALTER TABLE scientific_payload_migrations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+            tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
                 )
-            for table in ("raw_samples", "minute_aggregates"):
-                existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
-                additions = {
-                    "cpu_utilization": "REAL",
-                    "ram_utilization": "REAL",
-                    "gpu_utilization_json": "TEXT",
-                    "gpu_memory_used_json": "TEXT",
-                    "gpu_names_json": "TEXT",
+            }
+            if not tables:
+                connection.executescript(_SCHEMA)
+                tables = {
+                    str(item[0])
+                    for item in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                    )
                 }
-                if table == "raw_samples":
-                    additions.update({"staging_relative_path": "TEXT", "staging_row_locator": "INTEGER"})
-                for name, ddl in additions.items():
-                    if name not in existing:
-                        connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-            connection.executescript(
-                """
-                CREATE TRIGGER IF NOT EXISTS raw_samples_guard_update
-                BEFORE UPDATE ON raw_samples
-                BEGIN SELECT RAISE(ABORT, 'raw_samples is append-only'); END;
-                CREATE TRIGGER IF NOT EXISTS raw_samples_guard_delete
-                BEFORE DELETE ON raw_samples
-                WHEN telemetry_retention_authorized() = 0
-                BEGIN SELECT RAISE(ABORT, 'raw_samples retention authorization required'); END;
-                CREATE TRIGGER IF NOT EXISTS minute_aggregates_guard_update
-                BEFORE UPDATE ON minute_aggregates
-                BEGIN SELECT RAISE(ABORT, 'minute_aggregates is append-only'); END;
-                CREATE TRIGGER IF NOT EXISTS minute_aggregates_guard_delete
-                BEFORE DELETE ON minute_aggregates
-                WHEN telemetry_retention_authorized() = 0
-                BEGIN SELECT RAISE(ABORT, 'minute_aggregates retention authorization required'); END;
-                """
-            )
-
-    def _stage_sample(self, payload: dict[str, Any]) -> tuple[str, int]:
-        bucket = (int(payload["timestamp_ms"]) // 60_000) * 60_000
-        relative = f"staging/raw-{bucket}.jsonl"
-        path = _safe_staging_path(self.artifact_root, relative)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        locator = 0
-        if path.exists():
-            with path.open("rb") as handle:
-                locator = sum(1 for _ in handle)
-        with path.open("ab") as handle:
-            handle.write((_encoded(payload) + "\n").encode("utf-8"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        return relative, locator
-
-    def append_sample(self, payload: dict[str, Any]) -> None:
-        timestamp_ms = int(payload["timestamp_ms"])
-        relative, locator = self._stage_sample(payload)
-        cpu, ram, gpu_util, gpu_memory, gpu_names = _projection(payload)
-        with _connect(self.path) as connection:
-            connection.execute(
-                """INSERT INTO raw_samples(
-                    timestamp_ms, payload_json, cpu_utilization, ram_utilization,
-                    gpu_utilization_json, gpu_memory_used_json, gpu_names_json,
-                    staging_relative_path, staging_row_locator
-                ) VALUES (?, '{}', ?, ?, ?, ?, ?, ?, ?)""",
-                (timestamp_ms, cpu, ram, _encoded(gpu_util), _encoded(gpu_memory), _encoded(gpu_names), relative, locator),
-            )
-
-    def _samples_for_rows(
-        self,
-        rows: list[sqlite3.Row],
-        *,
-        connection: sqlite3.Connection | None = None,
-    ) -> dict[int, dict[str, Any]]:
-        samples: dict[int, dict[str, Any]] = {}
-        staging_groups: dict[str, list[sqlite3.Row]] = {}
-        unresolved: list[sqlite3.Row] = []
-
-        for row in rows:
-            relative = row["staging_relative_path"]
-            if relative:
-                staging_groups.setdefault(str(relative), []).append(row)
-                continue
-            value = json.loads(row["payload_json"])
-            resolved = resolve_json_value(value, root=self.artifact_root)
-            if not isinstance(resolved, dict):
-                raise ValueError("telemetry payload is not an object")
-            samples[int(row["timestamp_ms"])] = resolved
-
-        for relative, staged_rows in staging_groups.items():
-            path = _safe_staging_path(self.artifact_root, relative)
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except FileNotFoundError:
-                unresolved.extend(staged_rows)
-                continue
-            for row in staged_rows:
-                locator = int(row["staging_row_locator"])
-                payload = json.loads(lines[locator])
-                if not isinstance(payload, dict):
-                    raise ValueError("telemetry staging payload is not an object")
-                samples[int(row["timestamp_ms"])] = payload
-
-        if unresolved:
-            lookup = connection or open_read_only(self.path)
-            try:
-                timestamps = [int(row["timestamp_ms"]) for row in unresolved]
-                reference_rows = lookup.execute(
-                    """SELECT timestamp_ms, artifact_ref
-                    FROM telemetry_sample_artifact_refs
-                    WHERE timestamp_ms >= ? AND timestamp_ms <= ?""",
-                    (min(timestamps), max(timestamps)),
-                ).fetchall()
-            finally:
-                if connection is None:
-                    lookup.close()
-            references = {int(row["timestamp_ms"]): row["artifact_ref"] for row in reference_rows}
-            artifact_groups: dict[
-                tuple[str, str, int, int, str],
-                tuple[dict[str, Any], list[tuple[int, int]]],
-            ] = {}
-            for row in unresolved:
-                timestamp_ms = int(row["timestamp_ms"])
-                encoded_reference = references.get(timestamp_ms)
-                if encoded_reference is None:
-                    raise FileNotFoundError(
-                        f"telemetry sample staging and artifact reference are unavailable: {timestamp_ms}"
-                    )
-                reference = dict(require_row_reference(json.loads(encoded_reference)))
-                key = (
-                    str(reference["relative_path"]),
-                    str(reference["content_sha256"]),
-                    int(reference["size_bytes"]),
-                    int(reference["row_count"]),
-                    str(reference["value_field"]),
-                )
-                group = artifact_groups.setdefault(key, (reference, []))
-                group[1].append((timestamp_ms, int(reference["row_locator"])))
-
-            for reference, locators in artifact_groups.values():
-                artifact_rows = read_rows(reference, root=self.artifact_root, max_rows=MAX_HISTORY_POINTS)
-                field = str(reference["value_field"])
-                for timestamp_ms, locator in locators:
-                    raw_value = artifact_rows[locator][field]
-                    payload = json.loads(str(raw_value)) if field.endswith("_json") else raw_value
-                    if not isinstance(payload, dict):
-                        raise ValueError("telemetry artifact payload is not an object")
-                    samples[timestamp_ms] = payload
-
-        return samples
-
-    def _sample_for_row(self, row: sqlite3.Row, connection: sqlite3.Connection | None = None) -> dict[str, Any]:
-        return self._samples_for_rows([row], connection=connection)[int(row["timestamp_ms"])]
-
-    def _insert_receipt(self, connection: sqlite3.Connection, artifact: Any, source: dict[str, Any]) -> None:
-        values = _receipt_values(artifact, source)
-        connection.execute(
-            """INSERT INTO scientific_artifact_receipts(
-                artifact_id, owner_kind, owner_id, role, schema_id, artifact_schema_version,
-                storage_root, relative_path, content_sha256, size_bytes, row_count,
-                column_schema_sha256, media_type, availability, source_receipts_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(artifact_id) DO NOTHING""",
-            values,
-        )
-        persisted = connection.execute(
-            "SELECT * FROM scientific_artifact_receipts WHERE artifact_id = ?",
-            (artifact.artifact_id,),
-        ).fetchone()
-        if persisted is None:
-            raise ValueError("telemetry artifact receipt conflict")
-        conflicts = [
-            column
-            for column, expected in zip(_RECEIPT_COLUMNS[:-1], values[:-1], strict=True)
-            if persisted[column] != expected
-        ]
-        if conflicts:
-            raise ValueError(
-                "telemetry artifact receipt conflict: " + ", ".join(conflicts)
-            )
-
-    def reconcile_artifact_receipts(self) -> dict[str, int]:
-        candidates: dict[str, tuple[InstalledArtifact, dict[str, Any]]] = {}
-
-        def installed_from_reference(
-            reference: dict[str, Any],
-            *,
-            owner_kind: str,
-            owner_id: str,
-            role: str,
-            schema_id: str,
-            schema_version: int = 1,
-        ) -> InstalledArtifact:
-            path = verify_artifact(reference, root=self.artifact_root)
-            compact = "p" in reference
-            relative_path = str(reference["p"] if compact else reference["relative_path"])
-            content_sha256 = str(reference["h"] if compact else reference["content_sha256"])
-            size_bytes = int(reference["z"] if compact else reference["size_bytes"])
-            row_count = int(reference["n"] if compact else reference["row_count"])
-            schema = pq.read_schema(path)
-            return InstalledArtifact(
-                artifact_id=str(reference["artifact_id"]),
-                owner_kind=owner_kind,
-                owner_id=owner_id,
-                role=role,
-                schema_id=schema_id,
-                schema_version=schema_version,
-                relative_path=relative_path,
-                storage_path=path,
-                content_sha256=content_sha256,
-                size_bytes=size_bytes,
-                row_count=row_count,
-                column_schema_sha256=_schema_digest(schema),
-            )
-
-        with _connect(self.path) as connection:
-            for receipt in connection.execute(
-                "SELECT * FROM scientific_artifact_receipts"
-            ).fetchall():
-                reference = artifact_reference(
-                    artifact_id=receipt["artifact_id"],
-                    owner_kind=receipt["owner_kind"],
-                    owner_id=receipt["owner_id"],
-                    role=receipt["role"],
-                    schema_id=receipt["schema_id"],
-                    schema_version=receipt["artifact_schema_version"],
-                    content_sha256=receipt["content_sha256"],
-                    size_bytes=receipt["size_bytes"],
-                    row_count=receipt["row_count"],
-                    relative_path=receipt["relative_path"],
-                )
-                installed = installed_from_reference(
-                    reference,
-                    owner_kind=str(receipt["owner_kind"]),
-                    owner_id=str(receipt["owner_id"]),
-                    role=str(receipt["role"]),
-                    schema_id=str(receipt["schema_id"]),
-                    schema_version=int(receipt["artifact_schema_version"]),
-                )
-                candidates[installed.artifact_id] = (
-                    installed,
-                    json.loads(receipt["source_receipts_json"]),
-                )
-
-            for row in connection.execute(
-                "SELECT raw_samples.timestamp_ms, telemetry_sample_artifact_refs.artifact_ref "
-                "FROM telemetry_sample_artifact_refs "
-                "JOIN raw_samples USING(timestamp_ms) ORDER BY raw_samples.timestamp_ms"
-            ).fetchall():
-                reference = json.loads(row["artifact_ref"])
-                bucket = (int(row["timestamp_ms"]) // 60_000) * 60_000
-                installed = installed_from_reference(
-                    reference,
-                    owner_kind="telemetry_bucket",
-                    owner_id=f"raw:{bucket}",
-                    role="raw_history",
-                    schema_id="bms.telemetry.raw.v1",
-                )
-                if _schema_signature(pq.read_schema(installed.storage_path)) != _schema_signature(_TELEMETRY_SCHEMA):
-                    raise ValueError(f"telemetry raw artifact schema mismatch: {installed.artifact_id}")
-                candidates[installed.artifact_id] = (
-                    installed,
-                    {
-                        "source_store": "telemetry",
-                        "source_table": "raw_samples",
-                        "source_key": str(bucket),
-                    },
-                )
-
-            for row in connection.execute(
-                "SELECT bucket_ms, payload_json FROM minute_aggregates ORDER BY bucket_ms"
-            ).fetchall():
-                reference = json.loads(row["payload_json"])
-                if reference.get("schema") != "bms.scientific-artifact-reference.v1":
-                    continue
-                installed = installed_from_reference(
-                    reference,
-                    owner_kind="telemetry_bucket",
-                    owner_id=f"minute:{int(row['bucket_ms'])}",
-                    role="minute_aggregate",
-                    schema_id="bms.telemetry.aggregate.v1",
-                )
-                if _schema_signature(pq.read_schema(installed.storage_path)) != _schema_signature(_ENVELOPE_SCHEMA):
-                    raise ValueError(
-                        f"telemetry aggregate artifact schema mismatch: {installed.artifact_id}"
-                    )
-                candidates[installed.artifact_id] = (
-                    installed,
-                    {
-                        "source_store": "telemetry",
-                        "source_table": "minute_aggregates",
-                        "source_key": str(int(row["bucket_ms"])),
-                    },
-                )
-
-            inserted = 0
-            repaired = 0
+            if "telemetry_schema" not in tables:
+                raise RuntimeError("legacy JSON telemetry store must be discarded before typed-store startup")
+            _validate_schema(connection)
             connection.execute("BEGIN IMMEDIATE")
+            changed_directories: set[Path] = set()
             try:
-                for artifact_id in sorted(candidates):
-                    installed, source = candidates[artifact_id]
-                    values = _receipt_values(installed, source)
-                    persisted = connection.execute(
-                        "SELECT * FROM scientific_artifact_receipts WHERE artifact_id = ?",
-                        (artifact_id,),
-                    ).fetchone()
-                    if persisted is None:
-                        self._insert_receipt(connection, installed, source)
-                        inserted += 1
-                        continue
-                    conflicts = [
-                        column
-                        for column, expected in zip(
-                            _RECEIPT_COLUMNS[:-1], values[:-1], strict=True
-                        )
-                        if persisted[column] != expected
-                    ]
-                    if conflicts:
-                        assignments = ", ".join(
-                            f'"{column}" = ?' for column in _RECEIPT_COLUMNS[1:-1]
-                        )
-                        connection.execute(
-                            f"UPDATE scientific_artifact_receipts SET {assignments} "
-                            "WHERE artifact_id = ?",
-                            (*values[1:-1], artifact_id),
-                        )
-                        repaired += 1
+                registered = {
+                    str(item["relative_path"]): (
+                        str(item["content_sha256"]),
+                        int(item["size_bytes"]),
+                    )
+                    for item in connection.execute(
+                        "SELECT relative_path, content_sha256, size_bytes FROM telemetry_partitions"
+                    )
+                }
+                for relative, (content_sha256, size_bytes) in registered.items():
+                    destination = (self.partition_root / relative).resolve()
+                    destination.relative_to(self.partition_root)
+                    retiring = Path(f"{destination}.retiring")
+                    if not destination.exists() and retiring.exists():
+                        os.replace(retiring, destination)
+                        changed_directories.add(destination.parent)
+                    if (
+                        not destination.is_file()
+                        or destination.stat().st_size != size_bytes
+                        or _file_sha256(destination) != content_sha256
+                    ):
+                        raise RuntimeError("registered telemetry partition is missing or invalid")
+                for candidate in self.partition_root.rglob("*.parquet"):
+                    relative = candidate.relative_to(self.partition_root).as_posix()
+                    if relative not in registered:
+                        candidate.unlink(missing_ok=True)
+                        changed_directories.add(candidate.parent)
+                for candidate in self.partition_root.rglob("*.retiring"):
+                    candidate.unlink(missing_ok=True)
+                    changed_directories.add(candidate.parent)
+                for candidate in self.partition_root.rglob("*.tmp"):
+                    candidate.unlink(missing_ok=True)
+                    changed_directories.add(candidate.parent)
+                for directory in changed_directories:
+                    directory_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
                 connection.commit()
             except Exception:
                 connection.rollback()
                 raise
+
+    def _validated_read_connection(self) -> sqlite3.Connection:
+        connection = open_read_only(self.path)
+        try:
+            connection.execute("BEGIN")
+            _validate_schema(connection)
+        except (sqlite3.Error, RuntimeError) as error:
+            connection.close()
+            raise RuntimeError("telemetry store schema is unavailable or invalid") from error
+        return connection
+
+    def _base_values(self, payload: dict[str, Any], sample_count: int) -> tuple[Any, ...]:
+        cpu = _object(payload.get("cpu"))
+        power = _object(cpu.get("power_telemetry"))
+        ram = _object(payload.get("ram"))
+        timestamp_ms = int(payload["timestamp_ms"])
+        timestamp = str(payload.get("timestamp") or datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z"))
+        gpu_error = payload.get("gpu_error")
+        return (
+            timestamp_ms, timestamp, int(sample_count), None if gpu_error is None else str(gpu_error),
+            str(cpu.get("name") or ""), _integer(cpu.get("cores_physical")), _integer(cpu.get("cores_logical")),
+            _number(cpu.get("utilization")), _number(cpu.get("frequency_current_mhz")),
+            _number(cpu.get("frequency_max_mhz")), _number(cpu.get("temperature")),
+            _number(cpu.get("power_watts")), str(power.get("source") or ""),
+            1 if bool(power.get("available")) else 0, str(power.get("status") or ""),
+            str(power.get("message") or ""), _integer(power.get("discovered_sources")),
+            _integer(power.get("readable_sources")), None if power.get("setup_hint") is None else str(power.get("setup_hint")),
+            _number(ram.get("total_gb")), _number(ram.get("used_gb")), _number(ram.get("available_gb")),
+            _number(ram.get("utilization")), _number(ram.get("swap_total_gb")),
+            _number(ram.get("swap_used_gb")), _number(ram.get("swap_percent")),
+        )
+
+    def _insert_payload(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        prefix: Literal["raw", "minute"],
+        payload: dict[str, Any],
+        sample_count: int,
+    ) -> None:
+        timestamp_ms = int(payload["timestamp_ms"])
+        parent = "raw_samples" if prefix == "raw" else "minute_aggregates"
+        core_table = f"{prefix}_cpu_cores"
+        gpu_table = f"{prefix}_gpu_samples"
+        process_table = f"{prefix}_gpu_processes"
+        placeholders = ",".join("?" for _ in _BASE_INSERT_COLUMNS)
+        connection.execute(
+            f"INSERT INTO {parent}({','.join(_BASE_INSERT_COLUMNS)}) VALUES ({placeholders})",
+            self._base_values(payload, sample_count),
+        )
+        cpu = _object(payload.get("cpu"))
+        for core_index, utilization in enumerate(cpu.get("per_core_utilization") or []):
+            connection.execute(
+                f"INSERT INTO {core_table}(timestamp_ms, core_index, utilization) VALUES (?, ?, ?)",
+                (timestamp_ms, core_index, float(utilization)),
+            )
+        for gpu_value in payload.get("gpus") or []:
+            gpu = _object(gpu_value)
+            gpu_index = int(gpu.get("index", 0))
+            values = (
+                timestamp_ms, gpu_index, str(gpu.get("name") or ""), _number(gpu.get("utilization")),
+                _number(gpu.get("memory_utilization")), _number(gpu.get("memory_used_mb")),
+                _number(gpu.get("memory_total_mb")), _number(gpu.get("reserved_memory_mb")),
+                _number(gpu.get("power_draw_w")), _number(gpu.get("power_limit_w")),
+                _number(gpu.get("min_power_watts")), _number(gpu.get("default_power_watts")),
+                _number(gpu.get("max_power_watts")), _number(gpu.get("temperature")),
+                _number(gpu.get("fan_speed")), _number(gpu.get("clock_graphics_mhz")),
+                _number(gpu.get("clock_memory_mhz")), _number(gpu.get("clock_max_graphics_mhz")),
+                _number(gpu.get("clock_max_memory_mhz")),
+            )
+            connection.execute(
+                f"INSERT INTO {gpu_table}({','.join(_GPU_COLUMNS)}) VALUES ({','.join('?' for _ in _GPU_COLUMNS)})",
+                values,
+            )
+            for process_value in gpu.get("processes") or []:
+                process = _object(process_value)
+                connection.execute(
+                    f"INSERT INTO {process_table}(timestamp_ms, gpu_index, pid, name, memory_mb) VALUES (?, ?, ?, ?, ?)",
+                    (timestamp_ms, gpu_index, int(process["pid"]), str(process.get("name") or ""), int(process.get("memory_mb") or 0)),
+                )
+
+    def append_sample(self, payload: dict[str, Any]) -> None:
+        with _connect(self.path, writer=True) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._insert_payload(connection, prefix="raw", payload=payload, sample_count=1)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def _payloads_for_rows(
+        self,
+        connection: sqlite3.Connection,
+        rows: list[sqlite3.Row],
+        *,
+        prefix: Literal["raw", "minute"],
+    ) -> dict[int, dict[str, Any]]:
+        if not rows:
+            return {}
+        timestamps = [int(row["timestamp_ms"]) for row in rows]
+        lower, upper = min(timestamps), max(timestamps)
+        wanted = set(timestamps)
+        cores: dict[int, list[float]] = {timestamp: [] for timestamp in timestamps}
+        for row in connection.execute(
+            f"SELECT timestamp_ms, core_index, utilization FROM {prefix}_cpu_cores WHERE timestamp_ms BETWEEN ? AND ? ORDER BY timestamp_ms, core_index",
+            (lower, upper),
+        ):
+            timestamp = int(row["timestamp_ms"])
+            if timestamp in wanted:
+                cores[timestamp].append(float(row["utilization"]))
+        processes: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for row in connection.execute(
+            f"SELECT * FROM {prefix}_gpu_processes WHERE timestamp_ms BETWEEN ? AND ? ORDER BY timestamp_ms, gpu_index, pid",
+            (lower, upper),
+        ):
+            timestamp = int(row["timestamp_ms"])
+            if timestamp in wanted:
+                processes.setdefault((timestamp, int(row["gpu_index"])), []).append(
+                    {"pid": int(row["pid"]), "name": str(row["name"]), "memory_mb": int(row["memory_mb"])}
+                )
+        gpus: dict[int, list[dict[str, Any]]] = {timestamp: [] for timestamp in timestamps}
+        for row in connection.execute(
+            f"SELECT * FROM {prefix}_gpu_samples WHERE timestamp_ms BETWEEN ? AND ? ORDER BY timestamp_ms, gpu_index",
+            (lower, upper),
+        ):
+            timestamp = int(row["timestamp_ms"])
+            if timestamp not in wanted:
+                continue
+            gpu_index = int(row["gpu_index"])
+            gpus[timestamp].append(
+                {
+                    "index": gpu_index,
+                    "name": str(row["name"]),
+                    "utilization": row["utilization"],
+                    "memory_utilization": row["memory_utilization"],
+                    "memory_used_mb": row["memory_used_mb"],
+                    "memory_total_mb": row["memory_total_mb"],
+                    "reserved_memory_mb": row["reserved_memory_mb"],
+                    "power_draw_w": row["power_draw_w"],
+                    "power_limit_w": row["power_limit_w"],
+                    "min_power_watts": row["min_power_watts"],
+                    "default_power_watts": row["default_power_watts"],
+                    "max_power_watts": row["max_power_watts"],
+                    "temperature": row["temperature"],
+                    "fan_speed": row["fan_speed"],
+                    "clock_graphics_mhz": row["clock_graphics_mhz"],
+                    "clock_memory_mhz": row["clock_memory_mhz"],
+                    "clock_max_graphics_mhz": row["clock_max_graphics_mhz"],
+                    "clock_max_memory_mhz": row["clock_max_memory_mhz"],
+                    "processes": processes.get((timestamp, gpu_index), []),
+                }
+            )
+        payloads: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            timestamp = int(row["timestamp_ms"])
+            payloads[timestamp] = {
+                "timestamp_ms": timestamp,
+                "timestamp": str(row["timestamp"]),
+                "cpu": {
+                    "name": str(row["cpu_name"]),
+                    "cores_physical": int(row["cpu_cores_physical"]),
+                    "cores_logical": int(row["cpu_cores_logical"]),
+                    "utilization": row["cpu_utilization"],
+                    "per_core_utilization": cores[timestamp],
+                    "frequency_current_mhz": row["cpu_frequency_current_mhz"],
+                    "frequency_max_mhz": row["cpu_frequency_max_mhz"],
+                    "temperature": row["cpu_temperature"],
+                    "power_watts": row["cpu_power_watts"],
+                    "power_telemetry": {
+                        "source": str(row["cpu_power_source"]),
+                        "available": bool(row["cpu_power_available"]),
+                        "status": str(row["cpu_power_status"]),
+                        "message": str(row["cpu_power_message"]),
+                        "discovered_sources": int(row["cpu_power_discovered_sources"]),
+                        "readable_sources": int(row["cpu_power_readable_sources"]),
+                        "setup_hint": row["cpu_power_setup_hint"],
+                    },
+                },
+                "ram": {
+                    "total_gb": row["ram_total_gb"],
+                    "used_gb": row["ram_used_gb"],
+                    "available_gb": row["ram_available_gb"],
+                    "utilization": row["ram_utilization"],
+                    "swap_total_gb": row["ram_swap_total_gb"],
+                    "swap_used_gb": row["ram_swap_used_gb"],
+                    "swap_percent": row["ram_swap_percent"],
+                },
+                "gpus": gpus[timestamp],
+                "gpu_error": row["gpu_error"],
+            }
+        return payloads
+
+    def _read_payloads(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        prefix: Literal["raw", "minute"],
+        start_ms: int,
+        end_ms: int,
+        limit: int | None = None,
+    ) -> tuple[list[sqlite3.Row], dict[int, dict[str, Any]]]:
+        parent = "raw_samples" if prefix == "raw" else "minute_aggregates"
+        sql = f"SELECT * FROM {parent} WHERE timestamp_ms >= ? AND timestamp_ms < ? ORDER BY timestamp_ms"
+        parameters: tuple[Any, ...] = (int(start_ms), int(end_ms))
+        if limit is not None:
+            sql = f"SELECT * FROM ({sql}) ORDER BY timestamp_ms DESC LIMIT ?"
+            parameters = (*parameters, int(limit))
+        rows = connection.execute(sql, parameters).fetchall()
+        if limit is not None:
+            rows = list(reversed(rows))
+        return rows, self._payloads_for_rows(connection, rows, prefix=prefix)
+
+    def _partition_row(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cpu = payload["cpu"]
+        power = cpu["power_telemetry"]
+        ram = payload["ram"]
         return {
-            "verified": len(candidates),
-            "inserted": inserted,
-            "repaired": repaired,
+            "timestamp_ms": int(payload["timestamp_ms"]),
+            "timestamp": str(payload["timestamp"]),
+            "gpu_error": payload.get("gpu_error"),
+            "cpu_name": str(cpu.get("name") or ""),
+            "cpu_cores_physical": int(cpu.get("cores_physical") or 0),
+            "cpu_cores_logical": int(cpu.get("cores_logical") or 0),
+            "cpu_utilization": cpu.get("utilization"),
+            "cpu_per_core_utilization": [float(value) for value in cpu.get("per_core_utilization") or []],
+            "cpu_frequency_current_mhz": cpu.get("frequency_current_mhz"),
+            "cpu_frequency_max_mhz": cpu.get("frequency_max_mhz"),
+            "cpu_temperature": cpu.get("temperature"),
+            "cpu_power_watts": cpu.get("power_watts"),
+            "cpu_power_source": str(power.get("source") or ""),
+            "cpu_power_available": bool(power.get("available")),
+            "cpu_power_status": str(power.get("status") or ""),
+            "cpu_power_message": str(power.get("message") or ""),
+            "cpu_power_discovered_sources": int(power.get("discovered_sources") or 0),
+            "cpu_power_readable_sources": int(power.get("readable_sources") or 0),
+            "cpu_power_setup_hint": power.get("setup_hint"),
+            "ram_total_gb": ram.get("total_gb"),
+            "ram_used_gb": ram.get("used_gb"),
+            "ram_available_gb": ram.get("available_gb"),
+            "ram_utilization": ram.get("utilization"),
+            "ram_swap_total_gb": ram.get("swap_total_gb"),
+            "ram_swap_used_gb": ram.get("swap_used_gb"),
+            "ram_swap_percent": ram.get("swap_percent"),
+            "gpus": payload.get("gpus") or [],
         }
+
+    def _finalize_completed_hours(self, connection: sqlite3.Connection, now_ms: int) -> int:
+        open_hour = (int(now_ms) // 3_600_000) * 3_600_000
+        buckets = connection.execute(
+            """SELECT DISTINCT (timestamp_ms / 3600000) * 3600000 AS hour_ms
+            FROM raw_samples
+            WHERE timestamp_ms < ?
+              AND (timestamp_ms / 3600000) * 3600000 NOT IN
+                  (SELECT partition_start_ms FROM telemetry_partitions)
+            ORDER BY hour_ms""",
+            (open_hour,),
+        ).fetchall()
+        finalized = 0
+        for bucket_row in buckets:
+            hour = int(bucket_row["hour_ms"])
+            relative = f"raw/hour-{hour}.parquet"
+            destination = (self.partition_root / relative).resolve()
+            destination.relative_to(self.partition_root)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary: Path | None = None
+            content_sha256: str | None = None
+            published = False
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute(
+                    "SELECT 1 FROM telemetry_partitions WHERE partition_start_ms = ?",
+                    (hour,),
+                ).fetchone() is not None:
+                    connection.rollback()
+                    continue
+                rows, payloads = self._read_payloads(
+                    connection, prefix="raw", start_ms=hour, end_ms=hour + 3_600_000
+                )
+                if not rows:
+                    connection.rollback()
+                    continue
+                table = pa.Table.from_pylist(
+                    [self._partition_row(payloads[int(row["timestamp_ms"])]) for row in rows],
+                    schema=_RAW_PARTITION_SCHEMA,
+                )
+                with tempfile.NamedTemporaryFile(
+                    prefix=f".{destination.name}.",
+                    suffix=".tmp",
+                    dir=destination.parent,
+                    delete=False,
+                ) as temporary_handle:
+                    temporary = Path(temporary_handle.name)
+                pq.write_table(table, temporary, compression="zstd")
+                with temporary.open("rb") as handle:
+                    os.fsync(handle.fileno())
+                content_sha256 = _file_sha256(temporary)
+                size_bytes = temporary.stat().st_size
+                os.replace(temporary, destination)
+                published = True
+                directory_fd = os.open(destination.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                connection.execute(
+                    """INSERT INTO telemetry_partitions(
+                        partition_start_ms, partition_end_ms, relative_path, content_sha256,
+                        size_bytes, row_count, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        hour, hour + 3_600_000, relative, content_sha256,
+                        size_bytes, len(rows), datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                connection.commit()
+                finalized += 1
+            except BaseException:
+                try:
+                    if published and connection.in_transaction:
+                        destination.unlink(missing_ok=True)
+                        directory_fd = os.open(destination.parent, os.O_RDONLY)
+                        try:
+                            os.fsync(directory_fd)
+                        finally:
+                            os.close(directory_fd)
+                finally:
+                    connection.rollback()
+                raise
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        return finalized
 
     def finalize_completed_minutes(self, now_ms: int) -> int:
         open_bucket = (int(now_ms) // 60_000) * 60_000
         finalized = 0
-        with _connect(self.path) as connection:
-            last = connection.execute("SELECT MAX(bucket_ms) FROM minute_aggregates").fetchone()[0]
-            lower = 0 if last is None else int(last) + 60_000
-            buckets = connection.execute(
-                "SELECT DISTINCT (timestamp_ms / 60000) * 60000 AS bucket_ms FROM raw_samples WHERE timestamp_ms >= ? AND timestamp_ms < ? ORDER BY bucket_ms",
-                (lower, open_bucket),
-            ).fetchall()
-            for bucket_row in buckets:
-                bucket = int(bucket_row["bucket_ms"])
-                rows = connection.execute(
-                    "SELECT * FROM raw_samples WHERE timestamp_ms >= ? AND timestamp_ms < ? ORDER BY timestamp_ms",
-                    (bucket, bucket + 60_000),
-                ).fetchall()
-                samples_by_timestamp = self._samples_for_rows(rows, connection=connection)
-                samples = [samples_by_timestamp[int(row["timestamp_ms"])] for row in rows]
-                if not samples:
-                    continue
-                artifact_rows = []
-                for index, sample_value in enumerate(samples):
-                    cpu, ram, gpu_util, gpu_memory, gpu_names = _projection(sample_value)
-                    artifact_rows.append(
-                        {
-                            "row_index": index,
-                            "timestamp_ms": int(sample_value["timestamp_ms"]),
-                            "bucket_ms": bucket,
-                            "sample_count": 1,
-                            "timestamp": str(sample_value.get("timestamp", "")),
-                            "payload_json": _encoded(sample_value),
-                            "cpu_utilization": cpu,
-                            "ram_utilization": ram,
-                            "gpu_utilization": gpu_util,
-                            "gpu_memory_used_mb": gpu_memory,
-                            "gpu_names": gpu_names,
-                        }
-                    )
-                raw_sha = _artifact_source_sha(artifact_rows)
-                raw_artifact = install_parquet_rows(
-                    root=self.artifact_root,
-                    owner_kind="telemetry_bucket",
-                    owner_id=f"raw:{bucket}",
-                    role="raw_history",
-                    schema_id="bms.telemetry.raw.v1",
-                    schema_version=1,
-                    source_sha256=raw_sha,
-                    rows=artifact_rows,
-                    schema=_TELEMETRY_SCHEMA,
-                )
-                aggregate = _average_values(samples)
-                aggregate["timestamp_ms"] = bucket
-                aggregate["timestamp"] = datetime.fromtimestamp(bucket / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
-                aggregate_rows = envelope_rows(aggregate)
-                aggregate_artifact = install_parquet_rows(
-                    root=self.artifact_root,
-                    owner_kind="telemetry_bucket",
-                    owner_id=f"minute:{bucket}",
-                    role="minute_aggregate",
-                    schema_id="bms.telemetry.aggregate.v1",
-                    schema_version=1,
-                    source_sha256=canonical_sha256(aggregate),
-                    rows=aggregate_rows,
-                    schema=_ENVELOPE_SCHEMA,
-                )
+        with _connect(self.path, writer=True, publisher=True) as connection:
+            while True:
                 connection.execute("BEGIN IMMEDIATE")
-                source = {"source_store": "telemetry", "source_table": "raw_samples", "source_key": str(bucket)}
-                self._insert_receipt(connection, raw_artifact, source)
-                self._insert_receipt(connection, aggregate_artifact, {**source, "source_table": "minute_aggregates"})
-                for index, row in enumerate(rows):
-                    ref = artifact_row_reference(raw_artifact.reference(), index, value_field="payload_json")
-                    connection.execute(
-                        "INSERT OR IGNORE INTO telemetry_sample_artifact_refs(timestamp_ms, artifact_ref) VALUES (?, ?)",
-                        (int(row["timestamp_ms"]), _encoded(ref)),
+                try:
+                    bucket_row = connection.execute(
+                        """SELECT MIN((raw.timestamp_ms / 60000) * 60000) AS bucket_ms
+                        FROM raw_samples AS raw
+                        WHERE raw.timestamp_ms < ?
+                          AND NOT EXISTS (
+                              SELECT 1 FROM minute_aggregates AS minute
+                              WHERE minute.timestamp_ms = (raw.timestamp_ms / 60000) * 60000
+                          )""",
+                        (open_bucket,),
+                    ).fetchone()
+                    if bucket_row is None or bucket_row["bucket_ms"] is None:
+                        connection.rollback()
+                        break
+                    bucket = int(bucket_row["bucket_ms"])
+                    rows, payloads = self._read_payloads(
+                        connection, prefix="raw", start_ms=bucket, end_ms=bucket + 60_000
                     )
-                aggregate_ref = artifact_reference(**{
-                    "artifact_id": aggregate_artifact.artifact_id,
-                    "owner_kind": aggregate_artifact.owner_kind,
-                    "owner_id": aggregate_artifact.owner_id,
-                    "role": aggregate_artifact.role,
-                    "schema_id": aggregate_artifact.schema_id,
-                    "schema_version": aggregate_artifact.schema_version,
-                    "content_sha256": aggregate_artifact.content_sha256,
-                    "size_bytes": aggregate_artifact.size_bytes,
-                    "row_count": aggregate_artifact.row_count,
-                    "relative_path": aggregate_artifact.relative_path,
-                })
-                cpu, ram, gpu_util, gpu_memory, gpu_names = _projection(aggregate)
-                connection.execute(
-                    """INSERT OR IGNORE INTO minute_aggregates(
-                        bucket_ms, sample_count, payload_json, cpu_utilization, ram_utilization,
-                        gpu_utilization_json, gpu_memory_used_json, gpu_names_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (bucket, len(samples), _encoded(aggregate_ref), cpu, ram, _encoded(gpu_util), _encoded(gpu_memory), _encoded(gpu_names)),
-                )
-                connection.commit()
-                stage_paths = {row["staging_relative_path"] for row in rows if row["staging_relative_path"]}
-                for relative in stage_paths:
-                    _safe_staging_path(self.artifact_root, str(relative)).unlink(missing_ok=True)
+                    samples = [payloads[int(row["timestamp_ms"])] for row in rows]
+                    if not samples:
+                        connection.rollback()
+                        continue
+                    aggregate = _aggregate_samples(samples, bucket)
+                    self._insert_payload(
+                        connection, prefix="minute", payload=aggregate, sample_count=len(samples)
+                    )
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
                 finalized += 1
+            self._finalize_completed_hours(connection, int(now_ms))
         return finalized
 
     def apply_retention(self, now_ms: int) -> dict[str, int]:
         raw_cutoff = int(now_ms) - RAW_RETENTION_SECONDS * 1000
         minute_cutoff = int(now_ms) - AGGREGATE_RETENTION_SECONDS * 1000
+        retiring_paths: list[tuple[Path, Path]] = []
         with _connect(self.path, maintenance=True) as connection:
-            old_refs = [row[0] for row in connection.execute("SELECT timestamp_ms FROM raw_samples WHERE timestamp_ms < ?", (raw_cutoff,))]
-            raw_deleted = connection.execute("DELETE FROM raw_samples WHERE timestamp_ms < ?", (raw_cutoff,)).rowcount
-            for timestamp_ms in old_refs:
-                connection.execute("DELETE FROM telemetry_sample_artifact_refs WHERE timestamp_ms = ?", (timestamp_ms,))
-            minute_deleted = connection.execute("DELETE FROM minute_aggregates WHERE bucket_ms < ?", (minute_cutoff,)).rowcount
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                raw_deleted = connection.execute(
+                    "DELETE FROM raw_samples WHERE timestamp_ms < ?", (raw_cutoff,)
+                ).rowcount
+                minute_deleted = connection.execute(
+                    "DELETE FROM minute_aggregates WHERE timestamp_ms < ?", (minute_cutoff,)
+                ).rowcount
+                rows = connection.execute(
+                    "SELECT relative_path FROM telemetry_partitions WHERE partition_end_ms < ?",
+                    (minute_cutoff,),
+                ).fetchall()
+                changed_directories: set[Path] = set()
+                for row in rows:
+                    path = (self.partition_root / str(row["relative_path"])).resolve()
+                    path.relative_to(self.partition_root)
+                    retiring = Path(f"{path}.retiring")
+                    if not path.is_file() or retiring.exists():
+                        raise RuntimeError("telemetry partition retention state is invalid")
+                    os.replace(path, retiring)
+                    retiring_paths.append((path, retiring))
+                    changed_directories.add(path.parent)
+                for directory in changed_directories:
+                    directory_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                connection.execute(
+                    "DELETE FROM telemetry_partitions WHERE partition_end_ms < ?", (minute_cutoff,)
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                for path, retiring in retiring_paths:
+                    if retiring.exists():
+                        os.replace(retiring, path)
+                for directory in {path.parent for path, _retiring in retiring_paths}:
+                    directory_fd = os.open(directory, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                raise
+        for _path, retiring in retiring_paths:
+            retiring.unlink(missing_ok=True)
+        for directory in {path.parent for path, _retiring in retiring_paths}:
+            directory_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         return {"raw_deleted": raw_deleted, "minute_deleted": minute_deleted}
 
     def read_history(
@@ -793,33 +958,28 @@ class TelemetryStore:
             raise ValueError("unsupported resolution")
         if not 1 <= int(limit) <= MAX_HISTORY_POINTS:
             raise ValueError("limit is outside the supported range")
-        table, column = ("raw_samples", "timestamp_ms") if resolution == "raw" else ("minute_aggregates", "bucket_ms")
-        sample_count = "1 AS sample_count" if resolution == "raw" else "sample_count"
-        extra = ", staging_relative_path, staging_row_locator" if resolution == "raw" else ""
-        with open_read_only(self.path) as connection:
-            rows = connection.execute(
-                f"SELECT {column} AS timestamp_ms, payload_json, {sample_count}{extra} FROM {table} WHERE {column} >= ? AND {column} < ? ORDER BY {column} DESC LIMIT ?",
-                (int(start_ms), int(end_ms), int(limit)),
-            ).fetchall()
-            ordered_rows = list(reversed(rows))
-            raw_samples = (
-                self._samples_for_rows(ordered_rows, connection=connection)
-                if resolution == "raw"
-                else {}
+        prefix: Literal["raw", "minute"] = resolution
+        with self._validated_read_connection() as connection:
+            rows, payloads = self._read_payloads(
+                connection,
+                prefix=prefix,
+                start_ms=int(start_ms),
+                end_ms=int(end_ms),
+                limit=int(limit),
             )
-        values = []
-        for row in ordered_rows:
-            if resolution == "raw":
-                payload = raw_samples[int(row["timestamp_ms"])]
-            else:
-                payload = resolve_json_value(json.loads(row["payload_json"]), root=self.artifact_root)
-            values.append({"timestamp_ms": int(row["timestamp_ms"]), "sample_count": int(row["sample_count"]), "payload": payload})
-        return values
+        return [
+            {
+                "timestamp_ms": int(row["timestamp_ms"]),
+                "sample_count": int(row["sample_count"]),
+                "payload": payloads[int(row["timestamp_ms"])],
+            }
+            for row in rows
+        ]
 
     def read_freshness(self, *, now_ms: int | None = None, stale_after_ms: int) -> dict[str, Any]:
         if int(stale_after_ms) <= 0:
             raise ValueError("telemetry freshness threshold must be positive")
-        with open_read_only(self.path) as connection:
+        with self._validated_read_connection() as connection:
             latest = connection.execute("SELECT MAX(timestamp_ms) FROM raw_samples").fetchone()[0]
         if latest is None:
             return {
@@ -850,13 +1010,19 @@ class TelemetryStore:
         }
 
     def insert_minute_for_test(self, bucket_ms: int, payload: dict[str, Any], sample_count: int) -> None:
-        encoded = _encoded(payload)
-        cpu, ram, gpu_util, gpu_memory, gpu_names = _projection(payload)
-        with _connect(self.path) as connection:
-            connection.execute(
-                """INSERT INTO minute_aggregates(
-                    bucket_ms, sample_count, payload_json, cpu_utilization, ram_utilization,
-                    gpu_utilization_json, gpu_memory_used_json, gpu_names_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (int(bucket_ms), int(sample_count), encoded, cpu, ram, _encoded(gpu_util), _encoded(gpu_memory), _encoded(gpu_names)),
-            )
+        value = dict(payload)
+        value["timestamp_ms"] = int(bucket_ms)
+        value["timestamp"] = str(
+            value.get("timestamp")
+            or datetime.fromtimestamp(int(bucket_ms) / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+        with _connect(self.path, writer=True) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._insert_payload(
+                    connection, prefix="minute", payload=value, sample_count=int(sample_count)
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
