@@ -1452,8 +1452,14 @@ async def persist_attempt_validation(
     attempt = await session.get(ExperimentRunAttempt, attempt_id)
     if attempt is None:
         raise NotFound("run attempt not found")
-    normalized_outcome = outcome.strip().lower()
-    if normalized_outcome not in {"passed", "failed", "review"}:
+    requested_outcome = outcome.strip().lower()
+    outcome_map = {
+        "passed": "valid",
+        "failed": "invalid",
+        "review": "incomplete",
+    }
+    normalized_outcome = outcome_map.get(requested_outcome)
+    if normalized_outcome is None:
         raise ValidationFailure("invalid validation outcome")
     name = validator_name.strip()
     version = validator_version.strip()
@@ -1505,6 +1511,7 @@ async def persist_attempt_validation(
         created_at=now(),
     )
     session.add(validation)
+    await session.flush()
     edge_key = f"{name}:{version}:{receipt_sha256}"
     edge_id = "lineage-" + hashlib.sha256(
         f"{attempt.resource_id}\x00{validation_id}\x00validated_by\x00{edge_key}".encode("utf-8")
