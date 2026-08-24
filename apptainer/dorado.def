@@ -3,6 +3,9 @@
 Bootstrap: docker
 From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
+%files
+    templates/ngs/igv_variant_standalone.html /opt/bms/igv-reports/igv_variant_standalone.html
+
 %post
     set -eux
 
@@ -52,6 +55,12 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
     /opt/igv-reports/bin/pip install --no-cache-dir --disable-pip-version-check \
         "igv-reports==${IGV_REPORTS_VERSION}"
     ln -s /opt/igv-reports/bin/create_report /usr/local/bin/create_report
+    IGV_JS_VERSION="3.5.2"
+    IGV_JS_SHA256="0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6"
+    IGV_JS_PATH="/opt/bms/igv-reports/igv.min.js"
+    curl -fsSL --retry 3 --retry-delay 2 \
+        -o "${IGV_JS_PATH}" "https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js"
+    printf '%s  %s\n' "${IGV_JS_SHA256}" "${IGV_JS_PATH}" | sha256sum -c -
 
     # ── Dorado v1.3.1 (Jan 2026) ──────────────────────────────────────────
     # Pre-built Linux x86_64 binary with CUDA support
@@ -106,6 +115,8 @@ From: nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
         *) echo "samtools consensus capability is missing" >&2; exit 1 ;;
     esac
     test -x /usr/local/bin/create_report
+    test "$(sha256sum /opt/bms/igv-reports/igv.min.js | awk '{print $1}')" = "0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6"
+    grep -F 'src="file:///opt/bms/igv-reports/igv.min.js"' /opt/bms/igv-reports/igv_variant_standalone.html
     igv_metadata="$(/opt/igv-reports/bin/pip show igv-reports)"
     case "${igv_metadata}" in
         *"Version: 1.16.3"*) ;;

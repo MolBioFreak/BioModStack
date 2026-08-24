@@ -53,6 +53,7 @@ def build_report_inputs(
     junction_hotspots: str | Path,
     out_track_config: str | Path,
     out_reference_config: str | Path,
+    out_standalone_track_config: str | Path | None = None,
 ) -> None:
     normalized_job_id = job_id.strip()
     if (
@@ -168,6 +169,25 @@ def build_report_inputs(
         "indexURL": _artifact_url(normalized_job_id, mode, "reference_index", reference_fai),
     }
     Path(out_track_config).write_text(json.dumps(tracks, indent=2) + "\n", encoding="utf-8")
+    if out_standalone_track_config is not None:
+        standalone_tracks = json.loads(json.dumps(tracks))
+        local_roles = (
+            "alignment",
+            "coverage_depth",
+            "position_gradient",
+            "gc_content",
+            "gc_zscore",
+            "split_read_density",
+            "soft_clip_density",
+            "junction_hotspots",
+        )
+        for track, role in zip(standalone_tracks, local_roles, strict=True):
+            track["url"] = str(files[role])
+        standalone_tracks[0]["indexURL"] = str(files["alignment_index"])
+        Path(out_standalone_track_config).write_text(
+            json.dumps(standalone_tracks, indent=2) + "\n",
+            encoding="utf-8",
+        )
     Path(out_reference_config).write_text(
         json.dumps(reference_config, indent=2) + "\n",
         encoding="utf-8",
@@ -190,6 +210,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--soft-clip-density", required=True)
     parser.add_argument("--junction-hotspots", required=True)
     parser.add_argument("--out-track-config", required=True)
+    parser.add_argument("--out-standalone-track-config")
     parser.add_argument("--out-reference-config", required=True)
     return parser
 

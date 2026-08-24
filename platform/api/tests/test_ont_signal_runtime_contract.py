@@ -349,6 +349,31 @@ def test_rna_calibration_orientation_and_upstream_flag_are_bound() -> None:
     )
 
 
+def test_calibration_fasta_index_is_removed_as_ephemeral_output(tmp_path: Path) -> None:
+    fasta = tmp_path / "sample.fasta"
+    fasta.write_text(">read\nACGT\n", encoding="utf-8")
+    index = tmp_path / "sample.fasta.fai"
+    index.write_text("read\t4\t6\t4\t5\n", encoding="utf-8")
+
+    runtime.remove_calibration_fasta_index(fasta)
+
+    assert not index.exists()
+
+
+def test_calibration_fasta_index_cleanup_rejects_symlink(tmp_path: Path) -> None:
+    fasta = tmp_path / "sample.fasta"
+    fasta.write_text(">read\nACGT\n", encoding="utf-8")
+    target = tmp_path / "outside.fai"
+    target.write_text("authority", encoding="utf-8")
+    index = tmp_path / "sample.fasta.fai"
+    index.symlink_to(target)
+
+    with pytest.raises(ValueError, match="unsafe calibration FASTA index"):
+        runtime.remove_calibration_fasta_index(fasta)
+
+    assert target.read_text(encoding="utf-8") == "authority"
+
+
 def test_legacy_bam_model_provenance_requires_exact_exhaustive_read_groups() -> None:
     model = "dna_r10.4.1_e8.2_400bps_sup@v4.3.0"
     header = {

@@ -1,6 +1,7 @@
 {
-  "content_sha256": "842bff8243d1b3f6f41ea76c2dbcce7949dd441db61cb6332fbb76e4271c5e13",
+  "content_sha256": "3e951eca9372c8814007e2eeefa0adf9401f8505f29247bc1794c5a763cfa713",
   "paths": [
+    "apptainer/dorado.def",
     "biomodstack_services.py",
     "docker/ont-raw-signal.Dockerfile",
     "docker/ont-squigualiser-requirements.in",
@@ -9,6 +10,7 @@
     "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
     "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
     "modules/ngs/dorado_basecall.nf",
+    "modules/ngs/fastq_plasmid_qc.nf",
     "platform/api/config/ngs_molbio/adapter_registry_v1.json",
     "platform/api/config/ngs_molbio/capability_inventory_v1.json",
     "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
@@ -123,10 +125,14 @@
     "scripts/build_ngs_molbio_runtime_implementation_record.py",
     "scripts/build_ont_raw_signal_runtime.sh",
     "scripts/build_ont_squigualiser_runtime.sh",
+    "scripts/build_small_igv_report_inputs.py",
     "scripts/ont_raw_signal_lookup.py",
     "scripts/ont_raw_signal_validate.py",
     "scripts/ont_signal_runtime.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py",
+    "scripts/validate_standalone_igv_report.py",
+    "scripts/verify_construct.py",
+    "templates/ngs/igv_variant_standalone.html",
     "workflows/ngs/ont_construct_screening.nf"
   ],
   "schema": "bms.ngs-molbio.runtime-source-denominator.v1"

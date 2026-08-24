@@ -321,8 +321,8 @@ process FastqPlasmidQC {
         echo "Missing report input builder: ${codeRoot}/scripts/build_small_igv_report_inputs.py" >&2
         exit 1
     fi
-    if [[ ! -f "${codeRoot}/scripts/finalize_small_igv_report.py" ]]; then
-        echo "Missing report finalizer: ${codeRoot}/scripts/finalize_small_igv_report.py" >&2
+    if [[ ! -f "${codeRoot}/scripts/validate_standalone_igv_report.py" ]]; then
+        echo "Missing standalone report validator: ${codeRoot}/scripts/validate_standalone_igv_report.py" >&2
         exit 1
     fi
     "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/build_small_igv_report_inputs.py" \
@@ -340,6 +340,7 @@ process FastqPlasmidQC {
         --soft-clip-density igv_softclip_density.bedgraph \
         --junction-hotspots igv_junction_hotspots.bed \
         --out-track-config igv_track_config.json \
+        --out-standalone-track-config igv_standalone_track_config.json \
         --out-reference-config igv_reference_config.json
 
     : > igv_report.log
@@ -351,10 +352,12 @@ process FastqPlasmidQC {
     rm -f igv_report.html
     if ! create_report igv_report_sites.bed \
         --fasta reference_qc.fasta \
-        --track-config igv_track_config.json \
+        --track-config igv_standalone_track_config.json \
         --flanking ${igvReportFlankingBp} \
-        --title "FASTQ Plasmid QC IGV Report" \
-        --no-embed \
+        --title "FASTQ Plasmid QC IGV Report (Portable)" \
+        --subsample 0.002 \
+        --template /opt/bms/igv-reports/igv_variant_standalone.html \
+        --standalone \
         --output igv_report.html >> igv_report.log 2>&1; then
         echo "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" | tee -a igv_report.log >&2
         rm -f igv_report.html
@@ -364,20 +367,16 @@ process FastqPlasmidQC {
         echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_EMPTY" | tee -a igv_report.log >&2
         exit 86
     fi
-    if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/finalize_small_igv_report.py" \
+    if ! "\${PYTHON_CMD[@]}" "${codeRoot}/scripts/validate_standalone_igv_report.py" \
         --report igv_report.html \
-        --reference-config igv_reference_config.json \
-        --track-config igv_track_config.json \
-        --generated-reference-fasta reference_qc.fasta \
-        --generated-reference-index reference_qc.fasta.fai \
-        --max-bytes 1048576 >> igv_report.log 2>&1; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_FINALIZE_FAILED" | tee -a igv_report.log >&2
+        --max-bytes 67108864 >> igv_report.log 2>&1; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" | tee -a igv_report.log >&2
         rm -f igv_report.html
         exit 86
     fi
     igv_report_size=\$(wc -c < igv_report.html)
-    if [[ "\${igv_report_size}" -gt 1048576 ]]; then
-        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=1048576" | tee -a igv_report.log >&2
+    if [[ "\${igv_report_size}" -gt 67108864 ]]; then
+        echo "CRITICAL_FAILURE: IGV_REPORT_ARTIFACT_OVERSIZED bytes=\${igv_report_size} max_bytes=67108864" | tee -a igv_report.log >&2
         rm -f igv_report.html
         exit 86
     fi

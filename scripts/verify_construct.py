@@ -1236,19 +1236,90 @@ def write_summary(path: Path, manifest: dict[str, Any]) -> None:
 def write_evidence_html(path: Path, manifest: dict[str, Any]) -> None:
     verdict = html.escape(str(manifest["verdict"]))
     reasons = "".join(f"<li><code>{html.escape(code)}</code></li>" for code in manifest["reason_codes"])
+    summary = manifest.get("summary", {})
+    sequence_check = manifest.get("checks", {}).get("sequence_identity", {})
+    variant_analysis_complete = "VARIANT_ANALYSIS_PENDING" not in sequence_check.get("reason_codes", [])
+    topology_check = manifest.get("checks", {}).get("topology", {})
+    topology_state = summary.get("topology_status") or topology_check.get("metrics", {}).get("state") or "unavailable"
+
+    def percent(value: Any) -> str:
+        return "unavailable" if value is None else f"{float(value) * 100:.2f}%"
+
+    decision_rows = (
+        ("Sequence identity", percent(summary.get("sequence_identity_fraction"))),
+        (
+            "Observed variants",
+            str(summary.get("variant_count", len(manifest.get("variants", []))))
+            if variant_analysis_complete
+            else "not assessed",
+        ),
+        ("Coverage", percent(summary.get("coverage_fraction"))),
+        ("Unmapped reads", percent(summary.get("unmapped_fraction"))),
+        ("Topology", str(topology_state)),
+    )
+    decision = "".join(
+        f"<div class='metric'><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
+        for label, value in decision_rows
+    )
+
+    variants = manifest.get("variants", [])
+    variant_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(variant.get('id', '')))}</td>"
+        f"<td>{html.escape(str(variant.get('kind', '')))}</td>"
+        f"<td>{html.escape(str(variant.get('position_1based', '')))}</td>"
+        f"<td>{html.escape(str(variant.get('ref', '')))}</td>"
+        f"<td>{html.escape(str(variant.get('alt', '')))}</td>"
+        f"<td>{percent(variant.get('support_fraction'))}</td>"
+        f"<td>{html.escape(str(variant.get('support_status', '')))}</td>"
+        f"<td>{html.escape(str(variant.get('depth', '')))}</td>"
+        "</tr>"
+        for variant in variants
+    ) or (
+        "<tr><td colspan='8'>No observed variants.</td></tr>"
+        if variant_analysis_complete
+        else "<tr><td colspan='8'>Variant analysis was not completed.</td></tr>"
+    )
+
+    def metric_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        if isinstance(value, float):
+            return f"{value:.6g}"
+        if isinstance(value, (dict, list)):
+            return html.escape(json.dumps(value, sort_keys=True, separators=(",", ":")))
+        return html.escape(str(value))
+
+    check_sections = []
+    for name, check in manifest["checks"].items():
+        metric_rows = "".join(
+            f"<tr><th>{html.escape(metric.replace('_', ' ').title())}</th><td>{metric_value(value)}</td></tr>"
+            for metric, value in check.get("metrics", {}).items()
+            if metric != "provenance"
+        )
+        check_sections.append(
+            f"<section><h3>{html.escape(name.replace('_', ' ').title())}: "
+            f"{html.escape(str(check['status']).upper())}</h3>"
+            f"<table><tbody>{metric_rows}</tbody></table></section>"
+        )
     checks = "".join(
-        f"<tr><th>{html.escape(name)}</th><td>{html.escape(check['status'])}</td>"
+        f"<tr><th>{html.escape(name.replace('_', ' ').title())}</th><td>{html.escape(check['status'])}</td>"
         f"<td>{html.escape(', '.join(check['reason_codes']) or 'none')}</td></tr>"
         for name, check in manifest["checks"].items()
     )
     path.write_text(
         "<!doctype html><html><head><meta charset='utf-8'><title>Construct verification evidence</title>"
-        "<style>body{font-family:system-ui;margin:2rem;background:#111827;color:#e5e7eb}"
-        "table{border-collapse:collapse}th,td{border:1px solid #374151;padding:.5rem;text-align:left}"
+        "<style>body{font-family:system-ui;margin:2rem auto;max-width:1200px;background:#111827;color:#e5e7eb}"
+        "table{border-collapse:collapse;width:100%;margin-bottom:1rem}th,td{border:1px solid #374151;padding:.5rem;text-align:left}"
+        ".metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem}.metric{background:#1f2937;padding:1rem;border-radius:.5rem}"
+        ".metric span{display:block;color:#9ca3af}.metric strong{font-size:1.35rem}section{margin:1rem 0;padding:1rem;background:#1f2937;border-radius:.5rem}"
         "code{color:#93c5fd}</style></head><body>"
-        f"<h1>Construct verification: {verdict}</h1><h2>Reason codes</h2><ul>{reasons}</ul>"
+        f"<h1>Construct verification: {verdict}</h1><h2>Decision summary</h2><div class='metrics'>{decision}</div>"
+        f"<h2>Reason codes</h2><ul>{reasons}</ul>"
         f"<h2>Independent checks</h2><table><tr><th>Check</th><th>Status</th><th>Reasons</th></tr>{checks}</table>"
-        "<p>This report summarizes machine evidence; it does not replace review of the bound JSON manifest.</p>"
+        "<h2>Observed variants</h2><table><thead><tr><th>ID</th><th>Type</th><th>Position</th><th>Reference</th><th>Observed</th><th>Support</th><th>Classification</th><th>Depth</th></tr></thead>"
+        f"<tbody>{variant_rows}</tbody></table><h2>Check evidence</h2>{''.join(check_sections)}"
+        "<p>This portable report contains the decision-relevant machine evidence. The bound JSON manifest remains the complete provenance authority.</p>"
         "</body></html>\n",
         encoding="utf-8",
     )

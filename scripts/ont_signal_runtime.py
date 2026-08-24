@@ -771,6 +771,15 @@ def calculate_offsets_command(
     return command
 
 
+def remove_calibration_fasta_index(sequence_fasta: Path) -> None:
+    index = Path(f"{sequence_fasta}.fai")
+    if not index.exists() and not index.is_symlink():
+        return
+    if index.is_symlink() or not index.is_file():
+        raise ValueError("unsafe calibration FASTA index")
+    index.unlink()
+
+
 def cmd_calibrate(args: argparse.Namespace) -> None:
     if not 1 <= args.sample_count <= 100:
         raise ValueError("calibration sample count is outside bounded policy")
@@ -872,13 +881,16 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
         raise ValueError("calibration candidate evidence does not yield an unambiguous recommendation")
     independent_m = int(zero_candidate["candidate_signal_move_offset"])
     independent_k = independent_m + 1
-    offset_receipt = run(calculate_offsets_command(
-        baseline,
-        sequence_fasta,
-        bounded_output,
-        args.sample_count,
-        args.molecule_type,
-    ))
+    try:
+        offset_receipt = run(calculate_offsets_command(
+            baseline,
+            sequence_fasta,
+            bounded_output,
+            args.sample_count,
+            args.molecule_type,
+        ))
+    finally:
+        remove_calibration_fasta_index(sequence_fasta)
     stdout = offset_receipt["stdout_tail"]
     matches = re.findall(r"recommended kmer_length:(\d+) recommended sig_move_offset:(\d+)", stdout)
     if len(matches) != 1 or "please refer" in stdout.lower():

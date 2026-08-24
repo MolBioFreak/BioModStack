@@ -47,6 +47,7 @@ def test_builds_digest_bound_governed_tracks_and_external_reference(tmp_path: Pa
     module = _load_module()
     reference, reference_index, artifacts = _inputs(tmp_path)
     track_config = tmp_path / "igv_track_config.json"
+    standalone_track_config = tmp_path / "igv_standalone_track_config.json"
     reference_config = tmp_path / "igv_reference_config.json"
 
     module.build_report_inputs(
@@ -55,13 +56,16 @@ def test_builds_digest_bound_governed_tracks_and_external_reference(tmp_path: Pa
         reference_fasta=reference,
         reference_index=reference_index,
         out_track_config=track_config,
+        out_standalone_track_config=standalone_track_config,
         out_reference_config=reference_config,
         **artifacts,
     )
 
     tracks = json.loads(track_config.read_text(encoding="utf-8"))
+    standalone_tracks = json.loads(standalone_track_config.read_text(encoding="utf-8"))
     reference_urls = json.loads(reference_config.read_text(encoding="utf-8"))
     assert len(tracks) == 8
+    assert len(standalone_tracks) == 8
     expected_roles = {
         "alignment": artifacts["alignment_bam"],
         "alignment_index": artifacts["alignment_bai"],
@@ -97,6 +101,20 @@ def test_builds_digest_bound_governed_tracks_and_external_reference(tmp_path: Pa
             + hashlib.sha256(reference_index.read_bytes()).hexdigest()
         ),
     }
+    assert standalone_tracks[0]["url"] == str(artifacts["alignment_bam"])
+    assert standalone_tracks[0]["indexURL"] == str(artifacts["alignment_bai"])
+    assert [track["url"] for track in standalone_tracks[1:]] == [
+        str(artifacts[role])
+        for role in (
+            "coverage_depth",
+            "position_gradient",
+            "gc_content",
+            "gc_zscore",
+            "split_read_density",
+            "soft_clip_density",
+            "junction_hotspots",
+        )
+    ]
 
 
 def test_materialized_nextflow_bam_and_bai_are_accepted(tmp_path: Path) -> None:

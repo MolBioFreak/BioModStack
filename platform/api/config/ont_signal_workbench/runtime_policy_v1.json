@@ -1,7 +1,7 @@
 {
   "schema": "bms.ont-squigualiser-runtime-policy.v1",
-  "runtime_id": "sha256:98172ff92d41e234d028cf985b7deb9ac5e090391581016d8aebf1671fde4392",
-  "oci_digest": "sha256:98172ff92d41e234d028cf985b7deb9ac5e090391581016d8aebf1671fde4392",
+  "runtime_id": "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404",
+  "oci_digest": "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404",
   "upstream": {
     "name": "Squigualiser",
     "version": "0.7.0",
