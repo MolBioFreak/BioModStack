@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "977fdf90956d4acabb0696016c3280e4925c84d9b39cc1fb496a2a02b824b965",
+  "content_sha256": "744805deb43674fd3639bae69599e201b1d721b95faf0926d6be8e2fd1abb904",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -59,8 +59,8 @@
     },
     {
       "path": "biomodstack_services.py",
-      "sha256": "622f75b1a74da4ee516cd21dd32db53fc56de4a31bdcde224eac35e404daeeda",
-      "size_bytes": 94909
+      "sha256": "b5d071fbb50ecbe8018554727efe3f20dffcd5e41fa81f42b5ca9309ac4dcd25",
+      "size_bytes": 96226
     },
     {
       "path": "docker/ont-raw-signal.Dockerfile",
@@ -722,8 +722,8 @@
     "content_sha256": "3e951eca9372c8814007e2eeefa0adf9401f8505f29247bc1794c5a763cfa713",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "1b3cce549b2207bab8d7a7fd73416e74c37a086f",
-  "successor_source_tree": "5350fc2cbd4d94bf8bec10965ad941b98ebfacae",
+  "successor_source_commit": "572f30574b5b3f06d77b08415b5a787ea9fae9ed",
+  "successor_source_tree": "5ef0466273cfe8fb330718b1fb362a644f94ab47",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
