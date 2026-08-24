@@ -39,7 +39,7 @@ def test_esmfold2_resource_admission_meets_nextflow_memory_floor() -> None:
     })
 
     assert request["cpu_threads"] == 1
-    assert request["dram_bytes"] == 8 * 1024**3
+    assert request["dram_bytes"] == 16 * 1024**3
 
 
 def _handoff(*, gpu_index: int | None = None, gpu_uuid: str | None = None) -> dict[str, object]:
