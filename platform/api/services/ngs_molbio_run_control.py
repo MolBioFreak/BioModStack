@@ -552,7 +552,8 @@ async def _claim_command(
         await session.rollback()
         return None
     await session.commit()
-    return await session.get(ExperimentRunControlCommand, candidate.command_id)
+    await session.refresh(candidate)
+    return candidate
 
 
 async def _core_lineage(core_session: AsyncSession, root_job: Any) -> list[Any]:
