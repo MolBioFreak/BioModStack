@@ -214,7 +214,7 @@ test('NGS instrument control uses only opaque intent handles and has no browser 
     );
 
     assert.match(ngsToolkit, /type ToolkitView = NgsToolkitView/u);
-    assert.match(ngsToolkit, /Instrument intent/u);
+    assert.match(ngsToolkit, /Instrument setup/u);
     assert.doesNotMatch(ngsToolkit, /Start instrument run/u);
     assert.match(ngsToolkit, /<OntInstrumentPanel/u);
     assert.match(api, /fetchOntDeviceStatus/u);
