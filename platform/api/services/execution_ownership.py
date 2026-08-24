@@ -814,7 +814,10 @@ def _parse_systemd_properties(raw: str) -> dict[str, str]:
     for line in str(raw or "").splitlines():
         key, separator, value = line.partition("=")
         if separator:
-            values[key] = value
+            if key in values and values[key] and value:
+                values[key] = f"{values[key]}\n{value}"
+            else:
+                values[key] = value
     return values
 
 
