@@ -464,6 +464,7 @@ export interface ResultSurface {
     provenance: TypedPayload;
     comparison: ResultComparison;
     available_actions: string[];
+    lineage_edge_key?: 'cloned-plan-intent';
 }
 
 export interface ProjectSelection {
@@ -980,7 +981,7 @@ export function parseResultSurface(value: unknown, label = 'result surface'): Re
     const record = exactRecord(value, label, [
         'schema', 'receipt_id', 'entity_kind', 'entity_id', 'contract_id', 'content_digest', 'surface_kind',
         'route', 'readiness', 'native_summary', 'scientific_acceptance', 'provenance', 'comparison', 'available_actions',
-    ]);
+    ], ['lineage_edge_key']);
     const route = record.route === null ? null : exactRecord(record.route, `${label}.route`, ['template_id', 'path', 'query']);
     const query = route === null ? null : exactRecord(route.query, `${label}.route.query`, Object.keys(requireJsonObject(route.query, `${label}.route.query`)));
     const parsedQuery: Record<string, string> = {};
@@ -1036,6 +1037,9 @@ export function parseResultSurface(value: unknown, label = 'result surface'): Re
             authority: comparisonAuthority,
         },
         available_actions: requireArray(record.available_actions, `${label}.available_actions`, (item, itemLabel) => requireLiteral(item, itemLabel, ['open', 'download', 'compare', 'attach_evidence'])),
+        ...(record.lineage_edge_key === undefined ? {} : {
+            lineage_edge_key: requireLiteral(record.lineage_edge_key, `${label}.lineage_edge_key`, ['cloned-plan-intent'] as const),
+        }),
     };
 }
 

@@ -78,6 +78,15 @@ describe('Project Manager API contract', () => {
         expect(normalizeProjectManagerReadModel(model).map.nodes[0]?.parent_node_key).toBe('domain_experiment:domain-1');
     });
 
+    it('accepts the exact clone-lineage key on result previews and rejects other values', () => {
+        const model = structuredClone(minimalSummary);
+        model.result_previews = [{ ...resultSurface, lineage_edge_key: 'cloned-plan-intent' }];
+        expect(normalizeProjectManagerReadModel(model).result_previews[0]?.lineage_edge_key).toBe('cloned-plan-intent');
+
+        model.result_previews = [{ ...resultSurface, lineage_edge_key: 'foreign-lineage-key' }];
+        expect(() => normalizeProjectManagerReadModel(model)).toThrow(/lineage_edge_key/);
+    });
+
     it('rejects malformed source digest-set authority', () => {
         const model = structuredClone(minimalSummary);
         model.source_digest_set_sha256 = 'not-a-digest';
