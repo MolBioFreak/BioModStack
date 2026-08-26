@@ -745,6 +745,8 @@ def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: 
 
     unit = development_units[service_name]
     assert "WantedBy=default.target" in unit
+    assert f"EnvironmentFile=-{Path.home() / '.config' / 'biomodstack' / 'mobile-update-publisher.env'}" in unit
+    assert "core-runtime.env" not in unit
     assert f"Wants=network-online.target {services.TAILNET_GLOBAL_SERVICE}" in unit
     assert f"Before={services.TAILNET_GLOBAL_SERVICE}" in unit
     assert f"PartOf={services.DEV_TARGET_UNIT}" not in unit

@@ -134,7 +134,9 @@ DEFAULT_LAUNCH_PREFERENCES = {
 }
 
 _STATE_HOME = Path(os.getenv("XDG_STATE_HOME", str(Path.home() / ".local" / "state"))).expanduser().resolve()
+_CONFIG_HOME = Path(os.getenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))).expanduser().resolve()
 LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
+MOBILE_UPDATE_PUBLISHER_ENV = _CONFIG_HOME / "biomodstack" / "mobile-update-publisher.env"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 TELEMETRY_LOG = LOG_DIR / "telemetry.log"
@@ -1477,6 +1479,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment=BMS_MOBILE_UI_UPDATES_DIR={shared_data_root / 'mobile-ui-updates'}
         Environment=BMS_MOBILE_APK_UPDATES_DIR={shared_data_root / 'mobile-apk-updates'}
         Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT={MOBILE_UPDATE_PUBLISHER_PORT}
+        EnvironmentFile=-{MOBILE_UPDATE_PUBLISHER_ENV}
         Environment=BMS_BUILD_SHA={build_revision}
         Environment=BMS_BUILD_ID={build_id}
         Environment=BMS_BUILD_TIME={build_time}
