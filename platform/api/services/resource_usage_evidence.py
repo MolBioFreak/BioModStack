@@ -40,6 +40,7 @@ HISTORICAL_OWNER_ABSENCE_SCHEMA = "bms.systemd-owner-absence.v1"
 HISTORICAL_OWNER_ABSENCE_PARAM = "_historical_pre_spawn_owner_absence"
 RESOURCE_CHECKPOINT_SCHEMA = "bms.workflow-resource-usage-checkpoint.v1"
 _RESOURCE_POLL_INTERVAL_SECONDS = 0.2
+_RESOURCE_SNAPSHOT_ATTEMPTS = 3
 _MAX_GPU_ROWS = 32
 _MAX_CHECKPOINT_BYTES = 256 * 1024
 _HANDOFF_KEYS = frozenset({
@@ -713,7 +714,7 @@ class WorkflowResourceMonitor:
         self._control_group = properties.control_group
         self._invocation_id = properties.invocation_id
         try:
-            accounting = self._snapshot()
+            accounting = self._snapshot_with_retry()
             self._last_accounting = accounting
             self._write_checkpoint(accounting)
         except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError) as exc:
@@ -753,6 +754,16 @@ class WorkflowResourceMonitor:
             "pids_peak": pids_peak,
         }
 
+    def _snapshot_with_retry(self) -> dict[str, Any]:
+        last_error: OSError | ValueError | subprocess.SubprocessError | ResourceUsageEvidenceError | None = None
+        for _attempt in range(_RESOURCE_SNAPSHOT_ATTEMPTS):
+            try:
+                return self._snapshot()
+            except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError) as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
     def _write_checkpoint(self, accounting: Mapping[str, Any]) -> None:
         payload = {
             "schema": RESOURCE_CHECKPOINT_SCHEMA,
@@ -784,7 +795,7 @@ class WorkflowResourceMonitor:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                accounting = self._snapshot()
+                accounting = self._snapshot_with_retry()
                 self._last_accounting = accounting
                 self._write_checkpoint(accounting)
             except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError):
@@ -803,7 +814,7 @@ class WorkflowResourceMonitor:
         accounting: dict[str, Any] | None = None
         if self._control_group:
             try:
-                accounting = self._snapshot()
+                accounting = self._snapshot_with_retry()
                 self._last_accounting = accounting
                 self._write_checkpoint(accounting)
             except (OSError, ValueError, subprocess.SubprocessError, ResourceUsageEvidenceError):

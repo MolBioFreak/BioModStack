@@ -373,6 +373,49 @@ def test_runner_records_expected_device_allow_paths_canonically() -> None:
     )
 
 
+def test_resource_monitor_retries_one_transient_snapshot_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handoff = _handoff()
+    assigned = resource_evidence.materialize_scheduler_dispatch_authority(
+        _prepared_dispatch(handoff),
+        handoff=handoff,
+        gpu_index=2,
+        gpu_uuid="GPU-2222",
+    )
+    monitor = resource_evidence.WorkflowResourceMonitor(
+        job_id="job-1",
+        lane="development",
+        generation=1,
+        attempt=1,
+        unit_name="unit.service",
+        owner_nonce="owner",
+        expected_invocation_id="invocation",
+        handoff=handoff,
+        dispatch_authority=assigned,
+        gpu_index=2,
+        gpu_uuid="GPU-2222",
+    )
+    calls = 0
+
+    def fake_snapshot() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("transient cgroup read race")
+        return {"cpu": {}, "memory_current_bytes": 1, "memory_peak_bytes": 1, "pids_peak": 1}
+
+    monkeypatch.setattr(monitor, "_snapshot", fake_snapshot)
+
+    assert monitor._snapshot_with_retry() == {  # noqa: SLF001
+        "cpu": {},
+        "memory_current_bytes": 1,
+        "memory_peak_bytes": 1,
+        "pids_peak": 1,
+    }
+    assert calls == 2
+
+
 def test_gpu_process_query_retries_one_transient_command_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
