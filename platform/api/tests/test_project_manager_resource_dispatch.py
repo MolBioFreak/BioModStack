@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 import inspect
+import subprocess
 from types import SimpleNamespace
 import sys
 from pathlib import Path
@@ -361,6 +362,40 @@ def test_runner_receipt_exposes_scheduler_dispatch_gpu_identity() -> None:
 
     assert receipt["schema"] == "bms.workflow-resource-usage.v2"
     assert receipt["dispatch"] == {"gpu_index": 2, "gpu_uuid": "GPU-2222"}
+
+
+def test_runner_records_expected_device_allow_paths_canonically() -> None:
+    assert resource_evidence._expected_device_allow_paths({"gpu_index": 2}) == (  # noqa: SLF001
+        "/dev/nvidia-uvm",
+        "/dev/nvidia-uvm-tools",
+        "/dev/nvidia2",
+        "/dev/nvidiactl",
+    )
+
+
+def test_gpu_process_query_retries_one_transient_command_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="transient NVML error")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="123, GPU-2222, 4096\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(resource_evidence.subprocess, "run", fake_run)
+
+    assert resource_evidence._gpu_rows_for_pids({123}) == [  # noqa: SLF001
+        {"pid": 123, "gpu_uuid": "GPU-2222", "used_memory_bytes": 4096 * 1024 * 1024}
+    ]
+    assert calls == 2
 
 
 def test_pre_spawn_failure_receipt_is_terminal_zero_use_evidence() -> None:

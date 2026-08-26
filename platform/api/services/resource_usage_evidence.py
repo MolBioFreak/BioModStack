@@ -76,7 +76,7 @@ def _expected_device_allow_paths(handoff: Mapping[str, Any]) -> tuple[str, ...]:
     if gpu_index is None:
         return ()
     try:
-        return workflow_nvidia_device_allow_paths(gpu_index)
+        return tuple(sorted(workflow_nvidia_device_allow_paths(gpu_index)))
     except ExecutionOwnershipError as exc:
         raise ResourceUsageEvidenceError(
             "authoritative NVIDIA device allowlist is unavailable"
@@ -468,18 +468,26 @@ def _cgroup_directory(control_group: str) -> Path:
 def _gpu_rows_for_pids(pids: set[int]) -> list[dict[str, Any]]:
     if not pids:
         return []
-    completed = subprocess.run(
-        [
-            "nvidia-smi",
-            "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
-            "--format=csv,noheader,nounits",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=2,
-    )
-    if completed.returncode != 0:
+    command = [
+        "nvidia-smi",
+        "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
+        "--format=csv,noheader,nounits",
+    ]
+    completed: subprocess.CompletedProcess[str] | None = None
+    for _attempt in range(2):
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+        except subprocess.SubprocessError:
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            break
+    if completed is None or completed.returncode != 0:
         raise ResourceUsageEvidenceError("nvidia-smi resource query failed")
     rows: list[dict[str, Any]] = []
     for line in completed.stdout.splitlines():
