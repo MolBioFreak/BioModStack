@@ -59,12 +59,39 @@ function exactCurrentSelectionReceipt(environment) {
       owner: 'biomodstack', quick_check: 'ok', sequence_parent_cycle_count: 0,
       sequence_parent_foreign_key_current: true, status: 'healthy',
     },
+    molbio_ngs: {
+      status: 'healthy', exists: true, path: '/srv/.biomodstack-dev/molbio_ngs.db',
+      journal_mode: 'wal', synchronous: 2, foreign_keys: true,
+      migration: {
+        version: 4, name: 'molbio_ngs_versioned_bindings_ordered_outbox_v4',
+        checksum: '4'.repeat(64), description: 'Current governed NGS schema',
+        applied_at: '2026-08-14T20:02:13.154054+00:00',
+      },
+      attestation: {
+        ok: true,
+        actual_migration_ledger: [[4, 'molbio_ngs_versioned_bindings_ordered_outbox_v4', '4'.repeat(64)]],
+        expected_migration_ledger: [[4, 'molbio_ngs_versioned_bindings_ordered_outbox_v4', '4'.repeat(64)]],
+        missing_objects: [], extra_objects: [], changed_objects: [], artifact_errors: [],
+        foreign_key_errors: [], authority_coherence_errors: [], migration_ledger_error: null,
+      },
+    },
     readiness: {
       ready: true,
       mode: 'container',
       checks: {
         core_database: readinessCheck('ready'), frontend: readinessCheck('http_200'),
+        core_schema_migrations: {
+          ...readinessCheck('at_head'), expected_version: 40,
+          expected_name: 'seal_ont_raw_signal_lookup_terminal_immutability',
+          applied_version: 40, applied_name: 'seal_ont_raw_signal_lookup_terminal_immutability',
+          missing_schema_objects: [], physical_schema_errors: [],
+        },
         molbio_database: readinessCheck('ready'), process_liveness: readinessCheck('alive'),
+        molbio_ngs_database: readinessCheck('ready'),
+        telemetry_collection: {
+          ...readinessCheck('fresh'), latest_timestamp_ms: 1_787_775_487_120,
+          age_ms: 1_629, stale_after_ms: 15_000,
+        },
         workflow_adapter: readinessCheck('http_200'),
         workflow_launch: { ...readinessCheck('allowed'), allowed: true },
       },
@@ -288,10 +315,10 @@ function exactCurrentSelectionReceipt(environment) {
     const apiRoot = `${receipt.project_root}/platform/api`;
     const apiReport = processReport(111, '7', {
       cwd: apiRoot,
-      cmdline: `${apiRoot}/.venv/bin/python3 ${apiRoot}/.venv/bin/uvicorn main:app --port 18002 --host 127.0.0.1 --no-access-log --reload`,
+      cmdline: `${apiRoot}/.venv/bin/python3 ${apiRoot}/.venv/bin/uvicorn main:app --port 18002 --host 127.0.0.1 --no-access-log`,
       argv: [
         `${apiRoot}/.venv/bin/python3`, `${apiRoot}/.venv/bin/uvicorn`, 'main:app',
-        '--port', '18002', '--host', '127.0.0.1', '--no-access-log', '--reload',
+        '--port', '18002', '--host', '127.0.0.1', '--no-access-log',
       ],
       executable: '/usr/bin/python3',
       cgroup: '0::/user.slice/user-1000.slice/user@1000.service/app.slice/biomodstack-api.service',
@@ -304,9 +331,6 @@ function exactCurrentSelectionReceipt(environment) {
     for (const probe of [receipt.health.local_api, receipt.health.tailnet_api]) {
       probe.payload.build.revision = developmentRevision;
       probe.payload.readiness.mode = 'native';
-      probe.payload.readiness.checks.workflow_adapter = {
-        ready: true, required: false, status: 'not_required',
-      };
     }
     receipt.workflow_adapter_listener.listener_reports[0].build_revision = developmentRevision;
     receipt.development_api_listener = {
@@ -684,6 +708,32 @@ test('selection response contract accepts exact development and production recei
   assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
     receipt('production'), 'production', 'https://compute-node.taileb3a90.ts.net',
   ));
+  const reloadDevelopment = receipt('development');
+  const reloadRoot = reloadDevelopment.development_api_listener.source_root;
+  const reloadReport = reloadDevelopment.development_api_listener.listener_reports[0];
+  reloadReport.argv.push(
+    '--reload', '--reload-dir', reloadRoot,
+    '--reload-exclude', '.pytest_cache/*',
+    '--reload-exclude', 'tests/*',
+    '--reload-exclude', 'inputs/*',
+    '--reload-exclude', '*.db',
+    '--reload-exclude', '__pycache__/*',
+    '--reload-exclude', '.venv/*',
+  );
+  reloadReport.cmdline = reloadReport.argv.join(' ');
+  reloadDevelopment.api_listeners = reloadDevelopment.development_api_listener.listener_reports;
+  assert.doesNotThrow(() => prepareAssets.validateTailnetSelectionPayload(
+    reloadDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  ));
+
+  const unapprovedDevelopment = receipt('development');
+  const unapprovedReport = unapprovedDevelopment.development_api_listener.listener_reports[0];
+  unapprovedReport.argv.push('--proxy-headers');
+  unapprovedReport.cmdline = unapprovedReport.argv.join(' ');
+  unapprovedDevelopment.api_listeners = unapprovedDevelopment.development_api_listener.listener_reports;
+  assert.throws(() => prepareAssets.validateTailnetSelectionPayload(
+    unapprovedDevelopment, 'development', 'https://compute-node.taileb3a90.ts.net',
+  ));
   const reorderedMount = receipt('production');
   const mount = reorderedMount.managed_api_runtime.containers[0].mounts[0];
   const reordered = {
@@ -878,6 +928,30 @@ test('selection response contract accepts exact development and production recei
       }
     },
     (value) => { value.health.local_api.payload.molbio.rogue = true; },
+    (value) => { value.health.local_api.payload.molbio_ngs.rogue = true; },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.molbio_ngs.attestation.ok = false;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.core_schema_migrations.status = 'behind';
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        const telemetry = value.health[probe].payload.readiness.checks.telemetry_collection;
+        telemetry.ready = false;
+        telemetry.status = 'stale';
+        telemetry.age_ms = telemetry.stale_after_ms + 1;
+      }
+    },
+    (value) => {
+      for (const probe of ['local_api', 'tailnet_api']) {
+        value.health[probe].payload.readiness.checks.molbio_ngs_database.ready = false;
+      }
+    },
     (value) => { value.serve_handlers.rogue = { Proxy: 'http://127.0.0.1:9999' }; },
     (value) => { value.serve_handlers['/'].rogue = true; },
     (value) => { value.serve_handlers['/api/tailnet-environment'].rogue = true; },

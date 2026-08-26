@@ -924,6 +924,21 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
   const validDevelopmentApiListener = (listener, projectRoot, revision) => {
     const sourceRoot = `${projectRoot}/platform/api`;
     const expectedPort = Number(new URL(expected.apiHealthTarget).port);
+    const baseArgv = [
+      `${sourceRoot}/.venv/bin/python3`, `${sourceRoot}/.venv/bin/uvicorn`,
+      'main:app', '--port', String(expectedPort), '--host', '127.0.0.1', '--no-access-log',
+    ];
+    const reloadArgv = [
+      ...baseArgv, '--reload', '--reload-dir', sourceRoot,
+      '--reload-exclude', '.pytest_cache/*',
+      '--reload-exclude', 'tests/*',
+      '--reload-exclude', 'inputs/*',
+      '--reload-exclude', '*.db',
+      '--reload-exclude', '__pycache__/*',
+      '--reload-exclude', '.venv/*',
+    ];
+    const approvedArgv = (value) => JSON.stringify(value) === JSON.stringify(baseArgv)
+      || JSON.stringify(value) === JSON.stringify(reloadArgv);
     if (!(
       hasExactKeys(listener, [
         'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
@@ -946,20 +961,14 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         ])
         && report.cwd === sourceRoot
         && report.build_revision === revision
-        && Array.isArray(report.argv) && report.argv.length >= 4
-        && normalizeAbsolutePath(report.argv[0]) === `${sourceRoot}/.venv/bin/python3`
+        && Array.isArray(report.argv) && approvedArgv(report.argv)
         && nonEmptyBounded(report.executable, 4096)
         && normalizeAbsolutePath(report.executable) === report.executable
         && report.cmdline === report.argv.join(' ')
         && reportInExactUnit(report, 'biomodstack-api.service')
       ))
     )) return false;
-    return listener.listener_reports.some((report) => (
-      normalizeAbsolutePath(report.argv[1]) === `${sourceRoot}/.venv/bin/uvicorn`
-      && report.argv.includes('main:app')
-      && report.argv.includes(String(expectedPort))
-      && report.argv.includes('--reload')
-    ));
+    return true;
   };
   const validWorkflowAdapterListener = (
     listener, projectRoot, selectorRevision,
@@ -998,6 +1007,58 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         && reportInExactUnit(report, 'biomodstack-development-workflow-adapter.service')
       ));
   };
+  const validMolbioNgs = (value) => {
+    if (!hasExactKeys(value, [
+      'attestation', 'exists', 'foreign_keys', 'journal_mode',
+      'migration', 'path', 'status', 'synchronous',
+    ])) return false;
+    const migration = value.migration;
+    const attestation = value.attestation;
+    const validLedger = (ledger) => Array.isArray(ledger)
+      && ledger.length > 0
+      && ledger.every((entry) => (
+        Array.isArray(entry) && entry.length === 3
+        && Number.isInteger(entry[0]) && entry[0] > 0
+        && nonEmptyBounded(entry[1], 256)
+        && /^[0-9a-f]{64}$/.test(String(entry[2] || ''))
+      ));
+    if (
+      value.status !== 'healthy'
+      || value.exists !== true
+      || value.foreign_keys !== true
+      || value.journal_mode !== 'wal'
+      || !Number.isInteger(value.synchronous) || value.synchronous < 0 || value.synchronous > 3
+      || normalizeAbsolutePath(value.path) !== value.path
+      || !hasExactKeys(migration, [
+        'applied_at', 'checksum', 'description', 'name', 'version',
+      ])
+      || !Number.isInteger(migration.version) || migration.version <= 0
+      || !nonEmptyBounded(migration.name, 256)
+      || !/^[0-9a-f]{64}$/.test(String(migration.checksum || ''))
+      || !nonEmptyBounded(migration.description, 1024)
+      || !nonEmptyBounded(migration.applied_at, 128)
+      || !Number.isFinite(Date.parse(migration.applied_at))
+      || !hasExactKeys(attestation, [
+        'actual_migration_ledger', 'artifact_errors', 'authority_coherence_errors',
+        'changed_objects', 'expected_migration_ledger', 'extra_objects',
+        'foreign_key_errors', 'migration_ledger_error', 'missing_objects', 'ok',
+      ])
+      || attestation.ok !== true
+      || attestation.migration_ledger_error !== null
+      || !validLedger(attestation.actual_migration_ledger)
+      || !validLedger(attestation.expected_migration_ledger)
+      || JSON.stringify(attestation.actual_migration_ledger)
+        !== JSON.stringify(attestation.expected_migration_ledger)
+      || ![
+        'artifact_errors', 'authority_coherence_errors', 'changed_objects',
+        'extra_objects', 'foreign_key_errors', 'missing_objects',
+      ].every((key) => Array.isArray(attestation[key]) && attestation[key].length === 0)
+    ) return false;
+    const applied = attestation.actual_migration_ledger.at(-1);
+    return applied[0] === migration.version
+      && applied[1] === migration.name
+      && applied[2] === migration.checksum;
+  };
   const validHealth = (health) => {
     const validBuild = (build) => (
       hasExactKeys(build, ['revision', 'build_id', 'build_time'])
@@ -1014,8 +1075,33 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && check.status === expectedStatus
       && (!launch || check.allowed === true)
     );
+    const validMigrationReadiness = (check) => (
+      hasExactKeys(check, [
+        'applied_name', 'applied_version', 'expected_name', 'expected_version',
+        'missing_schema_objects', 'physical_schema_errors', 'ready', 'required', 'status',
+      ])
+      && check.ready === true && check.required === true && check.status === 'at_head'
+      && Number.isInteger(check.expected_version) && check.expected_version > 0
+      && check.applied_version === check.expected_version
+      && nonEmptyBounded(check.expected_name, 256)
+      && check.applied_name === check.expected_name
+      && Array.isArray(check.missing_schema_objects) && check.missing_schema_objects.length === 0
+      && Array.isArray(check.physical_schema_errors) && check.physical_schema_errors.length === 0
+    );
+    const validTelemetryReadiness = (check) => (
+      hasExactKeys(check, [
+        'age_ms', 'latest_timestamp_ms', 'ready', 'required', 'stale_after_ms', 'status',
+      ])
+      && check.ready === true && check.required === true && check.status === 'fresh'
+      && Number.isInteger(check.latest_timestamp_ms) && check.latest_timestamp_ms > 0
+      && Number.isInteger(check.age_ms) && check.age_ms >= 0
+      && Number.isInteger(check.stale_after_ms) && check.stale_after_ms > 0
+      && check.age_ms <= check.stale_after_ms
+    );
     const validApiPayload = (payload) => (
-      hasExactKeys(payload, ['build', 'liveness', 'molbio', 'readiness', 'service', 'status'])
+      hasExactKeys(payload, [
+        'build', 'liveness', 'molbio', 'molbio_ngs', 'readiness', 'service', 'status',
+      ])
       && payload.status === 'healthy'
       && payload.service === 'biomodstack-api'
       && validBuild(payload.build)
@@ -1042,11 +1128,13 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
       && payload.molbio.database_schema_issue_count === 0
       && payload.molbio.foreign_key_violations === 0
       && payload.molbio.sequence_parent_cycle_count === 0
+      && validMolbioNgs(payload.molbio_ngs)
       && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
       && payload.readiness.ready === true
       && payload.readiness.mode === (environment === 'development' ? 'native' : 'container')
       && hasExactKeys(payload.readiness.checks, [
-        'core_database', 'frontend', 'molbio_database', 'process_liveness',
+        'core_database', 'core_schema_migrations', 'frontend', 'molbio_database',
+        'molbio_ngs_database', 'process_liveness', 'telemetry_collection',
         'workflow_adapter', 'workflow_launch',
       ])
       && Object.entries({
@@ -1055,12 +1143,10 @@ export function validateTailnetSelectionPayload(payload, environment, trustedOri
         molbio_database: 'ready',
         process_liveness: 'alive',
       }).every(([key, status]) => validReadinessCheck(payload.readiness.checks[key], status))
-      && (environment === 'development'
-        ? hasExactKeys(payload.readiness.checks.workflow_adapter, ['ready', 'required', 'status'])
-          && payload.readiness.checks.workflow_adapter.ready === true
-          && payload.readiness.checks.workflow_adapter.required === false
-          && payload.readiness.checks.workflow_adapter.status === 'not_required'
-        : validReadinessCheck(payload.readiness.checks.workflow_adapter, 'http_200'))
+      && validMigrationReadiness(payload.readiness.checks.core_schema_migrations)
+      && validTelemetryReadiness(payload.readiness.checks.telemetry_collection)
+      && validReadinessCheck(payload.readiness.checks.molbio_ngs_database, 'ready')
+      && validReadinessCheck(payload.readiness.checks.workflow_adapter, 'http_200')
       && validReadinessCheck(payload.readiness.checks.workflow_launch, 'allowed', true)
     );
     const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
