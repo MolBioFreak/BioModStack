@@ -1,14 +1,14 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "c08598d5078c44172cf3c9f28f06a7698c0aa43bb5e4ed783a4e4072c6f90e1a",
+  "content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
   "environment": {
     "git": "git version 2.34.1",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
     "python": "3.12.13",
     "uv": "uv 0.11.26 (x86_64-unknown-linux-gnu)"
   },
-  "executed_at": "2026-08-26T15:59:16Z",
+  "executed_at": "2026-08-22T02:41:14.447281Z",
   "payload_files": [
     {
       "path": "docs/reports/ngs-molbio-phase-n0-contract-freeze.md",
@@ -27,7 +27,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "c0d71a2e2e68c2e5c8feda1726fe51f0898096b5daf8fcf668bb06313f06d6bc",
+      "sha256": "cf31febd8936549ca91cb4efc8c2c6853888cdc3665c81c96478793e2919ba04",
       "size_bytes": 100169
     },
     {
@@ -52,12 +52,12 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "e639e6a7d6a5da1d319ec1de5cf2e9fdb00e4d12d9c35b70329a16a56c227e45",
+      "sha256": "c51f58078dc62b2532f99f66e8115a7027141a726887296fe300e3d35c76e120",
       "size_bytes": 26539
     },
     {
       "path": "platform/api/config/ngs_molbio/source_pin_v1.json",
-      "sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4",
+      "sha256": "76028030245171a8000eccc51349e72b71081ea7efe064ca2bd5b00d431588be",
       "size_bytes": 7014
     },
     {
@@ -297,8 +297,8 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
-      "sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d",
-      "size_bytes": 25902
+      "sha256": "67fd4c9d608c2fc638e24656bb739835ed67245780643da616be88d7f0b49934",
+      "size_bytes": 25909
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json",
@@ -456,7 +456,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "ba924aaadc172aed0beb97b1630ab5bbc62cbe859685fd8fcc9272179b1a6dd4",
+  "payload_fingerprint_sha256": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
   "result": {
     "adapters": 27,
     "capabilities": 21,

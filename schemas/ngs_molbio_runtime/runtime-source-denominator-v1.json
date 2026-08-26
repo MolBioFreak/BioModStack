@@ -1,5 +1,5 @@
 {
-  "content_sha256": "3e951eca9372c8814007e2eeefa0adf9401f8505f29247bc1794c5a763cfa713",
+  "content_sha256": "dac29eb1d2b00ec13fa7b6a563bea10d2c6e3505111427a79d22bf9ae203068b",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -15,6 +15,7 @@
     "platform/api/config/ngs_molbio/capability_inventory_v1.json",
     "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
     "platform/api/config/ngs_molbio/schema_registry_v1.json",
+    "platform/api/config/ngs_molbio/source_pin_v1.json",
     "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
     "platform/api/config/ont_signal_workbench/runtime_policy_v1.json",
     "platform/api/database.py",
