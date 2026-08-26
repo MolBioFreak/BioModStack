@@ -20,7 +20,7 @@ def _api_process_report(host_pid: int, cgroup: str) -> dict[str, object]:
         "parent_container_pid": 0, "executable": "/usr/local/bin/python3.10",
         "argv": [
             "/app/platform/api/.venv/bin/python", "/app/platform/api/.venv/bin/uvicorn",
-            "main:app", "--host", "127.0.0.1", "--port", "8000",
+            "main:app", "--host", "127.0.0.1", "--port", "18000",
         ],
         "cwd": "/app/platform/api", "uid": 1000,
     }

@@ -522,6 +522,722 @@ export function buildBundleDescriptor(html, options = {}) {
   };
 }
 
+export function validateTailnetSelectionPayload(payload, environment, trustedOrigin) {
+  const expected = environment === 'development'
+    ? {
+      frontendTarget: 'http://127.0.0.1:18082',
+      apiHealthTarget: 'http://127.0.0.1:18002/api/health',
+      serveRootProxy: 'http://127.0.0.1:18082',
+      runtimeMode: 'dev',
+      runtimeTarget: 'dev',
+    }
+    : environment === 'production'
+      ? {
+        frontendTarget: 'http://127.0.0.1:18080/bms/',
+        apiHealthTarget: 'http://127.0.0.1:18000/api/health',
+        serveRootProxy: 'http://127.0.0.1:18081',
+        runtimeMode: 'container',
+        runtimeTarget: 'prod',
+      }
+      : null;
+  const reject = () => {
+    throw new Error('Environment selection returned a mismatched runtime identity.');
+  };
+  const revisionPattern = /^[0-9a-f]{40}$/;
+  const digestPattern = /^sha256:[0-9a-f]{64}$/;
+  const containerIdPattern = /^[0-9a-f]{64}$/;
+  const nonEmptyBounded = (value, limit = 512) => (
+    typeof value === 'string' && value.trim().length > 0 && value.length <= limit
+  );
+  const validBuildTime = (value) => {
+    if (typeof value !== 'string') return false;
+    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = ''] = match;
+    const [year, month, day, hour, minute, second] = [
+      yearText, monthText, dayText, hourText, minuteText, secondText,
+    ].map(Number);
+    if (year < 2000) return false;
+    const millisecond = Number((fraction + '000').slice(0, 3));
+    const parsed = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+    return parsed.getUTCFullYear() === year
+      && parsed.getUTCMonth() === month - 1
+      && parsed.getUTCDate() === day
+      && parsed.getUTCHours() === hour
+      && parsed.getUTCMinutes() === minute
+      && parsed.getUTCSeconds() === second;
+  };
+  const cgroupPaths = (cgroup) => {
+    const lines = String(cgroup || '').split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) return null;
+    const paths = [];
+    for (const line of lines) {
+      const match = line.match(/^[0-9]+:[^:]*:(\/.*)$/);
+      if (!match) return null;
+      paths.push(match[1]);
+    }
+    return paths;
+  };
+  const exactContainerCgroup = (cgroup, containerId) => {
+    if (!containerIdPattern.test(String(containerId || ''))) return false;
+    const expectedPaths = new Set([
+      `/docker/${containerId}`,
+      `/system.slice/docker-${containerId}.scope`,
+    ]);
+    const paths = cgroupPaths(cgroup);
+    return Array.isArray(paths)
+      && paths.some((path) => expectedPaths.has(path))
+      && paths.every((path) => path === '/' || expectedPaths.has(path));
+  };
+  const validContainerProcessReport = (report, name, containerId) => {
+    if (
+      !hasExactKeys(report, [
+        'pid', 'cgroup', 'container_pid', 'parent_container_pid',
+        'executable', 'argv', 'cwd', 'uid',
+      ])
+      || !Number.isInteger(report.pid) || report.pid <= 0
+      || !Number.isInteger(report.container_pid) || report.container_pid <= 0
+      || !Number.isInteger(report.parent_container_pid) || report.parent_container_pid < 0
+      || !exactContainerCgroup(report.cgroup, containerId)
+      || !Array.isArray(report.argv)
+    ) return false;
+    if (name === 'biomodstack-api') {
+      return report.container_pid === 1
+        && report.parent_container_pid === 0
+        && report.executable === '/usr/local/bin/python3.10'
+        && JSON.stringify(report.argv) === JSON.stringify([
+          '/app/platform/api/.venv/bin/python', '/app/platform/api/.venv/bin/uvicorn',
+          'main:app', '--host', '127.0.0.1', '--port', '18000',
+        ])
+        && report.cwd === '/app/platform/api'
+        && report.uid === 1000;
+    }
+    if (report.container_pid === 1) {
+      return report.parent_container_pid === 0
+        && report.executable === '/usr/sbin/nginx'
+        && JSON.stringify(report.argv) === JSON.stringify(['nginx: master process nginx -g daemon off;'])
+        && report.cwd === '/'
+        && report.uid === 0;
+    }
+    return report.parent_container_pid === 1
+      && report.executable === '/usr/sbin/nginx'
+      && JSON.stringify(report.argv) === JSON.stringify(['nginx: worker process'])
+      && report.cwd === '/'
+      && report.uid === 101;
+  };
+  const validContainerSet = (runtime, requiredNames, revision) => {
+    if (
+      !hasExactKeys(runtime, ['containers', 'validated_revision', 'validated_compose_root'])
+      || runtime.validated_revision !== revision
+      || !nonEmptyBounded(runtime.validated_compose_root)
+      || !runtime.validated_compose_root.startsWith('/')
+      || !Array.isArray(runtime.containers)
+      || runtime.containers.length !== requiredNames.length
+    ) return false;
+    const byName = new Map(runtime.containers.map((container) => [container?.name, container]));
+    if (byName.size !== requiredNames.length) return false;
+    return requiredNames.every((name) => {
+      const container = byName.get(name);
+      const expectedIdentity = name === 'biomodstack-api'
+        ? {
+          imageId: 'sha256:74bf34e32e2f5d0f72d3f6d117c1b4877c169e7a62c0da06ea05b75d5e0cd12c',
+          cmdline: '/bin/sh -ec /app/platform/api/.venv/bin/python run_migrations.py && exec /app/platform/api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 18000',
+          cwd: '/app/platform/api',
+          mounts: [{
+            type: 'bind', source: '/mnt/BioModStack', destination: '/var/lib/biomodstack',
+            mode: 'rw', rw: true, propagation: 'rprivate',
+          }],
+        }
+        : {
+          imageId: 'sha256:7e79b645349216a2457cd2f64af53beb26d9041c7911ed8438d6708239017c3e',
+          cmdline: '/docker-entrypoint.sh nginx -g daemon off;',
+          cwd: '/',
+          mounts: [],
+        };
+      const validMounts = name === 'biomodstack-api'
+        ? Array.isArray(container?.mounts)
+          && container.mounts.length === 1
+          && hasExactKeys(container.mounts[0], [
+            'type', 'source', 'destination', 'mode', 'rw', 'propagation',
+          ])
+          && Object.entries(expectedIdentity.mounts[0]).every(
+            ([key, value]) => container.mounts[0][key] === value,
+          )
+        : Array.isArray(container?.mounts) && container.mounts.length === 0;
+      if (
+        !hasExactKeys(container, [
+          'name', 'container_id', 'revision', 'compose_working_dir', 'pid', 'cgroup',
+          'image_id', 'cmdline', 'cwd', 'host_pids', 'process_reports',
+          'readonly_rootfs', 'mounts',
+        ])
+        || !containerIdPattern.test(String(container.container_id || ''))
+        || container.revision !== revision
+        || container.compose_working_dir !== runtime.validated_compose_root
+        || !Number.isInteger(container.pid) || container.pid <= 0
+        || !nonEmptyBounded(container.cgroup, 4096)
+        || !exactContainerCgroup(container.cgroup, container.container_id)
+        || container.image_id !== expectedIdentity.imageId
+        || container.cmdline !== expectedIdentity.cmdline
+        || container.cwd !== expectedIdentity.cwd
+        || container.readonly_rootfs !== false
+        || !validMounts
+        || !sortedUniquePositiveIntegers(container.host_pids)
+        || !container.host_pids.includes(container.pid)
+        || (name === 'biomodstack-api'
+          && JSON.stringify(container.host_pids) !== JSON.stringify([container.pid]))
+        || !Array.isArray(container.process_reports)
+        || container.process_reports.length !== container.host_pids.length
+      ) return false;
+      const reportPids = container.process_reports.map((report) => report?.pid);
+      return JSON.stringify(reportPids) === JSON.stringify(container.host_pids)
+        && container.process_reports.every((report) => (
+          validContainerProcessReport(report, name, container.container_id)
+        ));
+    });
+  };
+  const sameRuntimeContainer = (leftRuntime, rightRuntime, name) => {
+    if (
+      leftRuntime?.validated_revision !== rightRuntime?.validated_revision
+      || leftRuntime?.validated_compose_root !== rightRuntime?.validated_compose_root
+    ) return false;
+    const left = leftRuntime?.containers?.find((item) => item?.name === name);
+    const right = rightRuntime?.containers?.find((item) => item?.name === name);
+    return JSON.stringify(left) === JSON.stringify(right);
+  };
+  const sortedUniquePositiveIntegers = (value, allowEmpty = false) => {
+    if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
+    if (!value.every((item) => Number.isInteger(item) && item > 0)) return false;
+    return value.every((item, index) => index === 0 || value[index - 1] < item);
+  };
+  const normalizeAbsolutePath = (value) => {
+    if (typeof value !== 'string' || !value.startsWith('/')) return null;
+    const parts = [];
+    for (const part of value.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        if (parts.length === 0) return null;
+        parts.pop();
+      } else parts.push(part);
+    }
+    return `/${parts.join('/')}`;
+  };
+  const hasExactKeys = (value, keys) => value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+  const validListenerClosure = (listener, port, bindAddresses) => {
+    if (
+      !listener
+      || listener.port !== port
+      || JSON.stringify(listener.bind_addresses) !== JSON.stringify(bindAddresses)
+      || !sortedUniquePositiveIntegers(listener.listener_inodes)
+      || !listener.listener_inode_owners
+      || typeof listener.listener_inode_owners !== 'object'
+      || Array.isArray(listener.listener_inode_owners)
+      || !Array.isArray(listener.listener_reports)
+      || listener.listener_reports.length === 0
+    ) return false;
+    const inodeKeys = Object.keys(listener.listener_inode_owners);
+    if (
+      inodeKeys.length !== listener.listener_inodes.length
+      || !listener.listener_inodes.every((inode) => Object.hasOwn(listener.listener_inode_owners, String(inode)))
+    ) return false;
+    const ownerPids = [...new Set(inodeKeys.flatMap((inode) => {
+      const owners = listener.listener_inode_owners[inode];
+      return sortedUniquePositiveIntegers(owners) ? owners : [NaN];
+    }))].sort((left, right) => left - right);
+    const reportPids = listener.listener_reports.map((report) => report?.pid).sort((left, right) => left - right);
+    return ownerPids.length > 0
+      && ownerPids.every(Number.isInteger)
+      && JSON.stringify(ownerPids) === JSON.stringify(reportPids)
+      && listener.listener_reports.every((report) => nonEmptyBounded(report?.cgroup, 4096));
+  };
+  const validContainerListener = (listener, runtime, containerName, port) => {
+    if (
+      !hasExactKeys(listener, [
+        'container_name', 'container_id', 'port', 'bind_addresses',
+        'container_listener_pids', 'listener_pid_map', 'host_listener_pids',
+        'listener_inodes', 'listener_inode_owners', 'container_host_pids', 'listener_reports',
+        'runtime_image_id', 'runtime_cmdline', 'runtime_cwd',
+      ])
+      || !validListenerClosure(listener, port, ['127.0.0.1'])
+    ) return false;
+    const container = runtime?.containers?.find((item) => item?.name === containerName);
+    if (
+      !container
+      || listener.container_name !== containerName
+      || listener.container_id !== container.container_id
+      || !sortedUniquePositiveIntegers(listener.container_listener_pids)
+      || !Array.isArray(listener.listener_pid_map)
+      || listener.listener_pid_map.length !== listener.container_listener_pids.length
+      || !sortedUniquePositiveIntegers(listener.host_listener_pids)
+      || listener.host_listener_pids.length !== listener.container_listener_pids.length
+      || !sortedUniquePositiveIntegers(listener.container_host_pids)
+      || JSON.stringify(listener.container_host_pids) !== JSON.stringify(container.host_pids)
+      || !listener.container_host_pids.includes(container.pid)
+      || listener.runtime_image_id !== container.image_id
+      || listener.runtime_cmdline !== container.cmdline
+      || listener.runtime_cwd !== container.cwd
+    ) return false;
+    const mappedContainerPids = listener.listener_pid_map.map((item) => item?.container_pid);
+    const mappedHostPids = listener.listener_pid_map.map((item) => item?.host_pid);
+    if (
+      !listener.listener_pid_map.every((item) => (
+        hasExactKeys(item, ['container_pid', 'host_pid'])
+        && Number.isInteger(item.container_pid) && item.container_pid > 0
+        && Number.isInteger(item.host_pid) && item.host_pid > 0
+      ))
+      || JSON.stringify(mappedContainerPids) !== JSON.stringify(listener.container_listener_pids)
+      || JSON.stringify(mappedHostPids) !== JSON.stringify(listener.host_listener_pids)
+      || listener.listener_pid_map.filter((item) => item.container_pid === 1).length !== 1
+      || listener.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid !== container.pid
+      || (containerName === 'biomodstack-api'
+        && JSON.stringify(listener.container_listener_pids) !== JSON.stringify([1]))
+    ) return false;
+    const reportsMatchPidMap = listener.listener_pid_map.every((mapping) => {
+      const report = listener.listener_reports.find((item) => item?.pid === mapping.host_pid);
+      return report?.container_pid === mapping.container_pid;
+    });
+    const ownerPids = [...new Set(Object.values(listener.listener_inode_owners).flat())]
+      .sort((left, right) => left - right);
+    return reportsMatchPidMap
+      && JSON.stringify(listener.host_listener_pids) === JSON.stringify(ownerPids)
+      && JSON.stringify(ownerPids) === JSON.stringify(listener.container_host_pids)
+      && listener.listener_reports.every((report) => (
+        validContainerProcessReport(report, containerName, container.container_id)
+      ))
+      && JSON.stringify(listener.listener_reports) === JSON.stringify(
+        container.process_reports.filter((report) => listener.host_listener_pids.includes(report.pid)),
+      );
+  };
+  const validProductionProxy = (proxy, projectRoot, publicReports) => {
+    const keys = [
+      'container_id', 'image', 'image_id', 'config_path', 'config_sha256',
+      'listener_port', 'pid', 'listener_pids', 'container_listener_pids',
+      'listener_pid_map',
+      'listener_inodes', 'listener_inode_owners', 'container_host_pids',
+      'listener_reports', 'cgroup', 'cmdline', 'cwd',
+    ];
+    if (
+      !hasExactKeys(proxy, keys)
+      || !containerIdPattern.test(String(proxy.container_id || ''))
+      || proxy.image !== 'nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'
+      || proxy.image_id !== 'sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea'
+      || proxy.config_path !== `${projectRoot}/docker/tailnet-production-proxy.conf`
+      || proxy.config_sha256 !== 'fa66233b84090cf618cb38b3c27a825e10fb5f238774e2114e24aab381e97956'
+      || proxy.listener_port !== 18081
+      || !Number.isInteger(proxy.pid) || proxy.pid <= 0
+      || !sortedUniquePositiveIntegers(proxy.listener_pids)
+      || !sortedUniquePositiveIntegers(proxy.container_listener_pids)
+      || !Array.isArray(proxy.listener_pid_map)
+      || proxy.listener_pid_map.length !== proxy.container_listener_pids.length
+      || proxy.listener_pids.length !== proxy.container_listener_pids.length
+      || !sortedUniquePositiveIntegers(proxy.listener_inodes)
+      || !sortedUniquePositiveIntegers(proxy.container_host_pids)
+      || !proxy.container_host_pids.includes(proxy.pid)
+      || !proxy.listener_inode_owners
+      || typeof proxy.listener_inode_owners !== 'object'
+      || Array.isArray(proxy.listener_inode_owners)
+      || !Array.isArray(proxy.listener_reports)
+      || proxy.listener_reports.length === 0
+      || !nonEmptyBounded(proxy.cgroup, 4096)
+      || !exactContainerCgroup(proxy.cgroup, proxy.container_id)
+      || proxy.cmdline !== '/docker-entrypoint.sh nginx -g daemon off;'
+      || proxy.cwd !== '/'
+    ) return false;
+    const inodeKeys = Object.keys(proxy.listener_inode_owners);
+    if (
+      inodeKeys.length !== proxy.listener_inodes.length
+      || !proxy.listener_inodes.every((inode) => Object.hasOwn(proxy.listener_inode_owners, String(inode)))
+    ) return false;
+    const ownerPids = [...new Set(inodeKeys.flatMap((inode) => {
+      const owners = proxy.listener_inode_owners[inode];
+      return sortedUniquePositiveIntegers(owners) ? owners : [NaN];
+    }))].sort((left, right) => left - right);
+    const reportPids = proxy.listener_reports.map((report) => report?.pid);
+    const mappedContainerPids = proxy.listener_pid_map.map((item) => item?.container_pid);
+    const mappedHostPids = proxy.listener_pid_map.map((item) => item?.host_pid);
+    return ownerPids.length > 0
+      && ownerPids.every(Number.isInteger)
+      && JSON.stringify(proxy.listener_pids) === JSON.stringify(ownerPids)
+      && ownerPids.every((ownerPid) => proxy.container_host_pids.includes(ownerPid))
+      && proxy.listener_pid_map.every((item) => (
+        hasExactKeys(item, ['container_pid', 'host_pid'])
+        && Number.isInteger(item.container_pid) && item.container_pid > 0
+        && Number.isInteger(item.host_pid) && item.host_pid > 0
+      ))
+      && JSON.stringify(mappedContainerPids) === JSON.stringify(proxy.container_listener_pids)
+      && JSON.stringify(mappedHostPids) === JSON.stringify(proxy.listener_pids)
+      && proxy.listener_pid_map.filter((item) => item.container_pid === 1).length === 1
+      && proxy.listener_pid_map.find((item) => item.container_pid === 1)?.host_pid === proxy.pid
+      && proxy.listener_pid_map.every((mapping) => {
+        const report = proxy.listener_reports.find((item) => item?.pid === mapping.host_pid);
+        return report?.container_pid === mapping.container_pid;
+      })
+      && JSON.stringify(reportPids) === JSON.stringify(ownerPids)
+      && JSON.stringify(proxy.listener_pids) === JSON.stringify(proxy.container_host_pids)
+      && proxy.listener_reports.every((report) => (
+        validContainerProcessReport(
+          report, 'biomodstack-tailnet-production-proxy', proxy.container_id,
+        )
+      ))
+      && JSON.stringify(publicReports) === JSON.stringify(proxy.listener_reports);
+  };
+  const reportInExactUnit = (report, service) => {
+    if (!/^[A-Za-z0-9_.@-]+\.service$/.test(service)) return false;
+    const escaped = service.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^/user\\.slice/user-(\\d+)\\.slice/user@\\1\\.service/app\\.slice/${escaped}$`);
+    const paths = cgroupPaths(report?.cgroup);
+    return Array.isArray(paths)
+      && paths.some((path) => pattern.test(path))
+      && paths.every((path) => path === '/' || pattern.test(path));
+  };
+  const validDevelopmentListener = (listener, projectRoot, revision) => {
+    const sourceRoot = `${projectRoot}/platform/frontend`;
+    const expectedVite = `${sourceRoot}/node_modules/vite/bin/vite.js`;
+    return hasExactKeys(listener, [
+      'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+      'listener_pids', 'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+    ])
+      && validListenerClosure(listener, 18082, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
+      && listener.systemd_service === 'biomodstack-frontend.service'
+      && listener.source_root === sourceRoot
+      && listener.source_revision === revision
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.executable === '/usr/bin/node'
+        && report.cwd === sourceRoot
+        && report.build_revision === revision
+        && report.argv.length === 6
+        && report.argv[0] === '/usr/bin/node'
+        && normalizeAbsolutePath(report.argv[1]) === expectedVite
+        && JSON.stringify(report.argv.slice(2)) === JSON.stringify(['--host', '127.0.0.1', '--port', '18082'])
+        && report.cmdline === report.argv.join(' ')
+        && reportInExactUnit(report, 'biomodstack-frontend.service')
+      ));
+  };
+  const validDevelopmentApiListener = (listener, projectRoot, revision) => {
+    const sourceRoot = `${projectRoot}/platform/api`;
+    const expectedPort = Number(new URL(expected.apiHealthTarget).port);
+    if (!(
+      hasExactKeys(listener, [
+        'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+        'listener_pids', 'listener_reports', 'systemd_service', 'source_root',
+        'source_revision', 'state_root', 'database_path',
+      ])
+      && validListenerClosure(listener, expectedPort, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
+      && listener.systemd_service === 'biomodstack-api.service'
+      && listener.source_root === sourceRoot
+      && listener.source_revision === revision
+      && normalizeAbsolutePath(listener.state_root) === listener.state_root
+      && normalizeAbsolutePath(listener.database_path) === listener.database_path
+      && listener.database_path === `${listener.state_root}/biomodstack.db`
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.cwd === sourceRoot
+        && report.build_revision === revision
+        && Array.isArray(report.argv) && report.argv.length >= 4
+        && normalizeAbsolutePath(report.argv[0]) === `${sourceRoot}/.venv/bin/python3`
+        && nonEmptyBounded(report.executable, 4096)
+        && normalizeAbsolutePath(report.executable) === report.executable
+        && report.cmdline === report.argv.join(' ')
+        && reportInExactUnit(report, 'biomodstack-api.service')
+      ))
+    )) return false;
+    return listener.listener_reports.some((report) => (
+      normalizeAbsolutePath(report.argv[1]) === `${sourceRoot}/.venv/bin/uvicorn`
+      && report.argv.includes('main:app')
+      && report.argv.includes(String(expectedPort))
+      && report.argv.includes('--reload')
+    ));
+  };
+  const validWorkflowAdapterListener = (
+    listener, projectRoot, selectorRevision,
+  ) => {
+    const selectorRoot = normalizeAbsolutePath(listener?.source_root);
+    const apiRoot = `${selectorRoot}/platform/api`;
+    return selectorRoot === listener?.source_root
+      && (environment === 'development' ? selectorRoot === projectRoot : selectorRoot !== projectRoot)
+      && hasExactKeys(listener, [
+      'port', 'bind_addresses', 'listener_inodes', 'listener_inode_owners',
+      'listener_pids', 'listener_reports', 'systemd_service', 'source_root', 'source_revision',
+    ])
+      && validListenerClosure(listener, 18001, ['127.0.0.1'])
+      && sortedUniquePositiveIntegers(listener.listener_pids)
+      && JSON.stringify(listener.listener_pids)
+        === JSON.stringify(listener.listener_reports.map((report) => report?.pid))
+      && listener.systemd_service === 'biomodstack-development-workflow-adapter.service'
+      && listener.source_root === selectorRoot
+      && listener.source_revision === selectorRevision
+      && listener.listener_reports.every((report) => (
+        hasExactKeys(report, [
+          'pid', 'cwd', 'cmdline', 'argv', 'executable', 'cgroup', 'build_revision',
+        ])
+        && report.executable === `${apiRoot}/.venv/bin/python`
+        && report.cwd === apiRoot
+        && report.build_revision === selectorRevision
+        && report.argv.length === 9
+        && [`${apiRoot}/.venv/bin/python`, `${apiRoot}/.venv/bin/python3`]
+          .includes(normalizeAbsolutePath(report.argv[0]))
+        && normalizeAbsolutePath(report.argv[1]) === `${apiRoot}/.venv/bin/uvicorn`
+        && JSON.stringify(report.argv.slice(2)) === JSON.stringify([
+          'workflow_adapter_app:app', '--port', '18001', '--host', '127.0.0.1',
+          '--no-proxy-headers', '--no-access-log',
+        ])
+        && report.cmdline === report.argv.join(' ')
+        && reportInExactUnit(report, 'biomodstack-development-workflow-adapter.service')
+      ));
+  };
+  const validHealth = (health) => {
+    const validBuild = (build) => (
+      hasExactKeys(build, ['revision', 'build_id', 'build_time'])
+      && revisionPattern.test(String(build.revision || ''))
+      && nonEmptyBounded(build.build_id, 256)
+      && validBuildTime(build.build_time)
+    );
+    const validReadinessCheck = (check, expectedStatus, launch = false) => (
+      hasExactKeys(check, launch
+        ? ['allowed', 'ready', 'required', 'status']
+        : ['ready', 'required', 'status'])
+      && check.ready === true
+      && check.required === true
+      && check.status === expectedStatus
+      && (!launch || check.allowed === true)
+    );
+    const validApiPayload = (payload) => (
+      hasExactKeys(payload, ['build', 'liveness', 'molbio', 'readiness', 'service', 'status'])
+      && payload.status === 'healthy'
+      && payload.service === 'biomodstack-api'
+      && validBuild(payload.build)
+      && hasExactKeys(payload.liveness, ['alive', 'status'])
+      && payload.liveness.alive === true
+      && payload.liveness.status === 'alive'
+      && hasExactKeys(payload.molbio, [
+        'database_kind', 'database_schema_current', 'database_schema_issue_count',
+        'foreign_key_violations', 'immutable_trigger_count', 'immutable_triggers_current',
+        'latest_migration', 'migration_count', 'migrations_current', 'owner', 'quick_check',
+        'sequence_parent_cycle_count', 'sequence_parent_foreign_key_current', 'status',
+      ])
+      && ['database_schema_current', 'immutable_triggers_current', 'migrations_current',
+        'sequence_parent_foreign_key_current'].every((key) => typeof payload.molbio[key] === 'boolean')
+      && ['database_schema_issue_count', 'foreign_key_violations', 'immutable_trigger_count',
+        'migration_count', 'sequence_parent_cycle_count'].every((key) => Number.isInteger(payload.molbio[key]))
+      && ['database_kind', 'latest_migration', 'owner', 'quick_check', 'status']
+        .every((key) => nonEmptyBounded(payload.molbio[key], 512))
+      && payload.molbio.status === 'healthy'
+      && payload.molbio.database_schema_current === true
+      && payload.molbio.immutable_triggers_current === true
+      && payload.molbio.migrations_current === true
+      && payload.molbio.sequence_parent_foreign_key_current === true
+      && payload.molbio.database_schema_issue_count === 0
+      && payload.molbio.foreign_key_violations === 0
+      && payload.molbio.sequence_parent_cycle_count === 0
+      && hasExactKeys(payload.readiness, ['checks', 'mode', 'ready'])
+      && payload.readiness.ready === true
+      && payload.readiness.mode === (environment === 'development' ? 'native' : 'container')
+      && hasExactKeys(payload.readiness.checks, [
+        'core_database', 'frontend', 'molbio_database', 'process_liveness',
+        'workflow_adapter', 'workflow_launch',
+      ])
+      && Object.entries({
+        core_database: 'ready',
+        frontend: 'http_200',
+        molbio_database: 'ready',
+        process_liveness: 'alive',
+      }).every(([key, status]) => validReadinessCheck(payload.readiness.checks[key], status))
+      && (environment === 'development'
+        ? hasExactKeys(payload.readiness.checks.workflow_adapter, ['ready', 'required', 'status'])
+          && payload.readiness.checks.workflow_adapter.ready === true
+          && payload.readiness.checks.workflow_adapter.required === false
+          && payload.readiness.checks.workflow_adapter.status === 'not_required'
+        : validReadinessCheck(payload.readiness.checks.workflow_adapter, 'http_200'))
+      && validReadinessCheck(payload.readiness.checks.workflow_launch, 'allowed', true)
+    );
+    const validProbe = (report, requestedUrl, finalUrl, expectApi) => (
+      hasExactKeys(report, ['url', 'final_url', 'status', 'payload'])
+      && report.url === requestedUrl
+      && report.final_url === finalUrl
+      && report.status === 200
+      && (expectApi ? validApiPayload(report.payload) : report.payload === null)
+    );
+    const localFrontendUrl = environment === 'development'
+      ? `${expected.frontendTarget}/`
+      : expected.frontendTarget;
+    const publicFrontendFinalUrl = environment === 'production'
+      ? `${trustedOrigin}/bms/`
+      : `${trustedOrigin}/`;
+    return hasExactKeys(health, ['local_frontend', 'local_api', 'tailnet_frontend', 'tailnet_api'])
+      && validProbe(health.local_frontend, localFrontendUrl, localFrontendUrl, false)
+      && validProbe(health.tailnet_frontend, `${trustedOrigin}/`, publicFrontendFinalUrl, false)
+      && validProbe(
+        health.local_api, expected.apiHealthTarget,
+ expected.apiHealthTarget, true,
+      )
+      && validProbe(
+        health.tailnet_api, `${trustedOrigin}/api/health`,
+        `${trustedOrigin}/api/health`, true,
+      );
+  };
+  const validLoopbackProxy = (value) => {
+    if (!nonEmptyBounded(value, 2048)) return false;
+    try {
+      const proxy = new URL(value);
+      const port = Number(proxy.port);
+      return proxy.protocol === 'http:'
+        && proxy.hostname === '127.0.0.1'
+        && proxy.username === '' && proxy.password === ''
+        && Number.isInteger(port) && port > 0 && port <= 65535
+        && proxy.search === '' && proxy.hash === '';
+    } catch {
+      return false;
+    }
+  };
+  const validServeHandlers = (handlers) => {
+    if (!handlers || typeof handlers !== 'object' || Array.isArray(handlers)) return false;
+    const entries = Object.entries(handlers);
+    if (!entries.some(([path]) => path === '/')
+      || !entries.some(([path]) => path === '/api/tailnet-environment')) return false;
+    return entries.every(([path, handler]) => {
+      if (!/^\/(?:[^\s?#]*)$/.test(path) || path.includes('..')) return false;
+      return hasExactKeys(handler, ['Proxy']) && validLoopbackProxy(handler.Proxy);
+    });
+  };
+  if (!expected || !payload || typeof payload !== 'object') reject();
+  const baseKeys = [
+    'selected_environment', 'runtime_mode', 'runtime_target', 'project_root',
+    'project_revision', 'selector_revision', 'frontend_target', 'api_health_target',
+    'serve_root_proxy', 'tailnet_origin', 'serve_handlers', 'frontend_listeners',
+    'api_listeners', 'workflow_adapter_listener', 'health', 'previous_serve_root_proxy',
+  ];
+  const environmentKeys = environment === 'development'
+    ? ['development_api_listener', 'development_frontend_listener']
+    : [
+      'managed_api_runtime', 'managed_api_listener',
+      'container_runtime', 'managed_frontend_listener',
+      'tailnet_production_proxy', 'tailnet_production_proxy_listeners',
+    ];
+  if (!hasExactKeys(payload, [...baseKeys, ...environmentKeys])) reject();
+  if (
+    payload.selected_environment !== environment
+    || payload.frontend_target !== expected.frontendTarget
+    || payload.api_health_target !== expected.apiHealthTarget
+    || payload.serve_root_proxy !== expected.serveRootProxy
+    || payload.runtime_mode !== expected.runtimeMode
+    || payload.runtime_target !== expected.runtimeTarget
+    || payload.tailnet_origin !== trustedOrigin
+    || !revisionPattern.test(String(payload.project_revision || ''))
+    || !revisionPattern.test(String(payload.selector_revision || ''))
+    || !validServeHandlers(payload.serve_handlers)
+    || !hasExactKeys(payload.serve_handlers?.['/'], ['Proxy'])
+    || !hasExactKeys(payload.serve_handlers?.['/api/tailnet-environment'], ['Proxy'])
+    || !hasExactKeys(payload.serve_handlers?.['/api/mobile-ui'], ['Proxy'])
+    || !hasExactKeys(payload.serve_handlers?.['/api/mobile-apk'], ['Proxy'])
+    || payload.serve_handlers?.['/']?.Proxy !== expected.serveRootProxy
+    || payload.serve_handlers?.['/api/tailnet-environment']?.Proxy !== 'http://127.0.0.1:18001'
+    || payload.serve_handlers?.['/api/mobile-ui']?.Proxy !== 'http://127.0.0.1:18003/api/mobile-ui'
+    || payload.serve_handlers?.['/api/mobile-apk']?.Proxy !== 'http://127.0.0.1:18003/api/mobile-apk'
+    || !validLoopbackProxy(payload.previous_serve_root_proxy)
+  ) reject();
+
+  const health = payload.health;
+  const localBuild = health?.local_api?.payload?.build;
+  const tailnetBuild = health?.tailnet_api?.payload?.build;
+  if (
+    !validHealth(health)
+    || health?.local_frontend?.status !== 200
+    || health?.tailnet_frontend?.status !== 200
+    || health?.local_api?.status !== 200
+    || health?.tailnet_api?.status !== 200
+    || !localBuild
+    || !tailnetBuild
+    || !revisionPattern.test(String(localBuild.revision || ''))
+    || !nonEmptyBounded(localBuild.build_id, 256)
+    || !validBuildTime(localBuild.build_time)
+    || health.local_api.payload.status !== 'healthy'
+    || health.tailnet_api.payload.status !== 'healthy'
+    || health.local_api.payload.liveness?.alive !== true
+    || health.tailnet_api.payload.liveness?.alive !== true
+    || health.local_api.payload.readiness?.ready !== true
+    || health.tailnet_api.payload.readiness?.ready !== true
+    || localBuild.revision !== tailnetBuild.revision
+    || localBuild.build_id !== tailnetBuild.build_id
+    || localBuild.build_time !== tailnetBuild.build_time
+    || payload.project_revision !== localBuild.revision
+    || !validWorkflowAdapterListener(
+      payload.workflow_adapter_listener,
+      payload.project_root,
+      payload.selector_revision,
+    )
+  ) reject();
+
+  if (environment === 'development') {
+    if (
+      payload.container_runtime !== undefined
+      || payload.tailnet_production_proxy !== undefined
+      || payload.managed_frontend_listener !== undefined
+      || payload.managed_api_runtime !== undefined
+      || payload.managed_api_listener !== undefined
+      || !validDevelopmentApiListener(
+        payload.development_api_listener,
+        payload.project_root,
+        localBuild.revision,
+      )
+      || JSON.stringify(payload.api_listeners)
+        !== JSON.stringify(payload.development_api_listener?.listener_reports)
+      || !validDevelopmentListener(
+        payload.development_frontend_listener,
+        payload.project_root,
+        payload.selector_revision,
+      )
+      || JSON.stringify(payload.frontend_listeners)
+        !== JSON.stringify(payload.development_frontend_listener?.listener_reports)
+    ) reject();
+  } else {
+    const proxy = payload.tailnet_production_proxy;
+    if (
+      !validContainerSet(payload.managed_api_runtime, ['biomodstack-api'], localBuild.revision)
+      || !validContainerListener(
+        payload.managed_api_listener,
+        payload.managed_api_runtime,
+        'biomodstack-api',
+        18000,
+      )
+      || JSON.stringify(payload.api_listeners)
+        !== JSON.stringify(payload.managed_api_listener?.listener_reports)
+      || !validContainerSet(payload.container_runtime, ['biomodstack-api', 'biomodstack-web'], localBuild.revision)
+      || !sameRuntimeContainer(
+        payload.managed_api_runtime,
+        payload.container_runtime,
+        'biomodstack-api',
+      )
+      || !validContainerListener(
+        payload.managed_frontend_listener,
+        payload.container_runtime,
+        'biomodstack-web',
+        18080,
+      )
+      || JSON.stringify(payload.frontend_listeners)
+        !== JSON.stringify(payload.managed_frontend_listener?.listener_reports)
+      || !validProductionProxy(
+        proxy,
+        payload.project_root,
+        payload.tailnet_production_proxy_listeners,
+      )
+    ) reject();
+  }
+  return payload;
+}
+
 export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled', shellApiVersion: 1, entryCss: [], entryJs: [] }) {
   const normalizedBundledDescriptor = {
     version: String(bundledDescriptor.version || 'bundled').trim() || 'bundled',
@@ -534,6 +1250,8 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
   const bundleStateStorageKey = 'bms.cordova.uiBundleState';
   const downloadedBasePath = '/__bms_ui__/active/';
   const bundledDescriptor = ${JSON.stringify(normalizedBundledDescriptor, null, 2)};
+  const validateTailnetSelectionPayload = ${validateTailnetSelectionPayload.toString()};
+  const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
   const bootStatus = window.__BMS_CORDOVA_UI_BOOT_STATUS__ = window.__BMS_CORDOVA_UI_BOOT_STATUS__ || {
     source: 'idle',
     ready: false,
@@ -657,12 +1375,18 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
     const runtime = window.__BMS_CORDOVA_RUNTIME__ || {};
     const remoteUiUrl = String(runtime.remoteUiUrl || '').trim();
     if (remoteUiUrl) {
-      return bootRemoteUi(remoteUiUrl);
+      bootStatus.source = 'preflight';
+      bootStatus.ready = false;
+      bootStatus.descriptor = { version: remoteUiUrl, shellApiVersion: bundledDescriptor.shellApiVersion, entryCss: [], entryJs: [] };
+      bootStatus.basePath = remoteUiUrl;
+      bootStatus.error = null;
+      bootStatus.detail = { mode: 'awaiting-environment-selection' };
+      return bootStatus;
     }
     return bootDescriptor(bundledDescriptor, { source: 'bundled', basePath: './' });
   }
 
-  function bootRemoteUi(remoteUiUrl) {
+  function mountVerifiedRemoteUi(remoteUiUrl) {
     bootStatus.source = 'remote';
     bootStatus.ready = false;
     bootStatus.descriptor = { version: remoteUiUrl, shellApiVersion: bundledDescriptor.shellApiVersion, entryCss: [], entryJs: [] };
@@ -675,16 +1399,8 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
       frame = document.createElement('iframe');
       frame.id = 'bms-cordova-remote-ui';
       frame.title = 'BioModStack live UI';
-      frame.src = remoteUiUrl;
       frame.setAttribute('allow', 'clipboard-read; clipboard-write; fullscreen');
       frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:#020617;z-index:0;';
-      frame.addEventListener('load', () => {
-        bootStatus.ready = true;
-        bootStatus.detail = { mode: 'remote', url: remoteUiUrl };
-      }, { once: true });
-      frame.addEventListener('error', () => {
-        bootStatus.error = 'The live BioModStack UI could not be loaded.';
-      }, { once: true });
       const mountFrame = () => {
         if (document.body && !frame.isConnected) {
           document.body.appendChild(frame);
@@ -696,7 +1412,57 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
         document.addEventListener('DOMContentLoaded', mountFrame, { once: true });
       }
     }
+    frame.addEventListener('load', () => {
+      bootStatus.ready = true;
+      bootStatus.detail = { mode: 'remote', url: remoteUiUrl };
+    }, { once: true });
+    frame.addEventListener('error', () => {
+      bootStatus.error = 'The live BioModStack UI could not be loaded.';
+    }, { once: true });
+    frame.src = remoteUiUrl;
     return bootStatus;
+  }
+
+  async function selectAndBootRemoteUi(apiBaseUrl, environment) {
+    if (environment !== 'development' && environment !== 'production') {
+      throw new Error('Choose Development or Production before launching.');
+    }
+    const configured = new URL(String(apiBaseUrl || ''));
+    const trustedDefault = new URL(String(runtime.apiBaseUrl || ''));
+    if (configured.protocol !== 'https:' || !configured.hostname.endsWith('.ts.net') || configured.origin !== trustedDefault.origin) {
+      throw new Error('Environment selection is restricted to the APK build Tailnet origin.');
+    }
+    const response = await fetch(configured.origin + '/api/tailnet-environment/select', {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ environment }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = payload && payload.detail ? String(payload.detail) : 'HTTP ' + response.status;
+      throw new Error('Environment selection failed: ' + detail);
+    }
+    validateTailnetSelectionPayload(payload, environment, configured.origin);
+    const remoteUiUrl = new URL(String(runtime.remoteUiUrl || configured.origin + '/'));
+    if (remoteUiUrl.origin !== configured.origin) {
+      throw new Error('Remote UI origin does not match the authenticated Tailnet control origin.');
+    }
+    remoteUiUrl.searchParams.set('bms_environment', environment);
+    remoteUiUrl.searchParams.set('bms_switch', String(Date.now()));
+    if (
+      storedBundleState
+      && storedBundleState.descriptor
+      && Number.parseInt(storedBundleState.descriptor.shellApiVersion ?? 0, 10) === bundledDescriptor.shellApiVersion
+    ) {
+      bootDescriptor(storedBundleState.descriptor, {
+        source: 'downloaded',
+        basePath: storedBundleState.basePath || downloadedBasePath,
+      });
+    } else {
+      mountVerifiedRemoteUi(remoteUiUrl.toString());
+    }
+    return payload;
   }
 
   function armReadyTimeout(source) {
@@ -759,10 +1525,17 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
     return bootStatus;
   };
 
-  window.__BMS_CORDOVA_BOOT_UI__ = bootDescriptor;
+  const remoteLiveMode = Boolean(String(runtime.remoteUiUrl || '').trim());
+  window.__BMS_CORDOVA_BOOT_UI__ = remoteLiveMode ? bootBundledUi : bootDescriptor;
+  window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__ = selectAndBootRemoteUi;
 
   const storedBundleState = readStoredBundleState();
-  if (
+  if (remoteLiveMode) {
+    // Keep compatible downloaded assets dormant behind the trusted preflight.
+    // They are activated only after the selected Tailnet environment passes
+    // the full authenticated runtime-identity contract above.
+    bootBundledUi();
+  } else if (
     storedBundleState
     && storedBundleState.descriptor
     && Number.parseInt(storedBundleState.descriptor.shellApiVersion ?? 0, 10) === bundledDescriptor.shellApiVersion
@@ -779,6 +1552,190 @@ export function buildUpdateLoaderScript(bundledDescriptor = { version: 'bundled'
   }
 })();
 `;
+}
+
+export function buildConnectionCapabilityReport(results = {}) {
+  const definitions = [
+    ['selector', 'Environment selector'],
+    ['selectedRuntime', 'Selected runtime API'],
+    ['uiUpdate', 'UI update channel'],
+    ['apkUpdate', 'Native APK update channel'],
+  ];
+  const capabilities = definitions.map(([id, label]) => {
+    const raw = results && typeof results === 'object' ? results[id] : null;
+    const available = raw?.available === true;
+    const detail = typeof raw?.detail === 'string' && raw.detail.trim()
+      ? raw.detail.trim().slice(0, 1000)
+      : 'Not checked.';
+    return { id, label, available, detail };
+  });
+  const unavailable = capabilities.filter(({ available }) => !available);
+  return {
+    overall: unavailable.length === 0 ? 'healthy' : 'degraded',
+    tone: unavailable.length === 0 ? 'success' : 'error',
+    summary: unavailable.length === 0
+      ? 'All required mobile capabilities are available.'
+      : `Unavailable: ${unavailable.map(({ label }) => label).join(', ')}.`,
+    capabilities,
+  };
+}
+
+export function applyConnectionCapabilityReport(panel, report) {
+  if (!panel || typeof panel.querySelector !== 'function') {
+    return report;
+  }
+  const normalized = report && typeof report === 'object'
+    ? report
+    : buildConnectionCapabilityReport();
+  const status = panel.querySelector('[data-role="connection-status"]');
+  if (status) {
+    status.dataset.status = normalized.tone || 'error';
+    status.textContent = normalized.summary || 'Connection capability state is unavailable.';
+  }
+  for (const capability of normalized.capabilities || []) {
+    const row = panel.querySelector(`[data-capability="${capability.id}"]`);
+    if (!row) continue;
+    row.dataset.available = String(capability.available === true);
+    row.textContent = `${capability.label}: ${capability.available ? 'Available' : 'Unavailable'}. ${capability.detail}`;
+  }
+  return normalized;
+}
+
+export async function probeConnectionCapabilities({
+  apiBaseUrl,
+  uiUpdateManifestPath,
+  apkUpdateManifestPath,
+  fetchImpl = globalThis.fetch,
+} = {}) {
+  const unavailableReport = (detail) => buildConnectionCapabilityReport({
+    selector: { available: false, detail },
+    selectedRuntime: { available: false, detail },
+    uiUpdate: { available: false, detail },
+    apkUpdate: { available: false, detail },
+  });
+  let origin;
+  try {
+    const configured = new URL(String(apiBaseUrl || '').trim());
+    if (configured.protocol !== 'https:' || configured.username || configured.password
+      || configured.pathname !== '/' || configured.search || configured.hash) {
+      return unavailableReport('Enter the exact private HTTPS Tailnet origin.');
+    }
+    origin = configured.origin;
+  } catch {
+    return unavailableReport('Enter the exact private HTTPS Tailnet origin.');
+  }
+  if (typeof fetchImpl !== 'function') {
+    return unavailableReport('The WebView fetch capability is unavailable.');
+  }
+
+  const resolveSameOriginUrl = (value, fallbackPath) => {
+    const resolved = new URL(String(value || fallbackPath), `${origin}/`);
+    if (resolved.origin !== origin || resolved.username || resolved.password) {
+      throw new Error('Capability URL must stay on the configured Tailnet origin.');
+    }
+    return resolved.toString();
+  };
+  const detailFromError = (label, error) => {
+    const detail = error && error.message ? error.message : String(error);
+    return `${label} failed: ${detail}`.slice(0, 1000);
+  };
+  const requestJson = async (url) => {
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => null);
+    return { response, payload };
+  };
+  const results = {};
+
+  try {
+    const url = resolveSameOriginUrl('/api/tailnet-environment/status');
+    const { response, payload } = await requestJson(url);
+    const selected = payload?.selected_environment;
+    const available = response.ok
+      && ['development', 'production'].includes(selected)
+      && payload?.tailnet_origin === origin;
+    results.selector = {
+      available,
+      detail: available
+        ? `${selected === 'development' ? 'Development' : 'Production'} selected (HTTP ${response.status}).`
+        : `Environment selector returned HTTP ${response.status} without a managed selection.`,
+    };
+  } catch (error) {
+    results.selector = { available: false, detail: detailFromError('Environment selector', error) };
+  }
+
+  try {
+    const url = resolveSameOriginUrl('/api/health');
+    const { response, payload } = await requestJson(url);
+    const revision = String(payload?.build?.revision || '');
+    const available = response.ok
+      && payload?.status === 'healthy'
+      && payload?.liveness?.alive === true
+      && payload?.readiness?.ready === true
+      && /^[0-9a-f]{40}$/.test(revision);
+    results.selectedRuntime = {
+      available,
+      detail: available
+        ? `Selected runtime API is healthy at ${revision.slice(0, 12)} (HTTP ${response.status}).`
+        : `Selected runtime API returned HTTP ${response.status} without healthy readiness.`,
+    };
+  } catch (error) {
+    results.selectedRuntime = { available: false, detail: detailFromError('Selected runtime API', error) };
+  }
+
+  try {
+    const url = resolveSameOriginUrl(
+      uiUpdateManifestPath,
+      '/api/mobile-ui/channels/phone/manifest',
+    );
+    const { response, payload } = await requestJson(url);
+    const descriptor = payload?.descriptor;
+    const available = response.ok
+      && typeof payload?.channel === 'string'
+      && payload.channel.length > 0
+      && typeof descriptor?.version === 'string'
+      && descriptor.version.length > 0
+      && Number.isInteger(descriptor?.shellApiVersion)
+      && Array.isArray(descriptor?.entryJs)
+      && descriptor.entryJs.length > 0;
+    results.uiUpdate = {
+      available,
+      detail: available
+        ? `UI update channel ${payload.channel} serves ${descriptor.version} (HTTP ${response.status}).`
+        : `UI update channel returned HTTP ${response.status} without a valid manifest.`,
+    };
+  } catch (error) {
+    results.uiUpdate = { available: false, detail: detailFromError('UI update channel', error) };
+  }
+
+  try {
+    const url = resolveSameOriginUrl(
+      apkUpdateManifestPath,
+      '/api/mobile-apk/channels/stable/manifest',
+    );
+    const { response, payload } = await requestJson(url);
+    const available = response.ok
+      && payload?.channel === 'stable'
+      && Number.isSafeInteger(payload?.version_code)
+      && payload.version_code > 0
+      && typeof payload?.version_name === 'string'
+      && payload.version_name.length > 0
+      && /^[0-9a-f]{64}$/.test(String(payload?.sha256 || ''));
+    results.apkUpdate = {
+      available,
+      detail: available
+        ? `Native APK channel serves ${payload.version_name} (${payload.version_code}, HTTP ${response.status}).`
+        : `Native APK channel returned HTTP ${response.status} without a valid manifest.`,
+    };
+  } catch (error) {
+    results.apkUpdate = { available: false, detail: detailFromError('Native APK channel', error) };
+  }
+
+  return buildConnectionCapabilityReport(results);
 }
 
 export function reduceNativeApkState(previousSequence, detail) {
@@ -868,6 +1825,9 @@ export function buildPreflightScript() {
   const downloadedBasePath = '/__bms_ui__/active/';
   const overlayId = 'bms-cordova-preflight';
   const toggleId = 'bms-cordova-preflight-toggle';
+  const buildConnectionCapabilityReport = ${buildConnectionCapabilityReport.toString()};
+  const applyConnectionCapabilityReport = ${applyConnectionCapabilityReport.toString()};
+  const probeConnectionCapabilities = ${probeConnectionCapabilities.toString()};
   const reduceNativeApkState = ${reduceNativeApkState.toString()};
   let lastNativeApkSequence = 0;
 
@@ -1038,7 +1998,7 @@ export function buildPreflightScript() {
   }
 
   function setStatus(panel, message, tone) {
-    const status = panel.querySelector('[data-role="status"]');
+    const status = panel.querySelector('[data-role="action-status"]');
     if (!status) {
       return;
     }
@@ -1213,30 +2173,56 @@ export function buildPreflightScript() {
     return downloadedFiles;
   }
 
-  async function probeHealth(panel, apiBaseUrl) {
-    const normalizedApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl, '');
-    if (!normalizedApiBaseUrl) {
-      setStatus(panel, 'Enter an API base URL before probing the control plane.', 'error');
-      return;
+  async function probeHealth(panel, apiBaseUrl, uiUpdateChannel) {
+    const pending = buildConnectionCapabilityReport();
+    const connectionStatus = panel.querySelector('[data-role="connection-status"]');
+    if (connectionStatus) {
+      connectionStatus.dataset.status = 'pending';
+      connectionStatus.textContent = 'Checking selector, selected runtime, UI updates, and APK updates…';
+    }
+    for (const capability of pending.capabilities) {
+      const row = panel.querySelector('[data-capability="' + capability.id + '"]');
+      if (row) {
+        row.dataset.available = 'pending';
+        row.textContent = capability.label + ': Checking…';
+      }
     }
 
-    setStatus(panel, 'Checking API health…', 'pending');
-    try {
-      const response = await fetch(normalizedApiBaseUrl + '/api/health', {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) {
-        setStatus(panel, 'API probe returned HTTP ' + response.status + '.', 'error');
-        return;
-      }
-      const payload = await response.json().catch(() => null);
-      const statusLabel = payload && payload.status ? String(payload.status) : 'ok';
-      setStatus(panel, 'API reachable (' + response.status + ', ' + statusLabel + ').', 'success');
-    } catch (error) {
-      const detail = error && error.message ? error.message : String(error);
-      setStatus(panel, 'API probe failed: ' + detail, 'error');
+    const report = await probeConnectionCapabilities({
+      apiBaseUrl: normalizeApiBaseUrl(apiBaseUrl, defaults.apiBaseUrl),
+      uiUpdateManifestPath: resolveUiUpdateManifestPath(uiUpdateChannel),
+      apkUpdateManifestPath: '/api/mobile-apk/channels/stable/manifest',
+      fetchImpl: window.fetch.bind(window),
+    });
+    applyConnectionCapabilityReport(panel, report);
+    return report;
+  }
+
+  function resolveTailnetControlBase(apiBaseUrl) {
+    const normalizedApiBaseUrl = normalizeApiBaseUrl(apiBaseUrl, defaults.apiBaseUrl);
+    const configured = new URL(normalizedApiBaseUrl);
+    const trustedDefault = new URL(normalizeApiBaseUrl(defaults.apiBaseUrl, ''));
+    if (configured.protocol !== 'https:' || !configured.hostname.endsWith('.ts.net')) {
+      throw new Error('Environment selection requires the private HTTPS Tailnet origin.');
     }
+    if (configured.origin !== trustedDefault.origin) {
+      throw new Error('Environment selection is restricted to the APK build Tailnet origin.');
+    }
+    return configured.origin;
+  }
+
+  async function selectTailnetEnvironment(panel, apiBaseUrl, environment) {
+    if (environment !== 'development' && environment !== 'production') {
+      throw new Error('Choose Development or Production before launching.');
+    }
+    const controlBase = resolveTailnetControlBase(apiBaseUrl);
+    setStatus(panel, 'Starting and verifying ' + environment + '…', 'pending');
+    if (typeof window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__ !== 'function') {
+      throw new Error('The trusted local shell cannot select and launch the remote UI.');
+    }
+    const payload = await window.__BMS_CORDOVA_SELECT_AND_BOOT_REMOTE_UI__(controlBase, environment);
+    setStatus(panel, 'Verified ' + environment + '. Launching the mirrored Tailnet UI…', 'success');
+    return payload;
   }
 
   async function refreshActiveUiFromPlugin(panel) {
@@ -1348,7 +2334,16 @@ export function buildPreflightScript() {
       '<section class="bms-cordova-preflight__panel" role="dialog" aria-modal="true" aria-labelledby="bms-cordova-preflight-title">',
       '  <div class="bms-cordova-preflight__eyebrow">BioModStack APK control surface</div>',
       '  <h1 id="bms-cordova-preflight-title" class="bms-cordova-preflight__title">Pre-flight settings</h1>',
-      '  <p class="bms-cordova-preflight__copy">Tune the API endpoint, phone density, and manual UI update flow before entering the app.</p>',
+      '  <p class="bms-cordova-preflight__copy">Choose the canonical environment that Tailnet must mirror, then launch only after its frontend, API, listener ownership, and Serve route verify.</p>',
+      '  <label class="bms-cordova-preflight__field">',
+      '    <span>Environment <strong>(required before launch)</strong></span>',
+      '    <select data-role="tailnet-environment">',
+      '      <option value="">Choose an environment…</option>',
+      '      <option value="development">Development</option>',
+      '      <option value="production">Production</option>',
+      '    </select>',
+      '  </label>',
+      '  <div class="bms-cordova-preflight__hint">Tailnet is a private routing layer only. It mirrors the selected canonical environment and never serves a third checkout.</div>',
       '  <label class="bms-cordova-preflight__field">',
       '    <span>API base URL</span>',
       '    <input data-role="api-base-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" value="' + escapeAttribute(draft.apiBaseUrl) + '" />',
@@ -1372,7 +2367,14 @@ export function buildPreflightScript() {
       '    <span>Use compact mobile shell overrides</span>',
       '  </label>',
       '  <div class="bms-cordova-preflight__hint">Saved override keys: <span class="bms-cordova-preflight__mono">' + escapeHtml(Object.keys(overrides).join(', ')) + '</span></div>',
-      '  <div class="bms-cordova-preflight__status" data-role="status" data-status="idle">Ready. UI-bundle and native-APK update controls are intentionally separate.</div>',
+      '  <div class="bms-cordova-preflight__status" data-role="connection-status" data-status="idle">Connection capabilities have not been checked.</div>',
+      '  <div class="bms-cordova-preflight__capabilities" aria-label="Connection capabilities">',
+      '    <div class="bms-cordova-preflight__capability" data-capability="selector" data-available="pending">Environment selector: Not checked.</div>',
+      '    <div class="bms-cordova-preflight__capability" data-capability="selectedRuntime" data-available="pending">Selected runtime API: Not checked.</div>',
+      '    <div class="bms-cordova-preflight__capability" data-capability="uiUpdate" data-available="pending">UI update channel: Not checked.</div>',
+      '    <div class="bms-cordova-preflight__capability" data-capability="apkUpdate" data-available="pending">Native APK update channel: Not checked.</div>',
+      '  </div>',
+      '  <div class="bms-cordova-preflight__status" data-role="action-status" data-status="idle">No update or launch action is running.</div>',
       '  <div class="bms-cordova-preflight__actions">',
       '    <button type="button" data-action="probe">Test connection</button>',
       '    <button type="button" data-action="check-ui-update">Check UI update</button>',
@@ -1382,9 +2384,9 @@ export function buildPreflightScript() {
       '    <button type="button" data-action="install-apk-update">Install native APK</button>',
       '    <button type="button" data-action="reset">Reset defaults</button>',
       '    <button type="button" data-action="save-reload" data-variant="primary">Save + reload</button>',
-      '    <button type="button" data-action="launch">Launch app</button>',
+      '    <button type="button" data-action="launch" data-variant="primary" disabled>Verify environment + launch</button>',
       '  </div>',
-      '  <div class="bms-cordova-preflight__footnote">Tip: endpoint, UI update channel, scale, and active downloaded bundle selection all persist locally on-device. The APK never points at Vite dev automatically.</div>',
+      '  <div class="bms-cordova-preflight__footnote">The environment choice is intentionally not persisted: Development or Production must be selected explicitly before each launch.</div>',
       '</section>',
     ].join('');
     document.body.appendChild(panel);
@@ -1404,10 +2406,16 @@ export function buildPreflightScript() {
     }
 
     const apiBaseUrlInput = panel.querySelector('[data-role="api-base-url"]');
+    const tailnetEnvironmentInput = panel.querySelector('[data-role="tailnet-environment"]');
     const uiUpdateChannelInput = panel.querySelector('[data-role="ui-update-channel"]');
     const scaleInput = panel.querySelector('[data-role="mobile-scale"]');
     const scaleValue = panel.querySelector('[data-role="scale-value"]');
     const compactModeInput = panel.querySelector('[data-role="compact-mode"]');
+    const launchButton = panel.querySelector('button[data-action="launch"]');
+
+    tailnetEnvironmentInput.addEventListener('change', () => {
+      launchButton.disabled = !['development', 'production'].includes(tailnetEnvironmentInput.value);
+    });
 
     scaleInput.addEventListener('input', () => {
       scaleValue.textContent = clampNumber(scaleInput.value, 0.55, 1.0, draft.mobileInitialScale).toFixed(2);
@@ -1427,7 +2435,7 @@ export function buildPreflightScript() {
       };
 
       if (button.dataset.action === 'probe') {
-        await probeHealth(panel, currentDraft.apiBaseUrl);
+        await probeHealth(panel, currentDraft.apiBaseUrl, currentDraft.uiUpdateChannel);
         return;
       }
 
@@ -1482,7 +2490,16 @@ export function buildPreflightScript() {
       }
 
       if (button.dataset.action === 'launch') {
-        hidePanel();
+        button.disabled = true;
+        try {
+          await selectTailnetEnvironment(panel, currentDraft.apiBaseUrl, tailnetEnvironmentInput.value);
+          hidePanel();
+        } catch (error) {
+          const detail = error && error.message ? error.message : String(error);
+          setStatus(panel, detail, 'error');
+        } finally {
+          button.disabled = !['development', 'production'].includes(tailnetEnvironmentInput.value);
+        }
       }
     });
 
@@ -1501,7 +2518,7 @@ export function buildPreflightScript() {
     });
 
     setTimeout(() => {
-      probeHealth(panel, draft.apiBaseUrl);
+      probeHealth(panel, draft.apiBaseUrl, draft.uiUpdateChannel);
       setActiveUiLabel(panel);
     }, 0);
   }
@@ -1527,9 +2544,12 @@ export function buildPreflightCss() {
   inset: 0;
   z-index: 9999;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  box-sizing: border-box;
   padding: 1rem;
+  padding-top: max(3.5rem, calc(1rem + env(safe-area-inset-top)));
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }
 
 .bms-cordova-preflight__scrim {
@@ -1542,6 +2562,9 @@ export function buildPreflightCss() {
 .bms-cordova-preflight__panel {
   position: relative;
   width: min(100%, 32rem);
+  max-height: calc(100dvh - 4.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 1.25rem;
   border: 1px solid rgba(148, 163, 184, 0.2);
   background: rgba(15, 23, 42, 0.98);
@@ -1581,7 +2604,8 @@ export function buildPreflightCss() {
 }
 
 .bms-cordova-preflight__field input[type='url'],
-.bms-cordova-preflight__field input[type='text'] {
+.bms-cordova-preflight__field input[type='text'],
+.bms-cordova-preflight__field select {
   width: 100%;
   border-radius: 0.85rem;
   border: 1px solid rgba(71, 85, 105, 0.8);
@@ -1647,6 +2671,37 @@ export function buildPreflightCss() {
   color: #fecaca;
 }
 
+.bms-cordova-preflight__capabilities {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.bms-cordova-preflight__capability {
+  border-left: 0.25rem solid rgba(148, 163, 184, 0.5);
+  border-radius: 0.45rem;
+  background: rgba(15, 23, 42, 0.58);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+
+.bms-cordova-preflight__capability[data-available='pending'] {
+  border-left-color: #38bdf8;
+  color: #bae6fd;
+}
+
+.bms-cordova-preflight__capability[data-available='true'] {
+  border-left-color: #22c55e;
+  color: #bbf7d0;
+}
+
+.bms-cordova-preflight__capability[data-available='false'] {
+  border-left-color: #f87171;
+  color: #fecaca;
+}
+
 .bms-cordova-preflight__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1667,8 +2722,13 @@ export function buildPreflightCss() {
 
 .bms-cordova-preflight__actions button[data-variant='primary'] {
   background: linear-gradient(135deg, #0891b2, #2563eb);
-  border-color: rgba(103, 232, 249, 0.55);
+  border-color: rgba(103, 232, 249, 0.45);
   color: white;
+}
+
+.bms-cordova-preflight__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .bms-cordova-preflight-toggle {
@@ -1789,29 +2849,42 @@ export async function main(argv = process.argv.slice(2)) {
   const outDir = path.join(projectRoot, '.cache', 'bms-frontend-dist');
   const wwwDir = path.join(projectRoot, 'www');
   const indexPath = path.join(wwwDir, 'index.html');
-
-  if (!(await exists(packageJsonPath))) {
-    throw new Error(`Missing ${packageJsonPath}`);
-  }
-  if (!(await exists(nodeModulesPath))) {
-    throw new Error(`Expected ${nodeModulesPath}. Bootstrap the source checkout once with pnpm install --frozen-lockfile before running this wrapper.`);
-  }
-
-  console.log(`Using BioModStack frontend at: ${frontendDir}`);
-  console.log(`Building Vite assets into: ${outDir}`);
-  run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
-    cwd: frontendDir,
-    env: process.env,
-  });
+  let bundledDescriptor;
 
   await fs.rm(wwwDir, { recursive: true, force: true });
   await fs.mkdir(wwwDir, { recursive: true });
-  await fs.cp(outDir, wwwDir, { recursive: true });
 
-  const bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
-    version: runtimeConfig.bundledUiVersion,
-    shellApiVersion: runtimeConfig.shellApiVersion,
-  });
+  if (runtimeConfig.remoteUiUrl) {
+    console.log(`Preparing trusted remote-live Cordova shell for: ${runtimeConfig.remoteUiUrl}`);
+    await fs.writeFile(
+      indexPath,
+      '<!doctype html>\n<html><head><meta charset="UTF-8"><title>BioModStack</title></head><body><div id="root"></div></body></html>\n',
+      'utf8',
+    );
+    bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
+      version: runtimeConfig.bundledUiVersion,
+      shellApiVersion: runtimeConfig.shellApiVersion,
+    });
+  } else {
+    if (!(await exists(packageJsonPath))) {
+      throw new Error(`Missing ${packageJsonPath}`);
+    }
+    if (!(await exists(nodeModulesPath))) {
+      throw new Error(`Expected ${nodeModulesPath}. Bootstrap the source checkout once with pnpm install --frozen-lockfile before running this wrapper.`);
+    }
+
+    console.log(`Using BioModStack frontend at: ${frontendDir}`);
+    console.log(`Building Vite assets into: ${outDir}`);
+    run('pnpm', ['exec', 'vite', 'build', '--base', './', '--outDir', outDir, '--emptyOutDir'], {
+      cwd: frontendDir,
+      env: process.env,
+    });
+    await fs.cp(outDir, wwwDir, { recursive: true });
+    bundledDescriptor = buildBundleDescriptor(await fs.readFile(indexPath, 'utf8'), {
+      version: runtimeConfig.bundledUiVersion,
+      shellApiVersion: runtimeConfig.shellApiVersion,
+    });
+  }
 
   await fs.writeFile(path.join(wwwDir, 'bms-runtime-config.js'), buildRuntimeConfigScript(runtimeConfig), 'utf8');
   await fs.writeFile(path.join(wwwDir, 'bms-cordova-shim.js'), buildShimScript(), 'utf8');

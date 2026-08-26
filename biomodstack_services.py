@@ -24,6 +24,7 @@ from biomodstack_runtime_profile import (
     DEFAULT_DEV_API_HOST_PORT,
     DEFAULT_DEV_WEB_HOST_PORT,
     DEFAULT_HOST_AGENT_PORT,
+    DEFAULT_MOBILE_UPDATE_PUBLISHER_PORT,
     DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT,
     DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT,
     DEFAULT_WEB_HOST_PORT,
@@ -51,6 +52,7 @@ WORKFLOW_ROOT_SLICE = "biomodstack-workflows.slice"
 DEVELOPMENT_WORKFLOW_SLICE = "biomodstack-workflows-development.slice"
 PRODUCTION_WORKFLOW_SLICE = "biomodstack-workflows-production.slice"
 TAILNET_GLOBAL_SERVICE = "biomodstack-tailnet-global.service"
+MOBILE_UPDATE_PUBLISHER_SERVICE = "biomodstack-mobile-update-publisher.service"
 CORE_RUNTIME_SERVICE = "biomodstack-core-runtime.service"
 TARGET_UNIT = "biomodstack.target"
 DEV_TARGET_UNIT = "biomodstack-dev.target"
@@ -71,6 +73,10 @@ SYSTEMD_RESOURCE_LIMITS: dict[str, tuple[str, dict[str, str]]] = {
     TELEMETRY_SERVICE: (
         "TELEMETRY",
         {"MemoryHigh": "256M", "MemoryMax": "512M", "TasksMax": "64", "LimitNOFILE": "4096"},
+    ),
+    MOBILE_UPDATE_PUBLISHER_SERVICE: (
+        "MOBILE_UPDATE_PUBLISHER",
+        {"MemoryHigh": "256M", "MemoryMax": "512M", "TasksMax": "128", "LimitNOFILE": "8192"},
     ),
     DEVELOPMENT_WORKFLOW_ADAPTER_SERVICE: (
         "WORKFLOW_ADAPTER",
@@ -95,6 +101,7 @@ VALID_RUNTIME_MODES = {DEV_RUNTIME_MODE, CONTAINER_RUNTIME_MODE}
 
 API_PORT = DEFAULT_API_HOST_PORT
 DEV_API_PORT = DEFAULT_DEV_API_HOST_PORT
+MOBILE_UPDATE_PUBLISHER_PORT = DEFAULT_MOBILE_UPDATE_PUBLISHER_PORT
 FRONTEND_PORT = DEFAULT_DEV_WEB_HOST_PORT
 STABLE_FRONTEND_PORT = DEFAULT_WEB_HOST_PORT
 # Unqualified compatibility callers refer to the stable Production listener.
@@ -103,6 +110,7 @@ DEVELOPMENT_WORKFLOW_ADAPTER_PORT = DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT
 PRODUCTION_WORKFLOW_ADAPTER_PORT = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT
 CPU_POWER_PORT = DEFAULT_CPU_POWER_PORT
 HOST_AGENT_PORT = DEFAULT_HOST_AGENT_PORT
+MOBILE_UPDATE_PUBLISHER_HEALTH_URL = f"http://127.0.0.1:{MOBILE_UPDATE_PUBLISHER_PORT}/health"
 API_HEALTH_URL = f"http://127.0.0.1:{API_PORT}/api/health"
 FRONTEND_URL = f"http://127.0.0.1:{STABLE_FRONTEND_PORT}/bms/"
 DEVELOPMENT_WORKFLOW_ADAPTER_HEALTH_URL = f"http://127.0.0.1:{DEVELOPMENT_WORKFLOW_ADAPTER_PORT}/api/workflow-adapter/health"
@@ -130,6 +138,7 @@ LOG_DIR = _STATE_HOME / "biomodstack" / "logs"
 API_LOG = LOG_DIR / "api.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 TELEMETRY_LOG = LOG_DIR / "telemetry.log"
+MOBILE_UPDATE_PUBLISHER_LOG = LOG_DIR / "mobile-update-publisher.log"
 DEVELOPMENT_WORKFLOW_ADAPTER_LOG = LOG_DIR / "development-workflow-adapter.log"
 PRODUCTION_WORKFLOW_ADAPTER_LOG = LOG_DIR / "production-workflow-adapter.log"
 # Compatibility consumers use the production/core adapter identity by default.
@@ -1371,6 +1380,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
     api_runner = root / "scripts" / "run_biomodstack_api.sh"
     frontend_runner = root / "scripts" / "run_biomodstack_frontend.sh"
+    mobile_update_publisher_runner = root / "scripts" / "run_biomodstack_mobile_update_publisher.sh"
     tailnet_global_installer = root / "scripts" / "install_tailnet_global_routes.py"
     dev_api_host_port = runtime_api_port(DEV_RUNTIME_MODE, project_root=root)
     dev_web_host_port = runtime_frontend_port(DEV_RUNTIME_MODE, project_root=root)
@@ -1424,6 +1434,9 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     )
     api_limits = render_systemd_resource_boundaries(API_SERVICE).replace("\n", "\n        ")
     frontend_limits = render_systemd_resource_boundaries(FRONTEND_SERVICE).replace("\n", "\n        ")
+    mobile_update_publisher_limits = render_systemd_resource_boundaries(MOBILE_UPDATE_PUBLISHER_SERVICE).replace(
+        "\n", "\n        "
+    )
     proxy_identity_env = development_proxy_identity_env_path()
 
     tailnet_global_unit = dedent(
@@ -1445,6 +1458,42 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         # above that inner convergence bound so it cannot terminate a valid
         # installation mid-transaction.
         TimeoutStartSec=120
+        """
+    )
+
+    mobile_update_publisher_unit = dedent(
+        f"""\
+        [Unit]
+        Description=BioModStack runtime-independent mobile update publisher
+        After=network-online.target
+        Wants=network-online.target {TAILNET_GLOBAL_SERVICE}
+        Before={TAILNET_GLOBAL_SERVICE}
+        StartLimitIntervalSec=300
+        StartLimitBurst=3
+
+        [Service]
+        Type=simple
+        Environment=BMS_HOME={root}
+        Environment=BMS_MOBILE_UI_UPDATES_DIR={shared_data_root / 'mobile-ui-updates'}
+        Environment=BMS_MOBILE_APK_UPDATES_DIR={shared_data_root / 'mobile-apk-updates'}
+        Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT={MOBILE_UPDATE_PUBLISHER_PORT}
+        Environment=BMS_BUILD_SHA={build_revision}
+        Environment=BMS_BUILD_ID={build_id}
+        Environment=BMS_BUILD_TIME={build_time}
+        Environment=PYTHONUNBUFFERED=1
+        ExecStartPre=/usr/bin/mkdir -p {shared_data_root / 'mobile-ui-updates'} {shared_data_root / 'mobile-apk-updates'}
+        ExecStartPre=/usr/bin/env python3 {log_rotator}
+        ExecStart={mobile_update_publisher_runner}
+        Restart=on-failure
+        RestartSec=5
+        TimeoutStopSec=15
+        KillMode=control-group
+        {mobile_update_publisher_limits}
+        StandardOutput=append:{MOBILE_UPDATE_PUBLISHER_LOG}
+        StandardError=append:{MOBILE_UPDATE_PUBLISHER_LOG}
+
+        [Install]
+        WantedBy=default.target
         """
     )
 
@@ -1620,6 +1669,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         DEVELOPMENT_WORKFLOW_SLICE: development_workflow_slice,
         API_SERVICE: api_unit,
         FRONTEND_SERVICE: frontend_unit,
+        MOBILE_UPDATE_PUBLISHER_SERVICE: mobile_update_publisher_unit,
         TAILNET_GLOBAL_SERVICE: tailnet_global_unit,
         DEV_TARGET_UNIT: target_unit,
     }
@@ -1671,6 +1721,7 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
     rotate_runtime_logs()
     API_LOG.touch(exist_ok=True)
     FRONTEND_LOG.touch(exist_ok=True)
+    MOBILE_UPDATE_PUBLISHER_LOG.touch(exist_ok=True)
     WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     DEVELOPMENT_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
     PRODUCTION_WORKFLOW_ADAPTER_LOG.touch(exist_ok=True)
@@ -1681,6 +1732,23 @@ def ensure_user_units(project_root: Path | None = None, runtime_mode: str | None
 
 def ensure_target_enabled(project_root: Path | None = None, runtime_mode: str | None = None) -> None:
     run_systemctl("enable", runtime_target_unit(runtime_mode), project_root=project_root)
+
+
+def ensure_mobile_update_publisher_running(
+    project_root: Path | None = None,
+    *,
+    restart: bool = False,
+) -> None:
+    root = (project_root or get_project_root()).resolve()
+    run_systemctl("enable", MOBILE_UPDATE_PUBLISHER_SERVICE, project_root=root)
+    if restart:
+        run_systemctl("restart", MOBILE_UPDATE_PUBLISHER_SERVICE, project_root=root)
+    elif not service_is_active(MOBILE_UPDATE_PUBLISHER_SERVICE, project_root=root):
+        run_systemctl("start", MOBILE_UPDATE_PUBLISHER_SERVICE, project_root=root)
+    wait_for_http(
+        MOBILE_UPDATE_PUBLISHER_HEALTH_URL,
+        timeout_seconds=DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+    )
 
 
 def service_is_active(service_name: str, project_root: Path | None = None) -> bool:
@@ -2166,6 +2234,7 @@ def start_all(
         if not skip_api_wait:
             wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+        ensure_mobile_update_publisher_running(root)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)
@@ -2269,6 +2338,7 @@ def restart_all(project_root: Path | None = None, runtime_mode: str | None = Non
         )
         wait_for_http(runtime_api_health_url(mode, project_root=root), timeout_seconds=wait_timeout_seconds)
         wait_for_http(frontend_url, timeout_seconds=wait_timeout_seconds)
+        ensure_mobile_update_publisher_running(root, restart=True)
         return
 
     ensure_target_enabled(root, runtime_mode=mode)

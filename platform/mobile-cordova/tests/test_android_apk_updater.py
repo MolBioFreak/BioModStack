@@ -93,6 +93,13 @@ def test_native_events_are_sequenced_and_lint_fails_on_api_compatibility_errors(
     assert '.put("sequence", eventSequence.incrementAndGet())' in updater
     assert 'abortOnError true' in gradle
     assert 'checkReleaseBuilds true' in gradle
+    assert 'bmsInternalUpdate' in gradle
+    assert 'initWith debug' in gradle
+    assert 'debuggable false' in gradle
+    assert 'signingConfig signingConfigs.debug' in gradle
+    assert 'testBuildType "bmsInternalUpdate"' in gradle
+    assert 'BMS_ANDROID_BUILD_VARIANT' in BUILD_SCRIPT.read_text()
+    assert 'assembleBmsInternalUpdate' in BUILD_SCRIPT.read_text()
 
 
 def test_core_runtime_compose_passes_both_apk_authentication_policies() -> None:
@@ -104,8 +111,10 @@ def test_core_runtime_compose_passes_both_apk_authentication_policies() -> None:
 def test_shell_version_navigation_network_and_release_signing_are_constrained() -> None:
     config = CONFIG.read_text()
     gradle = GRADLE.read_text()
-    assert 'version="0.2.0"' in config
-    assert 'android-versionCode="200"' in config
+    assert 'version="0.4.4"' in config
+    assert 'android-versionCode="404"' in config
+    runtime = (ROOT / "cordova.runtime.json").read_text(encoding="utf-8")
+    assert '"remoteUiUrl": "https://compute-node.taileb3a90.ts.net/"' in runtime
     assert '<allow-navigation href="https://localhost/*"' in config
     assert 'https://compute-node.taileb3a90.ts.net' in config
     assert 'http://10.0.2.2:8000' in config
@@ -124,6 +133,24 @@ def test_clean_build_prepares_www_before_adding_android_platform() -> None:
     platform_add = 'npx cordova platform add "android@$ANDROID_PLATFORM_VERSION"'
     assert script.count(prepare) == 1
     assert script.index(prepare) < script.index(platform_add)
+
+
+def test_internal_update_build_ignores_inherited_home_and_xdg_signing_roots() -> None:
+    script = BUILD_SCRIPT.read_text()
+    assert "pwd.getpwuid(os.getuid()).pw_dir" in script
+    assert 'HOME="$CANONICAL_HOME"' in script
+    assert 'XDG_CONFIG_HOME="$HOME/.local/share/biomodstack/cordova-build-config"' in script
+    assert "export HOME XDG_CONFIG_HOME" in script
+
+
+def test_build_syncs_authoritative_package_manager_instrumentation_source() -> None:
+    script = BUILD_SCRIPT.read_text()
+    assert 'UPDATER_ANDROID_TEST_SOURCE' in script
+    assert 'BmsPackageManagerIntegrationTest.kt' in script
+    assert 'rm -rf "$UPDATER_ANDROID_TEST_PACKAGE_DIR"' in script
+    assert 'install -D -m 0644' in script
+    assert script.index('rm -rf "$UPDATER_ANDROID_TEST_PACKAGE_DIR"') < script.index('install -D -m 0644')
+    assert script.index('npx cordova prepare android') < script.index('UPDATER_ANDROID_TEST_TARGET')
 
 
 def test_existing_ui_bundle_plugin_declares_only_files_present_in_source() -> None:

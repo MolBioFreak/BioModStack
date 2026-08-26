@@ -26,6 +26,22 @@ android {
         checkReleaseBuilds true
     }
 
+    // Private updater lineage: non-debuggable bytes signed with the existing
+    // Android debug certificate so code-300 test installs can upgrade in
+    // place. This is not the production release signing configuration.
+    buildTypes {
+        bmsInternalUpdate {
+            initWith debug
+            matchingFallbacks = ['debug']
+            debuggable false
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+    // Instrument the exact non-debuggable updater variant rather than silently
+    // substituting the ordinary debug APK.
+    testBuildType "bmsInternalUpdate"
+
     if (bmsReleaseSigningConfigured) {
         signingConfigs {
             bmsRelease {
