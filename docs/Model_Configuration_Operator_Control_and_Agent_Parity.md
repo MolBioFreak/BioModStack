@@ -43,6 +43,17 @@ Unknown settings fail closed. Unsupported combinations fail before queue inserti
 
 Workflow code may set a documented initial value or limit a setting to a model-supported context. It shall not create a second setting definition, silently remove a supported setting, or hide an active value from the operator.
 
+### Setting authority classes
+
+Every setting surface shall label and preserve one authority class:
+
+- **Operator-owned** values are editable and must appear in the complete requested settings object submitted by both browser and agent.
+- A **recommended default** is an explicit, editable initial value with a concise reason. It is not a hidden override and never replaces a saved operator value during hydration.
+- Values **fixed by the selected profile** remain visible and read-only. Their exact profile value, unit, and fixed reason are part of the request and provenance; the browser cannot silently substitute a nearby value.
+- **Scheduler-owned** placement, physical GPU identity, runtime paths, and internal materialization details are not scientific controls and cannot be browser fields. They appear only in the effective request or execution receipt where applicable.
+
+For workflows with server compilation, the requested settings remain distinct from the effective request. Preview shall display the effective request, all blockers/warnings, and its preview digest before final launch. A final mutation shall bind to that preview digest so an operator or agent cannot unknowingly launch a different compiled configuration. Any request-affecting edit invalidates preview.
+
 ## Operator UI requirements
 
 Use a control that matches the setting:

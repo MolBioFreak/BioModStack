@@ -476,6 +476,61 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             if (!summary) throw new Error('No validated Project context is available.');
             const workflowNodeKey = `workflow:${run.workflow_id}`;
             const domainExperimentId = domainExperimentForNode(summary, workflowNodeKey);
+            if (action === 'launch_molecular_dynamics') {
+                const uniqueDomainExperimentIds = summary.tree.nodes
+                    .filter((node) => node.node_type === 'domain_experiment' && node.subject_id)
+                    .map((node) => node.subject_id as string);
+                const preparedDomainExperimentId = domainExperimentId
+                    ?? (uniqueDomainExperimentIds.length === 1 ? uniqueDomainExperimentIds[0] : null);
+                const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
+                    ?? focusId
+                    ?? focusIdFromReadModel(summary);
+                if (!globalExperimentId || !preparedDomainExperimentId) {
+                    throw new Error('The completed Design has no validated Project launch scope.');
+                }
+                const binding = run.attempts.at(-1)?.binding_receipt;
+                const mdPreparation = binding?.md_preparation;
+                if (!mdPreparation || typeof mdPreparation !== 'object' || Array.isArray(mdPreparation)) {
+                    throw new Error('The completed Design has no server-issued MD preparation.');
+                }
+                const preparationId = typeof mdPreparation.preparation_id === 'string' ? mdPreparation.preparation_id : '';
+                const sourceDesignId = typeof mdPreparation.source_design_id === 'string' ? mdPreparation.source_design_id : '';
+                const workflowId = typeof mdPreparation.workflow_id === 'string' ? mdPreparation.workflow_id : '';
+                const workflowRevisionId = typeof mdPreparation.workflow_revision_id === 'string' ? mdPreparation.workflow_revision_id : '';
+                if (!preparationId || !sourceDesignId || !workflowId || !workflowRevisionId) {
+                    throw new Error('The server-issued MD preparation is incomplete.');
+                }
+                const returnQuery = new URLSearchParams({
+                    focus: globalExperimentId,
+                    selected: summary.selection.node_key,
+                });
+                const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
+                const launchContext = await issuePreparedLaunchContext(
+                    projectId,
+                    globalExperimentId,
+                    preparedDomainExperimentId,
+                    preparationId,
+                    returnUri,
+                );
+                if (
+                    launchContext.schema !== 'bms.launch-context.v2'
+                    || launchContext.project_id !== projectId
+                    || launchContext.global_experiment_id !== globalExperimentId
+                    || launchContext.domain_experiment_id !== preparedDomainExperimentId
+                    || launchContext.workflow_id !== workflowId
+                    || launchContext.workflow_revision_id !== workflowRevisionId
+                    || launchContext.preparation_id !== preparationId
+                    || launchContext.return_uri !== returnUri
+                ) {
+                    throw new Error('The server-issued MD launch context does not match the prepared Design scope.');
+                }
+                const launchQuery = new URLSearchParams({
+                    template: 'molecular_dynamics',
+                    launch_context_id: launchContext.launch_context_id,
+                    source_design_id: sourceDesignId,
+                });
+                return { kind: 'route' as const, route: `/submit?${launchQuery.toString()}` };
+            }
             if (action === 'retry' || action === 'resubmit' || action === 'clone') {
                 if (!run.batch_or_run_group_id) throw new Error('The server did not issue a run-group identity.');
                 const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)

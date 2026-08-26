@@ -1,7 +1,8 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
+import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
@@ -59,6 +60,7 @@ import {
     applyModelIntegrationDefault,
     createModelIntegrationSelection,
 } from './modelIntegrationControlState';
+import { buildMolecularDynamicsPredictionReturnRoute } from './gen2StartingStructureState.js';
 
 
 interface StructurePredictionTemplateProps {
@@ -70,6 +72,9 @@ interface StructurePredictionTemplateProps {
         currentMode?: string;
         baseTemplateId?: string;
     }) => void;
+    sourceSequenceId?: string | null;
+    mdDraftId?: string | null;
+    returnTemplate?: 'molecular_dynamics' | null;
 }
 
 const parseChainIdList = (value: unknown): string[] => {
@@ -151,7 +156,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
     return Math.max(min, Math.min(1000, parsed));
 };
 
-export function StructurePredictionTemplate({ onBack, initialValues, onOpenTemplateManager }: StructurePredictionTemplateProps) {
+export function StructurePredictionTemplate({ onBack, initialValues, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { gpuOptions } = useLiveGpuCatalog();
@@ -208,6 +213,25 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     };
     const [sequence, setSequence] = useState(initialPrimarySequence);
     const [sequenceName, setSequenceName] = useState(initialPrimaryName);
+    const [sequenceHandoffError, setSequenceHandoffError] = useState('');
+    const [sequenceHandoffLoading, setSequenceHandoffLoading] = useState(Boolean(sourceSequenceId));
+    useEffect(() => {
+        if (!sourceSequenceId) return;
+        let cancelled = false;
+        setSequenceHandoffLoading(true);
+        setSequenceHandoffError('');
+        void fetchUserSequence(sourceSequenceId).then(({ data }) => {
+            if (cancelled) return;
+            const sequenceRecord = parseMolecularDynamicsHandoffUserSequence(data, sourceSequenceId);
+            setSequence(sequenceRecord.sequence);
+            setSequenceName(sequenceRecord.name);
+        }).catch((error: unknown) => {
+            if (!cancelled) setSequenceHandoffError(error instanceof Error ? error.message : 'The selected saved sequence is unavailable.');
+        }).finally(() => {
+            if (!cancelled) setSequenceHandoffLoading(false);
+        });
+        return () => { cancelled = true; };
+    }, [sourceSequenceId]);
     const [primaryChainId, setPrimaryChainId] = useState<string>(initialPrimaryChain);
     const [targetSource, setTargetSource] = useState<SelectedTarget | null>((initialValues?.target_source as SelectedTarget | null) || null);
     const [targetSourcePath, setTargetSourcePath] = useState<string | null>(
@@ -393,11 +417,20 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [boltzApiEstimating, setBoltzApiEstimating] = useState(false);
     const [boltzApiClientRequestId, setBoltzApiClientRequestId] = useState(() => crypto.randomUUID());
 
+    const navigateAfterSubmission = async (jobResponse: unknown) => {
+        const launchContextActive = Boolean(new URLSearchParams(window.location.search).get('launch_context_id'));
+        if (!launchContextActive && returnTemplate === 'molecular_dynamics' && mdDraftId) {
+            navigate(buildMolecularDynamicsPredictionReturnRoute(mdDraftId, jobResponse));
+            return;
+        }
+        navigate(await completeCurrentLaunchContext(jobResponse as UntypedApiValue) ?? '/');
+    };
+
     const submitMutation = useMutation({
         mutationFn: async (data: UntypedApiValue) => submitJob(data),
         onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
+            await navigateAfterSubmission(response.data);
         }
     });
 
@@ -405,7 +438,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         mutationFn: submitBoltzApiJob,
         onSuccess: async (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
-            navigate(await completeCurrentLaunchContext(response.data) ?? '/');
+            await navigateAfterSubmission(response.data);
         },
         onError: (error: UntypedApiValue) => {
             const detail = error?.response?.data?.detail;
@@ -959,6 +992,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 : 'Cache: none';
 
     const handleSubmit = async () => {
+        if (sequenceHandoffLoading || sequenceHandoffError) {
+            alert(sequenceHandoffError || 'The selected saved sequence is still loading.');
+            return;
+        }
         const batchEntries = batchEntriesPreview;
 
         if (!sequence.trim() && batchEntries.length === 0) {
@@ -1382,6 +1419,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     </div>
                 )}
             </div>
+
+            {sequenceHandoffLoading && <div role="status" className="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-200">Loading the durable saved sequence…</div>}
+            {sequenceHandoffError && <div role="alert" className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{sequenceHandoffError}</div>}
 
             <div className="space-y-6">
 

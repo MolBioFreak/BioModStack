@@ -2221,6 +2221,9 @@ export interface UserSequenceCreate {
 export const fetchUserSequences = (search?: string) =>
     api.get<UserSequence[]>('/api/user-sequences', { params: { search } });
 
+export const fetchUserSequence = (id: string) =>
+    api.get<UserSequence>(`/api/user-sequences/${encodeURIComponent(id)}`);
+
 export const createUserSequence = (data: UserSequenceCreate) =>
     api.post<UserSequence>('/api/user-sequences', data);
 

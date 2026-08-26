@@ -16,21 +16,26 @@ describe('first-class molecular dynamics launcher', () => {
         assert.equal(submission.includes('<MolecularDynamicsTemplate'), true);
     });
 
-    it('exposes useful scientific, replica, cadence, and checkpoint controls', () => {
+    it('exposes inspected-source, typed scientific, replica, cadence, and checkpoint controls', () => {
         const launcher = source('components/MolecularDynamicsTemplate.tsx');
         for (const label of [
-            'Starting system',
-            'Engine & replicas',
-            'Preparation & ensemble',
-            'Production & output cadence',
+            'Choose a starting structure',
+            'Typed scientific controls',
+            'Chemistry profile',
+            'Independent replicas',
+            'Base random seed',
+            'Production per replica',
+            'Neutralize system',
             'Checkpoint interval',
             'Aggregate simulation',
+            'Preview effective request',
+            'Effective JSON',
         ]) {
             assert.equal(launcher.includes(label), true, label);
         }
-        assert.equal(launcher.includes('md_job_spec'), true);
-        assert.equal(launcher.includes("model_id: 'molecular_dynamics'"), true);
-        assert.equal(launcher.includes("mode: 'simulate'"), true);
+        assert.equal(launcher.includes("'/api/molecular-dynamics/launch-preview'"), true);
+        assert.equal(launcher.includes("'/api/molecular-dynamics/launch'"), true);
+        assert.equal(launcher.includes("schema_version: 'bms.md.launch-request.v1'"), true);
     });
 
     it('ships smoke-safe defaults and no hidden broad maxima for the selected smoke profile', () => {
@@ -46,10 +51,12 @@ describe('first-class molecular dynamics launcher', () => {
         assert.doesNotMatch(launcher, /max=\{16\}|max=\{10000\}|max=\{500\}|max=\{100\}|max=\{5\}/u);
     });
 
-    it('labels the accepted 1AKI and 1LMB short-GPU scopes without claiming long-timescale science', () => {
+    it('labels the accepted 1AKI lane without broadening it into general production science', () => {
         const launcher = source('components/MolecularDynamicsTemplate.tsx');
-        assert.match(launcher, /1AKI protein.*1LMB protein-DNA.*short-GPU/is);
-        assert.match(launcher, /not (?:validated for |intended for )?long-timescale production science/is);
+        assert.match(launcher, /RCSB 1AKI exact product bytes/is);
+        assert.match(launcher, /limited to the profile's declared validation scope/is);
+        assert.match(launcher, /scientific campaigns require separate qualification/is);
+        assert.doesNotMatch(launcher, /long-timescale (?:production )?science is validated/is);
     });
 
     it('does not offer prepared GROMACS and explains the OpenMM-only prepared lane', () => {

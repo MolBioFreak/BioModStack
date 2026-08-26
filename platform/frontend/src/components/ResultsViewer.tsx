@@ -67,6 +67,7 @@ import { ConformationalMappingViewer } from './conformationalMapping/Conformatio
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
+import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import {
     saveAntibodyRefinementLaunchState,
@@ -5079,6 +5080,15 @@ export function ResultsViewer() {
                                         className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
                                     >
                                         Open Frustration analysis
+                                    </button>
+                                )}
+                                {selectedDesign && activeJob.status === 'completed' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, selectedDesign.id))}
+                                        className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
+                                    >
+                                        Use as MD starting structure
                                     </button>
                                 )}
                                 {formatLineagePathSummary(

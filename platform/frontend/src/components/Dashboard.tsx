@@ -408,6 +408,7 @@ export function Dashboard() {
             name: `${detailedJob.name}_clone`,
             model_id: detailedJob.model_id,
             mode: detailedJob.mode,
+            source_job_id: detailedJob.id,
             params: detailedJob.params || {},
             pinned_gpu: detailedJob.pinned_gpu ?? null,
         };

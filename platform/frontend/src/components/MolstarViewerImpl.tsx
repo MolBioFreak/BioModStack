@@ -73,6 +73,8 @@ export interface MolstarViewerProps {
     artifactJobId?: string;
     /** Governed primary structure identity used for cross-artifact registration. */
     structureDocumentId?: string;
+    /** Public scene readiness emitted only by the implementation lifecycle. */
+    onLoadStateChange?: (state: 'loading' | 'loaded' | 'failed', errorMessage?: string) => void;
 }
 
 type ViewerStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -115,6 +117,7 @@ export default function MolstarViewer({
     onControllerReady,
     artifactJobId,
     structureDocumentId = 'primary',
+    onLoadStateChange,
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
     const adapterRef = useRef<MolstarDirectAdapter | null>(null);
@@ -126,6 +129,12 @@ export default function MolstarViewer({
     const viewerIdRef = useRef(`molstar-viewer-${crypto.randomUUID()}`);
     const [status, setStatus] = useState<ViewerStatus>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (status === 'loading') onLoadStateChange?.('loading');
+        else if (status === 'ready') onLoadStateChange?.('loaded', undefined);
+        else if (status === 'error') onLoadStateChange?.('failed', (errorMessage ?? 'Unable to load structure viewer').slice(0, 512));
+    }, [errorMessage, onLoadStateChange, status]);
 
     useEffect(() => {
         latestMeasurementsRef.current = measurements;

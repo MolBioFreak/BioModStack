@@ -14,6 +14,7 @@ const managerApi = vi.hoisted(() => ({
     attachExistingEntity: vi.fn(),
     getResultSurface: vi.fn(),
     createLaunchContext: vi.fn(),
+    issuePreparedLaunchContext: vi.fn(),
     createProject: vi.fn(),
     createGlobalExperiment: vi.fn(),
     createDomainExperiment: vi.fn(),
@@ -264,6 +265,56 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('opens a completed Design through the server-issued preparation-bound v2 MD context', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('workflow_run:run-1');
+            const mutable = value as unknown as {
+                runs: { items: Array<{
+                    available_actions: string[];
+                    attempts: Array<{ binding_receipt: Record<string, unknown> | null }>;
+                }> };
+            };
+            mutable.runs.items[0].available_actions = ['launch_molecular_dynamics'];
+            mutable.runs.items[0].attempts[1].binding_receipt = {
+                receipt_id: 'receipt-9',
+                md_preparation: {
+                    preparation_id: 'prep-md-1',
+                    source_design_id: '77777777-7777-4777-8777-777777777777',
+                    workflow_id: 'molecular_dynamics',
+                    workflow_revision_id: 'md-revision-1',
+                },
+            };
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        managerApi.issuePreparedLaunchContext.mockResolvedValue({
+            schema: 'bms.launch-context.v2',
+            launch_context_id: '88888888-8888-4888-8888-888888888888',
+            project_id: 'project-1',
+            global_experiment_id: 'global-1',
+            domain_experiment_id: 'domain-1',
+            workflow_id: 'molecular_dynamics',
+            workflow_revision_id: 'md-revision-1',
+            preparation_id: 'prep-md-1',
+            return_uri: '/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1',
+        });
+        await renderAt('/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1');
+        await waitUntil(() => expect(container.textContent).toContain('Launch Molecular Dynamics'));
+        const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Launch Molecular Dynamics');
+        await act(async () => launch?.click());
+        await waitUntil(() => expect(managerApi.issuePreparedLaunchContext).toHaveBeenCalledTimes(1));
+        expect(managerApi.issuePreparedLaunchContext).toHaveBeenCalledWith(
+            'project-1',
+            'global-1',
+            'domain-1',
+            'prep-md-1',
+            '/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1',
+        );
+        expect(managerApi.createLaunchContext).not.toHaveBeenCalled();
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
+            '/submit?template=molecular_dynamics&launch_context_id=88888888-8888-4888-8888-888888888888&source_design_id=77777777-7777-4777-8777-777777777777',
+        ));
+    });
+
     it('renders each canonical run once and labels retry provenance only as attempts', async () => {
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('DNA Polymerase Design'));

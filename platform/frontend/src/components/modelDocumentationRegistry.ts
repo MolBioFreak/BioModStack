@@ -50,6 +50,12 @@ export const MODEL_DOCUMENTATION_LINKS = {
         { label: 'FrustraMPNN GitHub', href: 'https://github.com/schoederlab/frustraMPNN' },
     ],
     fold_cp: [{ label: 'PyTorch DTensor', href: 'https://docs.pytorch.org/docs/stable/distributed.tensor.html' }],
+    gromacs: [
+        { label: 'GROMACS 2025.3 manual', href: 'https://manual.gromacs.org/2025.3/' },
+    ],
+    openmm: [
+        { label: 'OpenMM user guide', href: 'https://docs.openmm.org/latest/userguide/' },
+    ],
     laproteina: [
         { label: 'La-Proteina GitHub', href: 'https://github.com/NVIDIA-Digital-Bio/la-proteina' },
         { label: 'La-Proteina arXiv', href: 'https://arxiv.org/abs/2507.09466' },

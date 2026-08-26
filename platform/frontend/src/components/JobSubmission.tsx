@@ -18,6 +18,11 @@ import { OligoDesignerTemplate } from './OligoDesignerTemplate';
 import { ProteinModificationTemplate } from './ProteinModificationTemplate';
 
 import { MolecularDynamicsTemplate } from './MolecularDynamicsTemplate';
+import {
+    buildMolecularDynamicsHandoffInitialValues,
+    loadMolecularDynamicsDraft,
+    parseMolecularDynamicsHandoffRoute,
+} from './gen2StartingStructureState.js';
 import { ConformationalMappingLauncher } from './conformationalMapping/ConformationalMappingLauncher';
 import { PresetSelector } from './PresetSelector';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
@@ -699,6 +704,13 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    const mdHandoff = useMemo(() => {
+        try {
+            return { route: parseMolecularDynamicsHandoffRoute(`?${searchParams.toString()}`), error: '' };
+        } catch (error) {
+            return { route: null, error: error instanceof Error ? error.message.slice(0, 512) : 'Invalid Molecular Dynamics handoff route.' };
+        }
+    }, [searchParams]);
     const launchContextId = searchParams.get('launch_context_id');
     const launchContextQuery = useQuery({
         queryKey: ['launch-context', launchContextId],
@@ -719,10 +731,10 @@ export function JobSubmission() {
 
     // Read template from URL, allows page refresh and bookmarking
     const urlTemplate = searchParams.get('template');
-    const initialTemplateId = urlTemplate === 'protein_local_redesign'
+    const routeTemplateId = urlTemplate === 'protein_local_redesign'
         ? 'protein_modification_experimental'
         : urlTemplate === 'confornets_experimental' ? 'conformational_mapping' : urlTemplate;
-    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(initialTemplateId);
+    const [selectedTemplateId, setSelectedTemplateIdInternal] = useState<string | null>(routeTemplateId);
 
     // Wrapper to sync state with URL
     const setSelectedTemplateId = useCallback((id: string | null) => {
@@ -753,6 +765,16 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
+        const route = mdHandoff.route;
+        if (!route) return undefined;
+        const savedDraft = route.draftId ? loadMolecularDynamicsDraft(sessionStorage, route.draftId) : null;
+        return buildMolecularDynamicsHandoffInitialValues(route, savedDraft) as Record<string, UntypedApiValue>;
+    }, [mdHandoff.route]);
+    const molecularDynamicsInitialValues = useMemo<Record<string, UntypedApiValue>>(
+        () => ({ ...(clonedValues || {}), ...(mdHandoffInitialValues || {}) }),
+        [clonedValues, mdHandoffInitialValues],
+    );
     const [dedicatedTemplateVersion, setDedicatedTemplateVersion] = useState(0);
     const hydratedLaunchContextRef = useRef<string | null>(null);
     useEffect(() => {
@@ -763,30 +785,46 @@ export function JobSubmission() {
             !context?.launch_context_id
             || hydratedLaunchContextRef.current === context.launch_context_id
             || !scheduler
-            || scheduler.model_id !== 'esmfold2'
+            || !['esmfold2', 'molecular_dynamics'].includes(String(scheduler.model_id))
             || !schedulerParams
             || typeof schedulerParams !== 'object'
             || Array.isArray(schedulerParams)
         ) return;
         const paramsFromContext = schedulerParams as Record<string, UntypedApiValue>;
+        const isMdContext = scheduler.model_id === 'molecular_dynamics';
         const loadedJobName = typeof scheduler.name === 'string' && scheduler.name.trim()
             ? scheduler.name
-            : String(paramsFromContext.name || paramsFromContext.job_name || 'structure_prediction');
-        const nextValues: Record<string, UntypedApiValue> = {
-            ...paramsFromContext,
-            name: loadedJobName,
-            job_name: loadedJobName,
-            model_id: scheduler.model_id,
-            mode: scheduler.mode,
-        };
+            : String(paramsFromContext.name || paramsFromContext.job_name || (isMdContext ? 'molecular_dynamics' : 'structure_prediction'));
+        const nextValues: Record<string, UntypedApiValue> = isMdContext
+            ? {
+                name: loadedJobName,
+                job_name: loadedJobName,
+                model_id: scheduler.model_id,
+                mode: scheduler.mode,
+                intent: paramsFromContext,
+            }
+            : {
+                ...paramsFromContext,
+                name: loadedJobName,
+                job_name: loadedJobName,
+                model_id: scheduler.model_id,
+                mode: scheduler.mode,
+            };
         hydratedLaunchContextRef.current = context.launch_context_id;
         setClonedValues(nextValues);
         setParams(nextValues);
         setJobName(loadedJobName);
-        setSelectedModelId(String(scheduler.model_id));
-        setSelectedModeId(typeof scheduler.mode === 'string' ? scheduler.mode : null);
+        if (isMdContext) {
+            setWizardMode('templates');
+            setSelectedTemplateId('molecular_dynamics');
+            setSelectedModelId(null);
+            setSelectedModeId(null);
+        } else {
+            setSelectedModelId(String(scheduler.model_id));
+            setSelectedModeId(typeof scheduler.mode === 'string' ? scheduler.mode : null);
+        }
         setDedicatedTemplateVersion((version) => version + 1);
-    }, [launchContextQuery.data]);
+    }, [launchContextQuery.data, setSelectedTemplateId]);
     const [templateManagerContext, setTemplateManagerContext] = useState<{
         currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
@@ -808,6 +846,13 @@ export function JobSubmission() {
     const handleDedicatedTemplateBack = () => {
         setSelectedTemplateId(null);
         setClonedValues(undefined);
+    };
+
+    const openMdStructurePrediction = (values: Record<string, unknown>) => {
+        setWizardMode('templates');
+        setClonedValues(values as Record<string, UntypedApiValue>);
+        setSelectedTemplateId('structure_prediction');
+        setDedicatedTemplateVersion((version) => version + 1);
     };
 
     const handleTemplateCardSelect = (templateId: string) => {
@@ -862,6 +907,16 @@ export function JobSubmission() {
                     });
                 }
 
+                else if (data.model_id === 'molecular_dynamics') {
+                    setWizardMode('templates');
+                    setSelectedTemplateId('molecular_dynamics');
+                    setClonedValues({
+                        ...data.params,
+                        name: data.name,
+                        job_name: data.name,
+                        source_job_id: data.source_job_id,
+                    });
+                }
                 else if (data.model_id === 'boltzgen') {
                     setWizardMode('templates');
                     setSelectedTemplateId('antibody_denovo');
@@ -1039,6 +1094,14 @@ export function JobSubmission() {
         () => [...visibleApiTemplates.filter((t: UntypedApiValue) => t.experimental), ...hardcodedExperimentalTemplates],
         [hardcodedExperimentalTemplates, visibleApiTemplates]
     );
+
+    useEffect(() => {
+        if (!routeTemplateId || routeTemplateId === selectedTemplateId) return;
+        const apiTemplate = visibleApiTemplates.find((template: UntypedApiValue) => template.id === routeTemplateId);
+        if (!isDedicatedLauncherTemplate(routeTemplateId) && !apiTemplate) return;
+        setSelectedTemplateIdInternal(routeTemplateId);
+        setWizardMode(routeTemplateId === 'boltz_cp_experimental' || apiTemplate?.experimental ? 'experimental' : 'templates');
+    }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
         const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
@@ -1649,6 +1712,11 @@ export function JobSubmission() {
                     )}
                 </aside>
             )}
+            {mdHandoff.error && (
+                <aside role="alert" className="mb-4 rounded-lg border border-red-500/40 bg-red-950/40 px-4 py-3 text-sm text-red-100">
+                    {mdHandoff.error}
+                </aside>
+            )}
             {/* Main header - hidden when dedicated templates are active */}
             {showMainHeader && (
                 <header className="mb-8 flex items-center gap-4">
@@ -1779,6 +1847,9 @@ export function JobSubmission() {
                                             ...(clonedValues || {}),
                                         }
                                         : clonedValues}
+                                    sourceSequenceId={mdHandoff.route?.sourceSequenceId ?? null}
+                                    mdDraftId={mdHandoff.route?.draftId ?? null}
+                                    returnTemplate={mdHandoff.route?.returnTemplate ?? null}
                                 />
                             ) : selectedTemplateId === 'oligo_design' ? (
                                 <OligoDesignerTemplate
@@ -1794,8 +1865,11 @@ export function JobSubmission() {
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (
                                 <MolecularDynamicsTemplate
+                                    key={`molecular_dynamics:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
-                                    initialValues={clonedValues}
+                                    initialValues={molecularDynamicsInitialValues}
+                                    launchContextId={launchContextId}
+                                    onOpenStructurePrediction={openMdStructurePrediction}
                                 />
                             ) : selectedTemplateId === 'conformational_mapping' ? (
                                 <ConformationalMappingLauncher
