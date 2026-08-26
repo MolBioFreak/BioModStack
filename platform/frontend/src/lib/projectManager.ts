@@ -446,6 +446,8 @@ export interface ResultComparison {
     authority: JsonObject | null;
 }
 
+export type ResultLineageEdgeKey = 'cloned-plan-intent' | `terminal-output:${string}`;
+
 export interface ResultSurface {
     schema: 'bms.result-surface.v1';
     receipt_id: string;
@@ -464,7 +466,7 @@ export interface ResultSurface {
     provenance: TypedPayload;
     comparison: ResultComparison;
     available_actions: string[];
-    lineage_edge_key?: 'cloned-plan-intent';
+    lineage_edge_key?: ResultLineageEdgeKey;
 }
 
 export interface ProjectSelection {
@@ -910,6 +912,17 @@ function requireLiteral<T extends string>(value: unknown, label: string, values:
     return value as T;
 }
 
+function requireResultLineageEdgeKey(value: unknown, label: string): ResultLineageEdgeKey {
+    if (value === 'cloned-plan-intent') return value;
+    if (
+        typeof value === 'string'
+        && /^terminal-output:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+    ) {
+        return value as `terminal-output:${string}`;
+    }
+    throw new Error(`${label} has an unsupported value.`);
+}
+
 function requireArray<T>(value: unknown, label: string, parse: (item: unknown, itemLabel: string) => T): T[] {
     if (!Array.isArray(value)) throw new Error(`${label} must be an array.`);
     return value.map((item, index) => parse(item, `${label}[${index}]`));
@@ -1038,7 +1051,7 @@ export function parseResultSurface(value: unknown, label = 'result surface'): Re
         },
         available_actions: requireArray(record.available_actions, `${label}.available_actions`, (item, itemLabel) => requireLiteral(item, itemLabel, ['open', 'download', 'compare', 'attach_evidence'])),
         ...(record.lineage_edge_key === undefined ? {} : {
-            lineage_edge_key: requireLiteral(record.lineage_edge_key, `${label}.lineage_edge_key`, ['cloned-plan-intent'] as const),
+            lineage_edge_key: requireResultLineageEdgeKey(record.lineage_edge_key, `${label}.lineage_edge_key`),
         }),
     };
 }

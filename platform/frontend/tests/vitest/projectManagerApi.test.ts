@@ -83,6 +83,14 @@ describe('Project Manager API contract', () => {
         model.result_previews = [{ ...resultSurface, lineage_edge_key: 'cloned-plan-intent' }];
         expect(normalizeProjectManagerReadModel(model).result_previews[0]?.lineage_edge_key).toBe('cloned-plan-intent');
 
+        model.result_previews = [{
+            ...resultSurface,
+            lineage_edge_key: 'terminal-output:66b05089-7907-40c5-9b96-5529894586c3',
+        }];
+        expect(normalizeProjectManagerReadModel(model).result_previews[0]?.lineage_edge_key).toBe(
+            'terminal-output:66b05089-7907-40c5-9b96-5529894586c3',
+        );
+
         model.result_previews = [{ ...resultSurface, lineage_edge_key: 'foreign-lineage-key' }];
         expect(() => normalizeProjectManagerReadModel(model)).toThrow(/lineage_edge_key/);
     });
