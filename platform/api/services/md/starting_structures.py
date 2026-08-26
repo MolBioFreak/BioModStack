@@ -20,7 +20,8 @@ from urllib.parse import quote
 import Bio
 import httpx
 import rfc8785
-from Bio.PDB import MMCIFParser, PDBParser
+from Bio.PDB import MMCIFIO, MMCIFParser, PDBParser
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 
@@ -1853,11 +1854,36 @@ def compile_md_job_v2(
     }
 
 
+def _parse_mmcif_structure(data: bytes):
+    if re.search(rb"(?im)^[ \t]*_atom_site\.occupancy(?:[ \t\r]+|$)", data):
+        return MMCIFParser(QUIET=True).get_structure(
+            "starting-structure", io.StringIO(data.decode("utf-8"))
+        )
+    mmcif = MMCIF2Dict(io.StringIO(data.decode("utf-8")))
+    atom_ids = mmcif.get("_atom_site.id")
+    if not isinstance(atom_ids, list) or not atom_ids:
+        raise ValueError("The mmCIF atom-site loop is incomplete.")
+    # ESMFold2 omits occupancy. Supply the conventional fully occupied value
+    # only to Biopython's in-memory parser representation; source bytes stay exact.
+    mmcif["_atom_site.occupancy"] = ["1.0"] * len(atom_ids)
+    normalized = io.StringIO()
+    writer = MMCIFIO()
+    writer.set_dict(mmcif)
+    writer.save(normalized)
+    del atom_ids, writer, mmcif
+    normalized.seek(0)
+    return MMCIFParser(QUIET=True).get_structure("starting-structure", normalized)
+
+
 def _structure_summary(structure_file: StructureFile) -> StartingStructureInspectionSummary:
     try:
-        stream = io.StringIO(structure_file.data.decode("utf-8"))
-        parser = PDBParser(QUIET=True) if structure_file.format == "pdb" else MMCIFParser(QUIET=True)
-        structure = parser.get_structure("starting-structure", stream)
+        structure = (
+            _parse_mmcif_structure(structure_file.data)
+            if structure_file.format == "cif"
+            else PDBParser(QUIET=True).get_structure(
+                "starting-structure", io.StringIO(structure_file.data.decode("utf-8"))
+            )
+        )
         models = list(structure.get_models())
         chains = sorted({str(chain.id) for chain in structure.get_chains()})
         atoms = list(structure.get_atoms())

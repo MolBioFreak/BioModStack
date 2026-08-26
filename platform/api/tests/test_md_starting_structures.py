@@ -47,6 +47,225 @@ def test_managed_fixture_is_product_owned_inspected_and_path_free() -> None:
     )
 
 
+def test_esmf_generated_cif_without_occupancy_is_inspected_without_byte_mutation(
+    tmp_path: Path,
+) -> None:
+    starting_structures = importlib.import_module("services.md.starting_structures")
+    source_bytes = b"""data_esmfold2
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.B_iso_or_equiv
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+_atom_site.id
+ATOM N N  . GLY A 1 1 . 1 GLY A N  80.0 0.0 0.0 0.0 1 1
+ATOM C CA . GLY A 1 1 . 1 GLY A CA 80.0 1.0 0.0 0.0 1 2
+#
+"""
+    source = tmp_path / "esmfold2-result.cif"
+    source.write_bytes(source_bytes)
+    resolved = starting_structures.ResolvedStartingStructure(
+        source_ref=starting_structures.StartingStructureSourceRef(
+            kind="design", id="ae5baf3f-e456-4e22-ae30-f488f5a801f4"
+        ),
+        path=source,
+        label="ESMFold2 candidate",
+        producer_job_id="80136598-ca8a-59f6-a9ec-e351b172c5c2",
+        design_id="ae5baf3f-e456-4e22-ae30-f488f5a801f4",
+    )
+
+    inspection = starting_structures.inspect_resolved_structure(resolved)
+
+    assert source.read_bytes() == source_bytes
+    assert inspection.identity.format == "cif"
+    assert inspection.identity.sha256 == hashlib.sha256(source_bytes).hexdigest()
+    assert inspection.inspection.model_count == 1
+    assert inspection.inspection.chains == ["A"]
+    assert inspection.inspection.atom_count == 2
+    assert inspection.inspection.hetero_components == []
+    assert inspection.inspection.parser.name == "biopython"
+
+
+def test_esmf_generated_cif_without_occupancy_still_rejects_invalid_coordinates(
+    tmp_path: Path,
+) -> None:
+    starting_structures = importlib.import_module("services.md.starting_structures")
+    source = tmp_path / "invalid-esmfold2-result.cif"
+    source.write_bytes(b"""data_esmfold2_invalid
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.B_iso_or_equiv
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+_atom_site.id
+ATOM N N . GLY A 1 1 . 1 GLY A N 80.0 invalid 0.0 0.0 1 1
+#
+""")
+    resolved = starting_structures.ResolvedStartingStructure(
+        source_ref=starting_structures.StartingStructureSourceRef(
+            kind="design", id="ae5baf3f-e456-4e22-ae30-f488f5a801f4"
+        ),
+        path=source,
+        label="Invalid ESMFold2 candidate",
+    )
+
+    with pytest.raises(starting_structures.StartingStructureError) as rejected:
+        starting_structures.inspect_resolved_structure(resolved)
+
+    assert rejected.value.code == "MD_STARTING_STRUCTURE_PARSE_FAILED"
+
+
+@pytest.mark.parametrize("line_ending", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+def test_occupancy_present_cif_uses_direct_full_parser_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    line_ending: bytes,
+) -> None:
+    starting_structures = importlib.import_module("services.md.starting_structures")
+    source = tmp_path / "occupancy-present.cif"
+    source.write_bytes(b"""data_occupancy_present
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+_atom_site.id
+ATOM N N . GLY A 1 1 . 1 GLY A N 1.0 80.0 0.0 0.0 0.0 1 1
+#
+""".replace(b"\n", line_ending))
+    resolved = starting_structures.ResolvedStartingStructure(
+        source_ref=starting_structures.StartingStructureSourceRef(
+            kind="design", id="ae5baf3f-e456-4e22-ae30-f488f5a801f4"
+        ),
+        path=source,
+        label="Occupancy-present candidate",
+    )
+
+    def reject_extra_dictionary(*_args, **_kwargs):
+        raise AssertionError("occupancy-present CIF must use the direct one-pass parser")
+
+    monkeypatch.setattr(starting_structures, "MMCIF2Dict", reject_extra_dictionary)
+
+    inspection = starting_structures.inspect_resolved_structure(resolved)
+
+    assert inspection.inspection.model_count == 1
+    assert inspection.inspection.chains == ["A"]
+    assert inspection.inspection.atom_count == 1
+
+
+def test_missing_occupancy_releases_first_pass_atom_ids_before_full_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    starting_structures = importlib.import_module("services.md.starting_structures")
+    released = False
+    real_parser = starting_structures.MMCIFParser
+
+    class TrackedAtomIds(list):
+        def __del__(self):
+            nonlocal released
+            released = True
+
+    class TrackingWriter:
+        def set_dict(self, value):
+            self.value = value
+
+        def save(self, output):
+            output.write("""data_normalized
+#
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.auth_seq_id
+_atom_site.auth_comp_id
+_atom_site.auth_asym_id
+_atom_site.auth_atom_id
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.pdbx_PDB_model_num
+_atom_site.id
+ATOM N N . GLY A 1 1 . 1 GLY A N 1.0 80.0 0.0 0.0 0.0 1 1
+#
+""")
+
+    class ReleaseCheckingParser:
+        def __init__(self, **kwargs):
+            self.parser = real_parser(**kwargs)
+
+        def get_structure(self, structure_id, stream):
+            assert released, "first-pass atom IDs must be released before full parsing"
+            return self.parser.get_structure(structure_id, stream)
+
+    monkeypatch.setattr(
+        starting_structures,
+        "MMCIF2Dict",
+        lambda _stream: {"_atom_site.id": TrackedAtomIds(["1"])},
+    )
+    monkeypatch.setattr(starting_structures, "MMCIFIO", TrackingWriter)
+    monkeypatch.setattr(starting_structures, "MMCIFParser", ReleaseCheckingParser)
+
+    structure = starting_structures._parse_mmcif_structure(
+        b"data_missing_occupancy\n_atom_site.id 1\n"
+    )
+
+    assert len(list(structure.get_atoms())) == 1
+
+
 def test_source_reference_is_closed_and_bounded() -> None:
     starting_structures = importlib.import_module("services.md.starting_structures")
 
