@@ -180,16 +180,22 @@ def test_capabilities_advertise_v2_without_removing_retained_v1(monkeypatch: pyt
     import main
     from routers import molecular_dynamics
     monkeypatch.setattr(molecular_dynamics, "get_chemistry_catalog", lambda: _catalog())
-    with TestClient(main.app) as client:
+    client = TestClient(main.app)
+    try:
         response = client.get("/api/molecular-dynamics/capabilities")
+    finally:
+        client.close()
     assert response.status_code == 200
     assert response.json()["contract_schemas"] == ["bms.md.job.v2", "bms.md.job.v1"]
 
 
 def test_drt4_approved_pack_inventory_is_public_bounded_and_fail_closed() -> None:
     import main
-    with TestClient(main.app) as client:
+    client = TestClient(main.app)
+    try:
         response = client.get("/api/molecular-dynamics/approved-packs")
+    finally:
+        client.close()
     assert response.status_code == 200
     payload = response.json()
     assert payload["schema"] == "bms.md.approved-pack-inventory.v1"

@@ -3,11 +3,13 @@ Jobs API router - Create, list, cancel pipeline jobs.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
 from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, cast
+from dataclasses import dataclass
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -6332,6 +6334,289 @@ async def _create_job(
     )
 
 
+_TYPED_MD_INTENT_AUTHORITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_ref",
+        "expected_source_sha256",
+        "chemistry_profile_id",
+        "chemistry_profile_sha256",
+        "catalog_digest",
+        "requested_settings",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TypedMdProjectLaunch:
+    """Server-owned handoff from the sealed typed MD route to canonical Job creation."""
+
+    request_schema_version: str
+    intent: Mapping[str, Any]
+    preview: Mapping[str, Any]
+    preview_digest: str
+    md_job_spec: Mapping[str, Any]
+    source_token: str
+
+
+def _canonical_typed_md_document(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _typed_md_adapter_error(message: str) -> LaunchContextError:
+    return LaunchContextError(
+        "launch_context_typed_md_adapter_invalid",
+        message,
+        status_code=409,
+    )
+
+
+async def _validated_typed_md_project_params(
+    *,
+    experiment_session: AsyncSession,
+    context: Any,
+    job_data: JobCreate,
+    adapter: Any,
+    md_input_resolver: Any,
+) -> dict[str, Any]:
+    """Bind one current prepared Design authority to one server-compiled MD v2 spec."""
+
+    if not isinstance(adapter, TypedMdProjectLaunch):
+        raise _typed_md_adapter_error("Typed MD launch requires its sealed internal adapter.")
+    if (
+        adapter.request_schema_version != "bms.md.launch-request.v1"
+        or job_data.model_id != "molecular_dynamics"
+        or job_data.mode != "simulate"
+        or job_data.launch_context_id != context.launch_context_id
+        or not callable(md_input_resolver)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD adapter route, context, model, mode, or resolver authority is invalid."
+        )
+
+    intent = deepcopy(dict(adapter.intent))
+    preview = deepcopy(dict(adapter.preview))
+    md_job_spec = deepcopy(dict(adapter.md_job_spec))
+    supplied_params = dict(job_data.params or {})
+    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {"name", "launch_context_id"}:
+        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed v1 schema.")
+    if (
+        intent.get("schema_version") != "bms.md.launch-intent.v1"
+        or intent.get("launch_context_id") != context.launch_context_id
+        or set(supplied_params) != {"md_job_spec"}
+        or _canonical_typed_md_document(supplied_params["md_job_spec"])
+        != _canonical_typed_md_document(md_job_spec)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD request contains caller-owned or divergent server fields."
+        )
+
+    intent_authority = {
+        key: intent[key] for key in _TYPED_MD_INTENT_AUTHORITY_FIELDS
+    }
+    source_ref = intent_authority.get("source_ref")
+    preview_source = preview.get("source")
+    preview_chemistry = preview.get("chemistry")
+    effective_request = preview.get("effective_request")
+    if (
+        not isinstance(source_ref, dict)
+        or source_ref.get("kind") != "design"
+        or not isinstance(source_ref.get("id"), str)
+        or not source_ref["id"]
+        or preview.get("schema_version") != "bms.md.launch-preview.v1"
+        or preview.get("preview_digest") != adapter.preview_digest
+        or not isinstance(preview_source, dict)
+        or preview_source.get("source_ref") != source_ref
+        or preview_source.get("sha256") != intent_authority["expected_source_sha256"]
+        or preview.get("requested_settings") != intent_authority["requested_settings"]
+        or not isinstance(preview_chemistry, dict)
+        or preview_chemistry.get("profile_id") != intent_authority["chemistry_profile_id"]
+        or preview_chemistry.get("profile_sha256")
+        != intent_authority["chemistry_profile_sha256"]
+        or preview_chemistry.get("catalog_digest") != intent_authority["catalog_digest"]
+        or preview_chemistry.get("admitted") is not True
+        or preview.get("blockers") != []
+        or not isinstance(effective_request, dict)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD preview no longer matches its source, settings, profile, or catalog authority."
+        )
+
+    expected_execution = deepcopy(effective_request.get("execution"))
+    if not isinstance(expected_execution, dict):
+        raise _typed_md_adapter_error("Typed MD effective execution authority is invalid.")
+    expected_execution.pop("placement_authority", None)
+    expected_execution["gpu_id"] = "0"
+    spec_input = md_job_spec.get("input")
+    spec_chemistry = md_job_spec.get("chemistry")
+    if (
+        set(md_job_spec)
+        != {
+            "schema",
+            "job_id",
+            "engine",
+            "replicas",
+            "random_seed",
+            "input",
+            "chemistry",
+            "preparation",
+            "stages",
+            "execution",
+        }
+        or md_job_spec.get("schema") != "bms.md.job.v2"
+        or md_job_spec.get("job_id") != "assigned-by-server"
+        or not isinstance(spec_input, dict)
+        or set(spec_input) != {"structure"}
+        or spec_input.get("structure") != adapter.source_token
+        or not isinstance(adapter.source_token, str)
+        or not adapter.source_token.startswith("bms-md-starting-structure:")
+        or not isinstance(spec_chemistry, dict)
+        or spec_chemistry.get("profile_id") != intent_authority["chemistry_profile_id"]
+        or spec_chemistry.get("profile_sha256")
+        != intent_authority["chemistry_profile_sha256"]
+        or spec_chemistry.get("catalog_digest") != intent_authority["catalog_digest"]
+        or set(spec_chemistry)
+        != {"profile_id", "profile_sha256", "catalog_digest", "requested_scope"}
+        or not isinstance(spec_chemistry.get("requested_scope"), str)
+        or not spec_chemistry["requested_scope"]
+        or md_job_spec.get("engine") != effective_request.get("engine")
+        or md_job_spec.get("replicas") != effective_request.get("replicas")
+        or md_job_spec.get("random_seed") != effective_request.get("random_seed")
+        or md_job_spec.get("preparation") != effective_request.get("preparation")
+        or md_job_spec.get("stages") != effective_request.get("stages")
+        or md_job_spec.get("execution") != expected_execution
+    ):
+        raise _typed_md_adapter_error(
+            "Server-compiled MD v2 authority does not match the current typed preview."
+        )
+
+    from experiment_models import (
+        ExperimentAggregateHead,
+        ExperimentRevision,
+        ExperimentValidation,
+        ExperimentWorkflowPreparation,
+    )
+    from routers.molecular_dynamics import _launch_context_source_refs
+
+    preparation = await experiment_session.get(
+        ExperimentWorkflowPreparation, context.preparation_id
+    )
+    workflow = await experiment_session.get(ExperimentAggregateHead, context.workflow_id)
+    revision = await experiment_session.get(
+        ExperimentRevision, context.workflow_revision_id
+    )
+    domain = await experiment_session.get(
+        ExperimentAggregateHead, context.domain_experiment_id
+    )
+    domain_revision = await experiment_session.get(
+        ExperimentRevision,
+        domain.current_revision_id if domain is not None else "",
+    )
+    validation = await experiment_session.get(
+        ExperimentValidation,
+        preparation.validation_resource_id if preparation is not None else "",
+    )
+    if (
+        preparation is None
+        or workflow is None
+        or revision is None
+        or domain is None
+        or domain_revision is None
+        or validation is None
+        or preparation.resource_id != context.preparation_id
+        or preparation.workspace_id != context.project_id
+        or preparation.workflow_revision_id != context.workflow_revision_id
+        or preparation.normalized_request_sha256 != context.normalized_request_sha256
+        or preparation.validation_status != "valid"
+        or preparation.validation_resource_id != context.validation_receipt_id
+        or hashlib.sha256(preparation.validation_receipt_json.encode()).hexdigest()
+        != context.validation_receipt_sha256
+        or validation.subject_resource_id != preparation.resource_id
+        or validation.outcome != "valid"
+        or validation.receipt_json != preparation.validation_receipt_json
+        or validation.receipt_sha256
+        != hashlib.sha256(validation.receipt_json.encode()).hexdigest()
+        or workflow.parent_id != context.domain_experiment_id
+        or workflow.current_revision_id != context.workflow_revision_id
+        or revision.subject_id != context.workflow_id
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD context hierarchy, revision, preparation, or validation authority diverged."
+        )
+    try:
+        normalized_request = json.loads(preparation.normalized_request_json)
+        workflow_payload = json.loads(revision.canonical_payload)
+        domain_payload = json.loads(domain_revision.canonical_payload)
+        validation_receipt = json.loads(preparation.validation_receipt_json)
+        scheduler_payload = json.loads(preparation.scheduler_payload_json)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _typed_md_adapter_error(
+            "Typed MD preparation is no longer current and usable."
+        ) from exc
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            normalized_request,
+            workflow_payload,
+            domain_payload,
+            validation_receipt,
+            scheduler_payload,
+        )
+    ):
+        raise _typed_md_adapter_error("Typed MD prepared authority has an invalid shape.")
+    scheduler = workflow_payload.get("scheduler")
+    expected_params = scheduler.get("params") if isinstance(scheduler, dict) else None
+    bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
+    if (
+        _canonical_typed_md_document(normalized_request)
+        != preparation.normalized_request_json
+        or hashlib.sha256(preparation.normalized_request_json.encode()).hexdigest()
+        != preparation.normalized_request_sha256
+        or _canonical_typed_md_document(workflow_payload) != revision.canonical_payload
+        or hashlib.sha256(revision.canonical_payload.encode()).hexdigest()
+        != revision.payload_sha256
+        or normalized_request.get("workflow_revision_id")
+        != context.workflow_revision_id
+        or normalized_request.get("workflow") != workflow_payload
+        or not isinstance(normalized_request.get("input_dataset_revision_ids"), list)
+        or not isinstance(normalized_request.get("input_authority"), dict)
+        or validation_receipt.get("status") != "valid"
+        or validation_receipt.get("workflow_revision_id")
+        != context.workflow_revision_id
+        or validation_receipt.get("normalized_request_sha256")
+        != context.normalized_request_sha256
+        or scheduler_payload != scheduler
+        or _canonical_typed_md_document(scheduler_payload)
+        != preparation.scheduler_payload_json
+        or domain_payload.get("domain_kind") != "protein_in_silico"
+        or workflow_payload.get("adapter_id") != "molecular-dynamics.v2"
+        or not isinstance(scheduler, dict)
+        or scheduler.get("model_id") != "molecular_dynamics"
+        or scheduler.get("mode") != "simulate"
+        or not isinstance(expected_params, dict)
+        or set(expected_params) != _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        or _canonical_typed_md_document(expected_params)
+        != _canonical_typed_md_document(intent_authority)
+        or len(bound_refs) != 1
+        or bound_refs[0].kind != "design"
+        or bound_refs[0].id != source_ref["id"]
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD intent does not match the one prepared Project Design authority."
+        )
+
+    canonical_params = await validate_bound_job_request(
+        experiment_session,
+        context,
+        job_name=job_data.name,
+        model_id=job_data.model_id,
+        mode=job_data.mode,
+        params=deepcopy(expected_params),
+        pinned_gpu=job_data.pinned_gpu,
+    )
+    return {**canonical_params, "md_job_spec": md_job_spec}
+
+
 def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
@@ -6347,18 +6632,35 @@ async def create_job(
     _preallocated_job_id: Any = Depends(lambda: None),
     _commit: Any = Depends(lambda: True),
     _skip_parent_lineage_update: Any = Depends(lambda: False),
+    _md_output_creation: Any = Depends(lambda: None),
+    _md_input_resolver: Any = Depends(lambda: None),
+    _typed_md_project_launch: Any = Depends(lambda: None),
     experiment_session: AsyncSession = Depends(get_experiment_session),
 ) -> JobResponse:
     """Canonical Job submission, optionally bound by one opaque launch context."""
     launch_context_id = str(job_data.launch_context_id or "").strip()
+    typed_md_project_launch = (
+        None
+        if isinstance(_typed_md_project_launch, DependsParam)
+        else _typed_md_project_launch
+    )
     if not launch_context_id:
+        if typed_md_project_launch is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "launch_context_typed_md_adapter_invalid",
+                    "message": "Typed MD Project authority requires one launch context.",
+                },
+            )
         return await _create_job(
             job_data,
             background_tasks,
             session,
-            _preallocated_job_id,
-            _commit,
-            _skip_parent_lineage_update,
+            _preallocated_job_id=_preallocated_job_id,
+            _commit=_commit,
+            _md_output_creation=_md_output_creation,
+            _md_input_resolver=_md_input_resolver,
         )
     if current_launch_context_id.get() != launch_context_id:
         raise HTTPException(
@@ -6381,15 +6683,24 @@ async def create_job(
             if prepared_attempt is None:
                 raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
             _preallocated_job_id = prepared_attempt.scheduler_job_id
-        job_data.params = await validate_bound_job_request(
-            experiment_session,
-            preview_context,
-            job_name=job_data.name,
-            model_id=job_data.model_id,
-            mode=job_data.mode,
-            params=dict(job_data.params or {}),
-            pinned_gpu=job_data.pinned_gpu,
-        )
+        if typed_md_project_launch is None:
+            job_data.params = await validate_bound_job_request(
+                experiment_session,
+                preview_context,
+                job_name=job_data.name,
+                model_id=job_data.model_id,
+                mode=job_data.mode,
+                params=dict(job_data.params or {}),
+                pinned_gpu=job_data.pinned_gpu,
+            )
+        else:
+            job_data.params = await _validated_typed_md_project_params(
+                experiment_session=experiment_session,
+                context=preview_context,
+                job_data=job_data,
+                adapter=typed_md_project_launch,
+                md_input_resolver=_md_input_resolver,
+            )
         if _preallocated_job_id:
             existing_job = await session.get(Job, str(_preallocated_job_id))
             if existing_job is not None:
@@ -6471,11 +6782,11 @@ async def create_job(
             job_data,
             background_tasks,
             session,
-            _preallocated_job_id,
-            _commit,
-            _skip_parent_lineage_update,
-            None,
-            True,
+            _preallocated_job_id=_preallocated_job_id,
+            _commit=_commit,
+            _md_output_creation=_md_output_creation,
+            _md_input_resolver=_md_input_resolver,
+            _trusted_workflow_adapter=True,
         )
     except HTTPException:
         await session.rollback()
