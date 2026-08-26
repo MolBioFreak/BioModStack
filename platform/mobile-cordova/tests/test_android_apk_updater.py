@@ -8,6 +8,7 @@ XML = PLUGIN / 'plugin.xml'
 BRIDGE = PLUGIN / 'src' / 'android' / 'BmsApkUpdatePlugin.kt'
 POLICY = PLUGIN / 'src' / 'android' / 'ApkUpdatePolicy.kt'
 UPDATER = PLUGIN / 'src' / 'android' / 'BmsApkUpdater.kt'
+UPDATER_PROVIDER = PLUGIN / 'src' / 'android' / 'BmsApkFileProvider.kt'
 CONFIG = ROOT / 'config.xml'
 GRADLE = ROOT / 'build-extras.gradle'
 BUILD_SCRIPT = ROOT / 'scripts' / 'build-apk.sh'
@@ -20,9 +21,23 @@ def test_plugin_is_native_only_onload_and_scoped_fileprovider() -> None:
     assert 'onload' in xml and 'BmsApkUpdatePlugin' in xml
     assert '<js-module' not in xml
     assert 'REQUEST_INSTALL_PACKAGES' in xml
-    assert 'androidx.core.content.FileProvider' in xml
+    assert 'org.biomodstack.mobile.apkupdate.BmsApkFileProvider' in xml
     assert '<resource-file src="res/xml/apk_update_paths.xml" target="res/xml/apk_update_paths.xml"' in xml
     assert 'androidx.webkit:webkit' in xml
+
+
+def test_updater_file_provider_is_dedicated_and_uri_authority_matches_manifest() -> None:
+    xml = XML.read_text()
+    updater = UPDATER.read_text()
+    assert UPDATER_PROVIDER.is_file()
+    provider = UPDATER_PROVIDER.read_text()
+    assert 'class BmsApkFileProvider : FileProvider()' in provider
+    assert 'android:name="org.biomodstack.mobile.apkupdate.BmsApkFileProvider"' in xml
+    assert 'android:authorities="${applicationId}.bms.apk.fileprovider"' in xml
+    assert 'src="src/android/BmsApkFileProvider.kt"' in xml
+    assert '"${activity.packageName}.bms.apk.fileprovider"' in updater
+    assert '"${activity.packageName}.fileprovider"' not in updater
+    assert '<provider android:name="androidx.core.content.FileProvider"' not in xml
 
 
 def test_bridge_is_exact_local_origin_main_frame_bounded_and_not_cordova_exec() -> None:
@@ -111,8 +126,8 @@ def test_core_runtime_compose_passes_both_apk_authentication_policies() -> None:
 def test_shell_version_navigation_network_and_release_signing_are_constrained() -> None:
     config = CONFIG.read_text()
     gradle = GRADLE.read_text()
-    assert 'version="0.4.4"' in config
-    assert 'android-versionCode="404"' in config
+    assert 'version="0.4.5"' in config
+    assert 'android-versionCode="405"' in config
     runtime = (ROOT / "cordova.runtime.json").read_text(encoding="utf-8")
     assert '"remoteUiUrl": "https://compute-node.taileb3a90.ts.net/"' in runtime
     assert '<allow-navigation href="https://localhost/*"' in config
@@ -141,6 +156,18 @@ def test_internal_update_build_ignores_inherited_home_and_xdg_signing_roots() ->
     assert 'HOME="$CANONICAL_HOME"' in script
     assert 'XDG_CONFIG_HOME="$HOME/.local/share/biomodstack/cordova-build-config"' in script
     assert "export HOME XDG_CONFIG_HOME" in script
+
+
+def test_build_reinstalls_tracked_apk_updater_before_prepare() -> None:
+    script = BUILD_SCRIPT.read_text()
+    remove = 'npx cordova plugin remove "$LOCAL_APK_UPDATER_PLUGIN_ID" --nosave'
+    add = 'npx cordova plugin add "$LOCAL_APK_UPDATER_PLUGIN_DIR" --nosave'
+    prepare = 'npx cordova prepare android'
+    assert 'LOCAL_APK_UPDATER_PLUGIN_DIR=' in script
+    assert 'LOCAL_APK_UPDATER_PLUGIN_ID=' in script
+    assert remove in script
+    assert add in script
+    assert script.index(remove) < script.index(add) < script.index(prepare)
 
 
 def test_build_syncs_authoritative_package_manager_instrumentation_source() -> None:

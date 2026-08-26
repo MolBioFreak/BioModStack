@@ -17,14 +17,15 @@
       <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     </config-file>
     <config-file target="AndroidManifest.xml" parent="/manifest/application">
-      <provider android:name="androidx.core.content.FileProvider"
-                android:authorities="${applicationId}.fileprovider"
+      <provider android:name="org.biomodstack.mobile.apkupdate.BmsApkFileProvider"
+                android:authorities="${applicationId}.bms.apk.fileprovider"
                 android:exported="false" android:grantUriPermissions="true">
         <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
                    android:resource="@xml/apk_update_paths" />
       </provider>
     </config-file>
     <source-file src="src/android/BmsApkUpdatePlugin.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
+    <source-file src="src/android/BmsApkFileProvider.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
     <source-file src="src/android/ApkUpdatePolicy.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
     <source-file src="src/android/BmsApkUpdater.kt" target-dir="app/src/main/java/org/biomodstack/mobile/apkupdate" />
     <source-file src="src/test/ApkUpdatePolicyTest.kt" target-dir="app/src/test/java/org/biomodstack/mobile/apkupdate" />

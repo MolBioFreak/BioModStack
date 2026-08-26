@@ -6,6 +6,8 @@ CONFIG_PATH="${1:-$PROJECT_DIR/cordova.runtime.json}"
 ANDROID_PLATFORM_VERSION="${ANDROID_PLATFORM_VERSION:-13.0.0}"
 LOCAL_UI_BUNDLE_PLUGIN_DIR="$PROJECT_DIR/local-plugins/cordova-plugin-bms-ui-bundle"
 LOCAL_UI_BUNDLE_PLUGIN_ID="cordova-plugin-bms-ui-bundle"
+LOCAL_APK_UPDATER_PLUGIN_DIR="$PROJECT_DIR/local-plugins/cordova-plugin-bms-apk-updater"
+LOCAL_APK_UPDATER_PLUGIN_ID="cordova-plugin-bms-apk-updater"
 UPDATER_ANDROID_TEST_SOURCE="$PROJECT_DIR/local-plugins/cordova-plugin-bms-apk-updater/src/androidTest/BmsPackageManagerIntegrationTest.kt"
 
 cd "$PROJECT_DIR"
@@ -195,6 +197,14 @@ if [[ -f platforms/android/gradle.properties ]]; then
   ensure_gradle_property "$PROJECT_DIR/platforms/android/gradle.properties" "org.gradle.workers.max" "1"
   ensure_gradle_property "$PROJECT_DIR/platforms/android/gradle.properties" "org.gradle.jvmargs" "-Xmx1024m -Dfile.encoding=UTF-8 -Djava.util.concurrent.ForkJoinPool.common.parallelism=1 -XX:ActiveProcessorCount=2"
   ensure_gradle_property "$PROJECT_DIR/platforms/android/gradle.properties" "android.suppressUnsupportedCompileSdk" "35"
+fi
+
+if [[ -d "$LOCAL_APK_UPDATER_PLUGIN_DIR" ]]; then
+  INSTALLED_PLUGINS="$(npx cordova plugin list 2>/dev/null || true)"
+  if [[ "$INSTALLED_PLUGINS" == *"$LOCAL_APK_UPDATER_PLUGIN_ID"* ]]; then
+    npx cordova plugin remove "$LOCAL_APK_UPDATER_PLUGIN_ID" --nosave
+  fi
+  npx cordova plugin add "$LOCAL_APK_UPDATER_PLUGIN_DIR" --nosave
 fi
 
 if [[ -d "$LOCAL_UI_BUNDLE_PLUGIN_DIR" ]]; then

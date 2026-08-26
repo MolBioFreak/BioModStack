@@ -375,7 +375,7 @@ class BmsApkUpdater(
     private fun openPackageInstaller(apkFile: File, manifest: ApkUpdateManifest) {
         val uri = FileProvider.getUriForFile(
             activity,
-            "${activity.packageName}.fileprovider",
+            "${activity.packageName}.bms.apk.fileprovider",
             apkFile,
         )
         val intent = Intent(Intent.ACTION_VIEW).apply {
