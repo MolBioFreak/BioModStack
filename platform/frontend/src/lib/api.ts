@@ -5278,6 +5278,7 @@ export interface ProjectHubPlasmidSummary {
     name: string;
     description: string;
     availability: string;
+    unavailable_reason: string | null;
     length_bp: number;
     gc_percent: number | null;
     feature_count: number;
@@ -5312,6 +5313,7 @@ export interface ProjectHubExperimentSummary {
     persistence: 'saved' | 'unsaved';
     kind: ProjectHubExperimentKind;
     plasmid_sequence_id: string;
+    plasmid_sequence_ids: string[];
     plasmid_name: string;
     title: string;
     status: string;
