@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate closed v2 publication markers and emit stage-reporter paths."""
+"""Validate closed modern publication markers and emit stage-reporter paths."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api")
 from services.frustrampnn.contracts import canonical_json_loads  # noqa: E402
 from services.frustrampnn.manifests import (  # noqa: E402
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     ManifestValidationError,
     _read_regular,
     load_result_manifest,
@@ -20,11 +21,9 @@ from services.frustrampnn.manifests import (  # noqa: E402
 )
 
 
-_FIELDS = {"manifest", "result", "source", "statistics"}
-_EXPECTED_BASENAMES = {
-    "manifest": V2_MANIFEST_PATH,
-    "result": "workflow_component_result_v2.json",
-    "statistics": "frustrampnn_statistics_v1.json",
+_FIELDS_BY_GENERATION = {
+    2: {"manifest", "result", "source", "statistics"},
+    3: {"manifest", "result", "source"},
 }
 _SOURCE_SUFFIXES = {".pdb", ".cif", ".mmcif"}
 
@@ -39,16 +38,25 @@ def _relative_path(value: Any, field: str) -> PurePosixPath:
 
 
 def validate_marker(payload: Any) -> dict[str, PurePosixPath]:
-    if not isinstance(payload, dict) or set(payload) != _FIELDS:
-        raise ValueError("v2 marker fields are not exact")
-    paths = {field: _relative_path(payload[field], field) for field in _FIELDS}
-    for field, expected in _EXPECTED_BASENAMES.items():
-        if paths[field].name != expected:
-            raise ValueError(f"{field} has the wrong v2 artifact name")
+    if not isinstance(payload, dict) or "manifest" not in payload:
+        raise ValueError("marker fields are not exact")
+    manifest = _relative_path(payload["manifest"], "manifest")
+    generation = (
+        3 if manifest.name == V3_MANIFEST_PATH
+        else 2 if manifest.name == V2_MANIFEST_PATH
+        else None
+    )
+    if generation is None or set(payload) != _FIELDS_BY_GENERATION[generation]:
+        raise ValueError("marker generation/fields are not exact")
+    paths = {field: _relative_path(payload[field], field) for field in payload}
+    if paths["result"].name != f"workflow_component_result_v{generation}.json":
+        raise ValueError("result has the wrong generation-specific artifact name")
+    if generation == 2 and paths["statistics"].name != "frustrampnn_statistics_v1.json":
+        raise ValueError("statistics has the wrong v2 artifact name")
     if paths["source"].suffix.lower() not in _SOURCE_SUFFIXES:
         raise ValueError("source has an unsupported structure artifact name")
     bundle_parent = paths["manifest"].parent
-    for field in ("result", "statistics"):
+    for field in set(paths) - {"manifest", "source"}:
         if paths[field].parent != bundle_parent:
             raise ValueError(f"{field} does not belong to the manifest-attested bundle")
     return paths
@@ -58,17 +66,20 @@ def _validate_closed_marker(
     *,
     job_root: Path,
     marker: Path,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, ...]:
     marker_root = marker.parent if marker.parent != Path(".") else Path.cwd()
     marker_payload = canonical_json_loads(_read_regular(marker_root, marker.name))
     paths = validate_marker(marker_payload)
     bundle_root = job_root.joinpath(*paths["manifest"].parent.parts)
     manifest = load_result_manifest(bundle_root)
-    if manifest.get("schema_version") != 2:
-        raise ValueError("marker does not reference a v2 result manifest")
+    generation = manifest.get("schema_version")
+    if generation not in {2, 3}:
+        raise ValueError("marker does not reference a modern result manifest")
     payloads = validate_result_manifest(bundle_root, manifest)
 
-    request = canonical_json_loads(payloads["workflow_component_request_v2.json"])
+    request = canonical_json_loads(
+        payloads[f"workflow_component_request_v{generation}.json"]
+    )
     if paths["source"].as_posix() != request["source_artifact"]["relative_path"]:
         raise ValueError("marker source does not match the manifest-attested request authority")
     source_payload = _read_regular(job_root, paths["source"].as_posix())
@@ -76,12 +87,14 @@ def _validate_closed_marker(
     if hashlib.sha256(source_payload).hexdigest() != expected_source_sha256:
         raise ValueError("marker source bytes contradict the manifest-attested source authority")
 
-    return (
+    outputs = [
         paths["result"].as_posix(),
         paths["manifest"].as_posix(),
         paths["source"].as_posix(),
-        paths["statistics"].as_posix(),
-    )
+    ]
+    if generation == 2:
+        outputs.append(paths["statistics"].as_posix())
+    return tuple(outputs)
 
 
 def main(argv: list[str] | None = None) -> int:

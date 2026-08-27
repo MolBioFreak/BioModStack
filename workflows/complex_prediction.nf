@@ -23,7 +23,10 @@ def requireExactSettingsObject(value, Set<String> expectedKeys, String location)
 }
 
 def requireCompleteFrustraMPNNSettings(value) {
-    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'batching_enabled', 'structures_per_job', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    if (value.schema_name != 'frustrampnn_settings' || value.schema_version != 2 || !(value.batching_enabled instanceof Boolean) || !(value.structures_per_job instanceof Integer) || value.structures_per_job < 1 || value.structures_per_job > 250) {
+        throw new IllegalArgumentException('frustrampnn_settings v2 batching authority is invalid')
+    }
     requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'regions', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
     requireExactSettingsObject(value.source_structure, ['selected_model_number', 'preferred_altloc'] as Set, 'frustrampnn_settings.source_structure')
     requireExactSettingsObject(value.classification_policy, ['mode', 'high_max', 'minimal_min'] as Set, 'frustrampnn_settings.classification_policy')
@@ -68,6 +71,19 @@ def sha256Hex(byte[] payload) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     digest.update(payload)
     digest.digest().encodeHex().toString()
+}
+
+def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
+    def payload = canonicalJsonValue(value) as Map
+    payload['settings_value_origin'] = settingsValueOrigin
+    def selection = payload['protein_selection']
+    if (selection instanceof Map && selection['regions'] instanceof Collection && selection['regions'].isEmpty()) {
+        def compatibleSelection = new TreeMap<String, Object>()
+        compatibleSelection.putAll(selection)
+        compatibleSelection.remove('regions')
+        payload['protein_selection'] = compatibleSelection
+    }
+    return payload
 }
 
 include { complex_prediction_wf } from '../modules/structure_prediction.nf'
@@ -152,7 +168,7 @@ process PrepareComplexPredictionFrustraMPNNCandidate {
       --output-pdb prepared_source.pdb \
       --request prepared_request.json \
       --metadata-base64 '${metadataBase64}' \
-      --request-version 2 \
+      --request-version 3 \
       --structure-map prepared_structure_map.json \
       --settings-base64 '${settings_base64}' \
       --settings-sha256 '${settings_sha256}' \
@@ -170,13 +186,13 @@ process MaterializeComplexPredictionFrustraMPNNCandidate {
     tuple val(candidate_meta), path(prepared_request), path(prepared_source), path(prepared_structure_map)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
     """
     set -euo pipefail
-    cp -L '${prepared_request}' workflow_component_request_v2.json
+    cp -L '${prepared_request}' workflow_component_request_v3.json
     cp -L '${prepared_source}' canonical_source.pdb
     cp -L '${prepared_structure_map}' frustrampnn_structure_map_v1.json
     """
@@ -350,10 +366,9 @@ workflow COMPLEX_PREDICTION {
                 error('frustrampnn_settings must be exact compact canonical JSON')
             }
             def settingsBase64 = settingsBytes.encodeBase64().toString()
-            def settingsWithOrigin = new TreeMap<String, Object>()
-            settingsWithOrigin.putAll(rawSettings)
-            settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
-            def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
+            def settingsSha256 = sha256Hex(canonicalJsonBytes(
+                requestedFrustraMPNNSettingsHashPayload(rawSettings, settingsValueOrigin)
+            ))
             println("Running canonical FrustraMPNN on final complex candidates")
             println("FrustraMPNN scope: protein entities only; ligand/nucleic-acid context is not analyzed")
 

@@ -22,6 +22,7 @@ from database import (
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     Job,
     ScientificArtifactReceipt,
 )
@@ -192,6 +193,33 @@ def _v2_bundle(
     )
     terminal = _load_json(root, "workflow_component_result_v2.json")
     return manifest, terminal
+
+
+def _v3_bundle(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict, dict]:
+    component = importlib.import_module("scripts.run_frustrampnn_component")
+    inputs = root.parent / f"{root.name}-inputs"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = COMPONENT_FIXTURE._v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+        request_generation=3,
+    )
+    request["schema_version"] = 3
+    request["component_contract_version"] = "3.0"
+    COMPONENT_FIXTURE._mock_v2_runtime(component, monkeypatch, inputs)
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=root,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    return manifest, _load_json(root, "workflow_component_result_v3.json")
 
 
 def _republish(root: Path) -> tuple[dict, dict]:
@@ -371,6 +399,35 @@ async def _seed_v2_child_job(sessions: async_sessionmaker, root: Path) -> None:
         await session.commit()
 
 
+async def _seed_v3_child_job(sessions: async_sessionmaker, root: Path) -> None:
+    request = _load_json(root, "workflow_component_request_v3.json")
+    async with sessions() as session:
+        session.add(
+            Job(
+                id=request["parent_job_id"],
+                name=request["parent_job_id"],
+                status="completed",
+                model_id="frustrampnn",
+                mode="component",
+                output_dir=str(root.parent),
+                params={
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request[
+                                    "normalized_pdb_sha256"
+                                ],
+                            }
+                        ]
+                    }
+                },
+            )
+        )
+        await session.commit()
+
+
 async def _counts(session) -> tuple[int, int, int]:
     counts: list[int] = []
     for model in (FrustraMPNNResult, FrustraMPNNArtifact, FrustraMPNNLandscapeRow):
@@ -379,6 +436,143 @@ async def _counts(session) -> tuple[int, int, int]:
         ).scalar_one()
         counts.append(int(value))
     return counts[0], counts[1], counts[2]
+
+
+@pytest.mark.asyncio
+async def test_v3_core_ingestion_queues_statistics_child_in_same_transaction(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    root = tmp_path / "v3-core"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        children = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis))
+        ).scalars().all()
+        assert len(children) == 1
+        child = children[0]
+        assert child.state == "queued"
+        assert child.parent_job_id == result.parent_job_id
+        assert child.invocation_id == result.invocation_id
+        assert child.core_manifest_sha256 == result.manifest_sha256
+        assert child.core_landscape_sha256 == result.summary_json["landscape_sha256"]
+        assert child.core_bundle_relative_path == "v3-core"
+        artifact_receipt = await session.get(
+            ScientificArtifactReceipt,
+            child.core_artifact_id,
+        )
+        assert artifact_receipt is not None
+        assert artifact_receipt.role == "landscape"
+        assert artifact_receipt.owner_id == f"{result.parent_job_id}:{result.invocation_id}"
+
+
+@pytest.mark.asyncio
+async def test_statistics_worker_publishes_derived_artifact_without_rewriting_core(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    statistics_jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    root = tmp_path / "v3-statistics-worker"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        child = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis))
+        ).scalar_one()
+        core_authority = (
+            result.request_sha256,
+            result.manifest_sha256,
+            copy.deepcopy(result.manifest_json),
+            copy.deepcopy(result.terminal_result_json),
+        )
+        statistics = await statistics_jobs.run_statistics_child_once(
+            session,
+            analysis_id=child.analysis_id,
+        )
+        await session.commit()
+
+        assert statistics["schema_version"] == 2
+        router = importlib.import_module("routers.frustrampnn")
+        assert (
+            router.FrustraMPNNStatisticsDocument.model_validate(statistics).root
+            == statistics
+        )
+        assert statistics["analysis_receipt"]["analysis_id"] == child.analysis_id
+        assert statistics["landscape_sha256"] == child.core_landscape_sha256
+        assert child.state == "completed"
+        assert child.statistics_sha256 == statistics["statistics_sha256"]
+        assert child.artifact_sha256 == result.statistics_json["content_sha256"]
+        statistics_receipt = await session.get(
+            ScientificArtifactReceipt,
+            result.statistics_json["artifact_id"],
+        )
+        assert statistics_receipt is not None
+        assert statistics_receipt.owner_kind == "frustrampnn_statistics_analysis"
+        assert statistics_receipt.owner_id == child.analysis_id
+        assert result.statistics_sha256 == statistics["statistics_sha256"]
+        assert result.comparison_compatibility_id == statistics[
+            "comparison_compatibility_id"
+        ]
+        assert (
+            result.request_sha256,
+            result.manifest_sha256,
+            result.manifest_json,
+            result.terminal_result_json,
+        ) == core_authority
+
+
+@pytest.mark.asyncio
+async def test_statistics_worker_adapter_claims_one_pending_child(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    statistics_jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    root = tmp_path / "v3-statistics-adapter"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        analysis_id = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis.analysis_id))
+        ).scalar_one()
+        expected_statistics_hash = result.statistics_sha256
+
+    worker = statistics_jobs.FrustraMPNNStatisticsWorker(db)
+    processed = await worker.run_pending_once()
+    assert processed == analysis_id
+
+    async with db() as session:
+        child = await session.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+        result = await session.get(FrustraMPNNResult, ("job-v2", "invoke-v2"))
+        assert child is not None and child.state == "completed"
+        assert result is not None and result.statistics_sha256 is not None
+        assert result.statistics_sha256 != expected_statistics_hash
 
 
 @pytest.mark.asyncio

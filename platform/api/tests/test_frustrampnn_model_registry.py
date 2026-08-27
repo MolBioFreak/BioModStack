@@ -59,10 +59,21 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
     assert payload["settings_schema"]["required"] == [
         "schema_name",
         "schema_version",
+        "batching_enabled",
+        "structures_per_job",
         "protein_selection",
         "source_structure",
         "classification_policy",
     ]
+    assert payload["settings_schema"]["properties"]["schema_version"]["const"] == 2
+    assert payload["settings_schema"]["properties"]["batching_enabled"]["default"] is False
+    assert payload["settings_schema"]["properties"]["structures_per_job"] == {
+        "default": 1,
+        "maximum": 250,
+        "minimum": 1,
+        "title": "Structures Per Job",
+        "type": "integer",
+    }
     definitions = payload["settings_schema"]["$defs"]
     assert definitions["FrustraMPNNProteinSelection"]["required"] == [
         "mode",
@@ -94,6 +105,8 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
     descriptor_ids = [item["field"] for item in payload["parameter_descriptors"]]
     assert descriptor_ids == [
         "source_artifact",
+        "batching_enabled",
+        "structures_per_job",
         "protein_selection.mode",
         "protein_selection.entities",
         "protein_selection.regions",
@@ -104,6 +117,29 @@ def test_frustrampnn_integration_exposes_exact_bounded_capability_and_settings_m
         "classification_policy.high_max",
         "classification_policy.minimal_min",
     ]
+    descriptors = {item["field"]: item for item in payload["parameter_descriptors"]}
+    assert descriptors["batching_enabled"] == {
+        "field": "batching_enabled",
+        "api_type": "boolean",
+        "ownership": "workflow_structure_grouping",
+        "control_kind": "checkbox",
+        "backing": "predict_batch",
+        "default_source": "bms_default",
+        "minimum": None,
+        "maximum": None,
+        "applicability": None,
+    }
+    assert descriptors["structures_per_job"] == {
+        "field": "structures_per_job",
+        "api_type": "integer",
+        "ownership": "workflow_structure_grouping",
+        "control_kind": "slider_with_numeric_input",
+        "backing": "predict_batch",
+        "default_source": "bms_default",
+        "minimum": 1,
+        "maximum": 250,
+        "applicability": {"field": "batching_enabled", "equals": True},
+    }
     assert set(payload["field_ownership"]) == set(descriptor_ids)
     assert set(payload["control_kind_hints"]) == set(descriptor_ids)
     assert {rule["rule_id"] for rule in payload["compatibility_rules"]} == {
@@ -150,6 +186,7 @@ def test_frustrampnn_metadata_uses_the_installed_integration_and_no_absent_model
             "pdb",
             "chains",
             "positions",
+            "predict_batch",
             "bms_source_interpretation",
             "bms_classification_interpretation",
         }

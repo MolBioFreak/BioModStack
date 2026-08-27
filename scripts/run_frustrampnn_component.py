@@ -42,12 +42,15 @@ from services.frustrampnn.contracts import (  # noqa: E402
 from services.frustrampnn.manifests import (  # noqa: E402
     MANIFEST_PATH,
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     ManifestValidationError,
     build_result_manifest,
     summarize_landscape_v2,
+    summarize_landscape_v3,
     validate_external_authority_artifact,
     validate_result_manifest,
     validate_v2_input_closure,
+    validate_v3_input_closure,
 )
 from services.frustrampnn.structure import (  # noqa: E402
     NORMALIZER_VERSION,
@@ -177,11 +180,13 @@ def _load_request_payload(payload: bytes) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise ContractValidationError("request must be an object")
         version = request.get("schema_version")
-        if version not in {1, 2}:
+        if version not in {1, 2, 3}:
             raise ContractValidationError("request schema generation is unsupported")
         validate_schema(f"workflow_component_request_v{version}", request)
-        if version == 2 and payload != canonical_json_bytes(request):
-            raise ContractValidationError("v2 request file must be exact canonical JSON")
+        if version in {2, 3} and payload != canonical_json_bytes(request):
+            raise ContractValidationError(
+                f"v{version} request file must be exact canonical JSON"
+            )
     except Exception as exc:
         raise ComponentRunError("request_invalid", str(exc)) from exc
     return request
@@ -778,8 +783,13 @@ def _run_component_v2(
     timeout_seconds: float,
     runtime_identity: _runtime.FrustraMPNNRuntimeIdentity,
 ) -> dict[str, Any]:
+    generation = request.get("schema_version")
+    if generation not in {2, 3}:
+        raise ComponentRunError("request_invalid", "modern request generation is unsupported")
     if request_payload != canonical_json_bytes(dict(request)):
-        raise ComponentRunError("request_invalid", "v2 request file is not exact canonical JSON")
+        raise ComponentRunError(
+            "request_invalid", f"v{generation} request file is not exact canonical JSON"
+        )
     try:
         authority_payload = _external_authority_payload(request)
         normalized_payload = _read_regular(
@@ -792,7 +802,10 @@ def _run_component_v2(
             label="structure map",
             max_bytes=MAX_STRUCTURE_MAP_BYTES,
         )
-        structure, effective, configuration = validate_v2_input_closure(
+        closure_validator = (
+            validate_v3_input_closure if generation == 3 else validate_v2_input_closure
+        )
+        structure, effective, configuration = closure_validator(
             request, normalized_payload, structure_map_payload
         )
         validate_external_authority_artifact(request, structure, authority_payload)
@@ -820,12 +833,18 @@ def _run_component_v2(
     work_root = Path(tempfile.mkdtemp(prefix=f".{output.name}.phase3b-", dir=output_parent))
     staging = work_root / "bundle"
     staging.mkdir(mode=0o700)
+    request_name = f"workflow_component_request_v{generation}.json"
+    landscape_name = f"frustrampnn_landscape_v{generation}.json"
+    summary_name = f"frustrampnn_summary_v{generation}.json"
+    receipt_name = f"frustrampnn_execution_receipt_v{generation}.json"
+    result_name = f"workflow_component_result_v{generation}.json"
+    manifest_name = V3_MANIFEST_PATH if generation == 3 else V2_MANIFEST_PATH
     normalized = work_root / "normalized.pdb"
     normalized.write_bytes(normalized_payload)
     pinned: _runtime.PinnedContainer | None = None
     published = False
     try:
-        _write_json(staging / "workflow_component_request_v2.json", request)
+        _write_json(staging / request_name, request)
         if authority_payload is not None:
             (staging / AUTHORITY_ARTIFACT_PATH).write_bytes(authority_payload)
         (staging / "normalized_input.pdb").write_bytes(normalized_payload)
@@ -935,17 +954,20 @@ def _run_component_v2(
                 candidate_id=request["candidate_id"],
                 source_artifact_sha256=request["source_artifact"]["sha256"],
             )
-            summary = summarize_landscape_v2(landscape, effective)
+            summary_builder = (
+                summarize_landscape_v3 if generation == 3 else summarize_landscape_v2
+            )
+            summary = summary_builder(landscape, effective)
         except (LandscapeValidationError, ManifestValidationError) as exc:
             raise ComponentRunError("raw_output_invalid", str(exc)) from exc
         for entry in plan.entries:
             (staging / entry.shard_relative_path).unlink()
         (staging / "raw_frustrampnn.csv").write_bytes(merged_raw)
-        _write_json(staging / "frustrampnn_landscape_v2.json", landscape)
-        _write_json(staging / "frustrampnn_summary_v2.json", summary)
+        _write_json(staging / landscape_name, landscape)
+        _write_json(staging / summary_name, summary)
         receipt = {
             "schema_name": "frustrampnn_execution_receipt",
-            "schema_version": 2,
+            "schema_version": generation,
             "invocation_id": request["invocation_id"],
             "execution_configuration_sha256": request["execution_configuration_sha256"],
             "requested_settings_sha256": request["requested_settings_sha256"],
@@ -972,50 +994,51 @@ def _run_component_v2(
             "duration_seconds": max(0.0, (overall_ended - overall_started).total_seconds()),
         }
         try:
-            validate_schema("frustrampnn_execution_receipt_v2", receipt)
+            validate_schema(f"frustrampnn_execution_receipt_v{generation}", receipt)
         except Exception as exc:
             raise ComponentRunError("manifest_invalid", str(exc)) from exc
-        _write_json(staging / "frustrampnn_execution_receipt_v2.json", receipt)
+        _write_json(staging / receipt_name, receipt)
 
-        try:
-            capability_inventory, inventory_sha256 = (
-                _settings.load_capability_inventory()
-            )
-            capability_inventory_bytes = _read_regular(
-                _settings._CAPABILITY_INVENTORY_PATH,
-                label="canonical capability inventory",
-                max_bytes=MAX_AUTHORITY_ARTIFACT_BYTES,
-            )
-            if (
-                _sha256(capability_inventory_bytes) != inventory_sha256
-                or inventory_sha256 != request["capability_inventory_byte_sha256"]
-            ):
-                raise ContractValidationError(
-                    "installed capability inventory bytes disagree with v2 request authority"
+        if generation == 2:
+            try:
+                capability_inventory, inventory_sha256 = (
+                    _settings.load_capability_inventory()
                 )
-            statistics = build_statistics_receipt(
-                request=request,
-                execution_receipt=receipt,
-                landscape=landscape,
-                structure_map=structure,
-                capability_inventory=capability_inventory,
-                capability_inventory_bytes=capability_inventory_bytes,
-            )
-            statistics_payload = rfc8785.dumps(statistics)
-            (staging / "frustrampnn_statistics_v1.json").write_bytes(
-                statistics_payload
-            )
-        except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
-            raise ComponentRunError("manifest_invalid", str(exc)) from exc
+                capability_inventory_bytes = _read_regular(
+                    _settings._CAPABILITY_INVENTORY_PATH,
+                    label="canonical capability inventory",
+                    max_bytes=MAX_AUTHORITY_ARTIFACT_BYTES,
+                )
+                if (
+                    _sha256(capability_inventory_bytes) != inventory_sha256
+                    or inventory_sha256 != request["capability_inventory_byte_sha256"]
+                ):
+                    raise ContractValidationError(
+                        "installed capability inventory bytes disagree with v2 request authority"
+                    )
+                statistics = build_statistics_receipt(
+                    request=request,
+                    execution_receipt=receipt,
+                    landscape=landscape,
+                    structure_map=structure,
+                    capability_inventory=capability_inventory,
+                    capability_inventory_bytes=capability_inventory_bytes,
+                )
+                statistics_payload = rfc8785.dumps(statistics)
+                (staging / "frustrampnn_statistics_v1.json").write_bytes(
+                    statistics_payload
+                )
+            except (OSError, ContractValidationError, rfc8785.CanonicalizationError) as exc:
+                raise ComponentRunError("manifest_invalid", str(exc)) from exc
 
         try:
             manifest = build_result_manifest(staging)
-            _write_json(staging / V2_MANIFEST_PATH, manifest)
+            _write_json(staging / manifest_name, manifest)
             result = {
                 "schema_name": "workflow_component_result",
-                "schema_version": 2,
+                "schema_version": generation,
                 "component_id": "frustrampnn",
-                "component_contract_version": "2.0",
+                "component_contract_version": f"{generation}.0",
                 "request_sha256": request_sha256(request),
                 "invocation_id": request["invocation_id"],
                 "parent_job_id": request["parent_job_id"],
@@ -1025,18 +1048,18 @@ def _run_component_v2(
                 "failure_class": None,
                 "diagnostic": None,
                 "result_manifest": {
-                    "relative_path": V2_MANIFEST_PATH,
+                    "relative_path": manifest_name,
                     "sha256": canonical_sha256(manifest),
                 },
                 "result_payload": {
-                    "relative_path": "frustrampnn_summary_v2.json",
+                    "relative_path": summary_name,
                     "schema_name": "frustrampnn_summary",
-                    "schema_version": 2,
+                    "schema_version": generation,
                     "sha256": canonical_sha256(summary),
                 },
             }
-            validate_schema("workflow_component_result_v2", result)
-            _write_json(staging / "workflow_component_result_v2.json", result)
+            validate_schema(f"workflow_component_result_v{generation}", result)
+            _write_json(staging / result_name, result)
             validate_result_manifest(staging, manifest)
         except (ManifestValidationError, ContractValidationError) as exc:
             raise ComponentRunError("manifest_invalid", str(exc)) from exc
@@ -1051,7 +1074,8 @@ def _run_component_v2(
             if output.is_dir() and not output.is_symlink():
                 shutil.rmtree(output)
             raise ComponentRunError(
-                "publication_failed", "FrustraMPNN v2 bundle was not durably published"
+                "publication_failed",
+                f"FrustraMPNN v{generation} bundle was not durably published",
             ) from exc
         published = True
         return manifest
@@ -1095,9 +1119,11 @@ def run_component(
             timeout_seconds=timeout_seconds,
             runtime_identity=selected_runtime_identity,
         )
-    if version == 2:
+    if version in {2, 3}:
         if structure_map is None:
-            raise ComponentRunError("request_invalid", "v2 requires exact --structure-map input")
+            raise ComponentRunError(
+                "request_invalid", f"v{version} requires exact --structure-map input"
+            )
         exact_request = (
             canonical_json_bytes(dict(request))
             if request_payload is None
@@ -1181,8 +1207,10 @@ def main(argv: list[str] | None = None) -> int:
                 "request_invalid", "normal execution requires exactly one request input"
             )
         request = _load_request_payload(payload)
-        if request["schema_version"] == 2 and args.request is None:
-            raise ComponentRunError("request_invalid", "v2 requires an exact --request file")
+        if request["schema_version"] in {2, 3} and args.request is None:
+            raise ComponentRunError(
+                "request_invalid", "modern requests require an exact --request file"
+            )
         run_component(
             request=request,
             source_structure=args.structure,

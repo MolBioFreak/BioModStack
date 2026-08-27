@@ -166,6 +166,68 @@ export function FrustraMpnnSettingsPanel({
                 </summary>
 
                 <div className="space-y-3 border-t border-slate-200 p-4">
+                    <section
+                        className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3"
+                        aria-label="Batch processing"
+                    >
+                        <label className="flex items-start gap-3 text-sm text-slate-800">
+                            <input
+                                type="checkbox"
+                                data-frustrampnn-batching-enabled
+                                checked={value.batching_enabled}
+                                onChange={(event) => onChange({
+                                    ...value,
+                                    batching_enabled: event.currentTarget.checked,
+                                })}
+                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-cyan-600"
+                            />
+                            <span>
+                                <span className="block font-semibold">Enable batching</span>
+                                <span className="mt-1 block text-xs leading-5 text-slate-600">
+                                    One loaded model processes independent structures sequentially in their assigned order.
+                                </span>
+                            </span>
+                        </label>
+                        <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
+                            <label className="text-xs font-medium text-slate-700">
+                                Structures per FrustraMPNN job
+                                <input
+                                    type="range"
+                                    min={1}
+                                    max={250}
+                                    step={1}
+                                    data-frustrampnn-structures-slider
+                                    value={value.structures_per_job}
+                                    disabled={!value.batching_enabled}
+                                    onChange={(event) => onChange({
+                                        ...value,
+                                        structures_per_job: Number(event.currentTarget.value),
+                                    })}
+                                    className="mt-2 block w-full accent-cyan-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                />
+                            </label>
+                            <label className="text-xs font-medium text-slate-700">
+                                Count
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={250}
+                                    step={1}
+                                    data-frustrampnn-structures-number
+                                    value={value.structures_per_job}
+                                    disabled={!value.batching_enabled}
+                                    onChange={(event) => {
+                                        const next = Number(event.currentTarget.value);
+                                        if (Number.isInteger(next) && next >= 1 && next <= 250) {
+                                            onChange({ ...value, structures_per_job: next });
+                                        }
+                                    }}
+                                    className="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                                />
+                            </label>
+                        </div>
+                    </section>
+
                     <FrustraMpnnProteinSelectionControl
                         value={value}
                         onChange={onChange}

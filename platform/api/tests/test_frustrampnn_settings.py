@@ -284,6 +284,87 @@ def test_requested_selection_modes_reject_overlapping_or_invalid_regions() -> No
             )
 
 
+def test_batching_settings_v2_are_strict_bounded_and_historically_compatible() -> None:
+    settings = _settings_module()
+    defaults = settings.default_settings()
+
+    assert defaults.model_dump(mode="json", exclude_none=False) == {
+        "schema_name": "frustrampnn_settings",
+        "schema_version": 2,
+        "settings_value_origin": "bms_default",
+        "batching_enabled": False,
+        "structures_per_job": 1,
+        "protein_selection": {
+            "mode": "all_protein_entities",
+            "entities": [],
+            "regions": [],
+            "residues": [],
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "",
+        },
+        "classification_policy": {
+            "mode": "canonical",
+            "high_max": -1.0,
+            "minimal_min": 0.58,
+        },
+    }
+
+    supplied = defaults.model_dump(mode="json", exclude_none=False)
+    supplied.pop("settings_value_origin")
+    supplied.update({"batching_enabled": True, "structures_per_job": 250})
+    validated = settings.validate_complete_requested_settings(supplied)
+    assert validated.batching_enabled is True
+    assert validated.structures_per_job == 250
+    assert validated.settings_value_origin == "operator_request"
+
+    schema = settings.complete_requested_settings_schema()
+    assert {"batching_enabled", "structures_per_job"} <= set(schema["required"])
+    assert schema["properties"]["structures_per_job"]["minimum"] == 1
+    assert schema["properties"]["structures_per_job"]["maximum"] == 250
+
+    for field, value in (
+        ("batching_enabled", 1),
+        ("structures_per_job", True),
+        ("structures_per_job", 0),
+        ("structures_per_job", 251),
+    ):
+        invalid = dict(supplied)
+        invalid[field] = value
+        with pytest.raises((ValidationError, settings.RequestedSettingsPayloadError)):
+            settings.validate_complete_requested_settings(invalid)
+
+    historical_payload = {
+        "schema_name": "frustrampnn_settings",
+        "schema_version": 1,
+        "settings_value_origin": "bms_default",
+        "protein_selection": {
+            "mode": "all_protein_entities",
+            "entities": [],
+            "regions": [],
+            "residues": [],
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "",
+        },
+        "classification_policy": {
+            "mode": "canonical",
+            "high_max": -1.0,
+            "minimal_min": 0.58,
+        },
+    }
+    historical = settings.validate_persisted_requested_settings(historical_payload)
+    assert historical.schema_version == 1
+    assert historical.batching_enabled is False
+    assert historical.structures_per_job == 1
+    assert (
+        settings.requested_settings_sha256(historical)
+        == "2c0c0061521132498189fca37b443c7fe6f6a4aded0bc3dfa62abc3f35de6d98"
+    )
+
+
 def test_default_settings_match_installed_behavior_and_have_explicit_value_sources() -> None:
     settings = _settings_module()
     defaults = settings.default_settings()
@@ -300,6 +381,8 @@ def test_default_settings_match_installed_behavior_and_have_explicit_value_sourc
 
     effective = _effective(defaults)
     assert effective.value_sources.model_dump(mode="json") == {
+        "batching_enabled": "bms_default",
+        "structures_per_job": "bms_default",
         "protein_selection": {
             "mode": "bms_default",
             "entities": "bms_default",
@@ -331,6 +414,8 @@ def test_explicit_default_values_remain_operator_request_after_durable_reparse()
 
     effective = _effective(explicit)
     expected_sources = effective.value_sources.model_dump(mode="json")
+    assert expected_sources.pop("batching_enabled") == "operator_request"
+    assert expected_sources.pop("structures_per_job") == "operator_request"
     assert {
         source
         for group in expected_sources.values()

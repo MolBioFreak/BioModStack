@@ -2992,7 +2992,7 @@ def build_nextflow_command(
         if not job_id:
             raise ValueError("FrustraMPNN scheduler launch requires job_id")
         output_root = Path(os.path.abspath(str(output_dir)))
-        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
         manifest_path = Path(os.path.abspath(batch_manifest_path))
         if manifest_path != expected_manifest or manifest_path.is_symlink() or not manifest_path.is_file():
             raise ValueError("FrustraMPNN batch manifest is not the job-owned immutable authority")
@@ -3001,7 +3001,7 @@ def build_nextflow_command(
             raise ValueError("FrustraMPNN scheduler-child envelope is required")
         if envelope.get("execution_owner_job_id") != str(job_id):
             raise ValueError("FrustraMPNN execution owner does not match job_id")
-        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v1.json":
+        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v3.json":
             raise ValueError("FrustraMPNN manifest relative authority is invalid")
         manifest_payload = manifest_path.read_bytes()
         if len(manifest_payload) != envelope.get("batch_manifest_size_bytes"):
@@ -3013,13 +3013,33 @@ def build_nextflow_command(
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("FrustraMPNN batch manifest is invalid JSON") from exc
         records = batch.get("records") if isinstance(batch, dict) else None
+        batching_enabled = batch.get("batching_enabled") if isinstance(batch, dict) else None
+        structures_per_job = batch.get("structures_per_job") if isinstance(batch, dict) else None
         if (
             not isinstance(batch, dict)
+            or set(batch) != {
+                "schema_name",
+                "schema_version",
+                "execution_owner_job_id",
+                "batching_enabled",
+                "structures_per_job",
+                "settings_sha256",
+                "expected_cardinality",
+                "records",
+            }
             or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 2
+            or batch.get("schema_version") != 3
             or batch.get("execution_owner_job_id") != str(job_id)
+            or not isinstance(batching_enabled, bool)
+            or isinstance(structures_per_job, bool)
+            or not isinstance(structures_per_job, int)
+            or not 1 <= structures_per_job <= 250
+            or batch.get("settings_sha256") != envelope.get("settings_sha256")
             or not isinstance(records, list)
             or not records
+            or batch.get("expected_cardinality") != len(records)
+            or len(records) > structures_per_job
+            or (not batching_enabled and len(records) != 1)
             or len(records) != len(envelope.get("component_invocation_ids") or [])
         ):
             raise ValueError("FrustraMPNN batch manifest authority is invalid")

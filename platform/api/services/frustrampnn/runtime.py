@@ -707,6 +707,154 @@ def build_frustrampnn_command(
     return FrustraMPNNInvocation(argv=argv, physical_gpu_id=physical_gpu_id)
 
 
+def build_frustrampnn_predict_batch_command(
+    *,
+    apptainer: Path | str,
+    container: Path | str,
+    manifest: Path | str,
+    output_root: Path | str,
+    adapter: Path | str,
+    physical_gpu_id: object,
+) -> FrustraMPNNInvocation:
+    """Build one pinned-image invocation of the product-owned batch adapter."""
+
+    if (
+        isinstance(physical_gpu_id, bool)
+        or not isinstance(physical_gpu_id, int)
+        or physical_gpu_id < 0
+    ):
+        raise RuntimeValidationError(
+            "assigned FrustraMPNN physical GPU ID must be a non-negative integer"
+        )
+    executable = os.fspath(apptainer)
+    if not isinstance(executable, str) or not executable or "\x00" in executable:
+        raise RuntimeValidationError("Apptainer executable is invalid")
+    container_path = _absolute_safe_host_path(container, label="container")
+    manifest_path = _absolute_safe_host_path(manifest, label="batch manifest")
+    adapter_path = _absolute_safe_host_path(adapter, label="batch adapter")
+    output_path = _absolute_safe_host_path(output_root, label="output root")
+    for path, label in (
+        (manifest_path, "batch manifest"),
+        (adapter_path, "batch adapter"),
+    ):
+        descriptor = open_regular_no_follow(path, label=label)
+        os.close(descriptor)
+        try:
+            path.relative_to(output_path)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeValidationError(
+                f"{label} and writable output bind paths collide"
+            )
+    output_descriptor = _open_directory_no_follow(output_path, label="output root")
+    os.close(output_descriptor)
+
+    manifest_descriptor = open_regular_no_follow(manifest_path, label="batch manifest")
+    try:
+        with os.fdopen(manifest_descriptor, "rb", closefd=True) as manifest_file:
+            manifest_payload = manifest_file.read(4 * 1024 * 1024 + 1)
+    except OSError as exc:
+        raise RuntimeValidationError("cannot read batch manifest") from exc
+    if len(manifest_payload) > 4 * 1024 * 1024:
+        raise RuntimeValidationError("batch manifest exceeds its byte bound")
+    try:
+        manifest_value = json.loads(manifest_payload)
+        canonical_manifest = (
+            json.dumps(
+                manifest_value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RuntimeValidationError("batch manifest is not valid canonical JSON") from exc
+    if manifest_payload != canonical_manifest or not isinstance(manifest_value, dict):
+        raise RuntimeValidationError("batch manifest is not exact canonical JSON")
+    if set(manifest_value) != {
+        "schema_name", "schema_version", "checkpoint_path", "device", "records"
+    }:
+        raise RuntimeValidationError("batch manifest fields are not closed")
+    if (
+        manifest_value["schema_name"] != "frustrampnn_predict_batch_input"
+        or manifest_value["schema_version"] != 1
+    ):
+        raise RuntimeValidationError("batch manifest schema identity is invalid")
+    records = manifest_value["records"]
+    if not isinstance(records, list) or not 2 <= len(records) <= 250:
+        raise RuntimeValidationError("batch manifest records must contain 2..250 entries")
+
+    input_paths: list[Path] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict) or set(record) != {
+            "ordinal", "candidate_id", "invocation_id", "staged_pdb_path",
+            "source_sha256",
+        }:
+            raise RuntimeValidationError(
+                f"batch manifest record fields are not closed at index {index}"
+            )
+        if record["ordinal"] != index or isinstance(record["ordinal"], bool):
+            raise RuntimeValidationError("batch manifest record ordinals are not canonical")
+        input_path = _absolute_safe_host_path(
+            record["staged_pdb_path"], label=f"staged PDB {index}"
+        )
+        try:
+            input_path.relative_to(output_path)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeValidationError(
+                "staged PDB and writable output bind paths collide"
+            )
+        descriptor = open_regular_no_follow(input_path, label=f"staged PDB {index}")
+        try:
+            actual_sha256 = sha256_fd(descriptor)
+        finally:
+            os.close(descriptor)
+        expected_sha256 = _validate_digest(
+            record["source_sha256"], label=f"staged PDB {index} source"
+        )
+        if actual_sha256 != expected_sha256:
+            raise RuntimeValidationError(
+                f"staged PDB {index} source SHA-256 does not match"
+            )
+        input_paths.append(input_path)
+    if len(input_paths) != len(set(input_paths)):
+        raise RuntimeValidationError("batch manifest staged PDB paths must be unique")
+
+    argv = (
+        executable,
+        "exec",
+        "--containall",
+        "--writable-tmpfs",
+        "--nv",
+        "--env",
+        "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+        "--env",
+        f"CUDA_VISIBLE_DEVICES={physical_gpu_id}",
+        "--bind",
+        f"{manifest_path}:/bms/batch/input.json:ro",
+        "--bind",
+        f"{adapter_path}:/bms/adapter/run_frustrampnn_predict_batch.py:ro",
+    )
+    for input_path in input_paths:
+        argv += ("--bind", f"{input_path}:{input_path}:ro")
+    argv += (
+        "--bind", f"{output_path}:/bms/output:rw",
+        os.fspath(container_path),
+        "/opt/venv/bin/python",
+        "/bms/adapter/run_frustrampnn_predict_batch.py",
+        "--manifest",
+        "/bms/batch/input.json",
+        "--output-dir",
+        "/bms/output",
+    )
+    return FrustraMPNNInvocation(argv=argv, physical_gpu_id=physical_gpu_id)
+
+
 __all__ = [
     "FRUSTRAMPNN_RUNTIME_IDENTITY",
     "FRUSTRAMPNN_RUNTIME_REGISTRY",
@@ -717,6 +865,7 @@ __all__ = [
     "PinnedContainer",
     "RuntimeValidationError",
     "build_frustrampnn_command",
+    "build_frustrampnn_predict_batch_command",
     "cm_analysis_runtime_registry_v1",
     "compile_frustrampnn_command_plan",
     "container_sha256",

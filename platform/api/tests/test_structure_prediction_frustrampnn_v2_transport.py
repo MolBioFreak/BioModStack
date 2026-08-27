@@ -74,8 +74,10 @@ def _selected_settings(*, auth_seq_id: int = 10) -> FrustraMPNNRequestedSettings
     return FrustraMPNNRequestedSettings.model_validate(
         {
             "schema_name": "frustrampnn_settings",
-            "schema_version": 1,
+            "schema_version": 2,
             "settings_value_origin": "operator_request",
+            "batching_enabled": False,
+            "structures_per_job": 1,
             "protein_selection": {
                 "mode": "selected_residues",
                 "entities": [],
@@ -206,7 +208,7 @@ def test_structure_prediction_preparer_v2_consumes_exact_settings_and_emits_boun
     source.write_bytes(_two_model_pdb())
     normalized = tmp_path / "canonical_source.pdb"
     structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
-    request_path = tmp_path / "workflow_component_request_v2.json"
+    request_path = tmp_path / "workflow_component_request_v3.json"
     settings = _selected_settings()
     settings_payload = _settings_transport_bytes(settings)
     settings_sha256 = requested_settings_sha256(settings)
@@ -218,9 +220,9 @@ def test_structure_prediction_preparer_v2_consumes_exact_settings_and_emits_boun
         metadata=prepare._decode_metadata(
             base64.b64encode(canonical_json_bytes(_metadata())).decode("ascii"),
             source=source,
-            request_version=2,
+            request_version=3,
         ),
-        request_version=2,
+        request_version=3,
         structure_map_path=structure_map_path,
         settings_payload=settings_payload,
         settings_sha256=settings_sha256,
@@ -228,8 +230,8 @@ def test_structure_prediction_preparer_v2_consumes_exact_settings_and_emits_boun
     )
 
     assert request_path.read_bytes() == canonical_json_bytes(request)
-    assert request["schema_version"] == 2
-    assert request["component_contract_version"] == "2.0"
+    assert request["schema_version"] == 3
+    assert request["component_contract_version"] == "3.0"
     assert request["settings_value_origin"] == "operator_request"
     assert request["requested_settings"] == settings.model_dump(
         mode="json", exclude_none=False
@@ -254,7 +256,7 @@ def test_structure_prediction_preparer_v2_consumes_exact_settings_and_emits_boun
     assert request["normalized_pdb_sha256"] == hashlib.sha256(normalized.read_bytes()).hexdigest()
     assert request["execution_configuration"]["effective_settings"] == request["effective_settings"]
     assert "checkpoint_id" not in _metadata()
-    validate_schema("workflow_component_request_v2", request)
+    validate_schema("workflow_component_request_v3", request)
 
 
 def test_structure_prediction_preparer_v2_rejects_missing_or_invalid_origin_before_outputs(
@@ -269,7 +271,7 @@ def test_structure_prediction_preparer_v2_rejects_missing_or_invalid_origin_befo
     for origin in (None, "request", "bms_default "):
         normalized = tmp_path / "canonical_source.pdb"
         structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
-        request_path = tmp_path / "workflow_component_request_v2.json"
+        request_path = tmp_path / "workflow_component_request_v3.json"
         with pytest.raises(ValueError, match="settings value origin"):
             prepare.prepare_candidate(
                 source=source,
@@ -278,9 +280,9 @@ def test_structure_prediction_preparer_v2_rejects_missing_or_invalid_origin_befo
                 metadata=prepare._decode_metadata(
                     base64.b64encode(canonical_json_bytes(_metadata())).decode("ascii"),
                     source=source,
-                    request_version=2,
+                    request_version=3,
                 ),
-                request_version=2,
+                request_version=3,
                 structure_map_path=structure_map_path,
                 settings_payload=settings_payload,
                 settings_sha256="0" * 64,
@@ -322,13 +324,13 @@ def test_structure_prediction_preparer_v2_resolves_mappable_entity_selections(
     request = prepare.prepare_candidate(
         source=source,
         output_pdb=tmp_path / "canonical_source.pdb",
-        request_path=tmp_path / "workflow_component_request_v2.json",
+        request_path=tmp_path / "workflow_component_request_v3.json",
         metadata=prepare._decode_metadata(
             base64.b64encode(canonical_json_bytes(_metadata())).decode("ascii"),
             source=source,
-            request_version=2,
+            request_version=3,
         ),
-        request_version=2,
+        request_version=3,
         structure_map_path=tmp_path / "frustrampnn_structure_map_v1.json",
         settings_payload=settings_payload,
         settings_sha256=requested_settings_sha256(settings),
@@ -352,7 +354,7 @@ def test_structure_prediction_preparer_v2_fails_closed_when_selector_cannot_map(
     source.write_bytes(_two_model_pdb())
     normalized = tmp_path / "canonical_source.pdb"
     structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
-    request_path = tmp_path / "workflow_component_request_v2.json"
+    request_path = tmp_path / "workflow_component_request_v3.json"
     settings = _selected_settings(auth_seq_id=99)
     settings_payload = _settings_transport_bytes(settings)
 
@@ -364,9 +366,9 @@ def test_structure_prediction_preparer_v2_fails_closed_when_selector_cannot_map(
             metadata=prepare._decode_metadata(
                 base64.b64encode(canonical_json_bytes(_metadata())).decode("ascii"),
                 source=source,
-                request_version=2,
+                request_version=3,
             ),
-            request_version=2,
+            request_version=3,
             structure_map_path=structure_map_path,
             settings_payload=settings_payload,
             settings_sha256=requested_settings_sha256(settings),
@@ -396,9 +398,9 @@ def test_structure_prediction_workflow_is_v2_only_when_enabled_and_preserves_dis
     assert "canonicalJsonBytes(rawSettings)" in enabled
     assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
     assert "settingsSha256" in enabled
-    assert "workflow_component_request_v2.json" in preparer
+    assert "workflow_component_request_v3.json" in preparer
     assert "frustrampnn_structure_map_v1.json" in preparer
-    assert "--request-version 2" in preparer
+    assert "--request-version 3" in preparer
     assert "--settings-base64" in preparer
     assert "--settings-sha256" in preparer
     assert "--settings-value-origin" in preparer

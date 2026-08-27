@@ -868,6 +868,28 @@ export interface ResearchRecordRequest {
     supersedes_record_id?: string | null;
 }
 
+export interface FrustraMpnnExperimentScopeItem {
+    result_receipt_id: string;
+    parent_job_id: string;
+    invocation_id: string;
+    candidate_id: string;
+    manifest_sha256: string;
+    content_digest: string;
+    reopen_uri: string;
+}
+
+export interface FrustraMpnnExperimentScope {
+    schema: 'bms.project-frustrampnn-result-scope.v1';
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    global_experiment_revision_id: string;
+    domain_revision_id: string;
+    items: FrustraMpnnExperimentScopeItem[];
+    count: number;
+    bounded: true;
+}
+
 const segment = (value: string) => encodeURIComponent(value);
 
 type UnknownRecord = Record<string, unknown>;
@@ -1381,6 +1403,50 @@ function parseAttachmentReceipt(value: unknown): AttachmentReceipt {
     };
 }
 
+function parseFrustraMpnnExperimentScopeItem(value: unknown, label: string): FrustraMpnnExperimentScopeItem {
+    const record = exactRecord(value, label, [
+        'result_receipt_id', 'parent_job_id', 'invocation_id', 'candidate_id',
+        'manifest_sha256', 'content_digest', 'reopen_uri',
+    ]);
+    return {
+        result_receipt_id: requireString(record.result_receipt_id, `${label}.result_receipt_id`),
+        parent_job_id: requireString(record.parent_job_id, `${label}.parent_job_id`),
+        invocation_id: requireString(record.invocation_id, `${label}.invocation_id`),
+        candidate_id: requireString(record.candidate_id, `${label}.candidate_id`),
+        manifest_sha256: requireSha256(record.manifest_sha256, `${label}.manifest_sha256`),
+        content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
+        reopen_uri: requireString(record.reopen_uri, `${label}.reopen_uri`),
+    };
+}
+
+export function parseFrustraMpnnExperimentScope(value: unknown): FrustraMpnnExperimentScope {
+    const label = 'FrustraMPNN experiment scope';
+    const record = exactRecord(value, label, [
+        'schema', 'project_id', 'global_experiment_id', 'domain_experiment_id',
+        'global_experiment_revision_id', 'domain_revision_id',
+        'items', 'count', 'bounded',
+    ]);
+    const items = requireArray(record.items, `${label}.items`, parseFrustraMpnnExperimentScopeItem);
+    const count = requireInteger(record.count, `${label}.count`);
+    if (count !== items.length || count > 256) {
+        throw new Error(`${label}.count must equal the bounded item cardinality.`);
+    }
+    if (requireBoolean(record.bounded, `${label}.bounded`) !== true) {
+        throw new Error(`${label}.bounded must be true.`);
+    }
+    return {
+        schema: requireLiteral(record.schema, `${label}.schema`, ['bms.project-frustrampnn-result-scope.v1']),
+        project_id: requireString(record.project_id, `${label}.project_id`),
+        global_experiment_id: requireString(record.global_experiment_id, `${label}.global_experiment_id`),
+        domain_experiment_id: requireString(record.domain_experiment_id, `${label}.domain_experiment_id`),
+        global_experiment_revision_id: requireString(record.global_experiment_revision_id, `${label}.global_experiment_revision_id`),
+        domain_revision_id: requireString(record.domain_revision_id, `${label}.domain_revision_id`),
+        items,
+        count,
+        bounded: true,
+    };
+}
+
 export async function listProjects(signal?: AbortSignal): Promise<ProjectListPage> {
     const response = await api.get<ProjectListPage>('/api/projects', { params: { limit: 100 }, signal });
     return response.data;
@@ -1427,6 +1493,37 @@ export async function getGlobalExperiment(projectId: string, experimentId: strin
 
 export async function getDomainExperiment(projectId: string, experimentId: string, domainId: string, signal?: AbortSignal): Promise<HierarchyMutationResult> {
     return (await api.get<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}`, { signal })).data;
+}
+
+export async function fetchDomainFrustraMpnnResults(
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    globalExperimentRevisionId: string,
+    domainRevisionId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnExperimentScope> {
+    const response = await api.get<unknown>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}/frustrampnn-results`,
+        {
+            params: {
+                global_experiment_revision_id: globalExperimentRevisionId,
+                domain_revision_id: domainRevisionId,
+            },
+            signal,
+        },
+    );
+    const parsed = parseFrustraMpnnExperimentScope(response.data);
+    if (
+        parsed.project_id !== projectId
+        || parsed.global_experiment_id !== experimentId
+        || parsed.domain_experiment_id !== domainId
+        || parsed.global_experiment_revision_id !== globalExperimentRevisionId
+        || parsed.domain_revision_id !== domainRevisionId
+    ) {
+        throw new Error('FrustraMPNN experiment scope does not match the requested Project hierarchy.');
+    }
+    return parsed;
 }
 
 export async function getProjectSummary(projectId: string, options: ProjectSummaryOptions = {}): Promise<ProjectManagerReadModel> {

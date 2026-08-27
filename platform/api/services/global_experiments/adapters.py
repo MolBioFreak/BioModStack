@@ -1045,13 +1045,18 @@ class FrustraMpnnResultAdapter:
         request_sha = _sha256(row.request_sha256, "FrustraMPNN request digest")
         source_sha = _sha256(row.source_artifact_sha256, "FrustraMPNN source artifact digest")
         manifest = row.manifest_json
+        source_manifest_field = (
+            "source_artifact_sha256"
+            if manifest.get("schema_version") in {2, 3}
+            else "source_sha256"
+        ) if isinstance(manifest, dict) else "source_sha256"
         if not isinstance(manifest, dict) or any(
             (
                 manifest.get("parent_job_id") != row.parent_job_id,
                 manifest.get("invocation_id") != row.invocation_id,
                 manifest.get("candidate_id") != row.candidate_id,
                 manifest.get("request_sha256") != request_sha,
-                manifest.get("source_sha256") != source_sha,
+                manifest.get(source_manifest_field) != source_sha,
             )
         ):
             raise AdapterError("source_digest_mismatch", "FrustraMPNN manifest identity is not bound to native result")

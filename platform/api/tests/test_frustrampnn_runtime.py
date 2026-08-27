@@ -227,6 +227,89 @@ def test_command_is_exact_gpu_safe_and_returns_receipt_metadata(tmp_path: Path) 
     }
 
 
+def test_predict_batch_command_is_exact_gpu_safe_and_product_owned(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime()
+    manifest = tmp_path / "batch.json"
+    adapter = tmp_path / "run_frustrampnn_predict_batch.py"
+    output = tmp_path / "output"
+    pdb_paths = [tmp_path / "staged" / "alpha.pdb", tmp_path / "staged" / "beta.pdb"]
+    pdb_paths[0].parent.mkdir()
+    for path in pdb_paths:
+        path.write_bytes(f"HEADER {path.stem}\nEND\n".encode("ascii"))
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_name": "frustrampnn_predict_batch_input",
+                "schema_version": 1,
+                "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
+                "device": "cuda:0",
+                "records": [
+                    {
+                        "ordinal": ordinal,
+                        "candidate_id": f"candidate-{path.stem}",
+                        "invocation_id": f"invocation-{path.stem}",
+                        "staged_pdb_path": str(path),
+                        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                    for ordinal, path in enumerate(pdb_paths)
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter.write_text("print('adapter')\n", encoding="utf-8")
+    output.mkdir()
+    container = Path("/proc/self/fd/41")
+
+    invocation = runtime.build_frustrampnn_predict_batch_command(
+        apptainer="/usr/bin/apptainer",
+        container=container,
+        manifest=manifest,
+        output_root=output,
+        adapter=adapter,
+        physical_gpu_id=5,
+    )
+
+    assert list(invocation.argv) == [
+        "/usr/bin/apptainer",
+        "exec",
+        "--containall",
+        "--writable-tmpfs",
+        "--nv",
+        "--env",
+        "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+        "--env",
+        "CUDA_VISIBLE_DEVICES=5",
+        "--bind",
+        f"{manifest}:/bms/batch/input.json:ro",
+        "--bind",
+        f"{adapter}:/bms/adapter/run_frustrampnn_predict_batch.py:ro",
+        "--bind",
+        f"{pdb_paths[0]}:{pdb_paths[0]}:ro",
+        "--bind",
+        f"{pdb_paths[1]}:{pdb_paths[1]}:ro",
+        "--bind",
+        f"{output}:/bms/output:rw",
+        str(container),
+        "/opt/venv/bin/python",
+        "/bms/adapter/run_frustrampnn_predict_batch.py",
+        "--manifest",
+        "/bms/batch/input.json",
+        "--output-dir",
+        "/bms/output",
+    ]
+    assert invocation.receipt_metadata == {
+        "physical_gpu_id": 5,
+        "task_visible_gpu_id": 0,
+    }
+    assert invocation.argv.count("--bind") == 5
+
+
 def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
     settings = importlib.import_module("services.frustrampnn.settings")
     entities = []

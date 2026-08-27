@@ -272,11 +272,13 @@ class FrustraMPNNClassificationPolicy(_StrictFrozenModel):
 
 class FrustraMPNNRequestedSettings(_StrictFrozenModel):
     schema_name: Literal["frustrampnn_settings"] = "frustrampnn_settings"
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     settings_value_origin: SettingsValueOrigin = Field(
         default="bms_default",
         json_schema_extra={"readOnly": True},
     )
+    batching_enabled: bool = False
+    structures_per_job: Annotated[StrictInt, Field(ge=1, le=250)] = 1
     protein_selection: FrustraMPNNProteinSelection = Field(
         default_factory=FrustraMPNNProteinSelection
     )
@@ -409,6 +411,8 @@ class FrustraMPNNClassificationPolicyValueSources(_StrictFrozenModel):
 
 
 class FrustraMPNNSettingsValueSources(_StrictFrozenModel):
+    batching_enabled: ValueSource = "bms_default"
+    structures_per_job: ValueSource = "bms_default"
     protein_selection: FrustraMPNNProteinSelectionValueSources
     source_structure: FrustraMPNNSourceStructureValueSources
     classification_policy: FrustraMPNNClassificationPolicyValueSources
@@ -418,7 +422,7 @@ class FrustraMPNNEffectiveSettings(_StrictFrozenModel):
     schema_name: Literal["frustrampnn_effective_settings"] = (
         "frustrampnn_effective_settings"
     )
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     requested_settings: FrustraMPNNRequestedSettings
     settings_value_origin: SettingsValueOrigin
     resolved_chains: tuple[FrustraMPNNResolvedChainSelection, ...]
@@ -566,6 +570,9 @@ def _compatible_requested_settings_payload(
     selection = payload.get("protein_selection")
     if isinstance(selection, dict) and selection.get("regions") == []:
         selection.pop("regions")
+    if payload.get("schema_version") == 1:
+        payload.pop("batching_enabled", None)
+        payload.pop("structures_per_job", None)
     return payload
 
 
@@ -584,6 +591,13 @@ def compatible_effective_settings_payload(
         if isinstance(selection, dict) and selection.get("regions") == []:
             regions_empty = True
             selection.pop("regions")
+        if requested.get("schema_version") == 1:
+            requested.pop("batching_enabled", None)
+            requested.pop("structures_per_job", None)
+            value_sources = payload.get("value_sources")
+            if isinstance(value_sources, dict):
+                value_sources.pop("batching_enabled", None)
+                value_sources.pop("structures_per_job", None)
     if regions_empty:
         value_sources = payload.get("value_sources")
         if isinstance(value_sources, dict):
@@ -645,6 +659,11 @@ def validate_complete_requested_settings(
             "settings value origin is server-authored and cannot be supplied by callers",
             location=("settings_value_origin",),
         )
+    if source.get("schema_version") != 2:
+        raise RequestedSettingsPayloadError(
+            "fresh FrustraMPNN settings must use schema_version 2",
+            location=("schema_version",),
+        )
     required_shapes: tuple[tuple[tuple[str | int, ...], frozenset[str]], ...] = (
         (
             (),
@@ -652,6 +671,8 @@ def validate_complete_requested_settings(
                 {
                     "schema_name",
                     "schema_version",
+                    "batching_enabled",
+                    "structures_per_job",
                     "protein_selection",
                     "source_structure",
                     "classification_policy",
@@ -776,10 +797,17 @@ def complete_requested_settings_schema() -> dict[str, Any]:
     schema["required"] = [
         "schema_name",
         "schema_version",
+        "batching_enabled",
+        "structures_per_job",
         "protein_selection",
         "source_structure",
         "classification_policy",
     ]
+    schema["properties"]["schema_version"] = {
+        "const": 2,
+        "title": "Schema Version",
+        "type": "integer",
+    }
     schema["properties"].pop("settings_value_origin", None)
     definitions = schema["$defs"]
     definitions["FrustraMPNNProteinSelection"]["required"] = [
@@ -812,6 +840,8 @@ def settings_value_sources(
     if origin not in {"bms_default", "operator_request"}:
         raise ValueError("settings value origin is invalid")
     return FrustraMPNNSettingsValueSources(
+        batching_enabled=origin,
+        structures_per_job=origin,
         protein_selection=FrustraMPNNProteinSelectionValueSources(
             mode=origin,
             entities=origin,
@@ -910,7 +940,7 @@ def _build_effective_settings(
     _, capability_inventory_sha256 = load_capability_inventory()
     payload: dict[str, Any] = {
         "schema_name": "frustrampnn_effective_settings",
-        "schema_version": 1,
+        "schema_version": requested.schema_version,
         "requested_settings": requested.model_dump(mode="json", exclude_none=False),
         "settings_value_origin": requested.settings_value_origin,
         "resolved_chains": [

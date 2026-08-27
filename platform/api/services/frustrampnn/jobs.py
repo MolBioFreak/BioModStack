@@ -293,8 +293,18 @@ async def create_child_job(
         raise FrustraMPNNChildError(
             "requested_settings must be one typed FrustraMPNN requested-settings object"
         )
-    if len(selections) > 1000:
-        raise FrustraMPNNChildError("FrustraMPNN child batches are limited to 1000 inputs")
+    if requested_settings.schema_version != 2:
+        raise FrustraMPNNChildError(
+            "new FrustraMPNN child writes require requested settings schema_version 2"
+        )
+    if not requested_settings.batching_enabled and len(selections) > 1:
+        raise FrustraMPNNChildError(
+            "FrustraMPNN batching is disabled; one structure is allowed per scheduler Job"
+        )
+    if len(selections) > requested_settings.structures_per_job:
+        raise FrustraMPNNChildError(
+            "FrustraMPNN selection count exceeds requested structures_per_job"
+        )
     if bool(idempotency_owner) != bool(idempotency_marker_key):
         raise FrustraMPNNChildError("idempotency owner and marker must be supplied together")
 
@@ -421,14 +431,14 @@ async def create_child_job(
             _immutable_write(root / structure_map_relative, structure_map_payload)
 
             request_relative = (
-                f"inputs/requests/{ordinal:04d}/workflow_component_request_v2.json"
+                f"inputs/requests/{ordinal:04d}/workflow_component_request_v3.json"
             )
             request_path = root / request_relative
             request = {
                 "schema_name": "workflow_component_request",
-                "schema_version": 2,
+                "schema_version": 3,
                 "component_id": "frustrampnn",
-                "component_contract_version": "2.0",
+                "component_contract_version": "3.0",
                 "invocation_id": invocation_id,
                 "parent_job_id": job_id,
                 "parent_workflow_id": "frustrampnn_analysis",
@@ -470,7 +480,7 @@ async def create_child_job(
                 ],
                 "requested_outputs": list(_REQUESTED_OUTPUTS),
             }
-            validate_schema("workflow_component_request_v2", request)
+            validate_schema("workflow_component_request_v3", request)
             request_payload = canonical_json_bytes(request)
             request_sha256 = hashlib.sha256(request_payload).hexdigest()
             _immutable_write(request_path, request_payload)
@@ -492,8 +502,8 @@ async def create_child_job(
             })
             bundle = root / "frustrampnn" / "results" / candidate_id
             stage_outputs.extend([
-                os.fspath(bundle / "frustrampnn_result_manifest_v2.json"),
-                os.fspath(bundle / "workflow_component_result_v2.json"),
+                os.fspath(bundle / "frustrampnn_result_manifest_v3.json"),
+                os.fspath(bundle / "workflow_component_result_v3.json"),
             ])
             lineage.append({
                 "selection_ordinal": ordinal,
@@ -519,12 +529,16 @@ async def create_child_job(
 
         batch_manifest = {
             "schema_name": "bms_frustrampnn_scheduler_batch",
-            "schema_version": 2,
+            "schema_version": 3,
             "execution_owner_job_id": job_id,
+            "batching_enabled": requested_settings.batching_enabled,
+            "structures_per_job": requested_settings.structures_per_job,
+            "settings_sha256": settings_sha256,
+            "expected_cardinality": len(batch_records),
             "records": batch_records,
         }
         batch_payload = canonical_json_bytes(batch_manifest)
-        batch_path = root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+        batch_path = root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
         _immutable_write(batch_path, batch_payload)
         source_parent_id = str(source_parent.id) if source_parent else None
         prior = (supersedes.params or {}).get(ENVELOPE_KEY, {}) if supersedes else {}
@@ -535,7 +549,7 @@ async def create_child_job(
             "source_parent_job_id": source_parent_id,
             "source_batch_id": source_parent.batch_id if source_parent else None,
             "trigger": trigger,
-            "settings_contract_version": "typed_v1",
+            "settings_contract_version": "typed_v2",
             "settings_value_origin": requested_settings.settings_value_origin,
             "normalized_requested_settings": normalized_requested_settings,
             "settings_sha256": settings_sha256,
@@ -632,7 +646,7 @@ async def create_reanalysis_child(
     if prior_child.queue_status not in {"completed", "failed"}:
         raise FrustraMPNNChildError("reanalyze requires a terminal prior child Job")
     contract_version = envelope.get("settings_contract_version")
-    if contract_version == "typed_v1":
+    if contract_version in {"typed_v1", "typed_v2"}:
         prior_payload = envelope.get("normalized_requested_settings")
         try:
             prior_settings = validate_persisted_requested_settings(prior_payload)
@@ -644,6 +658,8 @@ async def create_reanalysis_child(
             raise FrustraMPNNChildError("prior typed settings origin binding is invalid")
         if envelope.get("settings_sha256") != requested_settings_sha256(prior_settings):
             raise FrustraMPNNChildError("prior typed settings hash binding is invalid")
+        if not isinstance(prior_payload, Mapping):
+            raise FrustraMPNNChildError("prior typed settings payload is invalid")
         for item in envelope.get("selection") or []:
             authority = item.get("launch_authority") if isinstance(item, dict) else None
             if (
@@ -651,7 +667,7 @@ async def create_reanalysis_child(
                 or authority.get("settings_value_origin")
                 != prior_settings.settings_value_origin
                 or authority.get("normalized_requested_settings")
-                != prior_settings.model_dump(mode="json", exclude_none=False)
+                != prior_payload
                 or authority.get("settings_sha256")
                 != requested_settings_sha256(prior_settings)
             ):
@@ -664,6 +680,16 @@ async def create_reanalysis_child(
         raise FrustraMPNNChildError(
             "prior typed settings are missing; historical v1 compatibility requires an explicit tag"
         )
+    if prior_settings.schema_version == 1:
+        upgraded_payload = prior_settings.model_dump(mode="json", exclude_none=False)
+        upgraded_payload.update(
+            {
+                "schema_version": 2,
+                "batching_enabled": False,
+                "structures_per_job": 1,
+            }
+        )
+        prior_settings = FrustraMPNNRequestedSettings.model_validate(upgraded_payload)
     if replacement_settings is not None and not isinstance(
         replacement_settings, FrustraMPNNRequestedSettings
     ):

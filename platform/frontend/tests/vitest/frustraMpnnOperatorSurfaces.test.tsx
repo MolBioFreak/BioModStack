@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { FrustraMpnnComparisonCompatibility } from '../../src/components/FrustraMpnnComparisonSurface';
 import { FrustraMpnnResultAuthoritySurface } from '../../src/components/FrustraMpnnResultAuthoritySurface';
+import * as authoritySurfaces from '../../src/components/FrustraMpnnResultAuthoritySurface';
+import type { FrustraMpnnStatisticsAnalysis } from '../../src/lib/frustraMpnnApi';
 import {
     parseFrustraMpnnStatistics,
     type FrustraMpnnPairComparison,
@@ -45,7 +47,11 @@ const baseDetail = {
     },
     effective_settings_json: {
         requested_settings: {
-            protein_selection: { mode: 'all_protein_entities', entities: [], residues: [] },
+            schema_name: 'frustrampnn_settings',
+            schema_version: 2,
+            batching_enabled: false,
+            structures_per_job: 1,
+            protein_selection: { mode: 'all_protein_entities', entities: [], regions: [], residues: [] },
             source_structure: { selected_model_number: 2, preferred_altloc: 'A' },
             classification_policy: { mode: 'custom', high_max: -0.75, minimal_min: 0.25 },
         },
@@ -59,7 +65,9 @@ const baseDetail = {
             }],
         }],
         value_sources: {
-            protein_selection: { mode: 'operator_request', entities: 'operator_request', residues: 'operator_request' },
+            batching_enabled: 'operator_request',
+            structures_per_job: 'operator_request',
+            protein_selection: { mode: 'operator_request', entities: 'operator_request', regions: 'operator_request', residues: 'operator_request' },
             source_structure: { selected_model_number: 'operator_request', preferred_altloc: 'operator_request' },
             classification_policy: { mode: 'operator_request', high_max: 'operator_request', minimal_min: 'operator_request' },
         },
@@ -77,6 +85,24 @@ const baseDetail = {
         },
     }),
 } as unknown as FrustraMpnnResultDetail;
+
+const analysis = (state: FrustraMpnnStatisticsAnalysis['state'], diagnostic: string | null = null): FrustraMpnnStatisticsAnalysis => ({
+    analysis_id: '11111111-1111-4111-8111-111111111111',
+    parent_job_id: 'job-1',
+    invocation_id: 'invoke-1',
+    state,
+    attempt_count: 1,
+    core_artifact_id: 'core-artifact-1',
+    core_landscape_sha256: 'c'.repeat(64),
+    core_manifest_sha256: 'd'.repeat(64),
+    formula_version: 'frustrampnn_statistics_formula_v1',
+    policy_version: 'frustrampnn_statistics_policy_v1',
+    package_version: 'biomodstack_frustrampnn_statistics_v1',
+    schema_version: 1,
+    artifact_sha256: state === 'completed' ? 'e'.repeat(64) : null,
+    statistics_sha256: state === 'completed' ? 'f'.repeat(64) : null,
+    diagnostic,
+});
 
 describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
     it('renders exact domain statuses, reasons, alignment, and safe override wording', async () => {
@@ -194,6 +220,46 @@ describe('mounted FrustraMPNN comparison and result authority surfaces', () => {
         expect(mountedView.container.textContent).toContain('Partially scored');
         expect(mountedView.container.textContent).toContain('Unsafe delta and transition hidden');
         await act(async () => mountedView.root.unmount());
+    });
+
+    it('renders the statistics lifecycle, bounds failure diagnostics, and retries only an authorized failed child once', async () => {
+        const Panel = (authoritySurfaces as unknown as {
+            FrustraMpnnStatisticsAnalysisPanel?: React.ComponentType<{
+                analysis: FrustraMpnnStatisticsAnalysis;
+                canRetry: boolean;
+                retryPending?: boolean;
+                onRetry: () => void;
+            }>;
+        }).FrustraMpnnStatisticsAnalysisPanel;
+        expect(Panel).toBeTypeOf('function');
+        const LifecyclePanel = Panel as React.ComponentType<{
+            analysis: FrustraMpnnStatisticsAnalysis;
+            canRetry: boolean;
+            retryPending?: boolean;
+            onRetry: () => void;
+        }>;
+        const retryCalls: string[] = [];
+        for (const state of ['queued', 'running', 'completed'] as const) {
+            const mounted = await mount(<LifecyclePanel analysis={analysis(state)} canRetry onRetry={() => retryCalls.push(state)} />);
+            expect(mounted.container.textContent).toContain(`Statistics analysis ${state}`);
+            expect(mounted.container.querySelector('button')).toBeNull();
+            await act(async () => mounted.root.unmount());
+        }
+        const unauthorized = await mount(<LifecyclePanel analysis={analysis('failed', 'failure')} canRetry={false} onRetry={() => retryCalls.push('unauthorized')} />);
+        expect(unauthorized.container.textContent).toContain('Statistics analysis failed');
+        expect(unauthorized.container.querySelector('button')).toBeNull();
+        await act(async () => unauthorized.root.unmount());
+
+        const diagnostic = `${'bounded '.repeat(80)}sensitive-tail`;
+        const failed = await mount(<LifecyclePanel analysis={analysis('failed', diagnostic)} canRetry onRetry={() => retryCalls.push('failed')} />);
+        expect(failed.container.textContent).toContain('Statistics analysis failed');
+        expect(failed.container.textContent).toContain('bounded bounded');
+        expect(failed.container.textContent).not.toContain('sensitive-tail');
+        const retry = Array.from(failed.container.querySelectorAll('button')).find((button) => button.textContent === 'Retry analysis');
+        expect(retry).toBeDefined();
+        await act(async () => retry!.click());
+        expect(retryCalls).toEqual(['failed']);
+        await act(async () => failed.root.unmount());
     });
 
     it('renders historical authority and missingness without reconstructing absent settings or statistics', async () => {

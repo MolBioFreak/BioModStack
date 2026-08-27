@@ -102,7 +102,7 @@ def test_plain_pdb_projection_and_scheduler_owned_terminal_reporting() -> None:
     assert "test \\\"\\${#outputs[@]}\\\" -gt 0" in workflow
 
 
-def test_protein_design_transports_complete_bounded_typed_v2_settings() -> None:
+def test_protein_design_transports_complete_bounded_typed_v3_settings() -> None:
     workflow = _workflow()
     preparer = workflow.split("process PrepareProteinDesignFrustraMPNNCandidate", 1)[1].split(
         "process ReportProteinDesignFrustraMPNNNotRequested", 1
@@ -114,9 +114,9 @@ def test_protein_design_transports_complete_bounded_typed_v2_settings() -> None:
     assert "frustrampnn_settings_value_origin" in enabled
     assert "canonicalJsonBytes(rawSettings)" in enabled
     assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
-    assert "workflow_component_request_v2.json" in preparer
+    assert "workflow_component_request_v3.json" in preparer
     assert "frustrampnn_structure_map_v1.json" in preparer
-    assert "--request-version 2" in preparer
+    assert "--request-version 3" in preparer
     assert "--settings-base64" in preparer
     assert "--settings-sha256" in preparer
     assert "--settings-value-origin" in preparer

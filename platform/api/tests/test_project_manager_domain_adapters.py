@@ -85,6 +85,11 @@ RESULT_SURFACE_VALIDATOR = Draft202012Validator(RESULT_SURFACE_SCHEMA)
 @pytest_asyncio.fixture
 async def adapter_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BMS_BUILD_SHA", "adapter-domain-test-build")
+    monkeypatch.setattr(
+        adapter_module,
+        "source_build_revision",
+        lambda: "adapter-domain-test-build",
+    )
     monkeypatch.setenv("BMS_RESULTS_DIR", str(tmp_path / "results"))
     monkeypatch.setenv("BMS_INPUTS_DIR", str(tmp_path / "inputs"))
     monkeypatch.setenv("BMS_MD_RESULT_ROOT", str(tmp_path / "results"))
@@ -446,6 +451,86 @@ async def test_core_rfd3_cm_and_frustrampnn_verify_native_authorities(adapter_st
     assert result_lineage["source_landscape_sha256"] == "b" * 64
     assert "receipt_content_digest" not in result_lineage
     assert "frustrampnn_guidance_id=guidance-1" in guidance_receipt["reopen_uri"]
+
+
+@pytest.mark.asyncio
+async def test_frustrampnn_adapter_verifies_real_v3_source_binding_and_rejects_tampering(
+    adapter_stores,
+) -> None:
+    _tmp_path, core_factory, _molbio_factory = adapter_stores
+    manifest = {
+        "schema_name": "frustrampnn_result_manifest",
+        "schema_version": 3,
+        "invocation_id": "invoke-v3-adapter",
+        "parent_job_id": "job-v3-adapter",
+        "candidate_id": "candidate-v3-adapter",
+        "request_sha256": "7" * 64,
+        "source_artifact_sha256": "8" * 64,
+        "artifacts": [],
+    }
+    summary = {
+        "schema_name": "frustrampnn_summary",
+        "schema_version": 3,
+        "candidate_id": "candidate-v3-adapter",
+    }
+    manifest_sha256 = hashlib.sha256(frustrampnn_canonical_bytes(manifest)).hexdigest()
+    summary_sha256 = hashlib.sha256(frustrampnn_canonical_bytes(summary)).hexdigest()
+    entity_id = urlencode(
+        {
+            "parent_job_id": "job-v3-adapter",
+            "invocation_id": "invoke-v3-adapter",
+        }
+    )
+    adapter = _class("FrustraMpnnResultAdapter")()
+
+    async with core_factory() as session:
+        session.add(
+            Job(
+                id="job-v3-adapter",
+                name="Real v3 adapter result",
+                status="completed",
+                model_id="frustrampnn",
+                mode="analyze",
+                params={},
+            )
+        )
+        session.add(FrustraMPNNResult(
+            parent_job_id="job-v3-adapter",
+            invocation_id="invoke-v3-adapter",
+            parent_workflow_id="structure_prediction",
+            candidate_id="candidate-v3-adapter",
+            design_id=None,
+            requiredness="required",
+            request_sha256="7" * 64,
+            source_artifact_id=None,
+            source_artifact_sha256="8" * 64,
+            manifest_sha256=manifest_sha256,
+            manifest_json=manifest,
+            summary_sha256=summary_sha256,
+            summary_json=summary,
+            runtime_identity_json={},
+            assigned_gpu_json={},
+            terminal_result_json={"status": "completed"},
+        ))
+        await session.commit()
+
+        receipt = await adapter.verify(session, entity_id)
+        assert manifest["schema_version"] == 3
+        assert receipt["metadata"]["source_artifact_sha256"] == manifest[
+            "source_artifact_sha256"
+        ]
+
+        result = await session.get(
+            FrustraMPNNResult,
+            ("job-v3-adapter", "invoke-v3-adapter"),
+        )
+        assert result is not None
+        result.source_artifact_sha256 = "0" * 64
+        await session.flush()
+        with pytest.raises(adapter_module.AdapterError) as caught:
+            await adapter.verify(session, entity_id)
+
+    assert caught.value.code == "source_digest_mismatch"
 
 
 @pytest.mark.asyncio

@@ -117,7 +117,7 @@ def prepare_ensemble_candidates(
             )
             candidate_root = staging / candidate_id
             candidate_root.mkdir()
-            request_file = candidate_root / "workflow_component_request_v2.json"
+            request_file = candidate_root / "workflow_component_request_v3.json"
             normalized_file = candidate_root / "canonical_source.pdb"
             structure_map_file = candidate_root / "frustrampnn_structure_map_v1.json"
             component_request = prepare_cm_candidate_v2(
@@ -148,7 +148,7 @@ def prepare_ensemble_candidates(
                 ],
                 "request_sha256": _sha256(request_file),
                 "tuple": [
-                    f"{candidate_id}/workflow_component_request_v2.json",
+                    f"{candidate_id}/workflow_component_request_v3.json",
                     f"{candidate_id}/canonical_source.pdb",
                     f"{candidate_id}/frustrampnn_structure_map_v1.json",
                 ],

@@ -620,9 +620,18 @@ def _validate_statistics_inputs(
         envelope = dict(request["identity_authority_artifact"])
         envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
         schema_request["identity_authority_artifact"] = envelope
-    validate_schema("workflow_component_request_v2", schema_request)
-    validate_schema("frustrampnn_execution_receipt_v2", execution_receipt)
-    validate_schema("frustrampnn_landscape_v2", landscape)
+    request_generation = request.get("schema_version")
+    if request_generation not in {2, 3}:
+        raise ContractValidationError("statistics require a modern request generation")
+    validate_schema(
+        f"workflow_component_request_v{request_generation}", schema_request
+    )
+    validate_schema(
+        f"frustrampnn_execution_receipt_v{request_generation}", execution_receipt
+    )
+    validate_schema(
+        f"frustrampnn_landscape_v{request_generation}", landscape
+    )
     validate_schema("frustrampnn_structure_map_v1", structure_map)
     validate_schema("capability_inventory_v1", capability_inventory)
 
@@ -707,7 +716,7 @@ def _validate_statistics_inputs(
     expected_slots = len(selected) * len(AA_ORDER)
     observed_slots = sum(len(row["slots"]) for row in landscape["residues"])
     if observed_slots != expected_slots:
-        raise ContractValidationError("successful v2 landscape must have exact 20-slot support")
+        raise ContractValidationError("successful landscape must have exact 20-slot support")
     for residue in landscape["residues"]:
         if residue["wt"] not in AA_ORDER:
             raise ContractValidationError("landscape contains unknown WT amino acid")
@@ -759,7 +768,7 @@ def _compatibility_basis(
                 "component_id": request["component_id"],
                 "component_contract_version": request["component_contract_version"],
                 "landscape_schema_name": "frustrampnn_landscape",
-                "landscape_schema_version": 2,
+                "landscape_schema_version": request["schema_version"],
                 "score_field": "score",
             },
             "canonical_amino_acid_order": AA_ORDER,
@@ -789,6 +798,7 @@ def build_statistics_receipt(
     *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
     landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
     capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    analysis_receipt: Mapping[str, Any] | None = None,
     allow_legacy_external_authority: bool = False,
 ) -> dict[str, Any]:
     """Build immutable statistics from complete physical v2 authority."""
@@ -1040,8 +1050,18 @@ def build_statistics_receipt(
         deltas, denominator_kind="paired_native_non_native_slots",
         denominator_count=count * (len(AA_ORDER) - 1),
     )
+    statistics_schema_version = 2 if request["schema_version"] == 3 else 1
+    if statistics_schema_version == 2 and not isinstance(analysis_receipt, Mapping):
+        raise ContractValidationError(
+            "v3 core statistics require an immutable analysis receipt"
+        )
+    if statistics_schema_version == 1 and analysis_receipt is not None:
+        raise ContractValidationError(
+            "historical statistics cannot carry successor analysis authority"
+        )
     payload: dict[str, Any] = {
-        "schema_name": "frustrampnn_statistics", "schema_version": 1,
+        "schema_name": "frustrampnn_statistics",
+        "schema_version": statistics_schema_version,
         "hash_semantics": "sha256(rfc8785(document_without_top_level_statistics_sha256))",
         "invocation_id": request["invocation_id"], "parent_job_id": request["parent_job_id"],
         "candidate_id": request["candidate_id"], "target_id": landscape["target_id"],
@@ -1106,6 +1126,8 @@ def build_statistics_receipt(
             ),
         },
     }
+    if statistics_schema_version == 2:
+        payload["analysis_receipt"] = copy.deepcopy(dict(analysis_receipt or {}))
     payload["statistics_sha256"] = _rfc8785_sha256(payload)
     validate_statistics_receipt(payload)
     return payload
@@ -1115,7 +1137,10 @@ def validate_statistics_receipt(receipt: Mapping[str, Any]) -> None:
     if not isinstance(receipt, Mapping):
         raise ContractValidationError("statistics receipt must be an object")
     payload = copy.deepcopy(dict(receipt))
-    validate_schema("frustrampnn_statistics_v1", payload)
+    schema_version = payload.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise ContractValidationError("statistics schema version is unsupported")
+    validate_schema(f"frustrampnn_statistics_v{schema_version}", payload)
     recorded = payload.pop("statistics_sha256")
     if recorded != _rfc8785_sha256(payload):
         raise ContractValidationError("statistics SHA-256 does not match receipt content")

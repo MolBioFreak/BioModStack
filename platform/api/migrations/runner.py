@@ -44,6 +44,9 @@ from migrations.add_frustrampnn_persistence import migrate as migrate_frustrampn
 from migrations.add_ngs_reference_sets import migrate as migrate_ngs_reference_sets
 from migrations.add_pooled_ont_reference_assignment import migrate as migrate_pooled_ont_reference_assignment
 from migrations.add_frustrampnn_statistics import migrate as migrate_frustrampnn_statistics
+from migrations.add_frustrampnn_statistics_analyses import (
+    migrate as migrate_frustrampnn_statistics_analyses,
+)
 from migrations.add_frustrampnn_reviews import migrate as migrate_frustrampnn_reviews
 from migrations.add_ont_raw_signal_ledger import migrate as migrate_ont_raw_signal_ledger
 from migrations.add_ont_external_registration_identity import (
@@ -132,6 +135,11 @@ MIGRATIONS: List[Migration] = [
     Migration(38, "seal_ont_move_source_terminal_immutability", seal_ont_move_source_terminal_immutability),
     Migration(39, "seal_ont_external_move_bam_receipt_binding", seal_ont_external_move_bam_receipt_binding),
     Migration(40, "seal_ont_raw_signal_lookup_terminal_immutability", seal_ont_raw_signal_lookup_terminal_immutability),
+    Migration(
+        41,
+        "add_frustrampnn_statistics_analyses",
+        migrate_frustrampnn_statistics_analyses,
+    ),
 ]
 
 

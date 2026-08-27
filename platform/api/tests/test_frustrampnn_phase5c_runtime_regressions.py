@@ -199,7 +199,7 @@ env.PYTHONPATH='/probe/fakepy'
         rows = list(csv.DictReader(handle))
     requests = {
         json.loads(path.read_text(encoding="utf-8"))["candidate_id"]
-        for path in (run / "work").rglob("workflow_component_request_v2.json")
+        for path in (run / "work").rglob("workflow_component_request_v3.json")
     }
     trace = (run / "trace.txt").read_text(encoding="utf-8")
     return {

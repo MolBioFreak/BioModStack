@@ -64,7 +64,9 @@ const sourceInspection = {
 
 const customSettings = (): FrustraMpnnRequestedSettings => ({
     schema_name: 'frustrampnn_settings',
-    schema_version: 1,
+    schema_version: 2,
+    batching_enabled: true,
+    structures_per_job: 250,
     protein_selection: {
         mode: 'selected_residues',
         entities: [],
@@ -86,7 +88,7 @@ const validationWire = () => {
     const requestedSettings = { ...customSettings(), settings_value_origin: 'operator_request' };
     const effectiveSettings = {
         schema_name: 'frustrampnn_effective_settings',
-        schema_version: 1,
+        schema_version: 2,
         requested_settings: requestedSettings,
         settings_value_origin: 'operator_request',
         resolved_chains: [],
@@ -104,6 +106,8 @@ const validationWire = () => {
             normalized_pdb_sha256: '6'.repeat(64),
         },
         value_sources: {
+            batching_enabled: 'operator_request',
+            structures_per_job: 'operator_request',
             protein_selection: { mode: 'operator_request', entities: 'operator_request', regions: 'operator_request', residues: 'operator_request' },
             source_structure: { selected_model_number: 'operator_request', preferred_altloc: 'operator_request' },
             classification_policy: { mode: 'operator_request', high_max: 'operator_request', minimal_min: 'operator_request' },
@@ -116,9 +120,9 @@ const validationWire = () => {
         normalized_requested_settings: requestedSettings,
         effective_settings: effectiveSettings,
         execution_configuration: {
-            configuration_id: 'frustrampnn_execution_configuration_v2',
+            configuration_id: 'frustrampnn_execution_configuration_v3',
             schema_name: 'frustrampnn_execution_configuration',
-            schema_version: 2,
+            schema_version: 3,
             tool_id: 'frustrampnn',
             tool_version: 'MegaScale',
             effective_settings: effectiveSettings,
@@ -164,11 +168,13 @@ const formKeys = (form: FormData): string[] => {
     return keys;
 };
 
-test('canonical FrustraMPNN settings hydrate as a complete closed v1 object', () => {
+test('canonical FrustraMPNN settings hydrate as a complete closed v2 object', () => {
     assert.deepEqual(hydrateFrustraMpnnSettings(undefined), CANONICAL_FRUSTRAMPNN_SETTINGS);
     assert.deepEqual(CANONICAL_FRUSTRAMPNN_SETTINGS, {
         schema_name: 'frustrampnn_settings',
-        schema_version: 1,
+        schema_version: 2,
+        batching_enabled: false,
+        structures_per_job: 1,
         protein_selection: {
             mode: 'all_protein_entities',
             entities: [],
@@ -186,6 +192,22 @@ test('canonical FrustraMPNN settings hydrate as a complete closed v1 object', ()
         },
     });
     assert.notStrictEqual(hydrateFrustraMpnnSettings(undefined), hydrateFrustraMpnnSettings(undefined));
+});
+
+test('historical v1 settings reopen as explicit v2 batching defaults', () => {
+    const historical = { ...customSettings() } as Record<string, unknown>;
+    historical.schema_version = 1;
+    delete historical.batching_enabled;
+    delete historical.structures_per_job;
+
+    assert.deepEqual(
+        hydrateFrustraMpnnSettings(historical),
+        parseFrustraMpnnRequestedSettings({
+            ...customSettings(),
+            batching_enabled: false,
+            structures_per_job: 1,
+        }),
+    );
 });
 
 test('persisted settings hydrate through Structure Prediction and antibody clone state without exposing server origin', () => {
@@ -291,10 +313,20 @@ test('strict settings parsing rejects partial, unknown, non-finite, and unordere
     assert.throws(
         () => parseFrustraMpnnRequestedSettings({
             schema_name: 'frustrampnn_settings',
-            schema_version: 1,
+            schema_version: 2,
         }),
         /missing|keys/i,
     );
+    for (const structuresPerJob of [0, 251, 1.5]) {
+        assert.throws(
+            () => parseFrustraMpnnRequestedSettings({
+                ...CANONICAL_FRUSTRAMPNN_SETTINGS,
+                batching_enabled: true,
+                structures_per_job: structuresPerJob,
+            }),
+            /structures_per_job|integer|between|maximum|minimum/i,
+        );
+    }
     assert.throws(
         () => parseFrustraMpnnRequestedSettings({
             ...CANONICAL_FRUSTRAMPNN_SETTINGS,

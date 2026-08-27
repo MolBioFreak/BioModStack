@@ -89,7 +89,7 @@ workflow {
         preparation.candidates.collect { candidate ->
             def candidateDir = prepared_dir.resolve(candidate.candidate_id.toString())
             tuple(
-                candidateDir.resolve('workflow_component_request_v2.json'),
+                candidateDir.resolve('workflow_component_request_v3.json'),
                 candidateDir.resolve('canonical_source.pdb'),
                 candidateDir.resolve('frustrampnn_structure_map_v1.json'),
             )

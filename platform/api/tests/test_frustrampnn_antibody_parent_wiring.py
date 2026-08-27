@@ -78,7 +78,7 @@ def test_antibody_prepare_publish_and_terminal_report_are_scheduled_and_strict()
     )[0]
 
 
-def test_antibody_transports_complete_bounded_typed_v2_settings() -> None:
+def test_antibody_transports_complete_bounded_typed_v3_settings() -> None:
     workflow = _workflow()
     parent = FRUSTRAMPNN_PARENT.read_text(encoding="utf-8")
     preparer = parent.split("process PrepareAntibodyFrustraMPNNCandidate", 1)[1].split(
@@ -91,9 +91,9 @@ def test_antibody_transports_complete_bounded_typed_v2_settings() -> None:
     assert "frustrampnn_settings_value_origin" in enabled
     assert "canonicalJsonBytes(rawSettings)" in enabled
     assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
-    assert "workflow_component_request_v2.json" in preparer
+    assert "workflow_component_request_v3.json" in preparer
     assert "frustrampnn_structure_map_v1.json" in preparer
-    assert "--request-version 2" in preparer
+    assert "--request-version 3" in preparer
     assert "--settings-base64" in preparer
     assert "--settings-sha256" in preparer
     assert "--settings-value-origin" in preparer

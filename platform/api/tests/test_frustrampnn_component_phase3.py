@@ -12,7 +12,7 @@ import subprocess
 import pytest
 import rfc8785
 
-from services.frustrampnn.configuration import execution_configuration
+from services.frustrampnn.configuration import configuration_sha256, execution_configuration
 from services.frustrampnn.contracts import AA_ORDER, canonical_json_bytes, canonical_sha256
 from services.frustrampnn.runtime import FRUSTRAMPNN_RUNTIME_IDENTITY, FrustraMPNNRuntimeIdentity
 from services.frustrampnn.settings import (
@@ -70,6 +70,7 @@ def _v2_inputs(
     selected: list[tuple[str, int]],
     thresholds: tuple[float, float] = (-0.5, 0.5),
     source_suffix: bytes = b"",
+    request_generation: int = 2,
 ) -> tuple[dict[str, object], Path, Path, dict[str, object]]:
     source = tmp_path / "source.pdb"
     source.write_bytes(_multi_residue_pdb(residues) + source_suffix)
@@ -121,11 +122,36 @@ def _v2_inputs(
     })
     effective = resolve_effective_settings(requested, structure_map)
     configuration = execution_configuration(effective)
+    requested_payload = requested.model_dump(mode="json", exclude_none=False)
+    effective_payload = effective.model_dump(mode="json", exclude_none=False)
+    configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
+    if request_generation == 2:
+        requested_payload["schema_version"] = 1
+        requested_payload.pop("batching_enabled")
+        requested_payload.pop("structures_per_job")
+        historical_requested = FrustraMPNNRequestedSettings.model_validate(
+            requested_payload
+        )
+        effective = resolve_effective_settings(historical_requested, structure_map)
+        effective_payload = effective.model_dump(mode="json", exclude_none=False)
+        effective_payload["requested_settings"] = requested_payload
+        effective_payload["value_sources"].pop("batching_enabled")
+        effective_payload["value_sources"].pop("structures_per_job")
+        configuration = execution_configuration(effective)
+        configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
+        configuration_payload["configuration_id"] = "frustrampnn_execution_configuration_v2"
+        configuration_payload["schema_version"] = 2
+        configuration_payload["effective_settings"] = effective_payload
+        configuration_payload["configuration_sha256"] = configuration_sha256(
+            configuration_payload
+        )
+    elif request_generation != 3:
+        raise ValueError("request_generation must be 2 or 3")
     request: dict[str, object] = {
         "schema_name": "workflow_component_request",
-        "schema_version": 2,
+        "schema_version": request_generation,
         "component_id": "frustrampnn",
-        "component_contract_version": "2.0",
+        "component_contract_version": f"{request_generation}.0",
         "invocation_id": "invoke-v2",
         "parent_job_id": "job-v2",
         "parent_workflow_id": "structure_prediction",
@@ -140,17 +166,17 @@ def _v2_inputs(
         "requiredness": "required",
         "identity_authority": "pdb_coordinates",
         "settings_value_origin": requested.settings_value_origin,
-        "requested_settings": requested.model_dump(mode="json", exclude_none=False),
+        "requested_settings": requested_payload,
         "requested_settings_sha256": effective.settings_sha256,
-        "effective_settings": effective.model_dump(mode="json", exclude_none=False),
+        "effective_settings": effective_payload,
         "effective_settings_sha256": effective.effective_settings_sha256,
         "classification_policy_sha256": effective.threshold_policy_sha256,
         "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
         "runtime_identity_sha256": configuration.runtime_identity_sha256,
         "structure_map_sha256": canonical_sha256(structure_map),
         "normalized_pdb_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
-        "execution_configuration": configuration.model_dump(mode="json", exclude_none=False),
-        "execution_configuration_sha256": configuration.configuration_sha256,
+        "execution_configuration": configuration_payload,
+        "execution_configuration_sha256": configuration_payload["configuration_sha256"],
         "requested_outputs": [
             "structure_map", "raw_csv", "landscape", "summary", "execution_receipt",
         ],

@@ -53,9 +53,16 @@ def requireExactSettingsObject(value, Set<String> expectedKeys, String location)
 
 def requireCompleteFrustraMPNNSettings(value) {
     requireExactSettingsObject(value, [
-        'schema_name', 'schema_version', 'protein_selection',
+        'schema_name', 'schema_version', 'batching_enabled', 'structures_per_job',
+        'protein_selection',
         'source_structure', 'classification_policy',
     ] as Set, 'frustrampnn_settings')
+    if (value.schema_name != 'frustrampnn_settings' || value.schema_version != 2 ||
+        !(value.batching_enabled instanceof Boolean) ||
+        !(value.structures_per_job instanceof Integer) ||
+        value.structures_per_job < 1 || value.structures_per_job > 250) {
+        throw new IllegalArgumentException('frustrampnn_settings v2 batching authority is invalid')
+    }
     requireExactSettingsObject(value.protein_selection, [
         'mode', 'entities', 'regions', 'residues',
     ] as Set, 'frustrampnn_settings.protein_selection')
@@ -131,6 +138,19 @@ def sha256Hex(byte[] payload) {
     digest.digest().encodeHex().toString()
 }
 
+def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
+    def payload = canonicalJsonValue(value) as Map
+    payload['settings_value_origin'] = settingsValueOrigin
+    def selection = payload['protein_selection']
+    if (selection instanceof Map && selection['regions'] instanceof Collection && selection['regions'].isEmpty()) {
+        def compatibleSelection = new TreeMap<String, Object>()
+        compatibleSelection.putAll(selection)
+        compatibleSelection.remove('regions')
+        payload['protein_selection'] = compatibleSelection
+    }
+    return payload
+}
+
 def producerIdentitySha256(producerMeta) {
     def outputKey = producerMeta.producer_output_key?.toString()
     if (!outputKey) {
@@ -156,7 +176,7 @@ process PrepareStructurePredictionFrustraMPNNCandidate {
         val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
@@ -166,9 +186,9 @@ process PrepareStructurePredictionFrustraMPNNCandidate {
     '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
       --source '${predicted_structure}' \
       --output-pdb canonical_source.pdb \
-      --request workflow_component_request_v2.json \
+      --request workflow_component_request_v3.json \
       --metadata-base64 '${metadataBase64}' \
-      --request-version 2 \
+      --request-version 3 \
       --structure-map frustrampnn_structure_map_v1.json \
       --settings-base64 '${settings_base64}' \
       --settings-sha256 '${settings_sha256}' \
@@ -292,10 +312,9 @@ workflow STRUCTURE_PREDICTION {
                 error('frustrampnn_settings must be exact compact canonical JSON')
             }
             def settingsBase64 = settingsBytes.encodeBase64().toString()
-            def settingsWithOrigin = new TreeMap<String, Object>()
-            settingsWithOrigin.putAll(rawSettings)
-            settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
-            def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
+            def settingsSha256 = sha256Hex(canonicalJsonBytes(
+                requestedFrustraMPNNSettingsHashPayload(rawSettings, settingsValueOrigin)
+            ))
             def canonical_candidates = structure_prediction_wf.out.canonical_structures.map { producer_meta, predicted ->
                 def method = producer_meta.producer_method?.toString()
                 def artifactKey = producer_meta.producer_artifact_key?.toString()

@@ -58,7 +58,12 @@ from .conformational_mapping.persistence import (
 )
 from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
 from .frustrampnn.identity import deterministic_candidate_id
-from .frustrampnn.manifests import MANIFEST_PATH, V2_MANIFEST_PATH
+from .frustrampnn.manifests import (
+    MANIFEST_PATH,
+    V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
+    result_manifest_path,
+)
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
 from .frustrampnn.persistence import (
     FrustraMPNNPersistenceError,
@@ -3275,12 +3280,19 @@ async def _ingest_rfd3_local_redesign_manifest(
 _FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
 _FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
 _FRUSTRAMPNN_TERMINAL_RESULTS = frozenset(
-    {_FRUSTRAMPNN_TERMINAL_RESULT, "workflow_component_result_v2.json"}
+    {
+        _FRUSTRAMPNN_TERMINAL_RESULT,
+        "workflow_component_result_v2.json",
+        "workflow_component_result_v3.json",
+    }
 )
-_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset({MANIFEST_PATH, V2_MANIFEST_PATH})
+_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset(
+    {MANIFEST_PATH, V2_MANIFEST_PATH, V3_MANIFEST_PATH}
+)
 _FRUSTRAMPNN_RESULT_PAIRS = {
     MANIFEST_PATH: _FRUSTRAMPNN_TERMINAL_RESULT,
     V2_MANIFEST_PATH: "workflow_component_result_v2.json",
+    V3_MANIFEST_PATH: "workflow_component_result_v3.json",
 }
 
 
@@ -4380,15 +4392,25 @@ async def ingest_job_results(
                             raise ConformationalPersistenceError(
                                 "canonical FrustraMPNN result bundle is unsafe"
                             )
-                        manifest_path = bundle_root / "frustrampnn_result_manifest_v2.json"
-                        landscape_path = bundle_root / "frustrampnn_landscape_v2.json"
+                        manifest_name = result_manifest_path(bundle_root)
+                        if manifest_name not in {V2_MANIFEST_PATH, V3_MANIFEST_PATH}:
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result generation is unsupported"
+                            )
+                        generation = 3 if manifest_name == V3_MANIFEST_PATH else 2
+                        manifest_path = bundle_root / manifest_name
+                        landscape_path = bundle_root / (
+                            f"frustrampnn_landscape_v{generation}.json"
+                        )
                         structure_map_path = bundle_root / "frustrampnn_structure_map_v1.json"
                         for artifact_path in (manifest_path, landscape_path, structure_map_path):
                             if artifact_path.is_symlink() or not artifact_path.is_file():
                                 raise ConformationalPersistenceError(
                                     "canonical FrustraMPNN result artifact is unsafe"
                                 )
-                        terminal_path = bundle_root / "workflow_component_result_v2.json"
+                        terminal_path = bundle_root / (
+                            f"workflow_component_result_v{generation}.json"
+                        )
                         if terminal_path.is_symlink() or not terminal_path.is_file():
                             raise ConformationalPersistenceError(
                                 "canonical FrustraMPNN terminal result is unsafe"
