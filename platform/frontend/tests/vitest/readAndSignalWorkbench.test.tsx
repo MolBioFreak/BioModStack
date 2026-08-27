@@ -39,6 +39,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 const alignmentMocks = vi.hoisted(() => ({
+    disposeAccess: vi.fn(),
     fetchRead: vi.fn(),
     fetchReads: vi.fn(),
     fetchSessions: vi.fn(),
@@ -101,6 +102,7 @@ vi.mock('../../src/lib/api', () => ({
 }));
 
 vi.mock('../../src/lib/ngsAlignmentSession', () => ({
+    disposeAlignmentAccess: alignmentMocks.disposeAccess,
     fetchAlignmentRead: alignmentMocks.fetchRead,
     fetchAlignmentReads: alignmentMocks.fetchReads,
     fetchAlignmentSessions: alignmentMocks.fetchSessions,
@@ -213,14 +215,39 @@ const renderParams: OntSignalRenderParams = {
 };
 
 const alignmentSession: AlignmentSession = {
+    schema: 'bms.ngs.alignment-session.v1',
     session_id: 'alignment-session-1',
     job_id: 'alignment-job-1',
     mode: 'primary',
-    reference_contig: 'chr7',
     ready: true,
     unavailable_reason: null,
-    reads_url: '/api/jobs/alignment-job-1/reads',
-    artifacts: {},
+    reads_url: '/api/jobs/alignment-job-1/reads?session_id=alignment-session-1',
+    sequence_qc_manifest_sha256: '1'.repeat(64),
+    verification_manifest_sha256: '2'.repeat(64),
+    artifact_set_sha256: '3'.repeat(64),
+    reference: {
+        contig: 'chr7',
+        length_bp: 1_000_000,
+        topology: 'linear',
+        normalized_sequence_sha256: '4'.repeat(64),
+        fasta_sha256: '5'.repeat(64),
+        fai_sha256: '6'.repeat(64),
+    },
+    artifacts: Object.fromEntries(
+        (['alignment', 'alignment_index', 'reference', 'reference_index'] as const).map((role, index) => {
+            const artifactId = ['7', '8', '9', 'a'][index]!.repeat(64);
+            return [role, {
+                artifact_id: artifactId,
+                url: `/api/jobs/alignment-job-1/alignment-artifacts/${artifactId}`,
+                sha256: ['b', 'c', 'd', 'e'][index]!.repeat(64),
+                size_bytes: 1024,
+                mime_type: 'application/octet-stream',
+                range_capable: true as const,
+                source_manifest_sha256: '1'.repeat(64),
+            }];
+        }),
+    ),
+    alignment_pair_sha256: 'f'.repeat(64),
 };
 
 const moveSource: OntMoveTableSource = {
@@ -607,6 +634,7 @@ beforeEach(() => {
     alignmentMocks.fetchRead.mockResolvedValue(selectedRead);
     alignmentMocks.fetchReads.mockResolvedValue({ reads: [selectedRead], next_cursor: null, limit: 50, sequence_included: false, scan_truncated: false });
     alignmentMocks.fetchSessions.mockResolvedValue([]);
+    alignmentMocks.disposeAccess.mockResolvedValue(undefined);
     alignmentMocks.isAccessDenied.mockReturnValue(false);
     alignmentMocks.rotateAccess.mockResolvedValue({ rotated: true });
 
@@ -1659,6 +1687,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
         await waitUntil(() => expect(button('Open IGV').disabled).toBe(false));
         await act(async () => button('Open IGV').click());
+        await waitUntil(() => expect(button('Inspect reads')).not.toBeNull());
+        await act(async () => button('Inspect reads').click());
         await waitUntil(() => expect(button('Open raw signal for read')).not.toBeNull());
 
         await act(async () => {
@@ -1774,6 +1804,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
         await waitUntil(() => expect(button('Open IGV').disabled).toBe(false));
         await act(async () => button('Open IGV').click());
+        await waitUntil(() => expect(button('Inspect reads')).not.toBeNull());
+        await act(async () => button('Inspect reads').click());
         await waitUntil(() => expect(button('Open raw signal for read')).not.toBeNull());
 
         const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Authoritative job-scoped alignment session"]');

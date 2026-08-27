@@ -10,6 +10,7 @@ import {
     getSequenceQcManifestErrorMessage,
     type SequenceQcManifestStatus,
 } from './sequenceQcManifestState';
+import { withAlignmentAccessRecovery } from '../../lib/ngsAlignmentSession';
 
 export interface SequenceQcManifestQueryState {
     status: SequenceQcManifestStatus;
@@ -32,8 +33,10 @@ export function useSequenceQcManifest(
         queryKey: ['sequence-qc-manifest', jobId, jobStatus],
         queryFn: async () => {
             if (!jobId) throw new Error('sequence-QC manifest requires a job id');
-            const response = await fetchSequenceQcManifest(jobId);
-            return response.data;
+            return withAlignmentAccessRecovery(jobId, async () => {
+                const response = await fetchSequenceQcManifest(jobId);
+                return response.data;
+            });
         },
         enabled: Boolean(jobId) && shouldFetchSequenceQcManifest(jobStatus),
         retry: false,

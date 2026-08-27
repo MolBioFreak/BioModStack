@@ -36,6 +36,8 @@ export default defineConfig({
             './tests/vitest/ngsProjectPanelMounted.test.tsx',
             './tests/vitest/ngsPayloadMounted.test.tsx',
             './tests/vitest/readAndSignalWorkbench.test.tsx',
+            './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',
+            './tests/vitest/ontFastqQcResultPanel.test.tsx',
             './tests/vitest/domainWorkflowOperatorClosure.test.ts',
         ],
     },
