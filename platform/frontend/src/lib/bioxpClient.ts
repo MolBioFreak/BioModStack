@@ -898,6 +898,7 @@ export interface BioXpOperatorReportFilters {
     protocol_job_id?: string;
     protocol_action_id?: string;
     lifecycle_stage_id?: string;
+    lifecycle_attempt_id?: string;
     outcome?: string;
     event_source?: string;
     pressure_stream_id?: string;
@@ -915,13 +916,26 @@ export interface BioXpOperatorReportFilters {
     end?: number;
 }
 
+export type BioXpOperatorReportJsonValue = null | boolean | number | string | BioXpOperatorReportJsonValue[] | BioXpOperatorReportJsonObject;
+export interface BioXpOperatorReportJsonObject { [key: string]: BioXpOperatorReportJsonValue }
+
+export interface BioXpOperatorReportListener { host: string | null; port: number | null }
+export interface BioXpOperatorReportReleaseSource { commit: string | null; tree: string | null; mode: string | null; manifest_sha256: string | null; aggregate_sha256: string | null }
+export interface BioXpOperatorReportReleaseImage { id: string | null; inspection_receipt_sha256: string | null }
+export interface BioXpOperatorReportReleaseDeployment { receipt_id: string | null; installed_at: number | string | null; receipt_sha256: string | null }
+export interface BioXpOperatorReportReleaseBinding { service_unit: string | null; unit_sha256: string | null; launcher_sha256: string | null; configuration_sha256: string | null; oem_lock_sha256: string | null; udocker_sha256: string | null; udocker_tree_sha256: string | null; declared_listener: BioXpOperatorReportListener | null; observed_listener: BioXpOperatorReportListener | null }
+export interface BioXpOperatorReportReleaseIdentity { schema?: string | null; status: string | null; verified: boolean; reason_code: string | null; release_id: string | null; source: BioXpOperatorReportReleaseSource; image: BioXpOperatorReportReleaseImage; deployment: BioXpOperatorReportReleaseDeployment; binding: BioXpOperatorReportReleaseBinding }
+export interface BioXpOperatorReportUnavailableReleaseIdentity { status: string; verified: false; reason_code: string }
+export interface BioXpOperatorReportSourceHighWaters { operator_commands: number; operator_transitions: number; pipette_operations: number; pipette_channel_observations: number; pipette_transport_exchanges: number; runtime_events: number; pipette_pressure_streams: number; pipette_pressure_chunks: number; runtime_evidence_objects: number; runtime_evidence_links: number | null; runtime_evidence_events: number; operator_plane_command_versions: number; operator_plane_pipette_versions: number; operator_plane_pressure_stream_versions: number; operator_plane_evidence_versions: number }
+export interface BioXpOperatorReportSchemaIdentity { database_identity: 'robot_authoritative_sqlite'; schema_version: 5; identity_version: number | null; release_identity: BioXpOperatorReportReleaseIdentity }
 export interface BioXpOperatorReportSnapshot {
-    database_incarnation_id?: string;
-    schema_identity?: Record<string, unknown>;
-    release_identity?: Record<string, unknown>;
-    source_high_waters?: Record<string, number>;
+    database_incarnation_id: string;
+    schema_identity: BioXpOperatorReportSchemaIdentity;
+    release_identity: BioXpOperatorReportReleaseIdentity;
+    source_high_waters: BioXpOperatorReportSourceHighWaters;
     high_water_sequence?: number;
     high_water_rowid?: number;
+    high_water_event_id?: number;
 }
 
 export interface BioXpOperatorReportSummary {
@@ -938,93 +952,86 @@ export interface BioXpOperatorReportSummary {
 }
 
 export interface BioXpOperatorReportCommandRow {
-    sequence?: number;
-    command_id?: string;
-    idempotency_key?: string;
-    operation?: string;
-    command_kind?: string;
-    entrypoint_id?: string;
-    caller_class?: string;
-    control_class?: string;
-    action_id?: string;
-    status?: string;
-    outcome?: string | null;
-    failure_code?: string | null;
-    started_at?: number | string | null;
-    finished_at?: number | string | null;
-    duration_ms?: number | null;
-    delivery_verified?: boolean;
-    controller_acknowledged?: boolean;
-    completion_verified?: boolean;
-    semantic_query_response_verified?: boolean;
-    physical_effect_verified?: boolean;
-    evidence_state?: string | null;
+    sequence: number;
+    command_id: string;
+    idempotency_key: string;
+    operation: string | null;
+    command_kind: string | null;
+    entrypoint_id: string | null;
+    caller_class: string | null;
+    control_class: string | null;
+    action_id: string | null;
+    status: string;
+    outcome: string | null;
+    failure_code: string | null;
+    ownership_generation: number | null;
+    connection_generation: number | null;
+    started_at: number | string | null;
+    admitted_at: number | string | null;
+    dispatched_at: number | string | null;
+    finished_at: number | string | null;
+    duration_ms: number | null;
+    delivery_verified: boolean;
+    controller_acknowledged: boolean;
+    completion_verified: boolean;
+    semantic_query_response_verified: boolean;
+    hardware_precondition_verified: boolean;
+    hardware_postcondition_verified: boolean;
+    physical_effect_verified: boolean;
+    evidence_state: string | null;
 }
 
-export interface BioXpOperatorReportCommands {
-    filters?: BioXpOperatorReportFilters;
-    snapshot?: BioXpOperatorReportSnapshot;
-    returned_count?: number;
-    filtered_total?: number;
-    commands?: BioXpOperatorReportCommandRow[];
-    has_more?: boolean;
-    next_cursor?: string | null;
-}
-
-export interface BioXpOperatorReportTransition {
-    transition_id?: number;
-    state?: string;
-    observed_at?: number | string | null;
-    detail?: unknown;
-}
+export interface BioXpOperatorReportCommands { filters: BioXpOperatorReportFilters; snapshot: BioXpOperatorReportSnapshot; returned_count: number; filtered_total: number; commands: BioXpOperatorReportCommandRow[]; has_more: boolean; next_cursor: string | null }
+export interface BioXpOperatorReportTransition { transition_id: number; state: string; observed_at: number | string; detail: BioXpOperatorReportJsonObject }
+export interface BioXpOperatorReportLegalHoldAssessment { event_id: string; observed_at: number | string; legal_hold_requested: boolean; assessment: BioXpOperatorReportJsonValue; actor: string | null; retained_deadline: number | string | null; legal_hold_projection_updated: boolean }
+export interface BioXpOperatorReportEvidence { evidence_artifact_id: string; sha256: string; byte_count: number; created_at: number | string; retention_deadline: number | string | null; legal_hold: boolean; latest_legal_hold_assessment: BioXpOperatorReportLegalHoldAssessment | null; expiry_state: string; expiry_receipt_id: string | null }
+export interface BioXpOperatorReportChannel { observation_id: string; command_id: string; pipette_operation_id: string; channel: number; phase: string | null; observed_at: number | string; semantic_validity: string | null; truth_source: string | null; tip_loaded: boolean | null; pressure: number | null; pressure_units: string | null; status: string | number | null; error_code: string | number | null; firmware_class: string | null; detail: BioXpOperatorReportJsonObject }
+export interface BioXpOperatorReportExchange { exchange_id: string; transaction_id: string | number | null; channel: number | null; transaction_phase: string | null; command_family: string | null; matcher_name: string | null; tx_id: number | null; expected_rx_id: number | null; observed_rx_id: number | null; tx_bytes: number[]; rx_bytes: number[]; delivery_verified: boolean; semantic_match: boolean; controller_acknowledged: boolean; completion_verified: boolean; completion_before_ack: boolean; sent_at: number | string | null; received_at: number | string | null; ack_at: number | string | null; completion_at: number | string | null }
+export interface BioXpOperatorReportEvent { event_id: number; command_id: string | null; pipette_operation_id: string | null; event_source: string; event_kind: string; channel: number | null; observed_at: number | string; event: BioXpOperatorReportJsonObject; snapshot?: BioXpOperatorReportSnapshot | null }
+export interface BioXpOperatorReportPressureStream { stream_session_id: string; pipette_operation_id: string | null; channels: number[]; sample_period_ms: number | null; started_at: number | string; stopped_at: number | string | null; source_generation: number | null; reader_generation: number | null; offset_identity: string | null; terminal_state: string | null; loss_count: number | null }
+export interface BioXpOperatorReportPressureChunk { chunk_id: string; channel: number; chunk_sequence: number; sample_count: number; lost_sample_count: number; units: string; sha256: string; byte_count: number; evidence_artifact_id: string | null; summary: BioXpOperatorReportJsonObject | null }
 
 export interface BioXpOperatorReportPipette {
-    pipette_operation_id?: string;
-    command_id?: string;
-    operation?: string;
-    status?: string;
-    outcome?: string | null;
-    failure_code?: string | null;
-    delivery_verified?: boolean;
-    controller_acknowledged?: boolean;
-    completion_verified?: boolean;
-    semantic_query_response_verified?: boolean;
-    physical_effect_verified?: boolean;
-    evidence_state?: string | null;
-    channels?: Array<Record<string, unknown>>;
-    exchanges?: Array<Record<string, unknown>>;
-    events?: Array<Record<string, unknown>>;
-    pressure_streams?: Array<Record<string, unknown>>;
+    pipette_operation_id: string;
+    command_id: string;
+    operation: string | null;
+    entrypoint_id: string | null;
+    caller_class: string | null;
+    control_class: string | null;
+    action_id: string | null;
+    protocol_job_id: string | null;
+    protocol_action_id: string | null;
+    lifecycle_stage_id: string | null;
+    lifecycle_attempt_id: string | null;
+    callback_session_id: string | null;
+    status: string;
+    outcome: string | null;
+    failure_code: string | null;
+    delivery_verified: boolean;
+    controller_acknowledged: boolean;
+    completion_verified: boolean;
+    semantic_query_response_verified: boolean;
+    hardware_postcondition_verified: boolean;
+    physical_effect_verified: boolean;
+    evidence_state: string | null;
+    channels?: BioXpOperatorReportChannel[];
+    exchanges?: BioXpOperatorReportExchange[];
+    events?: BioXpOperatorReportEvent[];
+    pressure_streams?: BioXpOperatorReportPressureStream[];
 }
 
-export interface BioXpOperatorReportPipettePage {
-    filters?: BioXpOperatorReportFilters;
-    snapshot?: BioXpOperatorReportSnapshot;
-    returned_count?: number;
-    filtered_total?: number;
-    has_more?: boolean;
-    next_cursor?: string | null;
-    pipette?: BioXpOperatorReportPipette[];
-}
-
-export interface BioXpOperatorReportCommandDetail extends BioXpOperatorReportCommandRow {
-    requested_inputs?: unknown;
-    effective_inputs?: unknown;
-    source_identity?: unknown;
-    transitions?: BioXpOperatorReportTransition[];
-    evidence?: Array<Record<string, unknown>>;
-    pipette?: BioXpOperatorReportPipette | null;
-}
-
-export interface BioXpOperatorReportEvents {
-    returned_count?: number;
-    events?: Array<Record<string, unknown>>;
-}
-
-export interface BioXpOperatorReportPressureStreams {
-    returned_count?: number;
-    pressure_streams?: Array<Record<string, unknown>>;
-}
+export interface BioXpOperatorReportPipettePage { filters: BioXpOperatorReportFilters; snapshot: BioXpOperatorReportSnapshot; returned_count: number; filtered_total: number; has_more: boolean; next_cursor: string | null; pipette: BioXpOperatorReportPipette[] }
+export interface BioXpOperatorReportPageContinuation { returned_count: number; filtered_total: number; has_more: boolean; next_cursor: string | null }
+export interface BioXpOperatorReportCommandDetail extends BioXpOperatorReportCommandRow { requested_inputs: BioXpOperatorReportJsonObject; effective_inputs: BioXpOperatorReportJsonObject; source_identity: BioXpOperatorReportJsonObject; transitions: BioXpOperatorReportTransition[]; evidence: BioXpOperatorReportEvidence[]; evidence_preview: BioXpOperatorReportEvidence[]; evidence_continuation: BioXpOperatorReportPageContinuation; pipette: BioXpOperatorReportPipette | null; snapshot: BioXpOperatorReportSnapshot; child_page_limit: number }
+export interface BioXpOperatorReportEvents { event_kind: string | null; filters: BioXpOperatorReportFilters; snapshot: BioXpOperatorReportSnapshot; returned_count: number; filtered_total: number; has_more: boolean; next_cursor: string | null; events: BioXpOperatorReportEvent[] }
+export interface BioXpOperatorReportPressureStreams { filters: BioXpOperatorReportFilters; snapshot: BioXpOperatorReportSnapshot; returned_count: number; filtered_total: number; has_more: boolean; next_cursor: string | null; pressure_streams: BioXpOperatorReportPressureStream[] }
+export interface BioXpOperatorReportTransitionPage extends BioXpOperatorReportPageContinuation { command_id: string; filters: { command_id: string; limit: number }; snapshot: BioXpOperatorReportSnapshot; transitions: BioXpOperatorReportTransition[] }
+export interface BioXpOperatorReportEvidencePage extends BioXpOperatorReportPageContinuation { command_id: string; filters: { command_id: string; limit: number }; snapshot: BioXpOperatorReportSnapshot; evidence: BioXpOperatorReportEvidence[] }
+export interface BioXpOperatorReportChannelPage extends BioXpOperatorReportPageContinuation { pipette_operation_id: string; filters: { pipette_operation_id: string; limit: number }; snapshot: BioXpOperatorReportSnapshot; channels: BioXpOperatorReportChannel[] }
+export interface BioXpOperatorReportExchangePage extends BioXpOperatorReportPageContinuation { pipette_operation_id: string; filters: { pipette_operation_id: string; limit: number }; snapshot: BioXpOperatorReportSnapshot; exchanges: BioXpOperatorReportExchange[] }
+export interface BioXpOperatorReportPressureSamplePage extends BioXpOperatorReportPageContinuation { stream_session_id: string; filters: BioXpOperatorReportFilters; snapshot: BioXpOperatorReportSnapshot; samples: BioXpOperatorReportPressureChunk[] }
+export interface BioXpOperatorReportEventDetail extends BioXpOperatorReportEvent { snapshot: BioXpOperatorReportSnapshot | null }
+export interface BioXpOperatorReportPressureDetail { stream_session_id: string; pipette_operation_id: string | null; channels: number[]; sample_period_ms: number | null; started_at: number | string; stopped_at: number | string | null; terminal_state: string | null; loss_count: number | null; chunks: BioXpOperatorReportPressureChunk[]; child_page_limit: number; snapshot: BioXpOperatorReportSnapshot }
 
 export interface BioXpOperatorReportExport {
     export_id: string;
@@ -1034,7 +1041,7 @@ export interface BioXpOperatorReportExport {
     row_count: number;
     sha256: string;
     byte_count: number;
-    release_identity: Record<string, unknown>;
+    release_identity: BioXpOperatorReportReleaseIdentity;
     download: string;
 }
 
@@ -1047,6 +1054,7 @@ export interface BioXpOperatorReportExportList {
         byte_count: number;
         status: string;
         created_at: number | string;
+        release_identity: BioXpOperatorReportReleaseIdentity | BioXpOperatorReportUnavailableReleaseIdentity;
         publication_state: string;
         evidence_state: string;
         legal_hold: boolean;
@@ -1563,6 +1571,83 @@ export const useBioXpOperatorReportCommandDetail = (commandId: string | null, en
         `/api/bioxp/operator-controls/reports/commands/${encodeURIComponent(commandId ?? '')}`,
     )).data,
     enabled: enabled && Boolean(commandId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportCommandTransitions = (commandId: string | null, cursor: string | null = null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'command-transitions', commandId, cursor],
+    queryFn: async () => (await api.get<BioXpOperatorReportTransitionPage>(
+        `/api/bioxp/operator-controls/reports/commands/${encodeURIComponent(commandId ?? '')}/transitions`,
+        { params: operatorReportParams(undefined, 50, cursor) },
+    )).data,
+    enabled: enabled && Boolean(commandId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportCommandEvidence = (commandId: string | null, cursor: string | null = null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'command-evidence', commandId, cursor],
+    queryFn: async () => (await api.get<BioXpOperatorReportEvidencePage>(
+        `/api/bioxp/operator-controls/reports/commands/${encodeURIComponent(commandId ?? '')}/evidence`,
+        { params: operatorReportParams(undefined, 50, cursor) },
+    )).data,
+    enabled: enabled && Boolean(commandId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportPipetteDetail = (pipetteOperationId: string | null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pipette-detail', pipetteOperationId],
+    queryFn: async () => (await api.get<BioXpOperatorReportPipette>(
+        `/api/bioxp/operator-controls/reports/pipette/${encodeURIComponent(pipetteOperationId ?? '')}`,
+    )).data,
+    enabled: enabled && Boolean(pipetteOperationId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportPipetteChannels = (pipetteOperationId: string | null, cursor: string | null = null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pipette-channels', pipetteOperationId, cursor],
+    queryFn: async () => (await api.get<BioXpOperatorReportChannelPage>(
+        `/api/bioxp/operator-controls/reports/pipette/${encodeURIComponent(pipetteOperationId ?? '')}/channels`,
+        { params: operatorReportParams(undefined, 50, cursor) },
+    )).data,
+    enabled: enabled && Boolean(pipetteOperationId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportPipetteExchanges = (pipetteOperationId: string | null, cursor: string | null = null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pipette-exchanges', pipetteOperationId, cursor],
+    queryFn: async () => (await api.get<BioXpOperatorReportExchangePage>(
+        `/api/bioxp/operator-controls/reports/pipette/${encodeURIComponent(pipetteOperationId ?? '')}/exchanges`,
+        { params: operatorReportParams(undefined, 50, cursor) },
+    )).data,
+    enabled: enabled && Boolean(pipetteOperationId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportEventDetail = (eventId: number | null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'event-detail', eventId],
+    queryFn: async () => (await api.get<BioXpOperatorReportEventDetail>(
+        `/api/bioxp/operator-controls/reports/events/${encodeURIComponent(String(eventId ?? ''))}`,
+    )).data,
+    enabled: enabled && eventId !== null,
+    retry: false,
+});
+
+export const useBioXpOperatorReportPressureDetail = (streamSessionId: string | null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pressure-detail', streamSessionId],
+    queryFn: async () => (await api.get<BioXpOperatorReportPressureDetail>(
+        `/api/bioxp/operator-controls/reports/pressure-streams/${encodeURIComponent(streamSessionId ?? '')}`,
+    )).data,
+    enabled: enabled && Boolean(streamSessionId),
+    retry: false,
+});
+
+export const useBioXpOperatorReportPressureSamples = (streamSessionId: string | null, cursor: string | null = null, enabled = true) => useQuery({
+    queryKey: ['bioxp', 'operator-reports', 'pressure-samples', streamSessionId, cursor],
+    queryFn: async () => (await api.get<BioXpOperatorReportPressureSamplePage>(
+        `/api/bioxp/operator-controls/reports/pressure-streams/${encodeURIComponent(streamSessionId ?? '')}/samples`,
+        { params: operatorReportParams(undefined, 50, cursor) },
+    )).data,
+    enabled: enabled && Boolean(streamSessionId),
     retry: false,
 });
 

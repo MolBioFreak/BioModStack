@@ -4686,6 +4686,18 @@ class OperatorReportReleaseIdentityV1(BaseModel):
     binding: OperatorReportReleaseBindingV1
 
 
+class OperatorReportUnavailableReleaseIdentityV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    status: str
+    verified: Literal[False]
+    reason_code: str
+
+
+class OperatorReportJsonObjectV1(RootModel[dict[str, JsonValue]]):
+    model_config = ConfigDict(strict=True)
+
+
 class OperatorReportSourceHighWatersV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4710,7 +4722,7 @@ class OperatorReportSchemaIdentityV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     database_identity: Literal["robot_authoritative_sqlite"]
-    schema_version: StrictInt = Field(ge=1)
+    schema_version: Literal[5]
     identity_version: StrictInt | None
     release_identity: OperatorReportReleaseIdentityV1
 
@@ -4865,7 +4877,19 @@ class OperatorReportTransitionV1(BaseModel):
     transition_id: StrictInt = Field(ge=1)
     state: str = Field(min_length=1, max_length=80)
     observed_at: StrictFloat | StrictInt | str
-    detail: dict[str, JsonValue]
+    detail: OperatorReportJsonObjectV1
+
+
+class OperatorReportLegalHoldAssessmentV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: str
+    observed_at: StrictFloat | StrictInt | str
+    legal_hold_requested: StrictBool
+    assessment: JsonValue
+    actor: str | None
+    retained_deadline: StrictFloat | StrictInt | str | None
+    legal_hold_projection_updated: StrictBool
 
 
 class OperatorReportEvidenceV1(BaseModel):
@@ -4877,7 +4901,7 @@ class OperatorReportEvidenceV1(BaseModel):
     created_at: StrictFloat | StrictInt | str
     retention_deadline: StrictFloat | StrictInt | str | None
     legal_hold: StrictBool
-    latest_legal_hold_assessment: dict[str, JsonValue] | None
+    latest_legal_hold_assessment: OperatorReportLegalHoldAssessmentV1 | None
     expiry_state: str = Field(min_length=1, max_length=80)
     expiry_receipt_id: str | None = Field(default=None, max_length=160)
 
@@ -4926,7 +4950,7 @@ class OperatorReportChannelV1(BaseModel):
     status: str | StrictInt | None = Field(default=None)
     error_code: str | StrictInt | None
     firmware_class: str | None = Field(default=None, max_length=120)
-    detail: dict[str, JsonValue]
+    detail: OperatorReportJsonObjectV1
 
 
 class OperatorReportExchangeV1(BaseModel):
@@ -4961,7 +4985,7 @@ class OperatorReportPipetteEventV1(BaseModel):
     event_source: str = Field(min_length=1, max_length=120)
     event_kind: str = Field(min_length=1, max_length=120)
     observed_at: StrictFloat | StrictInt | str
-    event: dict[str, JsonValue]
+    event: OperatorReportJsonObjectV1
 
 
 class OperatorReportPressureStreamChildV1(BaseModel):
@@ -5000,14 +5024,37 @@ class OperatorReportCommandPageV1(BaseModel):
     commands: list[OperatorReportCommandRowV1]
 
 
+class OperatorReportPageContinuationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    returned_count: StrictInt = Field(ge=0)
+    filtered_total: StrictInt = Field(ge=0)
+    has_more: StrictBool
+    next_cursor: str | None
+
+
+class OperatorReportCommandChildFiltersV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    command_id: str = Field(min_length=1, max_length=160)
+    limit: StrictInt = Field(ge=1)
+
+
+class OperatorReportPipetteChildFiltersV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    pipette_operation_id: str = Field(min_length=1, max_length=160)
+    limit: StrictInt = Field(ge=1)
+
+
 class OperatorReportCommandDetailV1(OperatorReportCommandRowV1):
-    requested_inputs: JsonValue
-    effective_inputs: JsonValue
-    source_identity: JsonValue
+    requested_inputs: OperatorReportJsonObjectV1
+    effective_inputs: OperatorReportJsonObjectV1
+    source_identity: OperatorReportJsonObjectV1
     transitions: list[OperatorReportTransitionV1]
     evidence: list[OperatorReportEvidenceV1]
     evidence_preview: list[OperatorReportEvidenceV1]
-    evidence_continuation: dict[str, JsonValue]
+    evidence_continuation: OperatorReportPageContinuationV1
     pipette: OperatorReportPipetteDetailV1 | None
     snapshot: OperatorReportSnapshotV1
     child_page_limit: StrictInt = Field(ge=1)
@@ -5017,7 +5064,7 @@ class OperatorReportTransitionsV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     command_id: str = Field(min_length=1, max_length=160)
-    filters: dict[str, JsonValue]
+    filters: OperatorReportCommandChildFiltersV1
     snapshot: OperatorReportSnapshotV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
@@ -5030,7 +5077,7 @@ class OperatorReportCommandEvidencePageV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     command_id: str = Field(min_length=1, max_length=160)
-    filters: dict[str, JsonValue]
+    filters: OperatorReportCommandChildFiltersV1
     snapshot: OperatorReportSnapshotV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
@@ -5055,7 +5102,7 @@ class OperatorReportPipetteChannelsV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     pipette_operation_id: str = Field(min_length=1, max_length=160)
-    filters: dict[str, JsonValue]
+    filters: OperatorReportPipetteChildFiltersV1
     snapshot: OperatorReportSnapshotV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
@@ -5068,7 +5115,7 @@ class OperatorReportPipetteExchangesV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     pipette_operation_id: str = Field(min_length=1, max_length=160)
-    filters: dict[str, JsonValue]
+    filters: OperatorReportPipetteChildFiltersV1
     snapshot: OperatorReportSnapshotV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
@@ -5087,7 +5134,7 @@ class OperatorReportEventV1(BaseModel):
     event_kind: str = Field(min_length=1, max_length=120)
     channel: StrictInt | None = Field(default=None, ge=0, le=3)
     observed_at: StrictFloat | StrictInt | str
-    event: dict[str, JsonValue]
+    event: OperatorReportJsonObjectV1
     snapshot: OperatorReportSnapshotV1 | None = None
 
 
@@ -5144,7 +5191,7 @@ class OperatorReportPressureChunkV1(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_count: StrictInt = Field(ge=0)
     evidence_artifact_id: str | None = Field(default=None, max_length=160)
-    summary: dict[str, JsonValue] | None = None
+    summary: OperatorReportJsonObjectV1 | None = None
 
 
 class OperatorReportPressureDetailV1(BaseModel):
@@ -5176,6 +5223,58 @@ class OperatorReportPressureSamplesV1(BaseModel):
     samples: list[OperatorReportPressureChunkV1]
 
 
+class OperatorReportExportArtifactV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    format: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: StrictInt = Field(ge=0)
+    relpath: str | None = None
+
+
+class OperatorReportExportReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    receipt_schema: str
+    publisher_identity: str
+    export_id: str
+    evidence_artifact_id: str
+    created_at: StrictFloat | StrictInt
+    retention_deadline: StrictFloat | StrictInt
+    normalized_filters: OperatorReportFiltersV1
+    filter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_high_waters: OperatorReportSourceHighWatersV1
+    schema_identity: OperatorReportSchemaIdentityV1
+    release_identity: OperatorReportReleaseIdentityV1
+    database_incarnation_id: str
+    row_count: StrictInt = Field(ge=0)
+    artifact: OperatorReportExportArtifactV1
+    public_download_available: StrictBool = True
+    evidence_state: str
+    legal_hold: StrictBool
+    evidence_available: StrictBool
+
+
+class OperatorReportLegacyExportReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    receipt_schema: str
+    publisher_identity: str
+    export_id: str
+    evidence_artifact_id: str
+    created_at: StrictFloat | StrictInt
+    retention_deadline: StrictFloat | StrictInt
+    filter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    row_count: StrictInt = Field(ge=0)
+    artifact: OperatorReportExportArtifactV1
+    legacy_snapshot: OperatorReportJsonObjectV1
+    release_identity: OperatorReportUnavailableReleaseIdentityV1
+    public_download_available: Literal[False]
+    evidence_state: str
+    legal_hold: StrictBool
+    evidence_available: StrictBool
+
+
 class OperatorReportExportV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -5200,7 +5299,7 @@ class OperatorReportExportListItemV1(BaseModel):
     byte_count: StrictInt
     status: str
     created_at: StrictFloat | StrictInt | str
-    release_identity: dict[str, JsonValue]
+    release_identity: OperatorReportReleaseIdentityV1 | OperatorReportUnavailableReleaseIdentityV1
     publication_state: str
     evidence_state: str
     legal_hold: StrictBool
@@ -5225,7 +5324,7 @@ class OperatorReportHealthStoreCheckV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     status: str | None
     recorded_schema_version: StrictInt | None
-    current_schema_version: StrictInt | None
+    current_schema_version: Literal[5] | None
 
 
 class OperatorReportHealthDurabilityV1(BaseModel):
@@ -5322,11 +5421,11 @@ class OperatorReportExportMetadataV1(BaseModel):
 
     export_id: str = Field(min_length=1, max_length=160)
     format: str
-    filter: JsonValue | None
+    filter: OperatorReportFiltersV1 | None
     filter_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    snapshot: dict[str, JsonValue]
-    receipt: dict[str, JsonValue]
-    release_identity: dict[str, JsonValue]
+    snapshot: OperatorReportExportReceiptV1 | OperatorReportLegacyExportReceiptV1
+    receipt: OperatorReportExportReceiptV1 | OperatorReportLegacyExportReceiptV1
+    release_identity: OperatorReportReleaseIdentityV1 | OperatorReportUnavailableReleaseIdentityV1
     row_count: StrictInt = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_count: StrictInt = Field(ge=0)

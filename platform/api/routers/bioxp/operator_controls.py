@@ -798,8 +798,19 @@ async def operator_report_command_detail(command_id: str, runtime: BioXpRuntime 
 
 
 @router.get("/operator-controls/reports/commands/{command_id}/transitions", response_model=OperatorReportTransitionsV1)
-async def operator_report_command_transitions(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportTransitionsV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_command_transitions", OperatorReportTransitionsV1, path_params={"command_id": command_id})
+async def operator_report_command_transitions(
+    command_id: str,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> OperatorReportTransitionsV1:
+    return await _proxy_operator_report_model(
+        runtime,
+        "operator_report_command_transitions",
+        OperatorReportTransitionsV1,
+        params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+        path_params={"command_id": command_id},
+    )
 
 
 @router.get("/operator-controls/reports/commands/{command_id}/evidence", response_model=OperatorReportCommandEvidencePageV1)
@@ -837,13 +848,35 @@ async def operator_report_pipette_detail(pipette_operation_id: str, runtime: Bio
 
 
 @router.get("/operator-controls/reports/pipette/{pipette_operation_id}/channels", response_model=OperatorReportPipetteChannelsV1)
-async def operator_report_pipette_channels(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteChannelsV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_pipette_channels", OperatorReportPipetteChannelsV1, path_params={"pipette_operation_id": pipette_operation_id})
+async def operator_report_pipette_channels(
+    pipette_operation_id: str,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> OperatorReportPipetteChannelsV1:
+    return await _proxy_operator_report_model(
+        runtime,
+        "operator_report_pipette_channels",
+        OperatorReportPipetteChannelsV1,
+        params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+        path_params={"pipette_operation_id": pipette_operation_id},
+    )
 
 
 @router.get("/operator-controls/reports/pipette/{pipette_operation_id}/exchanges", response_model=OperatorReportPipetteExchangesV1)
-async def operator_report_pipette_exchanges(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteExchangesV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_pipette_exchanges", OperatorReportPipetteExchangesV1, path_params={"pipette_operation_id": pipette_operation_id})
+async def operator_report_pipette_exchanges(
+    pipette_operation_id: str,
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+    limit: int = Query(default=100, ge=1, le=1000),
+    cursor: str | None = None,
+) -> OperatorReportPipetteExchangesV1:
+    return await _proxy_operator_report_model(
+        runtime,
+        "operator_report_pipette_exchanges",
+        OperatorReportPipetteExchangesV1,
+        params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+        path_params={"pipette_operation_id": pipette_operation_id},
+    )
 
 
 @router.get("/operator-controls/reports/events", response_model=OperatorReportEventsV1)
