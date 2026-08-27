@@ -384,9 +384,9 @@ def test_standalone_workflow_uses_exact_v3_three_file_tuple_and_terminal_names()
     assert "batch.schema_version != 3" in workflow
     assert "batch.expected_cardinality != batch.records.size()" in workflow
     assert "workflow_component_request_v3\\.json" in workflow
-    assert "BMS-DEV-29" not in workflow
     assert "RunPersistedFrustraMPNNGroupedBatch(manifestPath.toString())" in workflow
-    assert "batching_enabled && batch.records.size() > 1" in workflow
+    assert "CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)" in workflow
+    assert "batch.batching_enabled && batch.records.size() > 1" in workflow
     assert "record.launch_authority" not in workflow
     assert "workflow_component_request_v1.json" not in workflow
     module = MODULE_PATH.read_text(encoding="utf-8")

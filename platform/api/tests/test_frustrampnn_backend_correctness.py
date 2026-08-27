@@ -36,10 +36,30 @@ def test_fanout_response_rejects_noncanonical_grouping(counts: list[int]) -> Non
                 "parent_job_id": "parent-1",
                 "selected_structure_count": sum(counts),
                 "structures_per_job": 2,
+                "effective_structures_per_job": 2,
                 "replayed": False,
                 "child_jobs": [_fanout_child(count) for count in counts],
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "mode", "expected_workflow"),
+    [
+        ("boltz2", "structure_prediction", "structure_prediction"),
+        ("boltz2", "complex_prediction", "complex_prediction"),
+        ("proteinmpnn", "protein_design", "protein_design"),
+        ("antibody_denovo", "antibody_denovo_pipeline", "antibody_denovo"),
+        ("conformational_mapping", "map", "conformational_mapping"),
+    ],
+)
+def test_all_frustrampnn_consumers_resolve_to_one_generic_api_fanout_topology(
+    model_id: str,
+    mode: str,
+    expected_workflow: str,
+) -> None:
+    parent = SimpleNamespace(model_id=model_id, mode=mode)
+    assert frustrampnn_router._frustrampnn_consumer_workflow(parent) == expected_workflow
 
 
 def _complete_settings_payload() -> dict[str, object]:

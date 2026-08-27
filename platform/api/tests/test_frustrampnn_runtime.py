@@ -67,6 +67,21 @@ def test_runtime_registry_is_canonical_immutable_and_projects_exact_cm_v1(tmp_pa
     }
 
 
+def test_apptainer_build_uses_one_verified_runtime_source_commit_for_install_and_weights() -> None:
+    definition = (
+        Path(__file__).resolve().parents[3] / "apptainer" / "frustrampnn.def"
+    ).read_text(encoding="utf-8")
+    commit = "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
+    assert f"FRUSTRAMPNN_SOURCE_COMMIT={commit}" in definition
+    assert 'git checkout --detach "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
+    assert 'test "$(git rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
+    assert "uv pip install --compile /opt/frustrampnn" in definition
+    assert "cp -r /opt/frustrampnn/weights/vanilla_model_weights" in definition
+    assert "frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" in definition
+    assert "git+https://github.com/schoederlab/frustraMPNN.git" not in definition
+    assert "raw/main/weights" not in definition
+
+
 @pytest.mark.parametrize(
     "path_builder",
     [

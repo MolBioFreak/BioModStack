@@ -327,6 +327,42 @@ class FrustraMPNNChildResultReceiptResponse(BaseModel):
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
 
 
+class FrustraMPNNBatchManifestReceiptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_name: Literal["bms_frustrampnn_scheduler_batch"]
+    schema_version: Literal[3]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+    expected_cardinality: int = Field(ge=1)
+    ordered_candidate_ids: list[str] = Field(min_length=1)
+    ordered_invocation_ids: list[str] = Field(min_length=1)
+
+
+class FrustraMPNNBatchTerminalRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ordinal: int = Field(ge=0)
+    candidate_id: str
+    invocation_id: str
+    pdb_stem: str
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    started_at: str
+    terminal_at: str
+    status: Literal["succeeded", "failed"]
+    failure_code: str | None
+    diagnostic: str | None = Field(default=None, max_length=1024)
+    row_count: int | None = Field(default=None, ge=0)
+    output_csv: str | None
+    output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class FrustraMPNNGroupedTerminalArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact_id: str
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+    records: list[FrustraMPNNBatchTerminalRecordResponse] = Field(min_length=1)
+
+
 class FrustraMPNNChildReceiptResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
@@ -343,6 +379,8 @@ class FrustraMPNNChildReceiptResponse(BaseModel):
     settings_value_origin: Literal["bms_default", "operator_request"]
     requested_settings: FrustraMPNNRequestedSettings
     requested_settings_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    batch_manifest: FrustraMPNNBatchManifestReceiptResponse
+    grouped_terminal_artifact: FrustraMPNNGroupedTerminalArtifactResponse | None = None
     candidates: list[FrustraMPNNChildCandidateReceiptResponse]
     results: list[FrustraMPNNChildResultReceiptResponse]
 
@@ -359,15 +397,16 @@ class FrustraMPNNStructureDatasetFanoutResponse(BaseModel):
     parent_job_id: str
     selected_structure_count: int = Field(ge=1)
     structures_per_job: int = Field(ge=1)
+    effective_structures_per_job: int = Field(ge=1)
     replayed: bool
     child_jobs: list[FrustraMPNNFanoutChildResponse] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_canonical_partition(self):
         full_groups, remainder = divmod(
-            self.selected_structure_count, self.structures_per_job
+            self.selected_structure_count, self.effective_structures_per_job
         )
-        expected = [self.structures_per_job] * full_groups
+        expected = [self.effective_structures_per_job] * full_groups
         if remainder:
             expected.append(remainder)
         observed = [child.structure_count for child in self.child_jobs]
@@ -1941,6 +1980,28 @@ async def _child_job_receipt(session: AsyncSession, child: Job) -> dict[str, Any
     return await child_receipt(session, child=child)
 
 
+def _frustrampnn_consumer_workflow(parent: Job) -> str:
+    """Resolve the supported consumer while the generic API owner keeps fan-out."""
+    model_id = str(parent.model_id or "").strip().lower()
+    mode = str(parent.mode or "").strip().lower()
+    parent_params = getattr(parent, "params", None)
+    params = parent_params if isinstance(parent_params, Mapping) else {}
+    if model_id == "conformational_mapping" or mode == "map":
+        return "conformational_mapping"
+    if "antibody" in model_id or "antibody" in mode:
+        return "antibody_denovo"
+    if mode == "complex_prediction" or any(
+        params.get(key)
+        for key in ("complex_components", "complex_json_path", "complex_batch_dir")
+    ):
+        return "complex_prediction"
+    if mode == "structure_prediction" or (model_id == "boltz2" and mode == "predict"):
+        return "structure_prediction"
+    # The supported entrypoint resolver sends all remaining design modes to
+    # workflows/protein_design.nf. Preserve that compatibility boundary here.
+    return "protein_design"
+
+
 async def _fanout_design_selections(
     session: AsyncSession,
     *,
@@ -1977,9 +2038,10 @@ async def _fanout_design_selections(
 
     return await fan_out_structure_dataset(
         session,
-        workflow_id="frustrampnn.analyze-structures.v1",
+        workflow_id=f"{_frustrampnn_consumer_workflow(parent)}.frustrampnn.v1",
         parent_job=parent,
         members=members,
+        batching_enabled=requested_settings.batching_enabled,
         structures_per_job=requested_settings.structures_per_job,
         request_identity={
             "requested_settings": requested_settings.model_dump(mode="json", exclude_none=False),
@@ -2002,6 +2064,7 @@ async def _fanout_receipt(session: AsyncSession, fanout: Any) -> dict[str, Any]:
         "parent_job_id": fanout.parent_job_id,
         "selected_structure_count": fanout.selected_structure_count,
         "structures_per_job": fanout.structures_per_job,
+        "effective_structures_per_job": fanout.effective_structures_per_job,
         "replayed": fanout.replayed,
         "child_jobs": children,
     }

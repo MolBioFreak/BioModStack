@@ -44,6 +44,7 @@ class StructureDatasetFanoutResult:
     parent_job_id: str
     selected_structure_count: int
     structures_per_job: int
+    effective_structures_per_job: int
     child_jobs: tuple[Job, ...]
     replayed: bool
 
@@ -70,11 +71,14 @@ def _fanout_plan(
     workflow_id: str,
     parent_job_id: str,
     members: Sequence[StructureDatasetMember[Any]],
+    batching_enabled: bool,
     structures_per_job: int,
     request_identity: Mapping[str, Any],
 ) -> dict[str, Any]:
     if not workflow_id.strip():
         raise StructureDatasetFanoutError("workflow_id is required")
+    if not isinstance(batching_enabled, bool):
+        raise StructureDatasetFanoutError("batching_enabled must be a boolean")
     if isinstance(structures_per_job, bool) or not isinstance(structures_per_job, int) or structures_per_job < 1:
         raise StructureDatasetFanoutError("structures_per_job must be a positive integer")
     if not members:
@@ -87,7 +91,9 @@ def _fanout_plan(
         "schema_version": 1,
         "workflow_id": workflow_id,
         "parent_job_id": parent_job_id,
+        "batching_enabled": batching_enabled,
         "structures_per_job": structures_per_job,
+        "effective_structures_per_job": structures_per_job if batching_enabled else 1,
         "request_identity": dict(request_identity),
         "members": [
             {"structure_id": member.structure_id, "lineage": dict(member.lineage)}
@@ -106,6 +112,7 @@ async def fan_out_structure_dataset(
     workflow_id: str,
     parent_job: Job,
     members: Sequence[StructureDatasetMember[PayloadT]],
+    batching_enabled: bool,
     structures_per_job: int,
     request_identity: Mapping[str, Any],
     create_child: ChildFactory[PayloadT],
@@ -123,12 +130,16 @@ async def fan_out_structure_dataset(
         workflow_id=workflow_id,
         parent_job_id=parent_job_id,
         members=members,
+        batching_enabled=batching_enabled,
         structures_per_job=structures_per_job,
         request_identity=request_identity,
     )
     plan_bytes = _canonical_bytes(plan)
     fanout_id = hashlib.sha256(plan_bytes).hexdigest()
-    expected_count = (len(members) + structures_per_job - 1) // structures_per_job
+    effective_structures_per_job = structures_per_job if batching_enabled else 1
+    expected_count = (
+        len(members) + effective_structures_per_job - 1
+    ) // effective_structures_per_job
     expected_child_ids = [_child_id(fanout_id, ordinal) for ordinal in range(expected_count)]
 
     async def reconcile_exact_replay() -> StructureDatasetFanoutResult | None:
@@ -159,6 +170,7 @@ async def fan_out_structure_dataset(
             parent_job_id=parent_job_id,
             selected_structure_count=len(members),
             structures_per_job=structures_per_job,
+            effective_structures_per_job=effective_structures_per_job,
             child_jobs=tuple(children),
             replayed=True,
         )
@@ -182,8 +194,12 @@ async def fan_out_structure_dataset(
 
     created: list[Job] = []
     try:
-        for ordinal, start in enumerate(range(0, len(members), structures_per_job)):
-            batch_members = tuple(members[start : start + structures_per_job])
+        for ordinal, start in enumerate(
+            range(0, len(members), effective_structures_per_job)
+        ):
+            batch_members = tuple(
+                members[start : start + effective_structures_per_job]
+            )
             batch = StructureDatasetBatch(
                 ordinal=ordinal,
                 child_job_id=expected_child_ids[ordinal],
@@ -237,6 +253,7 @@ async def fan_out_structure_dataset(
         parent_job_id=parent_job_id,
         selected_structure_count=len(members),
         structures_per_job=structures_per_job,
+        effective_structures_per_job=effective_structures_per_job,
         child_jobs=tuple(created),
         replayed=False,
     )
