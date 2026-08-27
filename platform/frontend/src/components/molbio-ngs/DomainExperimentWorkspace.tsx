@@ -318,6 +318,11 @@ export default function DomainExperimentWorkspace() {
             const code = response?.data?.detail?.code;
             if (response?.status === 409 && (code === 'stale_generation' || code === 'stale_molecular_revision')) {
                 setProjectHubConflictMessage('Project state advanced. Review the refreshed state before retrying.');
+                await queryClient.invalidateQueries({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    exact: true,
+                    refetchType: 'none',
+                });
                 const refreshedState = await queryClient.fetchQuery({
                     queryKey: ['molbio-ngs-domain-state', exactDomainId],
                     queryFn: () => fetchMolBioNgsDomainState(exactDomainId as string),

@@ -139,7 +139,7 @@ beforeEach(() => {
     apiMocks.fetchMolBioNgsReferences.mockResolvedValue([]);
     apiMocks.fetchMolBioNgsEvidence.mockResolvedValue([]);
     managerMocks.getProject.mockResolvedValue({ id: 'project-1', name: 'Syenex New Plasmids', payload: { project_scope: 'ngs_molbio_local' } });
-    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 60_000 }, mutations: { retry: false } } });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
