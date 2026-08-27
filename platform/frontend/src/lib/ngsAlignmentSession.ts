@@ -355,8 +355,11 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         if (pairDigest !== session.alignment_pair_sha256) {
             throw new Error('Alignment pair authority is invalid.');
         }
-        const sessionSeed = `${expectedJobId}\0${session.mode}\0${Object.keys(session.artifacts).sort()
-            .map((role) => session.artifacts[role as keyof typeof session.artifacts]!.artifact_id).join('\0')}`;
+        const sessionArtifactIds = Object.entries(session.artifacts)
+            .filter((entry): entry is [string, AlignmentSessionArtifact] => entry[1] !== null)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([, artifact]) => artifact.artifact_id);
+        const sessionSeed = `${expectedJobId}\0${session.mode}\0${sessionArtifactIds.join('\0')}`;
         const sessionDigest = [...new Uint8Array(await crypto.subtle.digest(
             'SHA-256', new TextEncoder().encode(sessionSeed),
         ))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
