@@ -192,11 +192,100 @@ async def test_failed_statistics_child_retries_without_changing_core_inference(t
             session,
             stale_before=datetime.utcnow() - timedelta(hours=1),
         )
-        assert recovered == 1
+        assert recovered == 0
         await session.commit()
         await session.refresh(second)
-        assert second.state == "queued"
+        assert second.state == "running"
         assert second.attempt_count == 2
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_cannot_steal_or_recover_a_running_statistics_claim(
+    tmp_path: Path,
+) -> None:
+    jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim-owner.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    analysis_id = "44444444-4444-4444-8444-444444444444"
+
+    async with sessions() as seed:
+        seed.add(
+            Job(
+                id="claim-owner-job",
+                name="claim-owner-job",
+                status="completed",
+                queue_status="completed",
+                model_id="frustrampnn",
+                mode="analyze",
+                params={},
+            )
+        )
+        seed.add(
+            FrustraMPNNResult(
+                parent_job_id="claim-owner-job",
+                invocation_id="claim-owner-invocation",
+                parent_workflow_id="frustrampnn_analysis",
+                candidate_id="claim-owner-candidate",
+                requiredness="required",
+                request_sha256="1" * 64,
+                source_artifact_sha256="2" * 64,
+                manifest_sha256="3" * 64,
+                manifest_json={},
+                summary_sha256="4" * 64,
+                summary_json={"landscape_sha256": "5" * 64},
+                runtime_identity_json={},
+                assigned_gpu_json={},
+                terminal_result_json={
+                    "component_contract_version": "3.0",
+                    "status": "succeeded",
+                },
+            )
+        )
+        await seed.flush()
+        seed.add(
+            FrustraMPNNStatisticsAnalysis(
+                analysis_id=analysis_id,
+                parent_job_id="claim-owner-job",
+                invocation_id="claim-owner-invocation",
+                core_artifact_id="claim-owner-artifact",
+                core_bundle_relative_path="bundle",
+                core_landscape_sha256="5" * 64,
+                core_manifest_sha256="3" * 64,
+                state="queued",
+                attempt_count=0,
+                formula_version=jobs.FORMULA_VERSION,
+                policy_version=jobs.POLICY_VERSION,
+                package_version=jobs.PACKAGE_VERSION,
+                schema_version=jobs.SCHEMA_VERSION,
+            )
+        )
+        await seed.commit()
+
+    async with sessions() as owner:
+        claimed = await jobs.claim_statistics_child(owner, analysis_id=analysis_id)
+        claimed.updated_at = datetime.utcnow() - timedelta(hours=2)
+        await owner.commit()
+
+    async with sessions() as contender:
+        with pytest.raises(
+            jobs.FrustraMPNNStatisticsJobError,
+            match="only queued statistics children can run",
+        ):
+            await jobs.claim_statistics_child(contender, analysis_id=analysis_id)
+        await contender.rollback()
+        assert await jobs.recover_abandoned_statistics_claims(
+            contender,
+            stale_before=datetime.utcnow() - timedelta(hours=1),
+        ) == 0
+        await contender.commit()
+
+    async with sessions() as observer:
+        persisted = await observer.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+        assert persisted is not None
+        assert persisted.state == "running"
+        assert persisted.attempt_count == 1
 
 
 

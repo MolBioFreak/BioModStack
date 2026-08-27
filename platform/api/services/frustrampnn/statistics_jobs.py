@@ -8,7 +8,7 @@ import hashlib
 import os
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -161,19 +161,17 @@ async def recover_abandoned_statistics_claims(
     *,
     stale_before: datetime,
 ) -> int:
-    recovered = await session.execute(
-        update(FrustraMPNNStatisticsAnalysis)
-        .where(
-            FrustraMPNNStatisticsAnalysis.state == "running",
-            FrustraMPNNStatisticsAnalysis.updated_at < stale_before,
-        )
-        .values(
-            state="queued",
-            diagnostic="recovered abandoned statistics claim",
-            updated_at=datetime.utcnow(),
-        )
-    )
-    return int(recovered.rowcount or 0)
+    """Never infer abandonment without durable lease-owner authority.
+
+    The current statistics-analysis table records neither a claim token nor a
+    renewable lease.  Age alone cannot distinguish an abandoned row from a
+    legitimate long-running CPU computation, so automatic recovery would risk
+    duplicate work.  Operators must explicitly fail and retry a truly
+    abandoned row until a future migration adds lease identity and heartbeat
+    fields.
+    """
+    del session, stale_before
+    return 0
 
 
 async def fail_statistics_child(
@@ -448,12 +446,11 @@ class FrustraMPNNStatisticsWorker:
         if self._task is not None and not self._task.done():
             return
         self._stop.clear()
-        async with self._session_factory() as session:
-            await recover_abandoned_statistics_claims(
-                session,
-                stale_before=datetime.utcnow() - timedelta(hours=1),
-            )
-            await session.commit()
+        _LOGGER.warning(
+            "FrustraMPNN running statistics rows are not auto-recovered: "
+            "the current schema has no renewable claim lease; use explicit "
+            "failed/retry handling for confirmed abandoned work"
+        )
         self._task = asyncio.create_task(
             self._run(),
             name="frustrampnn-statistics-worker",
