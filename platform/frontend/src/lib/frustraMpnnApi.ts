@@ -1103,6 +1103,13 @@ export interface FrustraMpnnResultListItem {
     parent_job_id: string;
     parent_workflow_id: string;
     candidate_id: string;
+    operator_label: string;
+    source_identity: {
+        design_id: string | null;
+        artifact_id: string | null;
+        artifact_sha256: string;
+        candidate_id: string;
+    };
     design_id: string | null;
     requiredness: string;
     source_artifact_id: string | null;
@@ -2348,7 +2355,8 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
 };
 
 const RESULT_ITEM_KEYS = [
-    'invocation_id', 'parent_job_id', 'parent_workflow_id', 'candidate_id', 'design_id',
+    'invocation_id', 'parent_job_id', 'parent_workflow_id', 'candidate_id', 'operator_label',
+    'source_identity', 'design_id',
     'requiredness', 'source_artifact_id', 'source_artifact_sha256', 'request_sha256',
     'manifest_sha256', 'summary_sha256', 'created_at', 'authority_version', 'availability',
     'statistics_available', 'missing_fields', 'settings_sha256', 'effective_settings_sha256',
@@ -2380,11 +2388,19 @@ const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultList
     const reopen = fmClosedProjection(payload.reopen_destination, 'result.reopen_destination', ['surface', 'params'], ['surface', 'params']);
     if (reopen.surface !== 'frustrampnn-workbench') throw new Error('result reopen surface is invalid');
     const reopenParams = fmClosedProjection(reopen.params, 'result.reopen_destination.params', ['job_id', 'invocation_id'], ['job_id', 'invocation_id']);
+    const sourceIdentity = fmClosedProjection(payload.source_identity, 'result.source_identity', ['design_id', 'artifact_id', 'artifact_sha256', 'candidate_id'], ['design_id', 'artifact_id', 'artifact_sha256', 'candidate_id']);
     return {
         invocation_id: fmString(payload.invocation_id, 'result.invocation_id'),
         parent_job_id: fmString(payload.parent_job_id, 'result.parent_job_id'),
         parent_workflow_id: fmString(payload.parent_workflow_id, 'result.parent_workflow_id'),
         candidate_id: fmString(payload.candidate_id, 'result.candidate_id'),
+        operator_label: fmString(payload.operator_label, 'result.operator_label'),
+        source_identity: {
+            design_id: fmNullableString(sourceIdentity.design_id, 'result.source_identity.design_id'),
+            artifact_id: fmNullableString(sourceIdentity.artifact_id, 'result.source_identity.artifact_id'),
+            artifact_sha256: fmSha256(sourceIdentity.artifact_sha256, 'result.source_identity.artifact_sha256'),
+            candidate_id: fmString(sourceIdentity.candidate_id, 'result.source_identity.candidate_id'),
+        },
         design_id: fmNullableString(payload.design_id, 'result.design_id'),
         requiredness: fmString(payload.requiredness, 'result.requiredness'),
         source_artifact_id: fmNullableString(payload.source_artifact_id, 'result.source_artifact_id'),

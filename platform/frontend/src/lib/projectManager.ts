@@ -874,6 +874,19 @@ export interface FrustraMpnnExperimentScopeItem {
     parent_job_id: string;
     invocation_id: string;
     candidate_id: string;
+    operator_label: string;
+    source_identity: {
+        design_id: string | null;
+        artifact_id: string;
+        artifact_sha256: string;
+        candidate_id: string;
+    };
+    state: 'completed' | 'failed' | 'missing' | 'skipped';
+    diagnostic: string | null;
+    statistics_analysis: {
+        state: 'not_started' | 'queued' | 'running' | 'completed' | 'failed';
+        diagnostic: string | null;
+    };
     manifest_sha256: string;
     content_digest: string;
     reopen_uri: string;
@@ -1407,14 +1420,32 @@ function parseAttachmentReceipt(value: unknown): AttachmentReceipt {
 
 function parseFrustraMpnnExperimentScopeItem(value: unknown, label: string): FrustraMpnnExperimentScopeItem {
     const record = exactRecord(value, label, [
-        'result_receipt_id', 'parent_job_id', 'invocation_id', 'candidate_id',
+        'result_receipt_id', 'parent_job_id', 'invocation_id', 'candidate_id', 'operator_label',
+        'source_identity', 'state', 'diagnostic', 'statistics_analysis',
         'manifest_sha256', 'content_digest', 'reopen_uri',
     ]);
+    const sourceIdentity = exactRecord(record.source_identity, `${label}.source_identity`, [
+        'design_id', 'artifact_id', 'artifact_sha256', 'candidate_id',
+    ]);
+    const statisticsAnalysis = exactRecord(record.statistics_analysis, `${label}.statistics_analysis`, ['state', 'diagnostic']);
     return {
         result_receipt_id: requireString(record.result_receipt_id, `${label}.result_receipt_id`),
         parent_job_id: requireString(record.parent_job_id, `${label}.parent_job_id`),
         invocation_id: requireString(record.invocation_id, `${label}.invocation_id`),
         candidate_id: requireString(record.candidate_id, `${label}.candidate_id`),
+        operator_label: requireString(record.operator_label, `${label}.operator_label`),
+        source_identity: {
+            design_id: requireNullableString(sourceIdentity.design_id, `${label}.source_identity.design_id`),
+            artifact_id: requireString(sourceIdentity.artifact_id, `${label}.source_identity.artifact_id`),
+            artifact_sha256: requireSha256(sourceIdentity.artifact_sha256, `${label}.source_identity.artifact_sha256`),
+            candidate_id: requireString(sourceIdentity.candidate_id, `${label}.source_identity.candidate_id`),
+        },
+        state: requireLiteral(record.state, `${label}.state`, ['completed', 'failed', 'missing', 'skipped']),
+        diagnostic: requireNullableString(record.diagnostic, `${label}.diagnostic`),
+        statistics_analysis: {
+            state: requireLiteral(statisticsAnalysis.state, `${label}.statistics_analysis.state`, ['not_started', 'queued', 'running', 'completed', 'failed']),
+            diagnostic: requireNullableString(statisticsAnalysis.diagnostic, `${label}.statistics_analysis.diagnostic`),
+        },
         manifest_sha256: requireSha256(record.manifest_sha256, `${label}.manifest_sha256`),
         content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
         reopen_uri: requireString(record.reopen_uri, `${label}.reopen_uri`),

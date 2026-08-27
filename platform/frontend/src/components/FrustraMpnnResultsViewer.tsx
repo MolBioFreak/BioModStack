@@ -47,14 +47,14 @@ import {
     FrustraMpnnStatisticsAnalysisPanel,
 } from './FrustraMpnnResultAuthoritySurface.js';
 import FrustraMpnnReviewExportPanel from './frustrampnn/FrustraMpnnReviewExportPanel.js';
+import { FrustraMpnnStructureSelector } from './frustrampnn/FrustraMpnnStructureSelector.js';
+import { FrustraMpnnExperimentResults } from './frustrampnn/FrustraMpnnExperimentResults.js';
 import type {
     FrustraMpnnExperimentContext,
     FrustraMpnnResultScope,
 } from './frustrampnn/workflowResultViewState.js';
 import {
     fetchDomainFrustraMpnnResults,
-    getDomainExperiment,
-    getGlobalExperiment,
 } from '../lib/projectManager.js';
 
 const PAGE_SIZE = 500;
@@ -146,70 +146,22 @@ export default function FrustraMpnnResultsViewer({
         refetchInterval: () => terminalJob.has(resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status) ? false : 3000,
     });
     const wantsExperimentScope = scope === 'whole-experiment' && experimentContext !== null;
-    const globalHead = useQuery({
-        queryKey: [
-            'frustrampnn-experiment-global-head',
-            experimentContext?.projectId,
-            experimentContext?.globalExperimentId,
-        ],
-        queryFn: ({ signal }) => getGlobalExperiment(
-            experimentContext!.projectId,
-            experimentContext!.globalExperimentId,
-            signal,
-        ),
-        enabled: wantsExperimentScope,
-    });
-    const domainHead = useQuery({
-        queryKey: [
-            'frustrampnn-experiment-domain-head',
-            experimentContext?.projectId,
-            experimentContext?.globalExperimentId,
-            experimentContext?.domainExperimentId,
-        ],
-        queryFn: ({ signal }) => getDomainExperiment(
-            experimentContext!.projectId,
-            experimentContext!.globalExperimentId,
-            experimentContext!.domainExperimentId,
-            signal,
-        ),
-        enabled: wantsExperimentScope,
-    });
-    const hierarchyAuthorityReady = Boolean(
-        wantsExperimentScope
-        && globalHead.data
-        && domainHead.data
-        && globalHead.data.id === experimentContext!.globalExperimentId
-        && globalHead.data.project_id === experimentContext!.projectId
-        && domainHead.data.id === experimentContext!.domainExperimentId
-        && domainHead.data.project_id === experimentContext!.projectId
-        && (
-            domainHead.data.global_experiment_id === experimentContext!.globalExperimentId
-            || domainHead.data.parent_id === experimentContext!.globalExperimentId
-        )
-        && typeof globalHead.data.current_revision_id === 'string'
-        && globalHead.data.current_revision_id.length > 0
-        && typeof domainHead.data.current_revision_id === 'string'
-        && domainHead.data.current_revision_id.length > 0
-    );
-    const hierarchyAuthorityIncomplete = wantsExperimentScope
-        && globalHead.isSuccess
-        && domainHead.isSuccess
-        && !hierarchyAuthorityReady;
+    const hierarchyAuthorityReady = wantsExperimentScope;
     const experimentResults = useQuery({
         queryKey: [
             'frustrampnn-experiment-results',
             experimentContext?.projectId,
             experimentContext?.globalExperimentId,
             experimentContext?.domainExperimentId,
-            globalHead.data?.current_revision_id,
-            domainHead.data?.current_revision_id,
+            experimentContext?.globalExperimentRevisionId,
+            experimentContext?.domainRevisionId,
         ],
         queryFn: ({ signal }) => fetchDomainFrustraMpnnResults(
             experimentContext!.projectId,
             experimentContext!.globalExperimentId,
             experimentContext!.domainExperimentId,
-            globalHead.data!.current_revision_id!,
-            domainHead.data!.current_revision_id!,
+            experimentContext!.globalExperimentRevisionId,
+            experimentContext!.domainRevisionId,
             signal,
         ),
         enabled: hierarchyAuthorityReady,
@@ -221,6 +173,8 @@ export default function FrustraMpnnResultsViewer({
                 workspace_id: experimentContext!.projectId,
                 global_experiment_id: experimentContext!.globalExperimentId,
                 domain_experiment_id: experimentContext!.domainExperimentId,
+                global_experiment_revision_id: experimentContext!.globalExperimentRevisionId,
+                domain_revision_id: experimentContext!.domainRevisionId,
                 result_model: 'frustrampnn',
                 frustrampnn_scope: 'whole-experiment',
             });
@@ -512,23 +466,18 @@ export default function FrustraMpnnResultsViewer({
                         <button type="button" aria-pressed={scope === 'whole-experiment'} disabled={!onScopeChange} onClick={() => onScopeChange?.('whole-experiment')} className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-40 ${scope === 'whole-experiment' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>Whole experiment</button>
                     </div>
                 </section>
+                {results.data && results.data.items.length > 0 && <FrustraMpnnStructureSelector
+                    items={results.data.items}
+                    selectedInvocationId={selectedInvocation}
+                    onSelect={setSelectedInvocation}
+                />}
                 {scope === 'whole-experiment' && experimentContext === null && (
                     <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
                         Whole-experiment results require Project, Global Experiment, and Domain Experiment context from Project Manager.
                     </div>
                 )}
-                {wantsExperimentScope && (globalHead.isError || domainHead.isError) && (
-                    <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
-                        Whole-experiment hierarchy could not be loaded. {errorMessage(globalHead.error || domainHead.error, 'Project Manager hierarchy is unavailable.')}
-                    </div>
-                )}
-                {hierarchyAuthorityIncomplete && (
-                    <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
-                        Exact whole-experiment hierarchy authority is unavailable. Current Global and Domain revision heads must match the selected aggregate context.
-                    </div>
-                )}
-                {wantsExperimentScope && (globalHead.isLoading || domainHead.isLoading || (hierarchyAuthorityReady && experimentResults.isLoading)) && (
-                    <div role="status" className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">Whole-experiment results are loading…</div>
+                {wantsExperimentScope && experimentResults.isLoading && (
+                    <div role="status" className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">Whole-experiment results are loading for the selected Project Manager revisions…</div>
                 )}
                 {hierarchyAuthorityReady && experimentResults.isError && (
                     <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
@@ -538,19 +487,12 @@ export default function FrustraMpnnResultsViewer({
                 {hierarchyAuthorityReady && experimentResults.isSuccess && experimentResultLinks.length === 0 && (
                     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">No FrustraMPNN results are attached to this Domain Experiment.</div>
                 )}
-                {hierarchyAuthorityReady && experimentResultLinks.length > 0 && (
-                    <section aria-label="Whole-experiment FrustraMPNN results" className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-                        <h2 className="text-sm font-semibold">Whole-experiment results</h2>
-                        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                            {experimentResultLinks.map(({ item, href }) => (
-                                <a key={item.result_receipt_id} href={href} className="rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm hover:border-cyan-400/50">
-                                    <span className="block font-semibold text-cyan-100">{item.candidate_id}</span>
-                                    <span className="mt-1 block text-xs text-slate-400">Job {item.parent_job_id}</span>
-                                    <span className="block text-xs text-slate-500">Invocation {item.invocation_id}</span>
-                                </a>
-                            ))}
-                        </div>
-                    </section>
+                {hierarchyAuthorityReady && experimentResultLinks.length > 0 && experimentContext && (
+                    <FrustraMpnnExperimentResults
+                        items={experimentResultLinks}
+                        globalRevisionId={experimentContext.globalExperimentRevisionId}
+                        domainRevisionId={experimentContext.domainRevisionId}
+                    />
                 )}
                 {(requestedInvocation || requestedComparisonId || requestedGuidanceId) && (
                     <aside className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-100" aria-label="Exact FrustraMPNN source context">
@@ -600,13 +542,7 @@ export default function FrustraMpnnResultsViewer({
                 </section>}
 
                 {results.data && results.data.total > 1 && (
-                    <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300" aria-label="Persisted invocation history">
-                        <label>Persisted invocation
-                        <select value={results.data.items.some((item) => item.invocation_id === selectedInvocation) ? selectedInvocation ?? '' : ''} onChange={(event) => setSelectedInvocation(event.target.value)} className="ml-3 rounded border border-slate-700 bg-slate-950 px-3 py-2">
-                            {!results.data.items.some((item) => item.invocation_id === selectedInvocation) && <option value="">URL-selected invocation</option>}
-                            {results.data.items.map((item) => <option key={item.invocation_id} value={item.invocation_id}>{item.candidate_id} · {item.status}</option>)}
-                        </select>
-                        </label>
+                    <section className="flex flex-wrap items-center justify-end gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300" aria-label="Persisted invocation history pagination">
                         <div className="flex items-center gap-2"><span>{resultOffset + 1}–{Math.min(resultOffset + results.data.items.length, results.data.total)} of {results.data.total}</span><button type="button" disabled={resultOffset === 0 || results.isFetching} onClick={() => setResultOffset(Math.max(0, resultOffset - 50))} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Previous</button><button type="button" disabled={resultOffset + results.data.items.length >= results.data.total || results.isFetching} onClick={() => setResultOffset(resultOffset + 50)} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Next</button></div>
                     </section>
                 )}

@@ -105,6 +105,13 @@ const resultDetail = {
     parent_job_id: 'job-1',
     parent_workflow_id: 'structure_prediction',
     candidate_id: 'candidate-1',
+    operator_label: 'Candidate 1',
+    source_identity: {
+        design_id: null,
+        artifact_id: null,
+        artifact_sha256: hashes.a,
+        candidate_id: 'candidate-1',
+    },
     design_id: null,
     requiredness: 'required',
     source_artifact_id: null,

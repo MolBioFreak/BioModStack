@@ -27,6 +27,7 @@ from database import (
     ConformationalMappingRequest,
     Design,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     FrustraMPNNComparison,
     FrustraMPNNGuidancePlan,
     Job,
@@ -1036,6 +1037,16 @@ class FrustraMpnnResultAdapter:
         job = await core_session.get(Job, row.parent_job_id)
         if job is None:
             raise AdapterError("source_contract_invalid", "FrustraMPNN result has no native parent job")
+        design = await core_session.get(Design, row.design_id) if row.design_id else None
+        statistics_analysis = await core_session.scalar(
+            select(FrustraMPNNStatisticsAnalysis)
+            .where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == row.parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == row.invocation_id,
+            )
+            .order_by(FrustraMPNNStatisticsAnalysis.created_at.desc())
+            .limit(1)
+        )
         manifest_sha = hashlib.sha256(frustrampnn_canonical_bytes(row.manifest_json)).hexdigest()
         summary_sha = hashlib.sha256(frustrampnn_canonical_bytes(row.summary_json)).hexdigest()
         if manifest_sha != _sha256(row.manifest_sha256, "FrustraMPNN manifest digest"):
@@ -1076,9 +1087,31 @@ class FrustraMpnnResultAdapter:
                 "parent_job_id": row.parent_job_id,
                 "invocation_id": row.invocation_id,
                 "candidate_id": row.candidate_id,
+                "operator_label": _bounded_label(
+                    design.name if design is not None else row.candidate_id,
+                    row.candidate_id,
+                ),
+                "design_id": row.design_id,
+                "source_artifact_id": row.source_artifact_id,
+                "source_artifact_sha256": source_sha,
+                "canonical_state": str(terminal.get("status") or "completed"),
+                "diagnostic": (
+                    str(terminal.get("failure_detail"))[:240]
+                    if terminal.get("failure_detail")
+                    else None
+                ),
+                "statistics_analysis_state": (
+                    str(statistics_analysis.state)
+                    if statistics_analysis is not None
+                    else "not_started"
+                ),
+                "statistics_analysis_diagnostic": (
+                    str(statistics_analysis.diagnostic)[:240]
+                    if statistics_analysis is not None and statistics_analysis.diagnostic
+                    else None
+                ),
                 "manifest_sha256": manifest_sha,
                 "summary_sha256": summary_sha,
-                "source_artifact_sha256": source_sha,
                 "result_contract_id": "frustrampnn_result_v1",
             },
         )
