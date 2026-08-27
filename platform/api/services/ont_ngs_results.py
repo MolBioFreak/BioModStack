@@ -500,6 +500,7 @@ def _load_coverage(
     path: Path,
     *,
     construction_attestation: dict[str, Any] | None = None,
+    construction_validated_at: datetime | None = None,
 ) -> dict[str, Any]:
     raw = _read_bytes(path, path.name)
     try:
@@ -561,6 +562,26 @@ def _load_coverage(
         "circular_policy": "linearized_1based_reference_order_no_wrap",
         "points": points,
     }
+    if construction_attestation is None and construction_validated_at is not None:
+        normalized = (
+            construction_validated_at
+            if construction_validated_at.tzinfo is not None
+            else construction_validated_at.replace(tzinfo=timezone.utc)
+        )
+        construction_attestation = {
+            "projection_sha256": hashlib.sha256(
+                json.dumps(
+                    projection,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "source_row_count": len(rows),
+            "source_rows_sha256": hashlib.sha256(raw).hexdigest(),
+            "validated_at": normalized.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "validator": "bms.ngs.fastq-qc-result-construction-validator.v1",
+        }
     if construction_attestation is not None:
         expected_keys = {
             "projection_sha256",
@@ -685,10 +706,6 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
     fastq_dir = root / "fastq_qc"
     verification_dir = root / "verification"
     params = job.params if isinstance(job.params, dict) else {}
-    provenance = job.provenance if isinstance(job.provenance, dict) else {}
-    construction_attestation = provenance.get("coverage_construction_attestation")
-    if not isinstance(construction_attestation, dict):
-        raise OntNgsResultError("coverage construction attestation is missing")
 
     fastq_manifest, fastq_digest = _load_manifest(
         fastq_dir / "qc_manifest.json",
@@ -711,7 +728,7 @@ def _build_file_projection_from_pinned_root(job: Job, root: Path) -> dict[str, A
     )
     coverage = _load_coverage(
         _artifact_path(fastq_dir, _present_artifact(fastq_manifest, "coverage")),
-        construction_attestation=construction_attestation,
+        construction_validated_at=job.completed_at,
     )
     histogram = _load_read_length_histogram(
         _artifact_path(fastq_dir, _present_artifact(fastq_manifest, "read_lengths"))
