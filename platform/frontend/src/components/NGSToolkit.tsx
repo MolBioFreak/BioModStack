@@ -1806,11 +1806,19 @@ function applyIgvAlignmentOptionsToTrack(
     }
 
     for (const target of targets) {
-        target.colorBy = nextColorBy;
+        try {
+            target.colorBy = nextColorBy;
+        } catch {
+            // IGV 3.x exposes colorBy as a getter on BAMTrack; config remains mutable authority.
+        }
         if (target.config) {
             target.config.colorBy = nextColorBy;
         }
-        target.groupBy = nextGroupBy;
+        try {
+            target.groupBy = nextGroupBy;
+        } catch {
+            // Keep load non-fatal when IGV exposes a read-only grouping accessor.
+        }
         if (target.config) {
             target.config.groupBy = nextGroupBy;
         }
