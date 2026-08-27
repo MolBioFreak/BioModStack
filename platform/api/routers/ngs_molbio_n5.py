@@ -34,8 +34,6 @@ from experiment_models import (
 from experiment_services import ExperimentServiceError, IdempotencyConflict, NotFound, RevisionConflict, ValidationFailure
 from molbio_database import get_molbio_session
 from molbio_models import (
-    MolBioAuditEvent,
-    MolBioOutboxEvent,
     MolecularDocument,
     MolecularOperation,
     MolecularOperationInput,
@@ -752,60 +750,9 @@ async def project_hub(
     })
 
 
-async def _compensate_project_hub_molecular_edit(
-    molbio: AsyncSession,
-    *,
-    sequence_id: str,
-    old_revision_id: str,
-    old_snapshot: dict[str, Any],
-    metadata_id: str,
-    new_revision_id: str,
-    prior_metadata: dict[str, Any] | None,
-) -> None:
+async def _compensate_project_hub_molecular_edit(molbio: AsyncSession) -> None:
+    """Discard the uncommitted Mol Bio side of a failed cross-store edit."""
     await molbio.rollback()
-    await begin_immediate_molbio_write(molbio)
-    sequence = await molbio.get(NucleotideSequence, sequence_id)
-    document = await molbio.get(MolecularDocument, sequence_id)
-    if sequence is None or document is None:
-        raise RuntimeError("project-hub compensation authority is missing")
-    sequence.name = str(old_snapshot.get("name") or sequence.name)
-    sequence.description = old_snapshot.get("description")
-    sequence.sequence_type = str(old_snapshot.get("sequence_type") or sequence.sequence_type)
-    sequence.is_circular = bool(old_snapshot.get("is_circular"))
-    sequence.organism = old_snapshot.get("organism")
-    sequence.version = int(old_snapshot.get("version") or max(int(sequence.version or 2) - 1, 1))
-    sequence.updated_at = old_snapshot.get("updated_at")
-    document.name = sequence.name
-    document.document_kind = sequence.sequence_type
-    document.current_revision_id = old_revision_id
-    audit_rows = list((await molbio.scalars(select(MolBioAuditEvent).where(
-        MolBioAuditEvent.entity_kind == "molecular_document",
-        MolBioAuditEvent.entity_id == sequence_id,
-        MolBioAuditEvent.event_kind == "sequence.project_metadata_update",
-    ))).all())
-    for row in audit_rows:
-        if isinstance(row.payload, dict) and row.payload.get("revision_id") == new_revision_id:
-            await molbio.delete(row)
-    outbox_rows = list((await molbio.scalars(select(MolBioOutboxEvent).where(
-        MolBioOutboxEvent.aggregate_kind == "molecular_document",
-        MolBioOutboxEvent.aggregate_id == sequence_id,
-        MolBioOutboxEvent.event_kind == "sequence.project_metadata_update",
-    ))).all())
-    for row in outbox_rows:
-        if isinstance(row.payload, dict) and row.payload.get("revision_id") == new_revision_id:
-            await molbio.delete(row)
-    metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
-    if prior_metadata is None:
-        if metadata is not None:
-            await molbio.delete(metadata)
-    elif metadata is not None:
-        for key, value in prior_metadata.items():
-            setattr(metadata, key, value)
-    await molbio.flush()
-    leaked_revision = await molbio.get(MolecularRevision, new_revision_id)
-    if leaked_revision is not None:
-        await molbio.delete(leaked_revision)
-    await molbio.commit()
 
 
 @router.post(D + "/project-hub/plasmids/{sequence_id}/info")
@@ -867,18 +814,6 @@ async def edit_project_hub_plasmid_info(
     if len(matching) != 1:
         raise HTTPException(409, detail={"code": "member_revision_mismatch", "message": "exact molecular member is not present once"})
 
-    old_snapshot = dict(expected_revision.snapshot)
-    prior_metadata = None
-    if existing_metadata is not None:
-        prior_metadata = {
-            "molecular_revision_id": existing_metadata.molecular_revision_id,
-            "active_state_revision_id": existing_metadata.active_state_revision_id,
-            "tags": list(existing_metadata.tags or []),
-            "notes": existing_metadata.notes,
-            "idempotency_key": existing_metadata.idempotency_key,
-            "request_fingerprint": existing_metadata.request_fingerprint,
-            "updated_at": existing_metadata.updated_at,
-        }
     await begin_immediate_molbio_write(molbio)
     sequence.name = payload.molecular_fields.name
     sequence.description = payload.molecular_fields.description
@@ -905,8 +840,6 @@ async def edit_project_hub_plasmid_info(
     metadata.idempotency_key = payload.idempotency_key
     metadata.request_fingerprint = fingerprint
     metadata.updated_at = datetime.utcnow()
-    await molbio.commit()
-
     try:
         resolved = await resolve_molecular_revision_receipt(molbio, sequence_id=sequence_id, revision_id=new_revision.id)
         new_receipt = await persist_member_receipt(native, resolved)
@@ -930,7 +863,6 @@ async def edit_project_hub_plasmid_info(
             parent_revision_id=selected.id,
             idempotency_key=f"project-hub-edit:{payload.idempotency_key}",
         )
-        await begin_immediate_molbio_write(molbio)
         metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
         if metadata is None or metadata.molecular_revision_id != new_revision.id:
             raise RuntimeError("project metadata activation authority was lost")
@@ -940,11 +872,7 @@ async def edit_project_hub_plasmid_info(
         await native.commit()
     except Exception as exc:
         await native.rollback()
-        await _compensate_project_hub_molecular_edit(
-            molbio, sequence_id=sequence_id, old_revision_id=expected_revision.id,
-            old_snapshot=old_snapshot, metadata_id=metadata_id, new_revision_id=new_revision.id,
-            prior_metadata=prior_metadata,
-        )
+        await _compensate_project_hub_molecular_edit(molbio)
         if isinstance(exc, NativeRevisionConflict):
             raise HTTPException(409, detail={"code": "stale_generation", "message": str(exc)}) from exc
         if isinstance(exc, HTTPException):
