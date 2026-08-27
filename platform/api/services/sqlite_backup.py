@@ -252,6 +252,8 @@ def open_verified_sqlite_backup(
             raise RuntimeError("SQLite backup replay failed integrity validation")
         sealed_connection = sqlite3.connect(":memory:")
         connection.backup(sealed_connection)
+        if hashlib.sha256(sealed_connection.serialize()).hexdigest() != expected_sha256:
+            raise RuntimeError("SQLite sealed backup copy does not match its receipt")
         if _sha256_descriptor(descriptor) != expected_sha256:
             raise RuntimeError("SQLite backup bytes changed during verified readback")
         backup_path_after = _lstat(backup)
