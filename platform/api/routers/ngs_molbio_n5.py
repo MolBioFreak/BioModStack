@@ -750,9 +750,45 @@ async def project_hub(
     })
 
 
-async def _compensate_project_hub_molecular_edit(molbio: AsyncSession) -> None:
-    """Discard the uncommitted Mol Bio side of a failed cross-store edit."""
+async def _compensate_project_hub_molecular_edit(
+    molbio: AsyncSession,
+    *,
+    sequence_id: str,
+    failed_revision_id: str,
+    old_snapshot: dict[str, Any],
+    metadata_id: str,
+    prior_metadata: dict[str, Any] | None,
+) -> None:
+    """Roll back uncommitted work or append an immutable visible-state restoration."""
     await molbio.rollback()
+    if await molbio.get(MolecularRevision, failed_revision_id) is None:
+        return
+    await molbio.rollback()
+    await begin_immediate_molbio_write(molbio)
+    sequence = await molbio.get(NucleotideSequence, sequence_id)
+    if sequence is None:
+        raise RuntimeError("project-hub compensation authority is missing")
+    sequence.name = str(old_snapshot.get("name") or sequence.name)
+    sequence.description = old_snapshot.get("description")
+    sequence.sequence_type = str(old_snapshot.get("sequence_type") or sequence.sequence_type)
+    sequence.is_circular = bool(old_snapshot.get("is_circular"))
+    sequence.organism = old_snapshot.get("organism")
+    sequence.version = int(sequence.version or 1) + 1
+    sequence.updated_at = datetime.utcnow()
+    await record_sequence_revision(
+        molbio,
+        sequence,
+        change_kind="project_metadata_rollback",
+        provenance={"source": "project_hub_compensation", "failed_revision_id": failed_revision_id},
+    )
+    metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
+    if prior_metadata is None:
+        if metadata is not None:
+            await molbio.delete(metadata)
+    elif metadata is not None:
+        for key, value in prior_metadata.items():
+            setattr(metadata, key, value)
+    await molbio.commit()
 
 
 @router.post(D + "/project-hub/plasmids/{sequence_id}/info")
@@ -761,12 +797,14 @@ async def edit_project_hub_plasmid_info(
     experiment_id: str,
     domain_id: str,
     sequence_id: str,
+    request: Request,
     payload: ProjectHubEditInfo,
     session: AsyncSession = Depends(get_experiment_session),
     native: AsyncSession = Depends(get_molbio_ngs_session),
     molbio: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
         await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
@@ -814,6 +852,18 @@ async def edit_project_hub_plasmid_info(
     if len(matching) != 1:
         raise HTTPException(409, detail={"code": "member_revision_mismatch", "message": "exact molecular member is not present once"})
 
+    old_snapshot = dict(expected_revision.snapshot)
+    prior_metadata = None
+    if existing_metadata is not None:
+        prior_metadata = {
+            "molecular_revision_id": existing_metadata.molecular_revision_id,
+            "active_state_revision_id": existing_metadata.active_state_revision_id,
+            "tags": list(existing_metadata.tags or []),
+            "notes": existing_metadata.notes,
+            "idempotency_key": existing_metadata.idempotency_key,
+            "request_fingerprint": existing_metadata.request_fingerprint,
+            "updated_at": existing_metadata.updated_at,
+        }
     await begin_immediate_molbio_write(molbio)
     sequence.name = payload.molecular_fields.name
     sequence.description = payload.molecular_fields.description
@@ -872,7 +922,14 @@ async def edit_project_hub_plasmid_info(
         await native.commit()
     except Exception as exc:
         await native.rollback()
-        await _compensate_project_hub_molecular_edit(molbio)
+        await _compensate_project_hub_molecular_edit(
+            molbio,
+            sequence_id=sequence_id,
+            failed_revision_id=new_revision.id,
+            old_snapshot=old_snapshot,
+            metadata_id=metadata_id,
+            prior_metadata=prior_metadata,
+        )
         if isinstance(exc, NativeRevisionConflict):
             raise HTTPException(409, detail={"code": "stale_generation", "message": str(exc)}) from exc
         if isinstance(exc, HTTPException):
