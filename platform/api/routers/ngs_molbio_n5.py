@@ -6,6 +6,7 @@ import json
 import uuid
 from datetime import datetime
 from typing import Any, TypeVar
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -466,6 +467,26 @@ def _hub_href(value: Any) -> str | None:
     return None
 
 
+def _project_hub_molecular_href(
+    *,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    state_revision_id: str,
+    sequence_id: str,
+    revision_id: str,
+) -> str:
+    return "/designer?" + urlencode({
+        "workspace_id": project_id,
+        "global_experiment_id": experiment_id,
+        "domain_experiment_id": domain_id,
+        "state_revision_id": state_revision_id,
+        "section": "plasmids",
+        "molbio_sequence_id": sequence_id,
+        "molbio_revision_id": revision_id,
+    })
+
+
 @router.get(D + "/project-hub")
 async def project_hub(
     project_id: str,
@@ -535,12 +556,50 @@ async def project_hub(
             revision = input_revisions.get(item.revision_id)
             if revision is not None:
                 operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+    receipt_sequence_ids: dict[str, set[str]] = {}
+    for row in operation_receipts:
+        linked = set(operation_sequence_ids.get(row.entity_id, set()))
+        ack = _hub_acknowledgement(row)
+        metadata = ack.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        many = metadata.get("plasmid_sequence_ids")
+        if isinstance(many, list):
+            linked.update(str(value) for value in many if isinstance(value, str) and value)
+        for key in ("plasmid_sequence_id", "sequence_id", "molecular_sequence_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value:
+                linked.add(value)
+        receipt_sequence_ids[row.id] = linked
 
     plasmids: list[dict[str, Any]] = []
     names_by_sequence: dict[str, str] = {}
     for receipt in molecular_receipts:
         revision = revisions.get(receipt.entity_id)
         if revision is None or not isinstance(revision.snapshot, dict):
+            try:
+                destination = json.loads(receipt.reopen_destination)
+            except (TypeError, ValueError):
+                destination = {}
+            params = destination.get("params") if isinstance(destination, dict) and isinstance(destination.get("params"), dict) else {}
+            sequence_id = str(params.get("sequence_id") or receipt.entity_id)
+            plasmids.append({
+                "sequence_id": sequence_id, "revision_id": receipt.entity_id,
+                "receipt_id": receipt.receipt_id, "receipt_sha256": receipt.receipt_sha256,
+                "content_digest": receipt.content_digest, "source_store_id": receipt.source_store_id,
+                "schema_name": receipt.schema_name, "revision_number": 0,
+                "name": sequence_id, "description": "Molecular member unavailable",
+                "availability": "unavailable", "unavailable_reason": "Molecular member unavailable",
+                "length_bp": 0, "gc_percent": None, "feature_count": 0, "feature_labels": [],
+                "cmv_promoter": None, "neor_kanr": None, "replication_origin_count": None,
+                "saved_experiment_count": 0, "molecule_type": None, "topology": None,
+                "organism_host_context": None, "project_tags": [], "project_notes": "",
+                "reopen_href": _project_hub_molecular_href(
+                    project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
+                    state_revision_id=selected.id, sequence_id=sequence_id, revision_id=receipt.entity_id,
+                ),
+                "map_segments": [],
+            })
             continue
         snapshot = revision.snapshot
         features = snapshot.get("features") if isinstance(snapshot.get("features"), list) else []
@@ -549,7 +608,7 @@ async def project_hub(
         sequence_id = revision.document_id
         name = str(snapshot.get("name") or sequence_id)
         names_by_sequence[sequence_id] = name
-        saved_count = sum(sequence_id in operation_sequence_ids.get(row.entity_id, set()) for row in operation_receipts)
+        saved_count = sum(sequence_id in receipt_sequence_ids.get(row.id, set()) for row in operation_receipts)
         map_segments = [
             {"start": int(item.get("start", 0)), "end": int(item.get("end", 0)), "tone": "accent"}
             for item in features[:24] if isinstance(item, dict)
@@ -558,10 +617,16 @@ async def project_hub(
         plasmids.append({
             "sequence_id": sequence_id,
             "revision_id": revision.id,
+            "receipt_id": receipt.receipt_id,
+            "receipt_sha256": receipt.receipt_sha256,
+            "content_digest": receipt.content_digest,
+            "source_store_id": receipt.source_store_id,
+            "schema_name": receipt.schema_name,
             "revision_number": revision.revision_number,
             "name": name,
             "description": str(snapshot.get("description") or ""),
             "availability": receipt.availability,
+            "unavailable_reason": None,
             "length_bp": revision.content_length,
             "gc_percent": snapshot.get("gc_content"),
             "feature_count": len(features),
@@ -575,7 +640,14 @@ async def project_hub(
             "organism_host_context": snapshot.get("organism"),
             "project_tags": list(metadata.tags or []) if metadata is not None and metadata.molecular_revision_id == revision.id else [],
             "project_notes": str(metadata.notes or "") if metadata is not None and metadata.molecular_revision_id == revision.id else "",
-            "reopen_href": _hub_href(json.loads(receipt.reopen_destination)) or f"/designer?molbio_sequence_id={sequence_id}&molbio_revision_id={revision.id}",
+            "reopen_href": _project_hub_molecular_href(
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                state_revision_id=selected.id,
+                sequence_id=sequence_id,
+                revision_id=revision.id,
+            ),
             "map_segments": map_segments,
         })
 
@@ -583,9 +655,11 @@ async def project_hub(
     kind_map = {"digest": "restriction_digest", "alignment": "alignment", "pcr": "pcr"}
     for row in operation_receipts:
         ack = _hub_acknowledgement(row)
-        metadata = ack.get("metadata") if isinstance(ack.get("metadata"), dict) else {}
+        metadata = ack.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         operation = operations.get(row.entity_id)
-        sequence_ids = sorted(operation_sequence_ids.get(row.entity_id, set()))
+        sequence_ids = sorted(sequence_id for sequence_id in receipt_sequence_ids.get(row.id, set()) if sequence_id in names_by_sequence)
         if not sequence_ids:
             continue
         sequence_id = sequence_ids[0]
@@ -595,6 +669,7 @@ async def project_hub(
         experiments.append({
             "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
             "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, sequence_id),
+            "plasmid_sequence_ids": sequence_ids,
             "title": str(title), "status": operation.status if operation is not None else "saved",
             "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
         })
@@ -608,7 +683,9 @@ async def project_hub(
     result_items: list[dict[str, Any]] = []
     for row in evidence_receipts:
         ack = _hub_acknowledgement(row)
-        metadata = ack.get("metadata") if isinstance(ack.get("metadata"), dict) else {}
+        metadata = ack.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         sequence_id = str(metadata.get("plasmid_sequence_id") or "")
         plasmid_name = names_by_sequence.get(sequence_id, str(metadata.get("plasmid_name") or "Unassigned plasmid"))
         if row.entity_kind in sequence_kinds:
@@ -677,27 +754,33 @@ async def _compensate_project_hub_molecular_edit(
     molbio: AsyncSession,
     *,
     sequence_id: str,
-    old_revision_id: str,
+    failed_revision_id: str,
     old_snapshot: dict[str, Any],
     metadata_id: str,
     prior_metadata: dict[str, Any] | None,
 ) -> None:
+    """Roll back uncommitted work or append an immutable visible-state restoration."""
+    await molbio.rollback()
+    if await molbio.get(MolecularRevision, failed_revision_id) is None:
+        return
     await molbio.rollback()
     await begin_immediate_molbio_write(molbio)
     sequence = await molbio.get(NucleotideSequence, sequence_id)
-    document = await molbio.get(MolecularDocument, sequence_id)
-    if sequence is None or document is None:
+    if sequence is None:
         raise RuntimeError("project-hub compensation authority is missing")
     sequence.name = str(old_snapshot.get("name") or sequence.name)
     sequence.description = old_snapshot.get("description")
     sequence.sequence_type = str(old_snapshot.get("sequence_type") or sequence.sequence_type)
     sequence.is_circular = bool(old_snapshot.get("is_circular"))
     sequence.organism = old_snapshot.get("organism")
-    sequence.version = int(old_snapshot.get("version") or max(int(sequence.version or 2) - 1, 1))
-    sequence.updated_at = old_snapshot.get("updated_at")
-    document.name = sequence.name
-    document.document_kind = sequence.sequence_type
-    document.current_revision_id = old_revision_id
+    sequence.version = int(sequence.version or 1) + 1
+    sequence.updated_at = datetime.utcnow()
+    await record_sequence_revision(
+        molbio,
+        sequence,
+        change_kind="project_metadata_rollback",
+        provenance={"source": "project_hub_compensation", "failed_revision_id": failed_revision_id},
+    )
     metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
     if prior_metadata is None:
         if metadata is not None:
@@ -714,12 +797,14 @@ async def edit_project_hub_plasmid_info(
     experiment_id: str,
     domain_id: str,
     sequence_id: str,
+    request: Request,
     payload: ProjectHubEditInfo,
     session: AsyncSession = Depends(get_experiment_session),
     native: AsyncSession = Depends(get_molbio_ngs_session),
     molbio: AsyncSession = Depends(get_molbio_session),
 ) -> dict[str, Any]:
     try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
         await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
     except ExperimentServiceError as exc:
         raise _error(exc) from exc
@@ -805,8 +890,6 @@ async def edit_project_hub_plasmid_info(
     metadata.idempotency_key = payload.idempotency_key
     metadata.request_fingerprint = fingerprint
     metadata.updated_at = datetime.utcnow()
-    await molbio.commit()
-
     try:
         resolved = await resolve_molecular_revision_receipt(molbio, sequence_id=sequence_id, revision_id=new_revision.id)
         new_receipt = await persist_member_receipt(native, resolved)
@@ -830,7 +913,6 @@ async def edit_project_hub_plasmid_info(
             parent_revision_id=selected.id,
             idempotency_key=f"project-hub-edit:{payload.idempotency_key}",
         )
-        await begin_immediate_molbio_write(molbio)
         metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
         if metadata is None or metadata.molecular_revision_id != new_revision.id:
             raise RuntimeError("project metadata activation authority was lost")
@@ -841,8 +923,12 @@ async def edit_project_hub_plasmid_info(
     except Exception as exc:
         await native.rollback()
         await _compensate_project_hub_molecular_edit(
-            molbio, sequence_id=sequence_id, old_revision_id=expected_revision.id,
-            old_snapshot=old_snapshot, metadata_id=metadata_id, prior_metadata=prior_metadata,
+            molbio,
+            sequence_id=sequence_id,
+            failed_revision_id=new_revision.id,
+            old_snapshot=old_snapshot,
+            metadata_id=metadata_id,
+            prior_metadata=prior_metadata,
         )
         if isinstance(exc, NativeRevisionConflict):
             raise HTTPException(409, detail={"code": "stale_generation", "message": str(exc)}) from exc

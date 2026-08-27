@@ -5269,10 +5269,16 @@ export interface ProjectHubMapSegment {
 export interface ProjectHubPlasmidSummary {
     sequence_id: string;
     revision_id: string;
+    receipt_id: string;
+    receipt_sha256: string;
+    content_digest: string;
+    source_store_id: string;
+    schema_name: string;
     revision_number: number;
     name: string;
     description: string;
     availability: string;
+    unavailable_reason: string | null;
     length_bp: number;
     gc_percent: number | null;
     feature_count: number;
@@ -5307,6 +5313,7 @@ export interface ProjectHubExperimentSummary {
     persistence: 'saved' | 'unsaved';
     kind: ProjectHubExperimentKind;
     plasmid_sequence_id: string;
+    plasmid_sequence_ids: string[];
     plasmid_name: string;
     title: string;
     status: string;

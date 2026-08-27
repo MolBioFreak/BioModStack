@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_database import create_experiment_engine, create_experiment_session_factory, get_experiment_session
 from experiment_models import ExperimentAuditEvent, ExperimentBase, ExperimentExternalEntityReceipt, ExperimentLineageEdge, ExperimentResource
@@ -58,6 +59,11 @@ async def hub_stores(tmp_path):
             "objective": "Onboard plasmids", "status": "active", "tags": [], "source_receipt_ids": [], "dataset_ids": [], "created_by": "operator",
             "change_summary": "created", "domain_payload": {"schema": "bms.ngs-molbio-experiment.v1"},
         })
+        experiment_session.add(ExperimentAuditEvent(
+            id="workspace-owner", workspace_id=project.id, resource_id=project.id,
+            event_type="workspace_owner_bound", generation=1,
+            payload_json=_canonical({"principal_id": "operator"}),
+        ))
         await experiment_session.commit()
 
     async with molbio_factory() as molbio_session:
@@ -96,6 +102,7 @@ async def hub_stores(tmp_path):
         acknowledgement = {"reopen_uri": f"/designer?molbio_operation_id={operation.id}", "metadata": {"title": "Saved alignment"}}
         for receipt_id, kind, entity_id, digest, ack in (
             ("operation-receipt", "molecular_operation", operation.id, "1" * 64, acknowledgement),
+            ("pcr-receipt", "pcr_experiment_revision", "pcr-revision-1", "4" * 64, {"reopen_uri": "/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1", "metadata": {"title": "Saved PCR", "plasmid_sequence_id": sequence.id}}),
             ("result-receipt", "ngs_result_manifest", "result-1", "2" * 64, {"reopen_uri": "/ngs?job_id=job-1", "metadata": {"title": "Clone assessment", "summary": "Persisted clone result", "status": "ready", "plasmid_sequence_id": sequence.id}}),
             ("unlinked-operation", "molecular_operation", "global-only", "3" * 64, {"reopen_uri": "/designer?molbio_operation_id=global-only"}),
         ):
@@ -104,6 +111,7 @@ async def hub_stores(tmp_path):
             experiment_session.add(ExperimentExternalEntityReceipt(id=receipt_id, workspace_id=project.id, resource_id=receipt_id, store_id="molbio" if kind == "molecular_operation" else "core", entity_kind=kind, entity_id=entity_id, generation_or_revision="1", content_digest=digest, availability="available", verification_authority="test", acknowledgement_json=_canonical(ack)))
         experiment_session.add_all([
             ExperimentLineageEdge(id="operation-edge", workspace_id=project.id, source_resource_id=domain.id, target_resource_id="operation-receipt", edge_mode="attached", edge_key="operation"),
+            ExperimentLineageEdge(id="pcr-edge", workspace_id=project.id, source_resource_id=domain.id, target_resource_id="pcr-receipt", edge_mode="attached", edge_key="pcr"),
             ExperimentLineageEdge(id="result-edge", workspace_id=project.id, source_resource_id=domain.id, target_resource_id="result-receipt", edge_mode="attached", edge_key="result"),
             ExperimentAuditEvent(id="activity-1", workspace_id=project.id, resource_id=domain.id, event_type="molecular_member_attached", generation=1, payload_json=_canonical({"receipt_id": receipt.receipt_id, "sequence_id": sequence.id, "name": sequence.name})),
         ])
@@ -117,8 +125,13 @@ async def hub_stores(tmp_path):
         await molbio_engine.dispose()
 
 
-def _app(experiment_factory, native_factory, molbio_factory):
+def _app(experiment_factory, native_factory, molbio_factory, *, authenticated: bool = True):
     app = FastAPI()
+    if authenticated:
+        @app.middleware("http")
+        async def authenticate(request, call_next):
+            request.state.authenticated_principal = {"id": "operator", "roles": ["operator"]}
+            return await call_next(request)
     app.include_router(router)
     async def experiments():
         async with experiment_factory() as session:
@@ -136,6 +149,25 @@ def _app(experiment_factory, native_factory, molbio_factory):
 
 
 @pytest.mark.asyncio
+async def test_project_hub_edit_info_requires_authenticated_project_owner(hub_stores):
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, revision = hub_stores
+    app = _app(experiment_factory, native_factory, molbio_factory, authenticated=False)
+    url = f"/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub/plasmids/sequence-pl1480/info"
+    request = {
+        "expected_molecular_revision_id": revision.id, "expected_state_revision_id": "state-current",
+        "expected_state_head_generation": 1, "idempotency_key": "unauthorized-edit",
+        "molecular_fields": {"name": "Unauthorized", "molecule_type": "dna", "topology": "circular", "description": "blocked", "organism_host_context": None},
+        "project_metadata": {"project_tags": [], "project_notes": ""},
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(url, json=request)
+    assert response.status_code == 401
+    async with molbio_factory() as session:
+        document = await session.get(MolecularDocument, "sequence-pl1480")
+        assert document.current_revision_id == revision.id
+
+
+@pytest.mark.asyncio
 async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_stores):
     experiment_factory, native_factory, molbio_factory, project, experiment, domain, revision = hub_stores
     app = _app(experiment_factory, native_factory, molbio_factory)
@@ -149,8 +181,22 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     assert payload["identity"]["current_state_revision_id"] == "state-current"
     assert payload["plasmids"][0]["sequence_id"] == "sequence-pl1480"
     assert payload["plasmids"][0]["revision_id"] == revision.id
-    assert payload["plasmids"][0]["saved_experiment_count"] == 1
-    assert [item["title"] for item in payload["experiments"]] == ["Saved alignment"]
+    assert payload["plasmids"][0]["receipt_id"]
+    assert payload["plasmids"][0]["receipt_sha256"]
+    assert payload["plasmids"][0]["content_digest"]
+    assert payload["plasmids"][0]["source_store_id"] == "molbio"
+    assert payload["plasmids"][0]["schema_name"]
+    reopen_href = payload["plasmids"][0]["reopen_href"]
+    assert f"workspace_id={project.id}" in reopen_href
+    assert f"global_experiment_id={experiment.id}" in reopen_href
+    assert f"domain_experiment_id={domain.id}" in reopen_href
+    assert "state_revision_id=state-current" in reopen_href
+    assert "section=plasmids" in reopen_href
+    assert "molbio_sequence_id=sequence-pl1480" in reopen_href
+    assert f"molbio_revision_id={revision.id}" in reopen_href
+    assert payload["plasmids"][0]["saved_experiment_count"] == 2
+    assert {item["title"] for item in payload["experiments"]} == {"Saved alignment", "Saved PCR"}
+    assert all(item["plasmid_sequence_ids"] == ["sequence-pl1480"] for item in payload["experiments"])
     assert [item["summary"] for item in payload["results"]] == ["Persisted clone result"]
     assert payload["sequence_data"]["items"] == []
     assert payload["activity"][0]["summary"] == "PL1480 added to the project"
@@ -229,3 +275,65 @@ async def test_project_hub_edit_info_compensates_cross_store_failure_without_vis
         document = await session.get(MolecularDocument, "sequence-pl1480")
         assert document.current_revision_id == revision.id
         assert (await session.execute(text("SELECT count(*) FROM project_plasmid_metadata"))).scalar_one() == 0
+        assert (await session.execute(text("SELECT count(*) FROM molecular_revisions WHERE document_id='sequence-pl1480'"))).scalar_one() == 1
+        assert (await session.execute(text("SELECT count(*) FROM molbio_audit_events WHERE event_kind='sequence.project_metadata_update'"))).scalar_one() == 0
+        assert (await session.execute(text("SELECT count(*) FROM molbio_outbox_events WHERE event_kind='sequence.project_metadata_update'"))).scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_project_hub_edit_info_restores_visible_molecular_state_when_native_commit_fails(hub_stores, monkeypatch):
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, revision = hub_stores
+    original_commit = AsyncSession.commit
+    injected = False
+
+    async def fail_first_native_commit(session):
+        nonlocal injected
+        if not injected and "native.db" in str(session.get_bind().url):
+            injected = True
+            raise RuntimeError("injected native commit failure")
+        await original_commit(session)
+
+    monkeypatch.setattr(AsyncSession, "commit", fail_first_native_commit)
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    url = f"/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub/plasmids/sequence-pl1480/info"
+    request = {
+        "expected_molecular_revision_id": revision.id, "expected_state_revision_id": "state-current",
+        "expected_state_head_generation": 1, "idempotency_key": "edit-native-commit-failure",
+        "molecular_fields": {"name": "Must be compensated", "molecule_type": "dna", "topology": "circular", "description": "failed commit", "organism_host_context": None},
+        "project_metadata": {"project_tags": ["must-not-remain-visible"], "project_notes": "must be compensated"},
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        failed = await client.post(url, json=request)
+    assert failed.status_code == 500
+    assert injected is True
+    async with molbio_factory() as session:
+        document = await session.get(MolecularDocument, "sequence-pl1480")
+        current = await session.get(MolecularRevision, document.current_revision_id)
+        assert current.snapshot["name"] == "PL1480"
+        assert current.change_kind == "project_metadata_rollback"
+        assert (await session.execute(text("SELECT count(*) FROM molecular_revisions WHERE document_id='sequence-pl1480'"))).scalar_one() == 3
+        assert (await session.execute(text("SELECT count(*) FROM project_plasmid_metadata"))).scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_project_hub_keeps_unavailable_molecular_members_visible(hub_stores):
+    experiment_factory, native_factory, molbio_factory, project, experiment, domain, _revision = hub_stores
+    async with native_factory() as session:
+        receipt = MolBioNGSMemberReceipt(
+            receipt_id="missing-revision-receipt", source_store_id="molbio", entity_kind="molecular_revision",
+            entity_id="missing-revision", source_generation_or_revision="1", content_digest="f" * 64,
+            schema_name="bms.molecular-revision.v1", schema_version="1", availability="unavailable",
+            reopen_destination=_canonical({"uri": "/designer?molbio_sequence_id=missing-sequence&molbio_revision_id=missing-revision"}),
+            canonical_receipt="{}", receipt_sha256="e" * 64, created_at="2026-08-27T12:00:00Z",
+        )
+        session.add(receipt)
+        await session.flush()
+        session.add(MolBioNGSDomainStateMember(state_revision_id="state-current", receipt_id=receipt.receipt_id, role="molecular_expected_construct", ordinal=1, created_at="2026-08-27T12:00:00Z"))
+        await session.commit()
+    app = _app(experiment_factory, native_factory, molbio_factory)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/projects/{project.id}/experiments/{experiment.id}/domains/{domain.id}/project-hub", params={"state_revision_id": "state-current"})
+    assert response.status_code == 200, response.text
+    missing = next(item for item in response.json()["plasmids"] if item["revision_id"] == "missing-revision")
+    assert missing["availability"] == "unavailable"
+    assert missing["unavailable_reason"] == "Molecular member unavailable"

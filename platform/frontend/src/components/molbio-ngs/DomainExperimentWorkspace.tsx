@@ -273,6 +273,7 @@ export default function DomainExperimentWorkspace() {
         enabled: hasProjectHubContext && selectedStateRevisionId !== null,
         retry: false,
     });
+    const [projectHubConflictMessage, setProjectHubConflictMessage] = useState<string | null>(null);
     const plasmidInfoMutation = useMutation({
         mutationFn: async ({ plasmid, draft }: { plasmid: ProjectHubPlasmidSummary; draft: ProjectHubPlasmidInfoDraft }) => {
             const model = projectHubQuery.data;
@@ -300,7 +301,9 @@ export default function DomainExperimentWorkspace() {
                 },
             });
         },
+        onMutate: () => setProjectHubConflictMessage(null),
         onSuccess: (model) => {
+            setProjectHubConflictMessage(null);
             queryClient.setQueryData(
                 ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId, model.identity.selected_state_revision_id],
                 model,
@@ -308,6 +311,24 @@ export default function DomainExperimentWorkspace() {
             void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
             if (model.identity.selected_state_revision_id !== selectedStateRevisionId) {
                 setStateRevisionId(model.identity.selected_state_revision_id);
+            }
+        },
+        onError: async (error) => {
+            const response = (error as { response?: { status?: number; data?: { detail?: { code?: string } } } }).response;
+            const code = response?.data?.detail?.code;
+            if (response?.status === 409 && (code === 'stale_generation' || code === 'stale_molecular_revision')) {
+                setProjectHubConflictMessage('Project state advanced. Review the refreshed state before retrying.');
+                await queryClient.invalidateQueries({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    exact: true,
+                    refetchType: 'none',
+                });
+                const refreshedState = await queryClient.fetchQuery({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    queryFn: () => fetchMolBioNgsDomainState(exactDomainId as string),
+                });
+                setStateRevisionId(refreshedState.current_state_revision_id);
+                void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
             }
         },
     });
@@ -899,7 +920,7 @@ export default function DomainExperimentWorkspace() {
                     plasmidInfoMutation.reset();
                     await plasmidInfoMutation.mutateAsync({ plasmid, draft });
                 }}
-                saveError={errorText(plasmidInfoMutation.error)}
+                saveError={projectHubConflictMessage ?? errorText(plasmidInfoMutation.error)}
                 saving={plasmidInfoMutation.isPending}
             />
         );

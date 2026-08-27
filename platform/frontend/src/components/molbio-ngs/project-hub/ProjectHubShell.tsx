@@ -85,9 +85,50 @@ function TechnicalDetails({ model }: { model: ProjectHubReadModel }) {
                     <div key={label} className="min-w-0 rounded-lg border border-border-primary bg-surface p-3">
                         <dt className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">{label}</dt>
                         <dd className="mt-1 break-all font-mono text-content-secondary">{String(value)}</dd>
+                        <button
+                            type="button"
+                            aria-label={`Copy ${label}`}
+                            className="mt-2 text-[10px] font-semibold text-accent"
+                            onClick={() => {
+                                if (navigator.clipboard) void navigator.clipboard.writeText(String(value)).catch(() => undefined);
+                            }}
+                        >Copy</button>
                     </div>
                 ))}
             </dl>
+            <h3 className="mt-5 font-semibold text-content">Plasmid technical records</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {model.plasmids.map((plasmid) => (
+                    <section key={plasmid.sequence_id} className="min-w-0 rounded-lg border border-border-primary bg-surface p-3">
+                        <h4 className="font-semibold text-content">{plasmid.name}</h4>
+                        <dl className="mt-2 space-y-2">
+                            {[
+                                ['molecular document ID', plasmid.sequence_id],
+                                ['molecular revision ID', plasmid.revision_id],
+                                ['receipt ID', plasmid.receipt_id],
+                                ['receipt SHA-256', plasmid.receipt_sha256],
+                                ['content digest', plasmid.content_digest],
+                                ['source store', plasmid.source_store_id],
+                                ['schema', plasmid.schema_name],
+                                ['exact reopen destination', plasmid.reopen_href],
+                            ].map(([label, value]) => (
+                                <div key={label}>
+                                    <dt className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">{label}</dt>
+                                    <dd className="break-all font-mono text-content-secondary">{value}</dd>
+                                    <button
+                                        type="button"
+                                        aria-label={`Copy ${plasmid.name} ${label}`}
+                                        className="mt-1 text-[10px] font-semibold text-accent"
+                                        onClick={() => {
+                                            if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => undefined);
+                                        }}
+                                    >Copy</button>
+                                </div>
+                            ))}
+                        </dl>
+                    </section>
+                ))}
+            </div>
         </details>
     );
 }
@@ -105,7 +146,8 @@ function Presence({ label, value, suffix = 'Present' }: { label: string; value: 
     );
 }
 
-function PlasmidCard({ plasmid, canMutate, onEdit, onDetails }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onDetails: () => void }) {
+function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onCompare: () => void; onDetails: () => void }) {
+    const unavailable = plasmid.availability === 'unavailable';
     return (
         <article className={`${PANEL} flex min-h-[430px] min-w-0 flex-col p-4`}>
             <div className="flex items-start gap-3">
@@ -115,8 +157,9 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onDetails }: { plasmid: Proje
                     <p className="text-xs text-content-secondary">{plasmid.description || 'No description recorded'}</p>
                     <p className="mt-1 text-xs text-content-muted">Current sequence · revision {plasmid.revision_number}</p>
                 </div>
-                <span className="rounded-full border border-success/40 bg-success/10 px-2 py-1 text-[10px] font-semibold capitalize text-success">{plasmid.availability}</span>
+                <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold capitalize ${unavailable ? 'border-danger/40 bg-danger/10 text-danger' : 'border-success/40 bg-success/10 text-success'}`}>{plasmid.availability}</span>
             </div>
+            {unavailable && <p role="alert" className="mt-3 rounded-lg border border-danger/40 bg-danger/10 p-3 text-xs font-semibold text-danger">{plasmid.unavailable_reason ?? 'Molecular member unavailable'}</p>}
             <div className="mt-3 flex min-h-12 flex-wrap content-start gap-1.5">
                 {plasmid.feature_labels.slice(0, 4).map((label) => <span key={label} className="rounded-md border border-border-primary bg-surface px-2 py-1 text-[9px] text-content-secondary">{label}</span>)}
             </div>
@@ -136,9 +179,9 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onDetails }: { plasmid: Proje
             </div>
             <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
                 <Link className={PRIMARY} to={plasmid.reopen_href}>Open plasmid</Link>
-                <button type="button" className={BUTTON}>Compare</button>
+                <button type="button" className={BUTTON} onClick={onCompare}>Compare</button>
                 <button type="button" className={BUTTON} onClick={onDetails}>Plasmid details</button>
-                <button type="button" className={BUTTON} disabled={!canMutate} onClick={(event) => onEdit(event.currentTarget)}>Edit info</button>
+                <button type="button" className={BUTTON} disabled={!canMutate || unavailable} onClick={(event) => onEdit(event.currentTarget)}>Edit info</button>
             </div>
         </article>
     );
@@ -153,10 +196,10 @@ function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubR
         <>
             <div className="mb-3 flex items-end justify-between gap-4">
                 <div><h2 className="text-xl font-bold text-content">Plasmids</h2><p className="text-sm text-content-secondary">Project molecular inventory, construct summaries, and saved work.</p></div>
-                <button className="text-xs font-semibold text-accent" type="button">Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
+                <button className="text-xs font-semibold text-accent" type="button" onClick={() => onNavigate({ section: 'plasmids', plasmid: null })}>Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
-                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
+            <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onCompare={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
                 <section className={`${PANEL} p-4`}><h3 className="font-semibold text-content">Recent project activity</h3><div className="mt-3 space-y-3">{model.activity.slice(0, 2).map((event) => <div key={event.id} className="flex gap-3 text-xs"><span className="mt-1 text-accent">●</span><div><strong className="block text-content">{event.summary}</strong><span className="text-content-muted">{formatDate(event.occurred_at)}</span></div></div>)}{model.activity.length === 0 && <EmptyInline title="No project activity yet" />}</div></section>
@@ -167,18 +210,25 @@ function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubR
     );
 }
 
-function PlasmidsTab({ model, canMutate, onEdit }: { model: ProjectHubReadModel; canMutate: boolean; onEdit: (p: ProjectHubPlasmidSummary, invoker: HTMLButtonElement) => void }) {
+function PlasmidsTab({ model, canMutate, onEdit, selectedPlasmidId }: { model: ProjectHubReadModel; canMutate: boolean; onEdit: (p: ProjectHubPlasmidSummary, invoker: HTMLButtonElement) => void; selectedPlasmidId: string | null }) {
+    const selected = model.plasmids.find((plasmid) => plasmid.sequence_id === selectedPlasmidId) ?? null;
     return (
         <>
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-bold text-content">Plasmids</h2><p className="text-sm text-content-secondary">Current saved plasmid records, maps, and imported annotations for this project.</p></div>{canMutate && <Link className={PRIMARY} to={model.project.add_plasmid_href}>+ Add plasmid</Link>}</div>
-            <div className={`${PANEL} overflow-x-auto`}>
-                <table className="w-full min-w-[880px] text-left text-xs">
+            <section data-testid="project-plasmid-comparison" className={`${PANEL} mb-4 p-4`}>
+                <h2 className="text-lg font-bold text-content">{selected ? `Compare ${selected.name} with project plasmids` : 'Compare all project plasmids'}</h2>
+                <p className="text-xs text-content-secondary">Current revision metrics appear together for direct review.</p>
+                <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">{model.plasmids.map((plasmid) => <div key={plasmid.sequence_id} className={`rounded-lg border p-3 ${plasmid.sequence_id === selected?.sequence_id ? 'border-accent bg-accent/10' : 'border-border-primary bg-surface'}`}><strong className="text-content">{plasmid.name}</strong><dl className="mt-2 grid grid-cols-2 gap-2 text-xs"><div><dt className="text-content-muted">Length</dt><dd className="font-semibold text-content">{plasmid.length_bp.toLocaleString()} bp</dd></div><div><dt className="text-content-muted">GC</dt><dd className="font-semibold text-content">{plasmid.gc_percent === null ? '—' : `${plasmid.gc_percent.toFixed(2)}%`}</dd></div><div><dt className="text-content-muted">Features</dt><dd className="font-semibold text-content">{plasmid.feature_count}</dd></div><div><dt className="text-content-muted">Saved work</dt><dd className="font-semibold text-content">{plasmid.saved_experiment_count}</dd></div></dl></div>)}</div>
+            </section>
+            <div data-testid="project-plasmid-desktop-table" className={`${PANEL} hidden overflow-x-auto lg:block`}>
+                <table className="w-full text-left text-xs">
                     <thead className="border-b border-border-primary bg-surface text-[10px] uppercase tracking-wide text-content-muted"><tr><th className="p-3">Map</th><th className="p-3">Plasmid</th><th className="p-3">Length</th><th className="p-3">GC</th><th className="p-3">Features</th><th className="p-3">Saved state</th><th className="p-3">Actions</th></tr></thead>
-                    <tbody>{model.plasmids.map((plasmid) => <tr key={plasmid.sequence_id} className="border-b border-border-primary last:border-b-0"><td className="p-3"><PlasmidMap plasmid={plasmid} size={62} /></td><td className="p-3"><strong className="block text-sm text-content">{plasmid.name}</strong><span className="text-content-muted">{plasmid.description}</span></td><td className="p-3 font-semibold text-content">{plasmid.length_bp.toLocaleString()} bp</td><td className="p-3 text-content-secondary">{plasmid.gc_percent === null ? '—' : `${plasmid.gc_percent.toFixed(2)}%`}</td><td className="p-3 text-content-secondary">{plasmid.feature_count}</td><td className="p-3 text-content-secondary">Revision {plasmid.revision_number}</td><td className="p-3"><div className="flex gap-2"><Link className={PRIMARY} to={plasmid.reopen_href}>Open sequence</Link><button type="button" className={BUTTON} disabled={!canMutate} onClick={(event) => onEdit(plasmid, event.currentTarget)}>Edit info</button></div></td></tr>)}</tbody>
+                    <tbody>{model.plasmids.map((plasmid) => <tr key={plasmid.sequence_id} className="border-b border-border-primary last:border-b-0"><td className="p-3"><PlasmidMap plasmid={plasmid} size={62} /></td><td className="p-3"><strong className="block text-sm text-content">{plasmid.name}</strong><span className="text-content-muted">{plasmid.description}</span></td><td className="p-3 font-semibold text-content">{plasmid.length_bp.toLocaleString()} bp</td><td className="p-3 text-content-secondary">{plasmid.gc_percent === null ? '—' : `${plasmid.gc_percent.toFixed(2)}%`}</td><td className="p-3 text-content-secondary">{plasmid.feature_count}</td><td className="p-3 text-content-secondary">Revision {plasmid.revision_number}</td><td className="p-3"><div className="flex gap-2"><Link className={PRIMARY} to={plasmid.reopen_href}>Open sequence</Link><button type="button" className={BUTTON} disabled={!canMutate || plasmid.availability === 'unavailable'} onClick={(event) => onEdit(plasmid, event.currentTarget)}>Edit info</button></div></td></tr>)}</tbody>
                 </table>
             </div>
+            <div data-testid="project-plasmid-stacked-records" className="grid gap-3 lg:hidden">{model.plasmids.map((plasmid) => <article key={plasmid.sequence_id} className={`${PANEL} p-4`}><div className="flex items-center gap-3"><PlasmidMap plasmid={plasmid} size={62} /><div><h3 className="font-semibold text-content">{plasmid.name}</h3><p className="text-xs text-content-secondary">{plasmid.length_bp.toLocaleString()} bp · {plasmid.feature_count} features · Revision {plasmid.revision_number}</p></div></div><div className="mt-3 flex gap-2"><Link className={PRIMARY} to={plasmid.reopen_href}>Open sequence</Link><button type="button" className={BUTTON} disabled={!canMutate || plasmid.availability === 'unavailable'} onClick={(event) => onEdit(plasmid, event.currentTarget)}>Edit info</button></div></article>)}</div>
             <div className="mt-4"><h2 className="text-xl font-bold text-content">Feature summaries</h2><p className="text-sm text-content-secondary">Readable annotations from each current sequence revision.</p></div>
-            <div className="mt-3 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">{model.plasmids.map((plasmid) => <section key={plasmid.sequence_id} className={`${PANEL} p-4`}><h3 className="font-semibold text-content">{plasmid.name}</h3><div className="mt-2 flex flex-wrap gap-1.5">{plasmid.feature_labels.map((label) => <span key={label} className="rounded-md border border-border-primary bg-surface px-2 py-1 text-[10px] text-content-secondary">{label}</span>)}</div></section>)}</div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2 xl:grid-cols-4">{model.plasmids.map((plasmid) => <section key={plasmid.sequence_id} className={`${PANEL} p-4`}><h3 className="font-semibold text-content">{plasmid.name}</h3><div className="mt-2 flex flex-wrap gap-1.5">{plasmid.feature_labels.map((label) => <span key={label} className="rounded-md border border-border-primary bg-surface px-2 py-1 text-[10px] text-content-secondary">{label}</span>)}</div></section>)}</div>
             <TechnicalDetails model={model} />
         </>
     );
@@ -221,7 +271,7 @@ const EXPERIMENT_LANES: Array<{ kind: ProjectHubExperimentKind; label: string; d
 
 function ExperimentsTab({ model, selectedPlasmidId, onNavigate }: { model: ProjectHubReadModel; selectedPlasmidId: string | null; onNavigate: ProjectHubShellProps['onNavigate'] }) {
     const saved = model.experiments.filter((item) => item.persistence === 'saved');
-    const visible = selectedPlasmidId ? saved.filter((item) => item.plasmid_sequence_id === selectedPlasmidId) : saved;
+    const visible = selectedPlasmidId ? saved.filter((item) => item.plasmid_sequence_ids.includes(selectedPlasmidId)) : saved;
     return (
         <>
             <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-bold text-content">Mol Bio experiments</h2><p className="text-sm text-content-secondary">Saved Mol Bio Toolkit work performed on project plasmids.</p></div><Link className={PRIMARY} to="/molbio">+ Start experiment</Link></div>
@@ -246,7 +296,31 @@ function ResultsTab({ model }: { model: ProjectHubReadModel }) {
 }
 
 function ActivityTab({ model }: { model: ProjectHubReadModel }) {
-    return <><div><h2 className="text-xl font-bold text-content">Activity</h2><p className="text-sm text-content-secondary">Readable project history. Technical event identity stays collapsed.</p></div><div className={`${PANEL} mt-4 divide-y divide-border-primary px-4`}>{model.activity.length ? model.activity.map((event) => <div key={event.id} className="flex gap-3 py-4"><span className="mt-1 text-accent">●</span><div><strong className="text-content">{event.summary}</strong><span className="mt-1 block text-xs text-content-muted">{formatDate(event.occurred_at)}</span></div></div>) : <div className="py-4"><EmptyInline title="No activity yet" /></div>}</div><TechnicalDetails model={model} /></>;
+    return (
+        <>
+            <div><h2 className="text-xl font-bold text-content">Activity</h2><p className="text-sm text-content-secondary">Readable project history. Technical event identity stays collapsed.</p></div>
+            <div className={`${PANEL} mt-4 divide-y divide-border-primary px-4`}>
+                {model.activity.length ? model.activity.map((event) => (
+                    <div key={event.id} className="flex gap-3 py-4">
+                        <span className="mt-1 text-accent">●</span>
+                        <div className="min-w-0 flex-1">
+                            <strong className="text-content">{event.summary}</strong>
+                            <span className="mt-1 block text-xs text-content-muted">{formatDate(event.occurred_at)}</span>
+                            <details data-testid={`activity-technical-${event.id}`} className="mt-2 text-xs text-content-secondary">
+                                <summary className="cursor-pointer font-semibold">Technical details</summary>
+                                <dl className="mt-2 grid gap-2 sm:grid-cols-3">
+                                    <div><dt className="text-content-muted">Event type</dt><dd className="break-all font-mono">{event.technical_event_type}</dd></div>
+                                    <div><dt className="text-content-muted">Receipt ID</dt><dd className="break-all font-mono">{event.receipt_id}</dd></div>
+                                    <div><dt className="text-content-muted">Envelope SHA-256</dt><dd className="break-all font-mono">{event.envelope_sha256}</dd></div>
+                                </dl>
+                            </details>
+                        </div>
+                    </div>
+                )) : <div className="py-4"><EmptyInline title="No activity yet" /></div>}
+            </div>
+            <TechnicalDetails model={model} />
+        </>
+    );
 }
 
 function EditDialog({ plasmid, saving, error, onCancel, onSave }: { plasmid: ProjectHubPlasmidSummary; saving: boolean; error: string | null; onCancel: () => void; onSave: (draft: ProjectHubPlasmidInfoDraft) => Promise<void> }) {
@@ -288,8 +362,8 @@ function EditDialog({ plasmid, saving, error, onCancel, onSave }: { plasmid: Pro
     const input = 'mt-1 w-full rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content outline-none focus:border-accent';
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
-            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="project-plasmid-edit-title" className="w-full max-w-2xl rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-2xl">
-                <div className="flex items-start justify-between gap-4"><div><span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Edit plasmid information</span><h2 id="project-plasmid-edit-title" className="mt-1 text-2xl font-bold text-content">{plasmid.name}</h2><p className="text-xs text-content-secondary">Project metadata for the current sequence record</p></div><button type="button" className={BUTTON} aria-label="Close edit dialog" disabled={saving} onClick={onCancel}>×</button></div>
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="project-plasmid-edit-title" aria-describedby="project-plasmid-edit-description" className="w-full max-w-2xl rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-2xl">
+                <div className="flex items-start justify-between gap-4"><div><span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Edit plasmid information</span><h2 id="project-plasmid-edit-title" className="mt-1 text-2xl font-bold text-content">{plasmid.name}</h2><p id="project-plasmid-edit-description" className="text-xs text-content-secondary">Project metadata for the current sequence record</p></div><button type="button" className={BUTTON} aria-label="Close edit dialog" disabled={saving} onClick={onCancel}>×</button></div>
                 <form className="mt-5 grid gap-4 md:grid-cols-2" onSubmit={submit}>
                     <label className="text-xs font-semibold text-content-secondary">Plasmid name<input ref={firstRef} required name="name" className={input} value={draft.name} onChange={(event) => update('name', event.target.value)} /></label>
                     <label className="text-xs font-semibold text-content-secondary">Molecule type<select name="molecule_type" className={input} value={draft.molecule_type} onChange={(event) => update('molecule_type', event.target.value)}><option>Plasmid · circular dsDNA</option><option>Plasmid · linear dsDNA</option><option>Other DNA</option></select></label>
@@ -327,7 +401,7 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
         requestAnimationFrame(() => document.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus());
     };
     const content = useMemo(() => {
-        if (requested === 'plasmids') return <PlasmidsTab model={model} canMutate={effectiveCanMutate} onEdit={openEdit} />;
+        if (requested === 'plasmids') return <PlasmidsTab model={model} canMutate={effectiveCanMutate} onEdit={openEdit} selectedPlasmidId={selectedPlasmidId} />;
         if (requested === 'sequence-data') return <SequenceDataTab model={model} />;
         if (requested === 'experiments') return <ExperimentsTab model={model} selectedPlasmidId={selectedPlasmidId} onNavigate={onNavigate} />;
         if (requested === 'results') return <ResultsTab model={model} />;
