@@ -138,7 +138,11 @@ def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority(
         **_observed_package_authority(),
     }
     validated: list[dict[str, Any]] = []
-    monkeypatch.setattr(service, "validate_persisted_reconciliation_receipt", validated.append)
+    monkeypatch.setattr(
+        service,
+        "validate_persisted_reconciliation_receipt",
+        lambda receipt, **_kwargs: validated.append(receipt),
+    )
     job = SimpleNamespace(
         id="retry3",
         provenance={

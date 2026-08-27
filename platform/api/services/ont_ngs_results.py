@@ -136,7 +136,23 @@ def _require_persisted_package_authority(
         reconciliation = provenance.get("ont_fastq_qc_reconciliation_v1")
         authority = reconciliation if isinstance(reconciliation, dict) else {}
         try:
-            validate_persisted_reconciliation_receipt(authority)
+            validate_persisted_reconciliation_receipt(
+                authority,
+                job=job,
+                expected_package={
+                    "workflow_id": "ont_fastq_qc",
+                    "input_mode": "fastq",
+                    "reference_sequence_sha256": reference_sequence_sha256,
+                    "source_fastq_sha256": source_fastq_sha256,
+                    "resource_evidence_status": "historical_unavailable",
+                    "sequence_qc_manifest_sha256": sequence_qc_manifest_sha256,
+                    "verification_manifest_sha256": construct_verification_manifest_sha256,
+                    "artifact_set_sha256": observed["artifact_set_sha256"],
+                    "declared_artifact_count": observed["declared_artifact_count"],
+                    "present_artifact_count": observed["present_artifact_count"],
+                    "unavailable_artifact_count": observed["unavailable_artifact_count"],
+                },
+            )
         except OntFastqQcReconciliationError as exc:
             raise OntNgsResultError("persisted reconciliation authority is invalid") from exc
         expected = {

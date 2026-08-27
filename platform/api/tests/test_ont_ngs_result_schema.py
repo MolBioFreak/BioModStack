@@ -113,7 +113,7 @@ def test_file_projection_is_producer_bound_and_contract_validated(
         completed_stages=list(stage_counts),
         stage_outputs=stage_outputs,
     )
-    monkeypatch.setattr(service, "validate_persisted_reconciliation_receipt", lambda _receipt: None)
+    monkeypatch.setattr(service, "validate_persisted_reconciliation_receipt", lambda _receipt, **_kwargs: None)
 
     projection = service._build_file_projection(job)
 

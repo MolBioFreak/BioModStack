@@ -4,6 +4,7 @@ import test from 'node:test';
 import { api } from '../src/lib/api.js';
 import {
     AlignmentReadScanTruncatedError,
+    bindAlignmentSessionsToResultAuthority,
     describeNgsError,
     disposeAlignmentAccess,
     fetchAlignmentRead,
@@ -166,7 +167,7 @@ function artifact(artifactId: string, sha256: string, sizeBytes: number, mimeTyp
         size_bytes: sizeBytes,
         mime_type: mimeType,
         range_capable: true,
-        source_manifest_sha256: 'f'.repeat(64),
+        source_manifest_sha256: '1'.repeat(64),
     };
 }
 
@@ -240,7 +241,7 @@ const payload: AlignmentSessionResponse = {
                 reference: artifact('c'.repeat(64), 'c'.repeat(64), 8, 'text/plain'),
                 reference_index: artifact('d'.repeat(64), 'd'.repeat(64), 8, 'text/plain'),
             },
-            alignment_pair_sha256: '5'.repeat(64),
+            alignment_pair_sha256: '5e3ded98e45517815b150158f6e2e4570fbf6f10108e812fc6b9d949944780a2',
         },
         {
             schema: 'bms.ngs.alignment-session.v1',
@@ -260,33 +261,33 @@ const payload: AlignmentSessionResponse = {
     ],
 };
 
-test('normalizes only job-bound opaque session URLs without path inference', () => {
-    const sessions = normalizeAlignmentSessions(payload, 'job-a');
+test('normalizes only job-bound opaque session URLs without path inference', async () => {
+    const sessions = await normalizeAlignmentSessions(payload, 'job-a');
     assert.equal(sessions.length, 2);
     assert.equal(sessions[0].artifacts.alignment?.url, `/api/jobs/job-a/alignment-artifacts/${'a'.repeat(64)}`);
     assert.equal(sessions[0].artifacts.reference_index?.sha256, 'd'.repeat(64));
     assert.equal(sessions[1].unavailable_reason, 'missing alignment index');
 });
 
-test('rejects unknown fields in the closed session and artifact wire contract', () => {
+test('rejects unknown fields in the closed session and artifact wire contract', async () => {
     const extraSession = structuredClone(payload) as AlignmentSessionResponse & { sessions: Array<Record<string, unknown>> };
     extraSession.sessions[0].legacy_reference_contig = 'plasmid';
-    assert.throws(() => normalizeAlignmentSessions(extraSession as AlignmentSessionResponse, 'job-a'), /unknown/i);
+    await assert.rejects(normalizeAlignmentSessions(extraSession as AlignmentSessionResponse, 'job-a'), /unknown/i);
 
     const extraArtifact = structuredClone(payload) as unknown as { sessions: Array<{ artifacts: Record<string, Record<string, unknown>> }> };
     extraArtifact.sessions[0]!.artifacts.alignment!.manifest = 'fastq_qc/qc_manifest.json';
-    assert.throws(() => normalizeAlignmentSessions(extraArtifact as unknown as AlignmentSessionResponse, 'job-a'), /unknown/i);
+    await assert.rejects(normalizeAlignmentSessions(extraArtifact as unknown as AlignmentSessionResponse, 'job-a'), /unknown/i);
 });
 
 
-test('rejects cross-job session payloads and non-job-scoped artifact URLs', () => {
-    assert.throws(() => normalizeAlignmentSessions({ ...payload, job_id: 'job-b' }, 'job-a'), /job mismatch/i);
+test('rejects cross-job session payloads and non-job-scoped artifact URLs', async () => {
+    await assert.rejects(normalizeAlignmentSessions({ ...payload, job_id: 'job-b' }, 'job-a'), /job mismatch/i);
     const tampered = structuredClone(payload);
     tampered.sessions[0].artifacts.alignment!.url = '/api/files/stream?path=/tmp/job-b/aligned.bam';
-    assert.throws(() => normalizeAlignmentSessions(tampered, 'job-a'), /unsafe artifact URL/i);
+    await assert.rejects(normalizeAlignmentSessions(tampered, 'job-a'), /unsafe artifact URL/i);
 });
 
-test('normalizes every authoritative auxiliary artifact role through opaque job URLs', () => {
+test('normalizes every authoritative auxiliary artifact role through opaque job URLs', async () => {
     const complete = structuredClone(payload);
     const roles = [
         'coverage_depth',
@@ -304,10 +305,37 @@ test('normalizes every authoritative auxiliary artifact role through opaque job 
         complete.sessions[0].artifacts[role] = artifact(digest, digest, index + 1);
     }
 
-    const session = normalizeAlignmentSessions(complete, 'job-a')[0];
+    const session = (await normalizeAlignmentSessions(complete, 'job-a'))[0];
     assert.deepEqual(
         Object.keys(session.artifacts).filter((role) => roles.includes(role as typeof roles[number])),
         roles,
+    );
+});
+
+test('rejects cross-bound alignment pair, reference, and manifest authority', async () => {
+    for (const mutate of [
+        (value: AlignmentSessionResponse) => { value.sessions[0].alignment_pair_sha256 = '0'.repeat(64); },
+        (value: AlignmentSessionResponse) => { value.sessions[0].reference!.fasta_sha256 = '0'.repeat(64); },
+        (value: AlignmentSessionResponse) => { value.sessions[0].artifacts.alignment!.source_manifest_sha256 = '0'.repeat(64); },
+    ]) {
+        const tampered = structuredClone(payload);
+        mutate(tampered);
+        await assert.rejects(normalizeAlignmentSessions(tampered, 'job-a'), /authority/i);
+    }
+});
+
+test('cross-binds ready sessions to canonical result authority', async () => {
+    const sessions = await normalizeAlignmentSessions(payload, 'job-a');
+    const authority = {
+        sequence_qc_manifest_sha256: '1'.repeat(64),
+        construct_verification_manifest_sha256: '2'.repeat(64),
+        artifact_set_sha256: '3'.repeat(64),
+        reference_sequence_sha256: '4'.repeat(64),
+    };
+    assert.equal(bindAlignmentSessionsToResultAuthority(sessions, authority), sessions);
+    assert.throws(
+        () => bindAlignmentSessionsToResultAuthority(sessions, { ...authority, artifact_set_sha256: '0'.repeat(64) }),
+        /Scientific integrity error/u,
     );
 });
 

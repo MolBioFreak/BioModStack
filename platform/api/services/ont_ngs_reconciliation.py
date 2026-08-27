@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import stat
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -470,9 +471,109 @@ def _validate_bound_receipt(receipt: Mapping[str, Any]) -> None:
     _stage_output_prefix(normalized_outputs)
 
 
-def validate_persisted_reconciliation_receipt(receipt: Mapping[str, Any]) -> None:
-    """Validate the complete persisted reconciliation authority before reuse."""
+def validate_persisted_reconciliation_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    job: Any,
+    expected_package: Mapping[str, Any],
+    provenance_preimage: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate persisted authority against the backup preimage and current protected row."""
     _validate_bound_receipt(receipt)
+    job_id = str(getattr(job, "id", ""))
+    completed_stages = list(getattr(job, "completed_stages", None) or [])
+    raw_stage_outputs = getattr(job, "stage_outputs", None)
+    stage_outputs = raw_stage_outputs if isinstance(raw_stage_outputs, Mapping) else {}
+    canonical_outputs = {key: list(stage_outputs.get(key) or []) for key in _REQUIRED_STAGES}
+    provenance = getattr(job, "provenance", None)
+    provenance = provenance if isinstance(provenance, Mapping) else {}
+    current_receipt_free = {
+        key: copy.deepcopy(value) for key, value in provenance.items() if key != _RECEIPT_KEY
+    }
+    hierarchy = current_receipt_free.get(_HIERARCHY_KEY)
+    hierarchy_document = hierarchy.get("document") if isinstance(hierarchy, Mapping) else None
+    hierarchy_digest = hierarchy.get("digest") if isinstance(hierarchy, Mapping) else None
+    source_snapshot = receipt.get("source_snapshot")
+
+    if provenance_preimage is None:
+        backup = receipt.get("backup")
+        backup_id = backup.get("backup_id") if isinstance(backup, Mapping) else None
+        results_dir = os.environ.get("BMS_RESULTS_DIR")
+        if not isinstance(backup_id, str) or Path(backup_id).name != backup_id or not results_dir:
+            raise OntFastqQcReconciliationError("reconciliation backup authority is unavailable")
+        backup_path = Path(results_dir).resolve().parent / "backups" / "ngs-reconciliation" / backup_id
+        try:
+            connection = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+            try:
+                row = connection.execute("SELECT provenance FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            finally:
+                connection.close()
+            provenance_preimage = json.loads(row[0]) if row and isinstance(row[0], str) else None
+        except (OSError, sqlite3.Error, json.JSONDecodeError) as exc:
+            raise OntFastqQcReconciliationError("reconciliation backup authority is unavailable") from exc
+    if not isinstance(provenance_preimage, Mapping):
+        raise OntFastqQcReconciliationError("reconciliation provenance preimage is unavailable")
+    expected_receipt_free = copy.deepcopy(dict(provenance_preimage))
+    preimage_hierarchy = expected_receipt_free.get(_HIERARCHY_KEY)
+    if preimage_hierarchy is None:
+        expected_receipt_free[_HIERARCHY_KEY] = copy.deepcopy(hierarchy)
+    elif preimage_hierarchy != hierarchy:
+        raise OntFastqQcReconciliationError("reconciliation hierarchy preimage is inconsistent")
+    mutable_rotation_keys = {"alignment_access_rotation_count", "alignment_access_token_sha256"}
+    current_stable = {key: value for key, value in current_receipt_free.items() if key not in mutable_rotation_keys}
+    expected_stable = {key: value for key, value in expected_receipt_free.items() if key not in mutable_rotation_keys}
+
+    identity_fields = {
+        "project_id": (hierarchy_document.get("project") or {}).get("id"),
+        "global_experiment_id": (hierarchy_document.get("global_experiment") or {}).get("id"),
+        "domain_experiment_id": (hierarchy_document.get("domain_experiment") or {}).get("id"),
+        "state_revision_id": (hierarchy_document.get("domain_experiment") or {}).get("state_revision_id"),
+        "member_receipt_id": (hierarchy_document.get("member") or {}).get("receipt_id"),
+        "sample_revision_id": (hierarchy_document.get("sample") or {}).get("revision_id"),
+        "reference_revision_id": (hierarchy_document.get("reference") or {}).get("revision_id"),
+    } if isinstance(hierarchy_document, Mapping) else {}
+    expected = {
+        "job_id": job_id,
+        "normalized_request_sha256": reconciliation_authority_digest(
+            "normalized-request", _normalized_request(job_id)
+        ),
+        "completed_stages_postimage_sha256": reconciliation_authority_digest(
+            "completed-stages-postimage", completed_stages
+        ),
+        "stage_outputs_postimage_sha256": reconciliation_authority_digest(
+            "stage-outputs-postimage", canonical_outputs
+        ),
+        "receipt_free_provenance_postimage_sha256": reconciliation_authority_digest(
+            "receipt-free-provenance-postimage", expected_receipt_free
+        ),
+        "hierarchy_authority_sha256": hierarchy_digest,
+        **identity_fields,
+        **dict(expected_package),
+    }
+    rotation_count = current_receipt_free.get("alignment_access_rotation_count")
+    rotation_digest = current_receipt_free.get("alignment_access_token_sha256")
+    rotation_valid = (
+        (rotation_count is None and rotation_digest is None)
+        or (
+            type(rotation_count) is int and rotation_count >= 0
+            and isinstance(rotation_digest, str) and _SHA256_RE.fullmatch(rotation_digest) is not None
+        )
+    )
+    if (
+        receipt.get("completed_stages") != completed_stages
+        or receipt.get("stage_outputs") != canonical_outputs
+        or any(receipt.get(key) != value for key, value in expected.items())
+        or current_stable != expected_stable
+        or not rotation_valid
+        or not isinstance(hierarchy_document, Mapping)
+        or not isinstance(hierarchy_digest, str)
+        or _canonical_sha256(hierarchy_document) != hierarchy_digest
+        or not isinstance(source_snapshot, Mapping)
+        or receipt.get("database_identity_sha256") != source_snapshot.get("database_identity_sha256")
+        or getattr(job, "status", None) != "completed"
+        or getattr(job, "queue_status", None) != "completed"
+    ):
+        raise OntFastqQcReconciliationError("persisted reconciliation receipt is not bound to current authority")
 
 
 def _normalized_request(job_id: str) -> dict[str, str]:

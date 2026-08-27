@@ -22,6 +22,7 @@ import {
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
+    bindAlignmentSessionsToResultAuthority,
     disposeAlignmentAccess,
     describeNgsError,
     fetchAlignmentSessions,
@@ -2424,8 +2425,8 @@ export function NGSToolkit() {
             : false,
     });
     const {
-        data: alignmentSessions = [],
-        error: alignmentSessionsError,
+        data: unboundAlignmentSessions = [],
+        error: alignmentSessionsQueryError,
         isFetched: alignmentSessionsFetched,
         refetch: refetchAlignmentSessions,
     } = useQuery<AlignmentSession[]>({
@@ -2447,7 +2448,7 @@ export function NGSToolkit() {
     const alignmentAccessRecoveryError = alignmentAccessRecoveryState.jobId === selectedJobId
         ? alignmentAccessRecoveryState.error
         : null;
-    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
+    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsQueryError);
     const restoreAlignmentAccess = useCallback(async () => {
         if (!selectedJobId || alignmentAccessRecoveryPending) return;
         const recoveryJobId = selectedJobId;
@@ -2552,6 +2553,25 @@ export function NGSToolkit() {
         selectedJob?.status,
         selectedOntWorkflowId,
     );
+    const alignmentAuthorityBinding = useMemo(() => {
+        const authority = ontFastqQcResultState.result?.authority;
+        if (!isCanonicalFastqQcRun || !authority) {
+            return { sessions: unboundAlignmentSessions, error: null as Error | null };
+        }
+        try {
+            return {
+                sessions: bindAlignmentSessionsToResultAuthority(unboundAlignmentSessions, authority),
+                error: null as Error | null,
+            };
+        } catch (reason: unknown) {
+            return {
+                sessions: [] as AlignmentSession[],
+                error: reason instanceof Error ? reason : new Error(String(reason)),
+            };
+        }
+    }, [isCanonicalFastqQcRun, ontFastqQcResultState.result, unboundAlignmentSessions]);
+    const alignmentSessions = alignmentAuthorityBinding.sessions;
+    const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
     const igvArtifacts = useMemo(

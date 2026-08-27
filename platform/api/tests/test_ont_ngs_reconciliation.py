@@ -500,6 +500,7 @@ async def test_reconciliation_apply_updates_only_mirrors_and_receipt(tmp_path: P
             loaded = await session.get(Job, JOB_ID)
             assert loaded is not None
             original_params = loaded.params
+            original_provenance = json.loads(json.dumps(loaded.provenance))
             original_current_stage = loaded.current_stage
             original_status = (loaded.status, loaded.queue_status, loaded.completed_at)
             plan = _build_plan(service, loaded)
@@ -525,6 +526,27 @@ async def test_reconciliation_apply_updates_only_mirrors_and_receipt(tmp_path: P
             assert persisted.params == original_params
             assert persisted.current_stage == original_current_stage
             assert (persisted.status, persisted.queue_status, persisted.completed_at) == original_status
+            receipt = persisted.provenance["ont_fastq_qc_reconciliation_v1"]
+            package_keys = {
+                "workflow_id", "input_mode", "reference_sequence_sha256", "source_fastq_sha256",
+                "resource_evidence_status", "sequence_qc_manifest_sha256", "verification_manifest_sha256",
+                "artifact_set_sha256", "declared_artifact_count", "present_artifact_count",
+                "unavailable_artifact_count", "result_root_identity_sha256",
+            }
+            service.validate_persisted_reconciliation_receipt(
+                receipt,
+                job=persisted,
+                expected_package={key: receipt[key] for key in package_keys},
+                provenance_preimage=original_provenance,
+            )
+            persisted.stage_outputs = {**persisted.stage_outputs, "fastq_align": ["foreign/output"]}
+            with pytest.raises(service.OntFastqQcReconciliationError, match="current authority"):
+                service.validate_persisted_reconciliation_receipt(
+                    receipt,
+                    job=persisted,
+                    expected_package={key: receipt[key] for key in package_keys},
+                    provenance_preimage=original_provenance,
+                )
     finally:
         await engine.dispose()
 

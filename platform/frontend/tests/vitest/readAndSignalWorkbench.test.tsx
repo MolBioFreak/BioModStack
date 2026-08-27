@@ -102,6 +102,8 @@ vi.mock('../../src/lib/api', () => ({
 }));
 
 vi.mock('../../src/lib/ngsAlignmentSession', () => ({
+    bindAlignmentSessionsToResultAuthority: (sessions: unknown[]) => sessions,
+    describeNgsError: (_reason: unknown, fallback: string) => fallback,
     disposeAlignmentAccess: alignmentMocks.disposeAccess,
     fetchAlignmentRead: alignmentMocks.fetchRead,
     fetchAlignmentReads: alignmentMocks.fetchReads,
