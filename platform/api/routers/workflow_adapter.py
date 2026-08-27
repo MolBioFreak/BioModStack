@@ -938,6 +938,28 @@ async def workflow_adapter_runtime_action(
     return payload_out
 
 
+def _requires_ont_fastq_resource_authority(job: Any, params: dict[str, Any]) -> bool:
+    workflow_values = {
+        str(params[key]).strip()
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    input_values = {
+        str(params[key]).strip()
+        for key in ("ont_input_mode", "input_mode")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    if "ont_fastq_qc" in workflow_values and workflow_values != {"ont_fastq_qc"}:
+        raise HTTPException(status_code=409, detail="canonical FASTQ-QC workflow identities conflict")
+    if "fastq" in input_values and input_values != {"fastq"}:
+        raise HTTPException(status_code=409, detail="canonical FASTQ-QC input-mode identities conflict")
+    return (
+        str(getattr(job, "model_id", "")) == "nanopore"
+        and workflow_values == {"ont_fastq_qc"}
+        and input_values == {"fastq"}
+    )
+
+
 @router.post("/launch", response_model=WorkflowAdapterLaunchResponse, status_code=202)
 async def workflow_adapter_launch(
     payload: WorkflowAdapterLaunchRequest,
@@ -1040,6 +1062,22 @@ async def workflow_adapter_launch(
                     status_code=503,
                     detail="live scheduler GPU authority is unavailable",
                 ) from exc
+            canonical_fastq = _requires_ont_fastq_resource_authority(job, params)
+            if canonical_fastq and resource_handoff is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="canonical FASTQ-QC launch requires resource admission authority",
+                )
+            if canonical_fastq and resource_handoff is not None and (
+                resource_handoff["gpu_index"] is not None
+                or resource_handoff["gpu_uuid"] is not None
+                or getattr(job, "assigned_gpu", None) is not None
+                or float(getattr(job, "estimated_vram_gb", 0) or 0) != 0.0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="canonical FASTQ-QC launch requires CPU-only resource authority",
+                )
             if resource_handoff is not None:
                 assert dispatch_authority is not None
                 _validate_resource_gpu_authority(

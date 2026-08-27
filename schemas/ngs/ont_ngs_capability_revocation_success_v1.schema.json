@@ -1,0 +1,27 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "revoked": {
+      "const": true
+    },
+    "schema": {
+      "const": "bms.ngs.capability-revocation-success.v1"
+    },
+    "scheme": {
+      "const": "opaque_job_capability_v1"
+    }
+  },
+  "required": [
+    "schema",
+    "job_id",
+    "revoked",
+    "scheme"
+  ],
+  "type": "object"
+}

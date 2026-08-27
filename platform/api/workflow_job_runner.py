@@ -34,6 +34,7 @@ from services.execution_ownership import (
     utc_timestamp,
 )
 from services.resource_usage_evidence import (
+    RESOURCE_USAGE_RECEIPTS_PARAM,
     ResourceUsageEvidenceError,
     WorkflowResourceMonitor,
     attach_resource_usage_receipt,
@@ -258,6 +259,25 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         invocation_id=invocation_id,
     )
     monitor: WorkflowResourceMonitor | None = None
+    terminal_resource_receipt: dict[str, Any] | None = None
+
+    def finish_success_resource_evidence() -> dict[str, Any]:
+        nonlocal terminal_resource_receipt
+        if monitor is None:
+            raise ResourceUsageEvidenceError("ONT success has no producer resource monitor")
+        if terminal_resource_receipt is None:
+            terminal_resource_receipt = monitor.finish(outcome="completed")
+        if terminal_resource_receipt.get("complete") is not True:
+            raise ResourceUsageEvidenceError("producer resource evidence is incomplete")
+        return dict(terminal_resource_receipt)
+
+    async def persist_terminal_resource_evidence(*, outcome: str) -> None:
+        nonlocal terminal_resource_receipt
+        if monitor is None:
+            return
+        if terminal_resource_receipt is None:
+            terminal_resource_receipt = monitor.finish(outcome=outcome)
+        await _persist_resource_usage_receipt(job_id, terminal_resource_receipt)
 
     try:
         monitor = WorkflowResourceMonitor.from_job(job)
@@ -282,14 +302,15 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
             params=execution_params,
             output_dir=authoritative_output_dir,
             allow_running_job=True,
+            terminal_resource_receipt_factory=(
+                finish_success_resource_evidence if monitor is not None else None
+            ),
         )
     except Exception as exc:
         logger.exception("Transient workflow runner failed for %s", job_id)
         if monitor is not None:
             try:
-                await _persist_resource_usage_receipt(
-                    job_id, monitor.finish(outcome="failed")
-                )
+                await persist_terminal_resource_evidence(outcome="failed")
             except Exception:
                 logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
@@ -313,9 +334,7 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
         logger.exception("Could not reload the authoritative workflow result for %s", job_id)
         if monitor is not None:
             try:
-                await _persist_resource_usage_receipt(
-                    job_id, monitor.finish(outcome="failed")
-                )
+                await persist_terminal_resource_evidence(outcome="failed")
             except Exception:
                 logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
@@ -331,9 +350,7 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
     if final_job is None:
         if monitor is not None:
             try:
-                await _persist_resource_usage_receipt(
-                    job_id, monitor.finish(outcome="failed")
-                )
+                await persist_terminal_resource_evidence(outcome="failed")
             except Exception:
                 logger.exception("Could not persist failed resource-use evidence for %s", job_id)
         await _finish_attempt(
@@ -350,8 +367,21 @@ async def run_workflow_job(job_id: str, lane: str) -> int:
     state, reason = _terminal_state(final_job)
     if monitor is not None:
         try:
-            resource_receipt = monitor.finish(outcome=state)
-            await _persist_resource_usage_receipt(job_id, resource_receipt)
+            if terminal_resource_receipt is None:
+                await persist_terminal_resource_evidence(outcome=state)
+            else:
+                persisted_receipts = params_mapping(final_job.params).get(
+                    RESOURCE_USAGE_RECEIPTS_PARAM
+                )
+                if (
+                    not isinstance(persisted_receipts, list)
+                    or dict(terminal_resource_receipt)
+                    not in [dict(item) for item in persisted_receipts if isinstance(item, dict)]
+                ):
+                    raise ResourceUsageEvidenceError(
+                        "terminal Job omitted the producer resource receipt"
+                    )
+            resource_receipt = terminal_resource_receipt or {}
             if state == "completed" and resource_receipt.get("complete") is not True:
                 state = "failed"
                 reason = "producer_resource_evidence_incomplete"

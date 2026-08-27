@@ -404,21 +404,39 @@ async def test_stage_terminal_endpoint_persists_immutable_non_success_state() ->
     token, digest = stage_reporting.issue_stage_report_token()
     job = Job(
         id="job-stage-terminal",
+        status="running",
+        queue_status="running",
+        awaiting_input=False,
         provenance={stage_reporting.PROVENANCE_DIGEST_KEY: digest},
         completed_stages=[],
         stage_outputs={},
         current_stage="frustrampnn",
+        stage_progress={"stage": "frustrampnn"},
     )
 
     class Result:
+        rowcount = 1
+
         def scalar_one_or_none(self):
             return job
 
     class Session:
         committed = False
 
-        async def execute(self, _statement):
+        async def execute(self, statement):
+            if getattr(statement, "is_update", False):
+                values = statement.compile().params
+                job.completed_stages = values["completed_stages"]
+                job.stage_outputs = values["stage_outputs"]
+                job.provenance = values["provenance"]
+                job.current_stage = values["current_stage"]
             return Result()
+
+        def expunge(self, _job):
+            return None
+
+        async def rollback(self):
+            return None
 
         async def commit(self):
             self.committed = True

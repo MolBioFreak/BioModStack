@@ -62,6 +62,9 @@ class _Session:
     async def commit(self) -> None:
         return None
 
+    async def rollback(self) -> None:
+        return None
+
 
 def _handoff_payload(params: dict | None = None) -> dict:
     return {
@@ -88,7 +91,15 @@ def test_handoff_accepts_only_explicit_safe_tuning_fields(monkeypatch):
     monkeypatch.setattr(ont_runs.ont_run_control, "build_plasmid_qc_handoff", build_handoff)
     captured = {}
     created = SimpleNamespace(id="job-safe")
-    async def fake_create(job, background_tasks, session, response, request, **_kwargs):
+    async def fake_create(
+        job,
+        background_tasks,
+        session,
+        experiment_session,
+        response,
+        request,
+        **_kwargs,
+    ):
         captured["job"] = job
         return created
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create)

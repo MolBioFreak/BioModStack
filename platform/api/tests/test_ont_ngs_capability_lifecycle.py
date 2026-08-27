@@ -22,7 +22,12 @@ from services import alignment_access, stage_reporting
 def _request(path: str, token: str | None = None) -> Request:
     headers = [(b"x-forwarded-proto", b"https")]
     if token is not None:
-        headers.append((b"authorization", f"Bearer {token}".encode("ascii")))
+        if "/api/jobs/" in path:
+            job_id = path.split("/api/jobs/", 1)[1].split("/", 1)[0]
+            cookie = f"{alignment_access.cookie_name(job_id, secure=True)}={token}"
+            headers.append((b"cookie", cookie.encode("ascii")))
+        else:
+            headers.append((b"authorization", f"Bearer {token}".encode("ascii")))
     return Request(
         {
             "type": "http",
@@ -51,13 +56,14 @@ def _assert_job_scoped_capability(response: Response, job: Job) -> None:
     assert header is not None
     cookie = SimpleCookie()
     cookie.load(header)
-    name = alignment_access.cookie_name(job.id)
+    name = alignment_access.cookie_name(job.id, secure=True)
     token = cookie[name].value
     provenance = job.provenance
     assert isinstance(provenance, dict)
     assert hashlib.sha256(token.encode("utf-8")).hexdigest() == provenance[alignment_access.PROVENANCE_DIGEST_KEY]
     assert provenance[alignment_access.PROVENANCE_SCHEME_KEY] == alignment_access.SCHEME
-    assert cookie[name]["path"] == f"/api/jobs/{job.id}"
+    assert cookie[name]["path"] == "/"
+    assert cookie[name]["max-age"] == "1800"
     assert cookie[name]["httponly"] is True
     assert cookie[name]["secure"] is True
     assert cookie[name]["samesite"].lower() == "strict"
@@ -361,11 +367,11 @@ async def test_barcode_unit_requires_completed_authorized_exact_source(tmp_path:
             await session.commit()
 
             with pytest.raises(HTTPException) as denied:
-                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request("/barcode", "wrong"), session)
+                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request(f"/api/jobs/{source.id}/barcode", "wrong"), session)
             assert denied.value.status_code == 403
 
             authorized_job, unit = await ont_runs._authorized_barcode_unit(
-                source.id, "barcode01", _request("/barcode", source_capability), session
+                source.id, "barcode01", _request(f"/api/jobs/{source.id}/barcode", source_capability), session
             )
             assert authorized_job.id == source.id
             assert unit["bam_sha256"] == digest
@@ -385,7 +391,7 @@ async def test_barcode_unit_requires_completed_authorized_exact_source(tmp_path:
             manifest.write_text(json.dumps(substituted_manifest), encoding="utf-8")
             with pytest.raises(HTTPException) as substituted:
                 await ont_runs._authorized_barcode_unit(
-                    source.id, "barcode01", _request("/barcode", source_capability), session
+                    source.id, "barcode01", _request(f"/api/jobs/{source.id}/barcode", source_capability), session
                 )
             assert substituted.value.status_code == 409
             bam.write_bytes(original_bam)
@@ -395,14 +401,14 @@ async def test_barcode_unit_requires_completed_authorized_exact_source(tmp_path:
             source.params = {"pod5_dir": "/retained/input"}
             await session.commit()
             with pytest.raises(HTTPException) as unbarcoded:
-                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request("/barcode", source_capability), session)
+                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request(f"/api/jobs/{source.id}/barcode", source_capability), session)
             assert unbarcoded.value.status_code == 422
 
             source.params = {"pod5_dir": "/retained/input", "barcode_kit": "SQK-RBK114-96"}
             source.status = JobStatus.RUNNING.value
             await session.commit()
             with pytest.raises(HTTPException) as incomplete:
-                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request("/barcode", source_capability), session)
+                await ont_runs._authorized_barcode_unit(source.id, "barcode01", _request(f"/api/jobs/{source.id}/barcode", source_capability), session)
             assert incomplete.value.status_code == 409
     finally:
         await engine.dispose()
@@ -565,7 +571,11 @@ async def test_stage_completion_persists_immutable_dorado_anchor(tmp_path: Path)
         await engine.dispose()
 
 
-def test_barcode_route_receives_job_scoped_httponly_cookie(tmp_path: Path) -> None:
+def test_barcode_route_receives_job_scoped_httponly_cookie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
     output = tmp_path / "source"
     bam = output / "demux" / "demux" / "units" / "barcode01.bam"
     bam.parent.mkdir(parents=True)
@@ -591,8 +601,8 @@ def test_barcode_route_receives_job_scoped_httponly_cookie(tmp_path: Path) -> No
     app = FastAPI()
     app.include_router(ont_runs.barcode_router, prefix="/api/jobs")
     app.dependency_overrides[ont_runs.get_session] = lambda: FakeSession()
-    with TestClient(app) as client:
-        client.cookies.set(alignment_access.cookie_name("cookie-source"), token, path="/api/jobs/cookie-source")
+    with TestClient(app, client=("127.0.0.1", 40000)) as client:
+        client.cookies.set(alignment_access.cookie_name("cookie-source"), token, path="/")
         response = client.get("/api/jobs/cookie-source/barcode-units")
     assert response.status_code == 200
     assert response.json()["units"][0]["unit_id"] == "barcode01"

@@ -38,7 +38,6 @@ workflow ONT_FASTQ_QC {
     println("  FASTQ path:  ${params.fastq_path ?: '(none)'}")
     println("  Reference:   ${params.reference_fasta ?: '(none)'}")
     println("  Run QC:      ${runFastqQc}")
-    println("  Dorado model:${params.dorado_model ?: 'sup'}")
 
     // --- Input validation ---
     def has_fastq = params.fastq_path && params.fastq_path.toString().trim()

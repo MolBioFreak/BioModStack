@@ -1632,11 +1632,15 @@ def _sequence_qc_manifest_path(job: Job) -> Path:
         root = resolve_persisted_job_result_root(job)
     except ValueError as exc:
         raise AdapterError("source_contract_invalid", "NGS job result root is invalid") from exc
-    for relative in (
-        Path("verification/qc_manifest.json"),
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = params.get("ont_workflow_id") or params.get("ont_request_workflow_id") or params.get("workflow_id")
+    input_mode = params.get("ont_input_mode") or params.get("input_mode")
+    canonical_fastq = str(workflow_id or "").strip() == "ont_fastq_qc" and str(input_mode or "").strip() == "fastq"
+    relatives = (Path("fastq_qc/qc_manifest.json"),) if canonical_fastq else (
         Path("fastq_qc/qc_manifest.json"),
         Path("qc_manifest.json"),
-    ):
+    )
+    for relative in relatives:
         candidate = root / relative
         if candidate.is_symlink():
             raise AdapterError("source_contract_invalid", "sequence-QC manifest is unsafe")

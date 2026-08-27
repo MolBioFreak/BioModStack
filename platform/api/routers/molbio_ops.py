@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
+from pathlib import Path
 import asyncio
 import hashlib
 import json
@@ -105,12 +106,38 @@ from services.molbio_ngs_receipts import (
 from services.ngs_comparison_panels import issue_comparison_panel_receipt, list_approved_panels, seed_approved_panel
 from services.sequence_qc_manifest import (
     SequenceQcManifestError,
+    find_canonical_fastq_manifest,
     find_manifest_in_result_root,
     load_sequence_qc_manifest,
+    read_manifest_json_nofollow,
 )
 
 
 router = APIRouter(prefix="/api/molbio", tags=["molbio"])
+
+
+def _load_job_sequence_qc_manifest(job: Any, result_root: Path) -> dict[str, Any]:
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = str(
+        params.get("ont_workflow_id")
+        or params.get("ont_request_workflow_id")
+        or params.get("workflow_id")
+        or ""
+    )
+    manifest_path = (
+        find_canonical_fastq_manifest(result_root)
+        if workflow_id == "ont_fastq_qc"
+        else find_manifest_in_result_root(result_root)
+    )
+    _document, manifest_bytes, _digest, _size = read_manifest_json_nofollow(manifest_path)
+    return load_sequence_qc_manifest(
+        manifest_path,
+        raw_bytes=manifest_bytes,
+        expected_job_id=str(job.id),
+        expected_workflow_id=workflow_id,
+        expected_input_mode=str(params.get("ont_input_mode") or params.get("input_mode") or ""),
+        expected_analysis_status="completed",
+    )
 
 
 class ApprovedPanelEntryRequest(BaseModel):
@@ -400,8 +427,7 @@ async def get_sequence_ngs_workup(
         root = None
         try:
             root = resolve_persisted_job_result_root(job)
-            manifest_path = find_manifest_in_result_root(root)
-            manifest = load_sequence_qc_manifest(manifest_path)
+            manifest = _load_job_sequence_qc_manifest(job, root)
         except (SequenceQcManifestError, ValueError, OSError):
             manifest = None
         comparison_summary = None

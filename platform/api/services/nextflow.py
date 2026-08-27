@@ -5,6 +5,7 @@ Handles launching and managing Nextflow pipeline processes.
 """
 
 import asyncio
+import copy
 import codecs
 from collections import deque
 import subprocess
@@ -18,7 +19,7 @@ import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
+from typing import Callable, Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
 from services import ont_submission_trust, stage_reporting
@@ -40,6 +41,54 @@ NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
 FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
 GPU_REQUIRED_MODEL_IDS = {"protein_local_redesign"}
+
+
+def capture_terminal_job_publication_snapshot(job: Any) -> dict[str, Any]:
+    """Capture every persisted Job column for terminal publication CAS."""
+    from database import Job
+
+    return {
+        column.name: copy.deepcopy(getattr(job, column.name))
+        for column in Job.__table__.columns
+    }
+
+
+async def publish_terminal_job_changes(
+    session: Any,
+    *,
+    job_id: str,
+    snapshot: dict[str, Any],
+    changes: dict[str, Any],
+) -> int:
+    """Apply terminal changes only when the complete Job snapshot is unchanged."""
+    from sqlalchemy import and_, update
+    from database import Job
+
+    columns = {column.name: column for column in Job.__table__.columns}
+    if set(snapshot) != set(columns):
+        raise ValueError("terminal publication snapshot does not cover every Job column")
+    if any(field not in columns for field in changes):
+        raise ValueError("terminal publication contains an unknown Job column")
+    if (
+        snapshot.get("status") != "running"
+        or snapshot.get("queue_status") != "running"
+        or snapshot.get("paused") is not False
+        or snapshot.get("awaiting_input") is not False
+        or snapshot.get("awaiting_stage") not in (None, "")
+        or snapshot.get("awaiting_payload") not in (None, {})
+    ):
+        return 0
+    predicates = [Job.id == job_id]
+    for field, value in snapshot.items():
+        column = columns[field]
+        predicates.append(column.is_(None) if value is None else column == value)
+    result = await session.execute(
+        update(Job)
+        .where(and_(*predicates))
+        .values(**copy.deepcopy(changes))
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
 
 
 def _parse_gpu_authority(raw_value: Any) -> int:
@@ -1839,6 +1888,23 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
 
 
 
+async def _validate_ont_fastq_qc_terminal_completion(
+    job: Any,
+    terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Bind producer resource evidence through the production completion validator."""
+
+    from services.ont_ngs_completion import validate_and_prepare_ont_fastq_qc_completion
+
+    if terminal_resource_receipt_factory is None:
+        raise RuntimeError("ONT FASTQ-QC completion requires producer resource evidence")
+    resource_usage_receipt = terminal_resource_receipt_factory()
+    return await validate_and_prepare_ont_fastq_qc_completion(
+        job,
+        resource_usage_receipt=resource_usage_receipt,
+    )
+
+
 async def launch_nextflow_job(
     job_id: str,
     model_id: str,
@@ -1846,6 +1912,7 @@ async def launch_nextflow_job(
     params: Dict[str, Any],
     output_dir: str,
     allow_running_job: bool = False,
+    terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> None:
     """
     Launch a Nextflow pipeline job.
@@ -1889,28 +1956,33 @@ async def launch_nextflow_job(
     ) -> bool:
         """Publish an active Job failure and typed receipts in one transaction."""
 
-        changes = {
-            attribute.key: attribute.value
-            for attribute in inspect(failed_job).attrs
-            if attribute.history.has_changes()
-        }
+        mapper = inspect(failed_job)
+        expected_snapshot: dict[str, Any] = {}
+        changes = {}
+        for column in Job.__table__.columns:
+            attribute = mapper.attrs[column.name]
+            history = attribute.history
+            current_value = getattr(failed_job, column.name)
+            expected_snapshot[column.name] = (
+                history.deleted[0]
+                if history.has_changes() and history.deleted
+                else current_value
+            )
+            if history.has_changes():
+                changes[column.name] = current_value
         if "params" in changes:
             changes["params"] = release_scheduler_gpu_assignment(changes["params"])
         else:
             changes["params"] = release_scheduler_gpu_assignment(getattr(failed_job, "params", {}))
         changes["assigned_gpu"] = None
         failure_session.expunge(failed_job)
-        published = await failure_session.execute(
-            update(Job)
-            .where(
-                Job.id == job_id,
-                Job.status == JobStatus.RUNNING.value,
-                Job.queue_status == "running",
-                Job.awaiting_input.is_(False),
-            )
-            .values(**changes)
+        rowcount = await publish_terminal_job_changes(
+            failure_session,
+            job_id=str(job_id),
+            snapshot=expected_snapshot,
+            changes=changes,
         )
-        if published.rowcount:
+        if rowcount:
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
@@ -1925,9 +1997,9 @@ async def launch_nextflow_job(
                 exit_code=exit_code,
             )
         await failure_session.commit()
-        if not published.rowcount:
+        if not rowcount:
             logger.info(stale_log_message, job_id)
-        return bool(published.rowcount)
+        return bool(rowcount)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
@@ -2017,7 +2089,19 @@ async def launch_nextflow_job(
         # both workflows consume deployment-owned CPU defaults from Nextflow
         # configuration instead.
         dynamic_gpu_cpus = None
-        if model_id not in {"conformational_mapping", "frustrampnn"}:
+        launch_workflow_id = str(
+            launch_params.get("ont_workflow_id")
+            or launch_params.get("ont_request_workflow_id")
+            or launch_params.get("workflow_id")
+            or ""
+        ).strip()
+        launch_input_mode = str(launch_params.get("ont_input_mode") or launch_params.get("input_mode") or "").strip()
+        is_fastq_only_ont_launch = (
+            model_id == "nanopore"
+            and launch_workflow_id == "ont_fastq_qc"
+            and launch_input_mode == "fastq"
+        )
+        if model_id not in {"conformational_mapping", "frustrampnn"} and not is_fastq_only_ont_launch:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
@@ -2562,6 +2646,7 @@ async def launch_nextflow_job(
             if job:
                 # Refresh status to see if it was cancelled by API while we waited
                 await session.refresh(job)
+                terminal_snapshot = capture_terminal_job_publication_snapshot(job)
                 
                 if job.status == JobStatus.CANCELLED.value:
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
@@ -2594,11 +2679,23 @@ async def launch_nextflow_job(
                             is_md_parent = (
                                 job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
+                            from services.ont_ngs_completion import is_ont_fastq_qc_job
+
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
 
                                 await validate_and_finalize_md_job(job, session)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
+                            elif is_ont_fastq_qc_job(job):
+                                integrity = await _validate_ont_fastq_qc_terminal_completion(
+                                    job,
+                                    terminal_resource_receipt_factory,
+                                )
+                                logger.info(
+                                    "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
+                                    job_id,
+                                    integrity["declared_artifact_count"],
+                                )
                             else:
                                 from services.result_state_integrity import finalize_successful_job
 
@@ -2719,17 +2816,13 @@ async def launch_nextflow_job(
                     # SQL, then conditionally publish only to an active row so
                     # autoflush/direct commit cannot resurrect operator state.
                     session.expunge(job)
-                    published = await session.execute(
-                        update(Job)
-                        .where(
-                            Job.id == job_id,
-                            Job.status == JobStatus.RUNNING.value,
-                            Job.queue_status == "running",
-                            Job.awaiting_input.is_(False),
-                        )
-                        .values(**changes)
+                    published_rowcount = await publish_terminal_job_changes(
+                        session,
+                        job_id=job_id,
+                        snapshot=terminal_snapshot,
+                        changes=changes,
                     )
-                    if published.rowcount and terminalizing_cm_failure:
+                    if published_rowcount and terminalizing_cm_failure:
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
@@ -2744,7 +2837,7 @@ async def launch_nextflow_job(
                             exit_code=exit_code,
                         )
                     await session.commit()
-                    if not published.rowcount:
+                    if not published_rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
                     if md_analysis_parent_id:
                         # Reconcile only after the guarded child publication.  The
@@ -2771,6 +2864,7 @@ async def launch_nextflow_job(
                 return
             logger.exception(f"Error running job {job_id}")
             _running_units.pop(job_id, None)
+            await session.rollback()
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -3299,6 +3393,10 @@ def build_nextflow_command(
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
         params['workflow_id'] = effective_profile
+    is_fastq_only_ont_command = (
+        effective_profile == 'ont_fastq_qc'
+        and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
+    )
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
@@ -3354,8 +3452,8 @@ def build_nextflow_command(
 
     explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
     explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
-    explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
-    explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_msa_db = None if is_fastq_only_ont_command else (params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db()))
+    explicit_msa_cache = None if is_fastq_only_ont_command else (params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir()))
     explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
     explicit_container_dir = (
         params.get("container_dir")
@@ -3402,14 +3500,17 @@ def build_nextflow_command(
         "code_root": explicit_code_root,
         "data_root": explicit_data_root,
         "weights_root": explicit_weights_root,
-        "msa_local_db": explicit_msa_db,
-        "msa_cache_dir": explicit_msa_cache,
         "container_dir": explicit_container_dir,
         "rfd_models": explicit_rfd_models,
         "af2_models": explicit_af2_models,
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
+    if not is_fastq_only_ont_command:
+        explicit_path_defaults.update({
+            "msa_local_db": explicit_msa_db,
+            "msa_cache_dir": explicit_msa_cache,
+        })
     for key, value in explicit_path_defaults.items():
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
@@ -3423,10 +3524,18 @@ def build_nextflow_command(
         from services.gpu_config import read_scheduler_config
         from services.msa_server import read_server_settings
 
-        scheduler_cfg = read_scheduler_config() or {}
-        global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
-        overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
-        msa_server_settings = read_server_settings() or {}
+        if is_fastq_only_ont_command:
+            scheduler_cfg = {}
+            global_cfg = {}
+            overrides_cfg = {}
+            msa_server_settings = {}
+            params.pop("msa_preferred_gpus", None)
+            params.pop("msa_excluded_gpus", None)
+        else:
+            scheduler_cfg = read_scheduler_config() or {}
+            global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
+            overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+            msa_server_settings = read_server_settings() or {}
         skip_persisted_msa_pin = (
             str(params.get("structure_validator", "")).strip().lower() == "protenix"
             and str(params.get("protenix_msa_backend", "auto")).strip().lower() == "local"
@@ -3505,31 +3614,35 @@ def build_nextflow_command(
     except Exception as exc:
         logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
 
-    try:
-        from services.anarcii_runtime import (
-            get_default_anarcii_mode,
-            resolve_anarcii_runtime,
-        )
+    if is_fastq_only_ont_command:
+        params.pop("anarcii_execution_mode", None)
+        params.pop("anarcii_gpu_id", None)
+    else:
+        try:
+            from services.anarcii_runtime import (
+                get_default_anarcii_mode,
+                resolve_anarcii_runtime,
+            )
 
-        requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
-        anarcii_runtime = resolve_anarcii_runtime(
-            requested_mode=requested_anarcii_mode,
-            preferred_gpu=params.get("anarcii_gpu_id"),
-            excluded_gpu_ids=params.get("msa_excluded_gpus"),
-        )
-        params["anarcii_execution_mode"] = anarcii_runtime.mode
-        if anarcii_runtime.gpu_id is None:
-            params.pop("anarcii_gpu_id", None)
-        else:
-            params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
-        logger.info(
-            "[ANARCII] Launch runtime=%s gpu=%s (%s)",
-            anarcii_runtime.mode,
-            anarcii_runtime.gpu_id,
-            anarcii_runtime.reason,
-        )
-    except Exception as exc:
-        logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
+            requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
+            anarcii_runtime = resolve_anarcii_runtime(
+                requested_mode=requested_anarcii_mode,
+                preferred_gpu=params.get("anarcii_gpu_id"),
+                excluded_gpu_ids=params.get("msa_excluded_gpus"),
+            )
+            params["anarcii_execution_mode"] = anarcii_runtime.mode
+            if anarcii_runtime.gpu_id is None:
+                params.pop("anarcii_gpu_id", None)
+            else:
+                params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
+            logger.info(
+                "[ANARCII] Launch runtime=%s gpu=%s (%s)",
+                anarcii_runtime.mode,
+                anarcii_runtime.gpu_id,
+                anarcii_runtime.reason,
+            )
+        except Exception as exc:
+            logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
     
     # Map model-specific params to Nextflow params
     param_mapping = {

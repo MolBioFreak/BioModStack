@@ -1,0 +1,568 @@
+{
+  "$defs": {
+    "alignmentSession": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/readySession"
+        },
+        {
+          "$ref": "#/$defs/unavailableSession"
+        }
+      ]
+    },
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mime_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "range_capable": {
+          "const": true
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 256,
+          "pattern": "^/api/jobs/[0-9a-f-]{36}/alignment-artifacts/[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "url",
+        "sha256",
+        "size_bytes",
+        "mime_type",
+        "range_capable",
+        "source_manifest_sha256"
+      ],
+      "type": "object"
+    },
+    "detailEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs.alignment-session-detail.v1"
+        },
+        "session": {
+          "$ref": "#/$defs/alignmentSession"
+        }
+      },
+      "required": [
+        "schema",
+        "job_id",
+        "session"
+      ],
+      "type": "object"
+    },
+    "listEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "schema": {
+          "const": "bms.ngs.alignment-session-list.v1"
+        },
+        "sessions": {
+          "items": false,
+          "maxItems": 2,
+          "minItems": 1,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/readySession"
+                },
+                {
+                  "properties": {
+                    "mode": {
+                      "const": "primary"
+                    },
+                    "ready": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "ready"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/alignmentSession"
+                },
+                {
+                  "properties": {
+                    "mode": {
+                      "const": "dimer_candidates"
+                    }
+                  },
+                  "required": [
+                    "mode"
+                  ]
+                }
+              ]
+            }
+          ],
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "job_id",
+        "sessions"
+      ],
+      "type": "object"
+    },
+    "readySession": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "properties": {
+            "alignment_pair_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "artifact_set_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "reads_url": {
+              "pattern": "^/api/jobs/[0-9a-f-]{36}/reads\\?session_id=[0-9a-f]{24}$",
+              "type": "string"
+            },
+            "ready": {
+              "const": true
+            },
+            "reference": {
+              "$ref": "#/$defs/reference"
+            },
+            "sequence_qc_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "unavailable_reason": {
+              "type": "null"
+            },
+            "verification_manifest_sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "properties": {
+            "artifacts": {
+              "required": [
+                "alignment",
+                "alignment_index",
+                "reference",
+                "reference_index"
+              ]
+            }
+          }
+        }
+      ],
+      "properties": {
+        "alignment_pair_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifact_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "alignment": {
+              "$ref": "#/$defs/artifact"
+            },
+            "alignment_index": {
+              "$ref": "#/$defs/artifact"
+            },
+            "coverage_depth": {
+              "$ref": "#/$defs/artifact"
+            },
+            "gc_content": {
+              "$ref": "#/$defs/artifact"
+            },
+            "gc_zscore": {
+              "$ref": "#/$defs/artifact"
+            },
+            "junction_hotspots": {
+              "$ref": "#/$defs/artifact"
+            },
+            "position_gradient": {
+              "$ref": "#/$defs/artifact"
+            },
+            "reference": {
+              "$ref": "#/$defs/artifact"
+            },
+            "reference_index": {
+              "$ref": "#/$defs/artifact"
+            },
+            "report": {
+              "$ref": "#/$defs/artifact"
+            },
+            "soft_clip_density": {
+              "$ref": "#/$defs/artifact"
+            },
+            "split_read_density": {
+              "$ref": "#/$defs/artifact"
+            },
+            "track_config": {
+              "$ref": "#/$defs/artifact"
+            }
+          },
+          "type": "object"
+        },
+        "job_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "primary",
+            "dimer_candidates"
+          ]
+        },
+        "reads_url": {
+          "maxLength": 512,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reference": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "const": "bms.ngs.alignment-session.v1"
+        },
+        "sequence_qc_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "pattern": "^[0-9a-f]{24}$",
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "maxLength": 2048,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verification_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "session_id",
+        "job_id",
+        "mode",
+        "ready",
+        "unavailable_reason",
+        "reads_url",
+        "sequence_qc_manifest_sha256",
+        "verification_manifest_sha256",
+        "artifact_set_sha256",
+        "reference",
+        "artifacts",
+        "alignment_pair_sha256"
+      ],
+      "type": "object"
+    },
+    "reference": {
+      "additionalProperties": false,
+      "properties": {
+        "contig": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "fai_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "fasta_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "length_bp": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "normalized_sequence_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ]
+        }
+      },
+      "required": [
+        "contig",
+        "length_bp",
+        "topology",
+        "normalized_sequence_sha256",
+        "fasta_sha256",
+        "fai_sha256"
+      ],
+      "type": "object"
+    },
+    "unavailableSession": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "properties": {
+            "alignment_pair_sha256": {
+              "type": "null"
+            },
+            "artifact_set_sha256": {
+              "type": "null"
+            },
+            "artifacts": {
+              "maxProperties": 0,
+              "type": "object"
+            },
+            "mode": {
+              "const": "dimer_candidates"
+            },
+            "reads_url": {
+              "type": "null"
+            },
+            "ready": {
+              "const": false
+            },
+            "reference": {
+              "type": "null"
+            },
+            "sequence_qc_manifest_sha256": {
+              "type": "null"
+            },
+            "unavailable_reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "verification_manifest_sha256": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "alignment_pair_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifact_set_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "artifacts": {
+          "additionalProperties": false,
+          "properties": {
+            "alignment": {
+              "$ref": "#/$defs/artifact"
+            },
+            "alignment_index": {
+              "$ref": "#/$defs/artifact"
+            },
+            "coverage_depth": {
+              "$ref": "#/$defs/artifact"
+            },
+            "gc_content": {
+              "$ref": "#/$defs/artifact"
+            },
+            "gc_zscore": {
+              "$ref": "#/$defs/artifact"
+            },
+            "junction_hotspots": {
+              "$ref": "#/$defs/artifact"
+            },
+            "position_gradient": {
+              "$ref": "#/$defs/artifact"
+            },
+            "reference": {
+              "$ref": "#/$defs/artifact"
+            },
+            "reference_index": {
+              "$ref": "#/$defs/artifact"
+            },
+            "report": {
+              "$ref": "#/$defs/artifact"
+            },
+            "soft_clip_density": {
+              "$ref": "#/$defs/artifact"
+            },
+            "split_read_density": {
+              "$ref": "#/$defs/artifact"
+            },
+            "track_config": {
+              "$ref": "#/$defs/artifact"
+            }
+          },
+          "type": "object"
+        },
+        "job_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "primary",
+            "dimer_candidates"
+          ]
+        },
+        "reads_url": {
+          "maxLength": 512,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reference": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "const": "bms.ngs.alignment-session.v1"
+        },
+        "sequence_qc_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "pattern": "^[0-9a-f]{24}$",
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "maxLength": 2048,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verification_manifest_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "session_id",
+        "job_id",
+        "mode",
+        "ready",
+        "unavailable_reason",
+        "reads_url",
+        "sequence_qc_manifest_sha256",
+        "verification_manifest_sha256",
+        "artifact_set_sha256",
+        "reference",
+        "artifacts",
+        "alignment_pair_sha256"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://biomodstack.local/schemas/ngs/ont_alignment_session_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/listEnvelope"
+    },
+    {
+      "$ref": "#/$defs/detailEnvelope"
+    }
+  ],
+  "title": "BioModStack governed ONT alignment session v1",
+  "x-bms-cross-field-invariants": [
+    "session and governed URL job identities equal envelope job_id",
+    "reads_url session_id equals session.session_id",
+    "ready artifact URLs end in their artifact_id",
+    "artifact_id is an opaque route identity; sha256 is the file-byte identity; source manifest digests match session authority",
+    "alignment_pair_sha256 recomputes from BAM and BAI file digests in the bms.ngs.alignment-pair.v1 domain",
+    "list has primary first and at most one dimer_candidates session",
+    "reference FASTA and FAI digests equal their artifact descriptors",
+    "detail session equals the list record byte-for-byte for identity, mode, readiness, reason, reference, pair, manifests, package, URLs, and artifacts"
+  ],
+  "x-bms-semantic-validator": "bms.ngs.alignment-session-semantic-validator.v1"
+}

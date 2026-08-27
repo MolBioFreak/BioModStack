@@ -6,8 +6,10 @@ import os
 import sqlite3
 import stat
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -16,8 +18,14 @@ class SQLiteBackupReport:
     backup_path: Path
     size_bytes: int
     sha256: str
-    quick_check: str
+    integrity_check: str
     foreign_key_violations: int
+    source_snapshot: dict[str, Any]
+
+    @property
+    def quick_check(self) -> str:
+        """Compatibility alias for older non-authority callers."""
+        return self.integrity_check
 
 
 FileIdentity = tuple[int, int]
@@ -98,7 +106,163 @@ def _lstat(path: Path) -> os.stat_result | None:
         return None
 
 
-def backup_sqlite_database(source_path: Path, backup_path: Path) -> SQLiteBackupReport:
+def checkpoint_sqlite_wal(source_path: Path, *, mode: str = "TRUNCATE") -> None:
+    """Checkpoint every committed WAL frame through an inode-attested handle."""
+
+    if mode not in {"PASSIVE", "TRUNCATE"}:
+        raise ValueError("SQLite WAL checkpoint mode is invalid")
+    source = Path(source_path).expanduser().resolve()
+    source_path_stat = _lstat(source)
+    if source_path_stat is None or not stat.S_ISREG(source_path_stat.st_mode):
+        raise FileNotFoundError(f"SQLite source database does not exist: {source}")
+    source_identity = _identity(source_path_stat)
+    descriptors_before_open = _file_descriptor_identities()
+    with sqlite3.connect(f"file:{source}?mode=rw", uri=True, timeout=30.0) as connection:
+        _attest_sqlite_connection(
+            connection,
+            descriptors_before_open,
+            source_identity,
+            label="WAL checkpoint",
+        )
+        row = connection.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+        if row is None or len(row) != 3:
+            raise RuntimeError("SQLite WAL checkpoint returned no authority result")
+        busy, log_frames, checkpointed_frames = (int(value) for value in row)
+        if busy != 0 or log_frames != checkpointed_frames:
+            raise RuntimeError("SQLite WAL checkpoint could not establish quiescent authority")
+    source_path_after = _lstat(source)
+    if source_path_after is None or _identity(source_path_after) != source_identity:
+        raise RuntimeError("SQLite source identity changed during WAL checkpoint")
+
+
+def open_attested_sqlite_readonly_connection(source_path: Path) -> sqlite3.Connection:
+    """Open and attest the exact SQLite source connection retained by reconciliation."""
+
+    source = Path(source_path).expanduser().resolve()
+    source_stat = _lstat(source)
+    if source_stat is None or not stat.S_ISREG(source_stat.st_mode):
+        raise FileNotFoundError(f"SQLite source database does not exist: {source}")
+    descriptors_before_open = _file_descriptor_identities()
+    connection = sqlite3.connect(
+        f"file:{source}?mode=ro",
+        uri=True,
+        timeout=30.0,
+        check_same_thread=False,
+    )
+    try:
+        _attest_sqlite_connection(
+            connection,
+            descriptors_before_open,
+            _identity(source_stat),
+            label="retained backup source",
+        )
+    except Exception:
+        connection.close()
+        raise
+    return connection
+
+
+def inspect_sqlite_source_snapshot(
+    source_path: Path,
+    *,
+    database_identity_sha256: str,
+) -> dict[str, Any]:
+    """Read the complete reconciliation source tuple from one pinned inode."""
+
+    source = Path(source_path).expanduser().resolve()
+    source_path_stat = _lstat(source)
+    if source_path_stat is None or not stat.S_ISREG(source_path_stat.st_mode):
+        raise FileNotFoundError(f"SQLite source database does not exist: {source}")
+    source_identity = _identity(source_path_stat)
+    source_descriptor = _open_pinned_readonly(source, source_identity, label="source snapshot")
+    try:
+        source_stat = os.fstat(source_descriptor)
+        descriptors_before_open = _file_descriptor_identities()
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30.0) as connection:
+            _attest_sqlite_connection(
+                connection,
+                descriptors_before_open,
+                source_identity,
+                label="source snapshot",
+            )
+            integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+            integrity_check = [str(row[0]) for row in integrity_rows]
+            foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+            if integrity_check != ["ok"] or foreign_key_violations:
+                raise RuntimeError("SQLite source failed integrity validation")
+            snapshot = {
+                "schema": "bms.sqlite-backup-source-preimage.v1",
+                "database_identity_sha256": database_identity_sha256,
+                "source_size_bytes": int(source_stat.st_size),
+                "source_sha256": _sha256_descriptor(source_descriptor),
+                "page_size": int(connection.execute("PRAGMA page_size").fetchone()[0]),
+                "page_count": int(connection.execute("PRAGMA page_count").fetchone()[0]),
+                "schema_version": int(connection.execute("PRAGMA schema_version").fetchone()[0]),
+                "data_version": int(connection.execute("PRAGMA data_version").fetchone()[0]),
+                "integrity_check": integrity_check[0],
+                "foreign_key_violations": foreign_key_violations,
+            }
+        source_stat_after = os.fstat(source_descriptor)
+        source_path_after = _lstat(source)
+        if (
+            source_path_after is None
+            or _identity(source_path_after) != source_identity
+            or _identity(source_stat_after) != source_identity
+            or source_stat_after.st_size != source_stat.st_size
+            or source_stat_after.st_mtime_ns != source_stat.st_mtime_ns
+        ):
+            raise RuntimeError("SQLite source identity or metadata changed during snapshot")
+        return snapshot
+    finally:
+        os.close(source_descriptor)
+
+
+def verify_sqlite_backup(
+    backup_path: Path,
+    *,
+    expected_size_bytes: int,
+    expected_sha256: str,
+) -> None:
+    """Replay full integrity and byte checks against one immutable backup object."""
+
+    backup = Path(backup_path).expanduser().resolve()
+    backup_stat = _lstat(backup)
+    if backup_stat is None or not stat.S_ISREG(backup_stat.st_mode):
+        raise FileNotFoundError(f"SQLite backup does not exist: {backup}")
+    backup_identity = _identity(backup_stat)
+    descriptor = _open_pinned_readonly(backup, backup_identity, label="backup replay")
+    try:
+        if os.fstat(descriptor).st_size != expected_size_bytes:
+            raise RuntimeError("SQLite backup replay size does not match its receipt")
+        if _sha256_descriptor(descriptor) != expected_sha256:
+            raise RuntimeError("SQLite backup replay digest does not match its receipt")
+        descriptors_before_open = _file_descriptor_identities()
+        with sqlite3.connect(f"file:{backup}?mode=ro", uri=True, timeout=30.0) as connection:
+            _attest_sqlite_connection(
+                connection,
+                descriptors_before_open,
+                backup_identity,
+                label="backup replay",
+            )
+            integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+            foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+        if [str(row[0]) for row in integrity_rows] != ["ok"] or foreign_key_violations:
+            raise RuntimeError("SQLite backup replay failed integrity validation")
+        backup_path_after = _lstat(backup)
+        if backup_path_after is None or _identity(backup_path_after) != backup_identity:
+            raise RuntimeError("SQLite backup replay identity changed during verification")
+    finally:
+        os.close(descriptor)
+
+
+def backup_sqlite_database(
+    source_path: Path,
+    backup_path: Path,
+    *,
+    database_identity_sha256: str | None = None,
+    checkpoint_wal: bool = False,
+    source_connection: sqlite3.Connection | None = None,
+) -> SQLiteBackupReport:
     """Create and verify a consistent, inode-pinned SQLite online backup.
 
     ``sqlite3.Connection.backup`` captures committed WAL pages. Publication is
@@ -112,6 +276,9 @@ def backup_sqlite_database(source_path: Path, backup_path: Path) -> SQLiteBackup
     destination = Path(backup_path).expanduser().resolve()
     if source == destination:
         raise ValueError("SQLite backup source and destination must be distinct, non-alias paths")
+
+    if checkpoint_wal:
+        checkpoint_sqlite_wal(source)
 
     source_path_stat = _lstat(source)
     if source_path_stat is None or not stat.S_ISREG(source_path_stat.st_mode):
@@ -150,16 +317,45 @@ def backup_sqlite_database(source_path: Path, backup_path: Path) -> SQLiteBackup
                 )
 
             source_uri = f"file:{source}?mode=ro"
+            owns_source_connection = source_connection is None
             descriptors_before_source_open = _file_descriptor_identities()
-            with sqlite3.connect(source_uri, uri=True, timeout=30.0) as source_connection:
-                _attest_sqlite_connection(
-                    source_connection,
-                    descriptors_before_source_open,
-                    source_identity,
-                    label="source",
+            source_context = (
+                sqlite3.connect(source_uri, uri=True, timeout=30.0)
+                if owns_source_connection
+                else nullcontext(source_connection)
+            )
+            with source_context as active_source_connection:
+                if owns_source_connection:
+                    _attest_sqlite_connection(
+                        active_source_connection,
+                        descriptors_before_source_open,
+                        source_identity,
+                        label="source",
+                    )
+                source_integrity_rows = active_source_connection.execute("PRAGMA integrity_check").fetchall()
+                source_integrity_check = [str(row[0]) for row in source_integrity_rows]
+                source_foreign_key_violations = len(
+                    active_source_connection.execute("PRAGMA foreign_key_check").fetchall()
                 )
+                if source_integrity_check != ["ok"] or source_foreign_key_violations:
+                    raise RuntimeError("SQLite source failed integrity validation")
+                source_snapshot = {
+                    "schema": "bms.sqlite-backup-source-preimage.v1",
+                    "database_identity_sha256": database_identity_sha256
+                    or hashlib.sha256(
+                        f"{source}:{source_identity[0]}:{source_identity[1]}".encode("utf-8")
+                    ).hexdigest(),
+                    "source_size_bytes": int(source_stat_before.st_size),
+                    "source_sha256": _sha256_descriptor(source_descriptor),
+                    "page_size": int(active_source_connection.execute("PRAGMA page_size").fetchone()[0]),
+                    "page_count": int(active_source_connection.execute("PRAGMA page_count").fetchone()[0]),
+                    "schema_version": int(active_source_connection.execute("PRAGMA schema_version").fetchone()[0]),
+                    "data_version": int(active_source_connection.execute("PRAGMA data_version").fetchone()[0]),
+                    "integrity_check": source_integrity_check[0],
+                    "foreign_key_violations": source_foreign_key_violations,
+                }
                 with sqlite3.connect(staging, timeout=30.0) as backup_connection:
-                    source_connection.backup(backup_connection)
+                    active_source_connection.backup(backup_connection)
                     backup_connection.commit()
 
             source_stat_after = os.fstat(source_descriptor)
@@ -190,12 +386,13 @@ def backup_sqlite_database(source_path: Path, backup_path: Path) -> SQLiteBackup
                 staging_identity,
                 label="staging validation",
             )
-            quick_check = str(check_connection.execute("PRAGMA quick_check").fetchone()[0])
+            integrity_rows = check_connection.execute("PRAGMA integrity_check").fetchall()
+            integrity_check = [str(row[0]) for row in integrity_rows]
             foreign_key_violations = len(
                 check_connection.execute("PRAGMA foreign_key_check").fetchall()
             )
-        if quick_check.casefold() != "ok":
-            raise RuntimeError(f"SQLite backup failed quick_check: {quick_check}")
+        if integrity_check != ["ok"]:
+            raise RuntimeError(f"SQLite backup failed integrity_check: {integrity_check}")
         if foreign_key_violations:
             raise RuntimeError(
                 "SQLite backup failed foreign key validation: "
@@ -241,8 +438,9 @@ def backup_sqlite_database(source_path: Path, backup_path: Path) -> SQLiteBackup
             backup_path=destination,
             size_bytes=published_size,
             sha256=published_digest,
-            quick_check=quick_check,
+            integrity_check=integrity_check[0],
             foreign_key_violations=foreign_key_violations,
+            source_snapshot=source_snapshot,
         )
     except Exception as error:
         cleanup_errors: list[str] = []

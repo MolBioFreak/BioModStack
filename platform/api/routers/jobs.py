@@ -7610,6 +7610,23 @@ async def resubmit_job(
     resubmit_params = _normalize_structure_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_structure_geometry_params(resubmit_params)
     resubmit_params = _normalize_antibody_job_params(resubmit_params)
+    resubmit_workflow_id = str(
+        resubmit_params.get("ont_workflow_id")
+        or resubmit_params.get("ont_request_workflow_id")
+        or resubmit_params.get("workflow_id")
+        or ""
+    ).strip()
+    resubmit_input_mode = str(
+        resubmit_params.get("ont_input_mode") or resubmit_params.get("input_mode") or ""
+    ).strip()
+    if (
+        original_job.model_id == "nanopore"
+        and resubmit_workflow_id == "ont_fastq_qc"
+        and resubmit_input_mode == "fastq"
+    ):
+        resubmit_params = ont_ngs_contract.normalize_ont_launch_params(
+            "ont_fastq_qc", resubmit_params
+        )
     if resubmit_params.get("msa_force_refresh") is True:
         # Resubmits should reuse cache by default unless user explicitly
         # starts a fresh job with force-refresh enabled.
@@ -7633,6 +7650,10 @@ async def resubmit_job(
         resubmit_sequence_length,
         resubmit_params,
     )
+    if original_job.model_id == "nanopore" and resubmit_workflow_id == "ont_fastq_qc" and resubmit_input_mode == "fastq":
+        resubmit_vram_estimate = 0
+        for key in ("gpu_id", "pinned_gpu", "pinned_gpus", "cpus_per_gpu"):
+            resubmit_params.pop(key, None)
     resubmit_selected_input_artifact_class = normalize_antibody_artifact_class(
         resubmit_params.get("selected_input_artifact_class")
     )
@@ -8024,6 +8045,88 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
     }
 
 
+async def _publish_generic_stage_terminal(
+    *,
+    session: AsyncSession,
+    job_id: str,
+    stage: str,
+    status: str,
+    outputs: list[str],
+    token: str,
+) -> dict[str, Any]:
+    terminal = {"status": status, "outputs": list(outputs)}
+    for _attempt in range(4):
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        current = result.scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not stage_reporting.token_is_authorized(current.provenance, token):
+            raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+        if (
+            current.status != JobStatus.RUNNING.value
+            or current.queue_status != "running"
+            or current.awaiting_input
+        ):
+            raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
+
+        original_completed = current.completed_stages
+        original_outputs = current.stage_outputs
+        original_provenance = current.provenance
+        original_current_stage = current.current_stage
+        original_stage_progress = current.stage_progress
+        completed = list(original_completed or [])
+        stage_outputs = dict(original_outputs or {})
+        provenance = dict(original_provenance or {})
+        terminal_states = dict(provenance.get("stage_terminal_states") or {})
+        existing_terminal = terminal_states.get(stage)
+        if existing_terminal is not None and existing_terminal != terminal:
+            raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+        if status == "complete":
+            if stage not in completed:
+                completed.append(stage)
+        elif stage in completed:
+            raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
+        stage_outputs[stage] = list(outputs)
+        terminal_states[stage] = terminal
+        provenance["stage_terminal_states"] = terminal_states
+        current_stage = None if original_current_stage == stage else original_current_stage
+
+        predicates = [
+            Job.id == job_id,
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_status == "running",
+            Job.awaiting_input.is_(False),
+            Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
+            Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
+            Job.provenance.is_(None) if original_provenance is None else Job.provenance == original_provenance,
+            Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
+            Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,
+        ]
+        session.expunge(current)
+        published = await session.execute(
+            update(Job)
+            .where(*predicates)
+            .values(
+                completed_stages=completed,
+                stage_outputs=stage_outputs,
+                provenance=provenance,
+                current_stage=current_stage,
+            )
+        )
+        if published.rowcount == 1:
+            await session.commit()
+            return {
+                "message": f"Stage '{stage}' marked {status}",
+                "job_id": job_id,
+                "stage": stage,
+                "status": status,
+                "completed_stages": completed,
+                "outputs_count": len(outputs),
+            }
+        await session.rollback()
+    raise HTTPException(status_code=409, detail="workflow stage callback conflicted with concurrent publication")
+
+
 @router.post("/{job_id}/stage-complete")
 async def report_stage_complete(
     job_id: str,
@@ -8094,40 +8197,16 @@ async def report_stage_complete(
             "outputs_count": len(outputs),
         }
     
-    # Update completed stages
-    completed = job.completed_stages or []
-    if stage not in completed:
-        completed.append(stage)
-    job.completed_stages = completed
-    
-    # Update stage outputs
-    stage_outputs = job.stage_outputs or {}
-    stage_outputs[stage] = outputs
-    job.stage_outputs = stage_outputs
-
-    provenance = dict(job.provenance or {})
-    terminal_states = dict(provenance.get("stage_terminal_states") or {})
-    existing_terminal = terminal_states.get(stage)
-    complete_terminal = {"status": "complete", "outputs": list(outputs)}
-    if existing_terminal is not None and existing_terminal != complete_terminal:
-        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
-    terminal_states[stage] = complete_terminal
-    provenance["stage_terminal_states"] = terminal_states
-    job.provenance = provenance
-    
-    # Clear current stage (will be set when next stage starts)
-    job.current_stage = None
-    
-    await session.commit()
-    
-    logger.info(f"Job {job_id}: Stage '{stage}' completed with {len(outputs)} outputs")
-    
-    return {
-        "message": f"Stage '{stage}' marked complete",
-        "job_id": job_id,
-        "completed_stages": completed,
-        "outputs_count": len(outputs)
-    }
+    response = await _publish_generic_stage_terminal(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        status="complete",
+        outputs=list(outputs),
+        token=token,
+    )
+    logger.info("Job %s: Stage '%s' completed with %s outputs", job_id, stage, len(outputs))
+    return response
 
 
 @router.post("/{job_id}/stage-terminal")
@@ -8152,33 +8231,16 @@ async def report_stage_terminal(
     if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
 
-    completed = list(job.completed_stages or [])
-    if stage in completed:
-        raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
-    terminal = {"status": status, "outputs": list(outputs)}
-    provenance = dict(job.provenance or {})
-    terminal_states = dict(provenance.get("stage_terminal_states") or {})
-    existing = terminal_states.get(stage)
-    if existing is not None and existing != terminal:
-        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
-    terminal_states[stage] = terminal
-    provenance["stage_terminal_states"] = terminal_states
-    job.provenance = provenance
-
-    stage_outputs = dict(job.stage_outputs or {})
-    stage_outputs[stage] = list(outputs)
-    job.stage_outputs = stage_outputs
-    if job.current_stage == stage:
-        job.current_stage = None
-    await session.commit()
+    response = await _publish_generic_stage_terminal(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        status=status,
+        outputs=list(outputs),
+        token=token,
+    )
     logger.info("Job %s: Stage '%s' terminal state is %s", job_id, stage, status)
-    return {
-        "message": f"Stage '{stage}' marked {status}",
-        "job_id": job_id,
-        "stage": stage,
-        "status": status,
-        "outputs_count": len(outputs),
-    }
+    return response
 
 
 @router.post("/{job_id}/stage-gates/{stage}/open")
@@ -8516,6 +8578,69 @@ async def mark_children_aggregated(
     }
 
 
+async def _publish_generic_stage_start(
+    *,
+    session: AsyncSession,
+    job_id: str,
+    stage: str,
+    token: str,
+) -> dict[str, Any]:
+    if not stage or len(stage) > 128:
+        raise HTTPException(status_code=422, detail="workflow stage identity is invalid")
+    for _attempt in range(4):
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        current = result.scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not stage_reporting.token_is_authorized(current.provenance, token):
+            raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+        if (
+            current.status != JobStatus.RUNNING.value
+            or current.queue_status != "running"
+            or current.awaiting_input
+        ):
+            raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
+
+        original_current_stage = current.current_stage
+        original_stage_progress = current.stage_progress
+        original_completed = current.completed_stages
+        original_outputs = current.stage_outputs
+        original_provenance = current.provenance
+        terminal_states = (
+            original_provenance.get("stage_terminal_states")
+            if isinstance(original_provenance, dict)
+            else None
+        )
+        if (
+            (isinstance(terminal_states, dict) and stage in terminal_states)
+            or stage in (original_completed or [])
+        ):
+            raise HTTPException(status_code=409, detail="terminal workflow stage cannot restart")
+        if original_current_stage == stage:
+            return {"message": f"Stage '{stage}' started", "job_id": job_id}
+
+        predicates = [
+            Job.id == job_id,
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_status == "running",
+            Job.awaiting_input.is_(False),
+            Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
+            Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,
+            Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
+            Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
+            Job.provenance.is_(None) if original_provenance is None else Job.provenance == original_provenance,
+        ]
+        session.expunge(current)
+        published = await session.execute(
+            update(Job).where(*predicates).values(current_stage=stage)
+        )
+        if published.rowcount == 1:
+            await session.commit()
+            return {"message": f"Stage '{stage}' started", "job_id": job_id}
+        await session.rollback()
+    raise HTTPException(status_code=409, detail="workflow stage start conflicted with concurrent publication")
+
+
 @router.post("/{job_id}/stage-start")
 async def report_stage_start(
     job_id: str,
@@ -8523,27 +8648,21 @@ async def report_stage_start(
     stage: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """
-    Report that a workflow stage has started.
-    Called by Nextflow workflows when entering a new stage.
-    """
+    """Publish one authenticated workflow stage start through snapshot CAS."""
+
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
     authorization = str(request.headers.get("authorization") or "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+    if scheme.lower() != "bearer":
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-    
-    job.current_stage = stage
-    await session.commit()
-    
-    logger.info(f"Job {job_id}: Stage '{stage}' started")
-    
-    return {"message": f"Stage '{stage}' started", "job_id": job_id}
+    response = await _publish_generic_stage_start(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        token=token,
+    )
+    logger.info("Job %s: Stage '%s' started", job_id, stage)
+    return response
 
 
 @router.get("/{job_id}/stages")

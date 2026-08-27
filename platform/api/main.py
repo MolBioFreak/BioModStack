@@ -251,6 +251,10 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan
 )
+app.add_exception_handler(
+    ngs_alignment_sessions.OntNgsRouteError,
+    ngs_alignment_sessions.ont_ngs_route_error_handler,
+)
 
 app.add_middleware(FrustraMPNNUploadLimitMiddleware)
 
@@ -346,6 +350,7 @@ if install_feature_enabled("bioxp"):
     app.include_router(bioxp.router, prefix="/api/bioxp", tags=["bioxp"])
 app.include_router(sequence_qc.router, prefix="/api/sequence-qc", tags=["sequence-qc"])
 app.include_router(ngs_alignment_sessions.router, prefix="/api", tags=["ngs-alignment"])
+ngs_alignment_sessions.install_governed_ngs_openapi(app)
 app.include_router(ont_devices.router, prefix="/api/ont", tags=["ont-devices"])
 app.include_router(ont_runs.router, prefix="/api/ont", tags=["ont-runs"])
 app.include_router(ont_signal_workbench.router, prefix="/api/ont/signal-workbench", tags=["ont-signal-workbench"])

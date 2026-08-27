@@ -492,6 +492,38 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
 
+    if canonical_id == "ont_fastq_qc":
+        def fastq_bool(name: str, default: bool) -> bool:
+            value = normalized.get(name, default)
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be boolean")
+            return value
+
+        def fastq_int(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = normalized.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+            return value
+
+        normalized["ont_workflow_id"] = spec.workflow_id
+        normalized["enable_rotating_reference_frames"] = fastq_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = fastq_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = fastq_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = fastq_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = fastq_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["manifest_contract"] = MANIFEST_SCHEMA
+        for key in list(normalized):
+            if (
+                key.startswith(("dorado_", "gpu_", "msa_", "anarcii_"))
+                or key in {
+                    "basecalling_mode", "barcode_kit", "sample_sheet", "duplex_pairs",
+                    "modified_bases", "min_qscore", "pinned_gpu", "pinned_gpus",
+                    "cuda_visible_devices", "cpus_per_gpu",
+                }
+            ):
+                normalized.pop(key, None)
+        return normalized
+
     lock_bytes = DORADO_LOCK_PATH.read_bytes()
     lock = json.loads(lock_bytes)
     current_lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()

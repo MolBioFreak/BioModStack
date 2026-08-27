@@ -354,7 +354,92 @@ def test_online_backup_captures_consistent_wal_database(tmp_path: Path) -> None:
     assert report.size_bytes == backup.stat().st_size
     assert S_IMODE(backup.stat().st_mode) == 0o600
     assert report.sha256 == hashlib.sha256(backup.read_bytes()).hexdigest()
+    assert report.integrity_check == "ok"
     assert report.quick_check == "ok"
+    assert report.source_snapshot["schema"] == "bms.sqlite-backup-source-preimage.v1"
+    assert report.source_snapshot["database_identity_sha256"]
+    assert report.source_snapshot["source_size_bytes"] == source.stat().st_size
+    assert report.source_snapshot["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert report.source_snapshot["page_size"] == 4096
+    assert report.source_snapshot["page_count"] >= 1
+    assert report.source_snapshot["schema_version"] >= 0
+    assert report.source_snapshot["data_version"] >= 0
+    assert report.source_snapshot["integrity_check"] == "ok"
+    assert report.source_snapshot["foreign_key_violations"] == 0
+
+
+def test_reconciliation_backup_checkpoints_wal_before_source_hash(tmp_path: Path) -> None:
+    from services.sqlite_backup import backup_sqlite_database, inspect_sqlite_source_snapshot
+
+    source = tmp_path / "source.db"
+    backup = tmp_path / "backup.db"
+    writer = sqlite3.connect(source)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE records (value TEXT NOT NULL)")
+        writer.execute("INSERT INTO records VALUES ('committed-in-wal')")
+        writer.commit()
+        wal_path = Path(f"{source}-wal")
+        assert wal_path.exists() and wal_path.stat().st_size > 0
+
+        report = backup_sqlite_database(
+            source,
+            backup,
+            database_identity_sha256="8" * 64,
+            checkpoint_wal=True,
+        )
+    finally:
+        writer.close()
+
+    assert not wal_path.exists() or wal_path.stat().st_size == 0
+    assert report.source_snapshot["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert report.source_snapshot == inspect_sqlite_source_snapshot(
+        source,
+        database_identity_sha256="8" * 64,
+    )
+    with sqlite3.connect(backup) as restored:
+        assert restored.execute("SELECT value FROM records").fetchall() == [("committed-in-wal",)]
+
+
+def test_reconciliation_backup_retains_source_connection_under_writer_reservation(tmp_path: Path) -> None:
+    from services.sqlite_backup import (
+        backup_sqlite_database,
+        checkpoint_sqlite_wal,
+        open_attested_sqlite_readonly_connection,
+    )
+
+    source = tmp_path / "source.db"
+    backup = tmp_path / "backup.db"
+    with sqlite3.connect(source) as setup:
+        setup.execute("PRAGMA journal_mode=WAL")
+        setup.execute("CREATE TABLE records (value TEXT NOT NULL)")
+        setup.execute("INSERT INTO records VALUES ('before-reservation')")
+        setup.commit()
+
+    retained = open_attested_sqlite_readonly_connection(source)
+    owner = sqlite3.connect(source, timeout=0.05)
+    contender = sqlite3.connect(source, timeout=0.05)
+    try:
+        owner.execute("BEGIN IMMEDIATE")
+        checkpoint_sqlite_wal(source, mode="PASSIVE")
+        report = backup_sqlite_database(
+            source,
+            backup,
+            database_identity_sha256="8" * 64,
+            source_connection=retained,
+        )
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            contender.execute("INSERT INTO records VALUES ('raced-writer')")
+        owner.rollback()
+    finally:
+        contender.close()
+        owner.close()
+        retained.close()
+
+    assert report.source_snapshot["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    with sqlite3.connect(backup) as restored:
+        assert restored.execute("SELECT value FROM records").fetchall() == [("before-reservation",)]
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,7 @@ def _client_with_fake_create(monkeypatch, captured: dict[str, Any]) -> TestClien
         request,
         *,
         commit=True,
+        **_kwargs,
     ):
         captured["job_data"] = job_data
         captured["session"] = session
@@ -193,6 +194,7 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
                 "fastq_path": "/data/run/A12.fastq.gz",
                 "reference_fasta": payload["reference_fasta"],
                 "source_instrument_run_id": run_id,
+                "source_instrument_observed_generation": 11,
                 "source_minknow_run_id": "MNK-001",
                 "source_instrument_observed_generation": 1,
             },
@@ -220,7 +222,9 @@ def test_ont_run_plasmid_handoff_submit_builds_and_submits_job(monkeypatch) -> N
         assert receipt_id == "receipt-1"
         return receipt
 
-    async def fake_attach_instrument_run_evidence(*_args, **_kwargs):
+    async def fake_attach_instrument_run_evidence(*_args, **kwargs):
+        assert kwargs["global_domain_experiment_id"] == "domain-1"
+        assert kwargs["state_revision_id"] == "state-revision-1"
         return SimpleNamespace(receipt_id="instrument-receipt-1", content_digest="c" * 64)
 
     monkeypatch.setattr(ont_runs, "validate_molbio_ngs_receipt", fake_validate_receipt)
@@ -321,7 +325,9 @@ def test_created_ont_job_receives_opaque_alignment_capability(monkeypatch) -> No
     assert "HttpOnly" in cookie_header
     assert "Secure" in cookie_header
     assert "SameSite=strict" in cookie_header
-    assert f"Path=/api/jobs/{created.id}" in cookie_header
+    assert "Max-Age=1800" in cookie_header
+    assert "Path=/" in cookie_header
+    assert cookie_header.startswith("__Host-bms-ngs-")
 
 
 def test_capability_issuance_failure_occurs_before_ont_job_creation(monkeypatch) -> None:
