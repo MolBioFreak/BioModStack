@@ -833,6 +833,32 @@ def test_insecure_local_development_allowlist_contains_only_actual_loopback_addr
     assert router.LOCAL_DEVELOPMENT_ADMIN_HOSTS == frozenset({"127.0.0.1", "::1"})
 
 
+def test_reconciled_fastq_qc_session_authority_uses_the_validated_historical_receipt() -> None:
+    from routers import ngs_alignment_sessions as router
+
+    digest = "a" * 64
+    job = SimpleNamespace(
+        id="31f02bd5-830f-4558-aa78-3873c515de68",
+        params={
+            "reference_sequence_sha256": "b" * 64,
+            "ont_workflow_id": "ont_fastq_qc",
+            "ont_input_mode": "fastq",
+        },
+        provenance={
+            "result_integrity": {"result_kind": "legacy_design"},
+            "ont_fastq_qc_reconciliation_v1": {
+                "schema": "bms.ont-fastq-qc-reconciliation.v1",
+                "job_id": "31f02bd5-830f-4558-aa78-3873c515de68",
+                "workflow_id": "ont_fastq_qc",
+                "input_mode": "fastq",
+                "artifact_set_sha256": digest,
+            },
+        },
+    )
+
+    assert router._job_session_authority(cast(Any, job))["package_artifact_set_sha256"] == digest
+
+
 def test_sequence_qc_manifest_wrapper_accepts_the_pinned_result_root_descriptor(tmp_path: Path) -> None:
     from routers import ngs_alignment_sessions as router
 

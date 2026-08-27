@@ -471,6 +471,23 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         navigate(`/ngs?${query.toString()}`);
     };
 
+    const openNgsRunInspector = () => {
+        if (!summary) return;
+        const selectedGlobalExperimentId = globalExperimentForNode(summary, summary.selection.node_key)
+            ?? focusId
+            ?? focusIdFromReadModel(summary);
+        const selectedDomainExperimentId = domainExperimentForNode(summary, summary.selection.node_key);
+        if (!selectedGlobalExperimentId || !selectedDomainExperimentId) return;
+        const query = new URLSearchParams({
+            workspace_id: projectId,
+            global_experiment_id: selectedGlobalExperimentId,
+            domain_experiment_id: selectedDomainExperimentId,
+            section: 'analyses',
+            ownership_scope: 'global',
+        });
+        navigate(`/ngs?${query.toString()}`);
+    };
+
     const runActionMutation = useMutation({
         mutationFn: async ({ action, run }: { action: string; run: ProjectManagerReadModel['runs']['items'][number] }) => {
             if (!summary) throw new Error('No validated Project context is available.');
@@ -823,6 +840,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                             onClose={() => setInspectorOpen(false)}
                             onOpenCanonical={() => surfaceMutation.mutate()}
                             onOpenNgsMolBio={openNgsMolBioWorkspace}
+                            onOpenNgsRuns={openNgsRunInspector}
                             onAddExisting={() => setAttachOpen(true)}
                             onCreateDomain={() => setDialogMode('create_domain')}
                             onEdit={() => setDialogMode('edit')}

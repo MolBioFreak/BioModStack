@@ -573,8 +573,20 @@ def _job_authority(job: Job) -> dict[str, str]:
 def _job_session_authority(job: Job) -> dict[str, Any]:
     authority = _job_authority(job)
     provenance = getattr(job, "provenance", None)
-    integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
+    provenance = provenance if isinstance(provenance, dict) else {}
+    integrity = provenance.get("result_integrity")
     package_digest = integrity.get("artifact_set_sha256") if isinstance(integrity, dict) else None
+    if not isinstance(package_digest, str) or re.fullmatch(r"[0-9a-f]{64}", package_digest) is None:
+        reconciliation = provenance.get("ont_fastq_qc_reconciliation_v1")
+        if not (
+            isinstance(reconciliation, dict)
+            and reconciliation.get("schema") == "bms.ont-fastq-qc-reconciliation.v1"
+            and reconciliation.get("job_id") == str(job.id)
+            and reconciliation.get("workflow_id") == authority["workflow_id"]
+            and reconciliation.get("input_mode") == authority["input_mode"]
+        ):
+            raise service.AlignmentSessionError("persisted package artifact-set authority is required")
+        package_digest = reconciliation.get("artifact_set_sha256")
     if not isinstance(package_digest, str) or re.fullmatch(r"[0-9a-f]{64}", package_digest) is None:
         raise service.AlignmentSessionError("persisted package artifact-set authority is required")
     return {**authority, "package_artifact_set_sha256": package_digest}

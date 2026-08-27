@@ -87,6 +87,15 @@ describe('NGS/MolBio frontend closure wiring', () => {
         expect(workspace).toContain('<DomainWorkflowOperator');
     });
 
+    it('routes the selected NGS Domain to its ordinary persisted Run Inspector', () => {
+        const manager = readFileSync(resolve(process.cwd(), 'src/pages/ProjectManager.tsx'), 'utf8');
+        const inspector = readFileSync(resolve(process.cwd(), 'src/components/project-manager/ProjectInspector.tsx'), 'utf8');
+
+        expect(manager).toContain("section: 'analyses'");
+        expect(manager).toContain('onOpenNgsRuns={openNgsRunInspector}');
+        expect(inspector).toContain('Open NGS Run Inspector');
+    });
+
     it('uses one pinned typed destination and retains exact return/reopen context', () => {
         const operator = readFileSync(resolve(process.cwd(), 'src/components/molbio-ngs/DomainWorkflowOperator.tsx'), 'utf8');
 
