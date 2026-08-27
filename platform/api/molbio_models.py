@@ -227,6 +227,28 @@ class MolecularOperationOutput(MolBioBase):
     snapshot = Column(JSON, nullable=False, default=dict)
 
 
+class ProjectPlasmidMetadata(MolBioBase):
+    """Project-local plasmid metadata, activated only by an exact Domain state revision."""
+
+    __tablename__ = "project_plasmid_metadata"
+    __table_args__ = (
+        UniqueConstraint("project_id", "domain_experiment_id", "sequence_id", name="uq_project_plasmid_metadata_scope"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(String(128), nullable=False)
+    domain_experiment_id = Column(String(128), nullable=False)
+    sequence_id = Column(String(36), ForeignKey("molecular_documents.id", ondelete="RESTRICT"), nullable=False)
+    molecular_revision_id = Column(String(36), ForeignKey("molecular_revisions.id", ondelete="RESTRICT"), nullable=False)
+    active_state_revision_id = Column(String(128), nullable=True)
+    tags = Column(JSON, nullable=False, default=list)
+    notes = Column(Text, nullable=False, default="")
+    idempotency_key = Column(String(255), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 class MolecularImportBatch(MolBioBase):
     """Immutable result binding for an authoritative multi-record import."""
 

@@ -36,6 +36,8 @@ from services.molbio_persistence import (
     IdempotencyConflictError,
     begin_immediate_molbio_write,
     canonical_request_fingerprint,
+    create_operation,
+    add_operation_edges,
     current_molecular_revision,
     get_pcr_by_idempotency_key,
     persist_pcr_experiment,
@@ -1111,6 +1113,34 @@ class SequenceAlignmentResponse(BaseModel):
     reference_coverage: float
     query_coverage: float
     variants: List[AlignmentVariantResponse] = Field(default_factory=list)
+
+
+class SavedSequenceAlignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=255)
+    reference_sequence_id: str = Field(min_length=1, max_length=128)
+    reference_revision_id: str = Field(min_length=1, max_length=128)
+    query_sequence_id: str = Field(min_length=1, max_length=128)
+    query_revision_id: str = Field(min_length=1, max_length=128)
+    settings: AlignmentSettingsSchema = Field(default_factory=AlignmentSettingsSchema)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
+class SavedSequenceAlignmentResponse(BaseModel):
+    persistence: Literal["saved"] = "saved"
+    operation_id: str
+    operation_kind: Literal["alignment"] = "alignment"
+    title: str
+    reference_sequence_id: str
+    reference_revision_id: str
+    query_sequence_id: str
+    query_revision_id: str
+    score: float
+    identity_pct: float
+    variant_count: int
+    created_at: datetime
+    reopen_href: str
 
 
 def normalize_sequence_type(
@@ -2891,6 +2921,111 @@ async def align_molecular_sequences(request: SequenceAlignmentRequest):
         query_name=request.query_name,
         **result,
     )
+
+
+def _saved_alignment_response(operation: MolecularOperation) -> SavedSequenceAlignmentResponse:
+    summary = dict(operation.parameters or {}).get("summary")
+    if not isinstance(summary, dict):
+        raise HTTPException(status_code=500, detail="saved alignment summary is invalid")
+    return SavedSequenceAlignmentResponse(
+        operation_id=operation.id,
+        title=str(summary["title"]),
+        reference_sequence_id=str(summary["reference_sequence_id"]),
+        reference_revision_id=str(summary["reference_revision_id"]),
+        query_sequence_id=str(summary["query_sequence_id"]),
+        query_revision_id=str(summary["query_revision_id"]),
+        score=float(summary["score"]),
+        identity_pct=float(summary["identity_pct"]),
+        variant_count=int(summary["variant_count"]),
+        created_at=operation.created_at,
+        reopen_href=f"/designer?section=experiments&molbio_operation_id={operation.id}",
+    )
+
+
+@router.post("/alignment/save", response_model=SavedSequenceAlignmentResponse, status_code=201)
+async def save_molecular_alignment(
+    request: SavedSequenceAlignmentRequest,
+    session: AsyncSession = Depends(get_molbio_session),
+) -> SavedSequenceAlignmentResponse:
+    """Persist an alignment summary and exact immutable input lineage only on explicit save."""
+    fingerprint = canonical_request_fingerprint(request.model_dump(mode="json"))
+    await begin_immediate_molbio_write(session)
+    existing = (
+        await session.execute(
+            select(MolecularOperation).where(
+                MolecularOperation.idempotency_key == request.idempotency_key
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.request_fingerprint != fingerprint:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="idempotency key conflicts with another saved alignment")
+        response = _saved_alignment_response(existing)
+        await session.rollback()
+        return response
+
+    reference = await session.get(MolecularRevision, request.reference_revision_id)
+    query = await session.get(MolecularRevision, request.query_revision_id)
+    if reference is None or reference.document_id != request.reference_sequence_id:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="exact reference molecular revision not found")
+    if query is None or query.document_id != request.query_sequence_id:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail="exact query molecular revision not found")
+    reference_sequence = reference.snapshot.get("sequence") if isinstance(reference.snapshot, dict) else None
+    query_sequence = query.snapshot.get("sequence") if isinstance(query.snapshot, dict) else None
+    if not isinstance(reference_sequence, str) or not isinstance(query_sequence, str):
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="exact molecular revision snapshot is invalid")
+    try:
+        result = await asyncio.to_thread(
+            align_sequences,
+            reference_sequence,
+            query_sequence,
+            AlignmentSettings(**request.settings.model_dump()),
+        )
+        summary = {
+            "title": request.title,
+            "reference_sequence_id": request.reference_sequence_id,
+            "reference_revision_id": reference.id,
+            "query_sequence_id": request.query_sequence_id,
+            "query_revision_id": query.id,
+            "score": result["score"],
+            "identity_pct": result["identity_pct"],
+            "variant_count": len(result["variants"]),
+        }
+        operation = await create_operation(
+            session,
+            operation_kind="alignment",
+            implementation="services.sequence_alignment.align_sequences",
+            parameters={
+                "settings": request.settings.model_dump(mode="json"),
+                "summary": summary,
+                "result_digest_sha256": hashlib.sha256(
+                    json.dumps(result, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+                ).hexdigest(),
+            },
+            provenance={"save_contract": "explicit", "lineage": "exact_molecular_revisions"},
+            idempotency_key=request.idempotency_key,
+            request_fingerprint=fingerprint,
+        )
+        await add_operation_edges(
+            session,
+            operation,
+            input_revisions=[
+                (reference, "reference", {"content_sha256": reference.content_sha256}),
+                (query, "query", {"content_sha256": query.content_sha256}),
+            ],
+        )
+        await session.commit()
+        return _saved_alignment_response(operation)
+    except SequenceAlignmentError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="saved alignment idempotency conflict") from exc
 
 
 # ============================================================================

@@ -1,7 +1,10 @@
 """Canonical nested Phase N5 backend routes for NGS/MolBio Projects."""
 from __future__ import annotations
 
+import hashlib
 import json
+import uuid
+from datetime import datetime
 from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -28,14 +31,34 @@ from experiment_models import (
     ExperimentWorkflowRun,
 )
 from experiment_services import ExperimentServiceError, IdempotencyConflict, NotFound, RevisionConflict, ValidationFailure
+from molbio_database import get_molbio_session
+from molbio_models import (
+    MolecularDocument,
+    MolecularOperation,
+    MolecularOperationInput,
+    MolecularRevision,
+    NucleotideSequence,
+    ProjectPlasmidMetadata,
+)
 from molbio_ngs_database import get_molbio_ngs_session
-from molbio_ngs_models import MolBioNGSDomainStateRevision, MolBioNGSEvidenceAssessment, MolBioNGSReferenceResource, MolBioNGSSample
+from molbio_ngs_models import (
+    MolBioNGSDomainState,
+    MolBioNGSDomainStateMember,
+    MolBioNGSDomainStateRevision,
+    MolBioNGSEvidenceAssessment,
+    MolBioNGSMemberReceipt,
+    MolBioNGSReferenceResource,
+    MolBioNGSSample,
+)
 from routers.experiment_workspaces import _operator_principal, _require_mutation_owner
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError
 from services.ngs_molbio_runtime_status import (
     NgsMolBioRuntimeAuthorityError,
     runtime_implementation_record,
 )
+from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
+from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
+from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
 from services.ngs_molbio_n5 import (
     InvalidLifecycleTransition,
     create_project_dataset,
@@ -59,6 +82,28 @@ class StrictModel(BaseModel):
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+class ProjectHubMolecularFields(StrictModel):
+    name: str = Field(min_length=1, max_length=255)
+    molecule_type: str = Field(min_length=1, max_length=32)
+    topology: str = Field(pattern="^(linear|circular)$")
+    description: str = Field(max_length=4000)
+    organism_host_context: str | None = Field(default=None, max_length=255)
+
+
+class ProjectHubMembershipMetadata(StrictModel):
+    project_tags: list[str] = Field(default_factory=list, max_length=32)
+    project_notes: str = Field(default="", max_length=4000)
+
+
+class ProjectHubEditInfo(StrictModel):
+    expected_molecular_revision_id: str = Field(min_length=1, max_length=128)
+    expected_state_revision_id: str = Field(min_length=1, max_length=128)
+    expected_state_head_generation: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    molecular_fields: ProjectHubMolecularFields
+    project_metadata: ProjectHubMembershipMetadata
 
 
 class DatasetCreate(StrictModel):
@@ -377,6 +422,435 @@ async def _native_rows(session: AsyncSession, model: Any, *, domain_id: str, ide
     if anchor:
         statement = statement.where(or_(model.created_at < anchor[0], (model.created_at == anchor[0]) & (id_column < anchor[1])))
     return list((await session.scalars(statement)).all())
+
+
+async def _project_hub_linked_receipts(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    domain_id: str,
+    kinds: set[str],
+    limit: int = 100,
+) -> list[ExperimentExternalEntityReceipt]:
+    return list((await session.scalars(
+        select(ExperimentExternalEntityReceipt)
+        .join(ExperimentLineageEdge, ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id)
+        .where(
+            ExperimentExternalEntityReceipt.workspace_id == project_id,
+            ExperimentLineageEdge.workspace_id == project_id,
+            ExperimentLineageEdge.source_resource_id == domain_id,
+            ExperimentExternalEntityReceipt.entity_kind.in_(kinds),
+        )
+        .order_by(ExperimentExternalEntityReceipt.created_at.desc(), ExperimentExternalEntityReceipt.id.desc())
+        .limit(limit)
+    )).unique().all())
+
+
+def _hub_acknowledgement(row: ExperimentExternalEntityReceipt) -> dict[str, Any]:
+    try:
+        value = json.loads(row.acknowledgement_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _hub_href(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return None
+    surface = value.get("surface")
+    params = value.get("params")
+    if surface == "molbio-sequence-revision" and isinstance(params, dict):
+        return f"/designer?molbio_sequence_id={params.get('sequence_id')}&molbio_revision_id={params.get('revision_id')}"
+    return None
+
+
+@router.get(D + "/project-hub")
+async def project_hub(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    state_revision_id: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_experiment_session),
+    native: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    """Compose a bounded operator read model without copying scientific payloads."""
+    try:
+        project, experiment, domain = await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+    state = await native.get(MolBioNGSDomainState, domain_id)
+    selected = await native.get(MolBioNGSDomainStateRevision, state_revision_id)
+    if state is None or selected is None or selected.global_domain_experiment_id != domain_id:
+        raise HTTPException(404, detail={"code": "not_found", "message": "exact Domain state revision not found"})
+
+    member_rows = list((await native.execute(
+        select(MolBioNGSDomainStateMember, MolBioNGSMemberReceipt)
+        .join(MolBioNGSMemberReceipt, MolBioNGSMemberReceipt.receipt_id == MolBioNGSDomainStateMember.receipt_id)
+        .where(MolBioNGSDomainStateMember.state_revision_id == selected.id)
+        .order_by(MolBioNGSDomainStateMember.ordinal, MolBioNGSDomainStateMember.receipt_id)
+        .limit(101)
+    )).all())
+    if len(member_rows) > 100:
+        raise HTTPException(413, detail={"code": "project_hub_member_limit"})
+    molecular_receipts = [receipt for _member, receipt in member_rows if receipt.entity_kind == "molecular_revision"]
+    revision_ids = [receipt.entity_id for receipt in molecular_receipts]
+    revisions = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularRevision).where(MolecularRevision.id.in_(revision_ids))
+        )).all()
+    } if revision_ids else {}
+    metadata_rows = list((await molbio.scalars(
+        select(ProjectPlasmidMetadata).where(
+            ProjectPlasmidMetadata.project_id == project_id,
+            ProjectPlasmidMetadata.domain_experiment_id == domain_id,
+            ProjectPlasmidMetadata.active_state_revision_id == selected.id,
+        ).limit(100)
+    )).all())
+    project_metadata = {row.sequence_id: row for row in metadata_rows}
+
+    operation_receipts = await _project_hub_linked_receipts(
+        session, project_id=project_id, domain_id=domain_id,
+        kinds={"molecular_operation", "pcr_experiment_revision"},
+    )
+    operation_ids = [row.entity_id for row in operation_receipts if row.entity_kind == "molecular_operation"]
+    operations = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularOperation).where(MolecularOperation.id.in_(operation_ids))
+        )).all()
+    } if operation_ids else {}
+    input_rows = list((await molbio.scalars(
+        select(MolecularOperationInput).where(MolecularOperationInput.operation_id.in_(operation_ids))
+    )).all()) if operation_ids else []
+    operation_sequence_ids: dict[str, set[str]] = {}
+    if input_rows:
+        input_revisions = {
+            row.id: row for row in (await molbio.scalars(
+                select(MolecularRevision).where(MolecularRevision.id.in_([item.revision_id for item in input_rows]))
+            )).all()
+        }
+        for item in input_rows:
+            revision = input_revisions.get(item.revision_id)
+            if revision is not None:
+                operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+
+    plasmids: list[dict[str, Any]] = []
+    names_by_sequence: dict[str, str] = {}
+    for receipt in molecular_receipts:
+        revision = revisions.get(receipt.entity_id)
+        if revision is None or not isinstance(revision.snapshot, dict):
+            continue
+        snapshot = revision.snapshot
+        features = snapshot.get("features") if isinstance(snapshot.get("features"), list) else []
+        labels = [str(item.get("name") or item.get("label") or item.get("type") or "Feature") for item in features if isinstance(item, dict)]
+        folded = [label.casefold() for label in labels]
+        sequence_id = revision.document_id
+        name = str(snapshot.get("name") or sequence_id)
+        names_by_sequence[sequence_id] = name
+        saved_count = sum(sequence_id in operation_sequence_ids.get(row.entity_id, set()) for row in operation_receipts)
+        map_segments = [
+            {"start": int(item.get("start", 0)), "end": int(item.get("end", 0)), "tone": "accent"}
+            for item in features[:24] if isinstance(item, dict)
+        ]
+        metadata = project_metadata.get(sequence_id)
+        plasmids.append({
+            "sequence_id": sequence_id,
+            "revision_id": revision.id,
+            "revision_number": revision.revision_number,
+            "name": name,
+            "description": str(snapshot.get("description") or ""),
+            "availability": receipt.availability,
+            "length_bp": revision.content_length,
+            "gc_percent": snapshot.get("gc_content"),
+            "feature_count": len(features),
+            "feature_labels": labels,
+            "cmv_promoter": any("cmv" in label and "promoter" in label for label in folded),
+            "neor_kanr": any("neor" in label or "kanr" in label for label in folded),
+            "replication_origin_count": sum("origin" in label or "ori" in label for label in folded),
+            "saved_experiment_count": saved_count,
+            "molecule_type": snapshot.get("sequence_type") or "dna",
+            "topology": "circular" if snapshot.get("is_circular") else "linear",
+            "organism_host_context": snapshot.get("organism"),
+            "project_tags": list(metadata.tags or []) if metadata is not None and metadata.molecular_revision_id == revision.id else [],
+            "project_notes": str(metadata.notes or "") if metadata is not None and metadata.molecular_revision_id == revision.id else "",
+            "reopen_href": _hub_href(json.loads(receipt.reopen_destination)) or f"/designer?molbio_sequence_id={sequence_id}&molbio_revision_id={revision.id}",
+            "map_segments": map_segments,
+        })
+
+    experiments: list[dict[str, Any]] = []
+    kind_map = {"digest": "restriction_digest", "alignment": "alignment", "pcr": "pcr"}
+    for row in operation_receipts:
+        ack = _hub_acknowledgement(row)
+        metadata = ack.get("metadata") if isinstance(ack.get("metadata"), dict) else {}
+        operation = operations.get(row.entity_id)
+        sequence_ids = sorted(operation_sequence_ids.get(row.entity_id, set()))
+        if not sequence_ids:
+            continue
+        sequence_id = sequence_ids[0]
+        operation_kind = operation.operation_kind if operation is not None else "pcr"
+        summary = dict(operation.parameters or {}).get("summary") if operation is not None else None
+        title = metadata.get("title") or (summary.get("title") if isinstance(summary, dict) else None) or operation_kind.replace("_", " ").title()
+        experiments.append({
+            "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
+            "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, sequence_id),
+            "title": str(title), "status": operation.status if operation is not None else "saved",
+            "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
+        })
+
+    sequence_kinds = {"ont_instrument_run", "ngs_job", "ngs_read_set", "ngs_alignment_job"}
+    result_kinds = {"ngs_result_manifest", "sequence_qc_job", "ngs_analysis_job", "ngs_alignment_job"}
+    evidence_receipts = await _project_hub_linked_receipts(
+        session, project_id=project_id, domain_id=domain_id, kinds=sequence_kinds | result_kinds,
+    )
+    sequence_items: list[dict[str, Any]] = []
+    result_items: list[dict[str, Any]] = []
+    for row in evidence_receipts:
+        ack = _hub_acknowledgement(row)
+        metadata = ack.get("metadata") if isinstance(ack.get("metadata"), dict) else {}
+        sequence_id = str(metadata.get("plasmid_sequence_id") or "")
+        plasmid_name = names_by_sequence.get(sequence_id, str(metadata.get("plasmid_name") or "Unassigned plasmid"))
+        if row.entity_kind in sequence_kinds:
+            sequence_items.append({
+                "id": row.entity_id, "plasmid_sequence_id": sequence_id, "plasmid_name": plasmid_name,
+                "kind": "run" if row.entity_kind in {"ont_instrument_run", "ngs_job"} else "read_set" if row.entity_kind == "ngs_read_set" else "alignment",
+                "title": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
+                "summary": str(metadata.get("summary") or ""), "status": str(metadata.get("status") or row.availability),
+                "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
+            })
+        if row.entity_kind in result_kinds:
+            result_items.append({
+                "id": row.entity_id, "plasmid_name": plasmid_name,
+                "type": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
+                "status": str(metadata.get("status") or row.availability), "owner": str(metadata.get("owner") or row.entity_id),
+                "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": ack.get("reopen_uri"),
+            })
+
+    activities = list((await session.scalars(
+        select(ExperimentAuditEvent).where(
+            ExperimentAuditEvent.workspace_id == project_id,
+            ExperimentAuditEvent.resource_id == domain_id,
+        ).order_by(ExperimentAuditEvent.created_at.desc(), ExperimentAuditEvent.id.desc()).limit(50)
+    )).all())
+    activity_items = []
+    for row in activities:
+        try:
+            body = json.loads(row.payload_json)
+        except (TypeError, ValueError):
+            body = {}
+        sequence_id = body.get("sequence_id") if isinstance(body, dict) else None
+        name = body.get("name") if isinstance(body, dict) else None
+        readable = f"{name or names_by_sequence.get(str(sequence_id), 'Plasmid')} added to the project" if row.event_type == "molecular_member_attached" else row.event_type.replace("_", " ").replace(".", " ").capitalize()
+        activity_items.append({
+            "id": row.id, "summary": readable, "occurred_at": row.created_at,
+            "technical_event_type": row.event_type, "receipt_id": str(body.get("receipt_id") or ""),
+            "envelope_sha256": __import__("hashlib").sha256(row.payload_json.encode("utf-8")).hexdigest(),
+        })
+
+    return _bounded_response({
+        "schema": "bms.project-hub.v1",
+        "project": {
+            "id": project_id, "name": project.display_name, "objective": project.description,
+            "lifecycle_state": project.lifecycle_state, "created_at": project.created_at, "plasmid_count": len(plasmids),
+            "settings_href": f"/projects/{project_id}", "add_plasmid_href": f"/designer?workspace_id={project_id}&section=plasmids&action=add-plasmid",
+        },
+        "identity": {
+            "workspace_id": project_id, "global_experiment_id": experiment_id, "domain_experiment_id": domain_id,
+            "selected_state_revision_id": selected.id, "current_state_revision_id": state.current_state_revision_id,
+            "state_head_generation": state.head_generation, "global_domain_revision_id": selected.global_domain_experiment_revision_id,
+            "membership_graph_sha256": selected.membership_graph_sha256, "binding_status": "acknowledged", "adapter_status": "available",
+        },
+        "plasmids": plasmids,
+        "sequence_data": {
+            "items": sequence_items,
+            "import_href": f"/ngs?workspace_id={project_id}&global_experiment_id={experiment_id}&domain_experiment_id={domain_id}&state_revision_id={selected.id}&section=sequence-data&action=import-ont",
+            "launcher_href": f"/ngs?workspace_id={project_id}&global_experiment_id={experiment_id}&domain_experiment_id={domain_id}&state_revision_id={selected.id}&section=sequence-data",
+        },
+        "experiments": experiments,
+        "results": result_items,
+        "activity": activity_items,
+    })
+
+
+async def _compensate_project_hub_molecular_edit(
+    molbio: AsyncSession,
+    *,
+    sequence_id: str,
+    old_revision_id: str,
+    old_snapshot: dict[str, Any],
+    metadata_id: str,
+    prior_metadata: dict[str, Any] | None,
+) -> None:
+    await molbio.rollback()
+    await begin_immediate_molbio_write(molbio)
+    sequence = await molbio.get(NucleotideSequence, sequence_id)
+    document = await molbio.get(MolecularDocument, sequence_id)
+    if sequence is None or document is None:
+        raise RuntimeError("project-hub compensation authority is missing")
+    sequence.name = str(old_snapshot.get("name") or sequence.name)
+    sequence.description = old_snapshot.get("description")
+    sequence.sequence_type = str(old_snapshot.get("sequence_type") or sequence.sequence_type)
+    sequence.is_circular = bool(old_snapshot.get("is_circular"))
+    sequence.organism = old_snapshot.get("organism")
+    sequence.version = int(old_snapshot.get("version") or max(int(sequence.version or 2) - 1, 1))
+    sequence.updated_at = old_snapshot.get("updated_at")
+    document.name = sequence.name
+    document.document_kind = sequence.sequence_type
+    document.current_revision_id = old_revision_id
+    metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
+    if prior_metadata is None:
+        if metadata is not None:
+            await molbio.delete(metadata)
+    elif metadata is not None:
+        for key, value in prior_metadata.items():
+            setattr(metadata, key, value)
+    await molbio.commit()
+
+
+@router.post(D + "/project-hub/plasmids/{sequence_id}/info")
+async def edit_project_hub_plasmid_info(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    sequence_id: str,
+    payload: ProjectHubEditInfo,
+    session: AsyncSession = Depends(get_experiment_session),
+    native: AsyncSession = Depends(get_molbio_ngs_session),
+    molbio: AsyncSession = Depends(get_molbio_session),
+) -> dict[str, Any]:
+    try:
+        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+    except ExperimentServiceError as exc:
+        raise _error(exc) from exc
+    fingerprint = hashlib.sha256(
+        json.dumps(payload.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    metadata_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:project-plasmid:{project_id}:{domain_id}:{sequence_id}"))
+    existing_metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
+    state = await native.get(MolBioNGSDomainState, domain_id)
+    if (
+        existing_metadata is not None
+        and existing_metadata.idempotency_key == payload.idempotency_key
+    ):
+        if existing_metadata.request_fingerprint != fingerprint:
+            raise HTTPException(409, detail={"code": "idempotency_conflict", "message": "idempotency key was used with another edit"})
+        if existing_metadata.active_state_revision_id and state is not None and state.current_state_revision_id == existing_metadata.active_state_revision_id:
+            return await project_hub(project_id, experiment_id, domain_id, state.current_state_revision_id, session, native, molbio)
+    if (
+        state is None
+        or state.head_generation != payload.expected_state_head_generation
+        or state.current_state_revision_id != payload.expected_state_revision_id
+    ):
+        raise HTTPException(409, detail={"code": "stale_generation", "message": "Domain state head changed"})
+    selected = await native.get(MolBioNGSDomainStateRevision, payload.expected_state_revision_id)
+    document = await molbio.get(MolecularDocument, sequence_id)
+    sequence = await molbio.get(NucleotideSequence, sequence_id)
+    expected_revision = await molbio.get(MolecularRevision, payload.expected_molecular_revision_id)
+    if (
+        selected is None
+        or selected.global_domain_experiment_id != domain_id
+        or document is None
+        or sequence is None
+        or expected_revision is None
+        or expected_revision.document_id != sequence_id
+        or document.current_revision_id != expected_revision.id
+    ):
+        raise HTTPException(409, detail={"code": "stale_molecular_revision", "message": "molecular revision changed"})
+    member_rows = list((await native.execute(
+        select(MolBioNGSDomainStateMember, MolBioNGSMemberReceipt)
+        .join(MolBioNGSMemberReceipt, MolBioNGSMemberReceipt.receipt_id == MolBioNGSDomainStateMember.receipt_id)
+        .where(MolBioNGSDomainStateMember.state_revision_id == selected.id)
+        .order_by(MolBioNGSDomainStateMember.ordinal)
+    )).all())
+    matching = [(member, receipt) for member, receipt in member_rows if receipt.entity_kind == "molecular_revision" and receipt.entity_id == expected_revision.id]
+    if len(matching) != 1:
+        raise HTTPException(409, detail={"code": "member_revision_mismatch", "message": "exact molecular member is not present once"})
+
+    old_snapshot = dict(expected_revision.snapshot)
+    prior_metadata = None
+    if existing_metadata is not None:
+        prior_metadata = {
+            "molecular_revision_id": existing_metadata.molecular_revision_id,
+            "active_state_revision_id": existing_metadata.active_state_revision_id,
+            "tags": list(existing_metadata.tags or []),
+            "notes": existing_metadata.notes,
+            "idempotency_key": existing_metadata.idempotency_key,
+            "request_fingerprint": existing_metadata.request_fingerprint,
+            "updated_at": existing_metadata.updated_at,
+        }
+    await begin_immediate_molbio_write(molbio)
+    sequence.name = payload.molecular_fields.name
+    sequence.description = payload.molecular_fields.description
+    sequence.sequence_type = payload.molecular_fields.molecule_type
+    sequence.is_circular = payload.molecular_fields.topology == "circular"
+    sequence.organism = payload.molecular_fields.organism_host_context
+    sequence.version = int(sequence.version or 1) + 1
+    sequence.updated_at = datetime.utcnow()
+    new_revision = await record_sequence_revision(
+        molbio, sequence, change_kind="project_metadata_update",
+        provenance={"source": "project_hub", "project_id": project_id, "domain_experiment_id": domain_id},
+    )
+    metadata = existing_metadata or ProjectPlasmidMetadata(
+        id=metadata_id, project_id=project_id, domain_experiment_id=domain_id, sequence_id=sequence_id,
+        molecular_revision_id=new_revision.id, tags=[], notes="", idempotency_key=payload.idempotency_key,
+        request_fingerprint=fingerprint,
+    )
+    if existing_metadata is None:
+        molbio.add(metadata)
+    metadata.molecular_revision_id = new_revision.id
+    metadata.active_state_revision_id = None
+    metadata.tags = list(dict.fromkeys(tag.strip() for tag in payload.project_metadata.project_tags if tag.strip()))
+    metadata.notes = payload.project_metadata.project_notes
+    metadata.idempotency_key = payload.idempotency_key
+    metadata.request_fingerprint = fingerprint
+    metadata.updated_at = datetime.utcnow()
+    await molbio.commit()
+
+    try:
+        resolved = await resolve_molecular_revision_receipt(molbio, sequence_id=sequence_id, revision_id=new_revision.id)
+        new_receipt = await persist_member_receipt(native, resolved)
+        replacement_member = matching[0][0]
+        next_members = [
+            StateMember(
+                receipt_id=new_receipt.receipt_id if member is replacement_member else member.receipt_id,
+                role=member.role,
+                ordinal=member.ordinal,
+                sample_revision_id=member.sample_revision_id,
+            )
+            for member, _receipt in member_rows
+        ]
+        next_revision = await save_state_revision(
+            native,
+            global_domain_experiment_id=domain_id,
+            global_domain_experiment_revision_id=selected.global_domain_experiment_revision_id,
+            payload=json.loads(selected.canonical_payload),
+            members=next_members,
+            expected_head_generation=payload.expected_state_head_generation,
+            parent_revision_id=selected.id,
+            idempotency_key=f"project-hub-edit:{payload.idempotency_key}",
+        )
+        await begin_immediate_molbio_write(molbio)
+        metadata = await molbio.get(ProjectPlasmidMetadata, metadata_id)
+        if metadata is None or metadata.molecular_revision_id != new_revision.id:
+            raise RuntimeError("project metadata activation authority was lost")
+        metadata.active_state_revision_id = next_revision.id
+        metadata.updated_at = datetime.utcnow()
+        await molbio.commit()
+        await native.commit()
+    except Exception as exc:
+        await native.rollback()
+        await _compensate_project_hub_molecular_edit(
+            molbio, sequence_id=sequence_id, old_revision_id=expected_revision.id,
+            old_snapshot=old_snapshot, metadata_id=metadata_id, prior_metadata=prior_metadata,
+        )
+        if isinstance(exc, NativeRevisionConflict):
+            raise HTTPException(409, detail={"code": "stale_generation", "message": str(exc)}) from exc
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(500, detail={"code": "project_hub_edit_failed", "message": f"Edit info failed without visible partial success: {exc}"}) from exc
+
+    return await project_hub(project_id, experiment_id, domain_id, next_revision.id, session, native, molbio)
 
 
 @router.get(D + "/state-revisions")
