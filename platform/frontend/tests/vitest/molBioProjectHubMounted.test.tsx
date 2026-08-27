@@ -184,6 +184,10 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Saved Mol Bio experiments');
         expect(container.textContent).toContain('No sequencing data attached');
         expect(container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]')?.open).toBe(false);
+        const plasmidCards = Array.from(container.querySelectorAll('article')).filter((article) =>
+            ['PL1480', 'PL2190'].includes(article.querySelector('h3')?.textContent ?? ''),
+        );
+        expect(plasmidCards[0]?.parentElement?.className.split(/\s+/)).toContain('xl:grid-cols-4');
         expect(container.querySelector('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')?.textContent).toContain('Open plasmid');
     });
 

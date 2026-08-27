@@ -155,7 +155,7 @@ function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubR
                 <div><h2 className="text-xl font-bold text-content">Plasmids</h2><p className="text-sm text-content-secondary">Project molecular inventory, construct summaries, and saved work.</p></div>
                 <button className="text-xs font-semibold text-accent" type="button">Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
