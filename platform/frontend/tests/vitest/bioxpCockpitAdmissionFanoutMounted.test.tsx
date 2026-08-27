@@ -944,7 +944,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(manualControls.textContent).toContain('Z Axis');
         expect(manualControls.textContent).toContain('Gripper');
         const inputs = [...section.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
-        expect(inputs[0]?.min).toBe('-2147483648');
+        expect(inputs[0]?.min).toBe('0');
         expect(inputs[0]?.max).toBe('2147483647');
         expect(inputs[1]?.min).toBe('-2147483648');
         expect(inputs[1]?.max).toBe('2147483647');
@@ -979,6 +979,77 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect((state.yInterruptCalls[0].request as { idempotency_key?: unknown }).idempotency_key).toEqual(expect.any(String));
         const yCards = [...container.querySelectorAll('article')].filter((node) => node.querySelector('h3')?.textContent === 'Y Axis');
         expect(yCards).toEqual([section]);
+    });
+
+    it('uses the robot action enabled state and reason for normal Y controls while STOP stays independent', async () => {
+        const yMove = (state.v2Catalog.data!.actions as Array<Record<string, unknown>>)
+            .find((row) => row.action_id === 'oem.y.move_steps')!;
+        Object.assign(yMove, {
+            enabled: false,
+            disabled_reason: 'Robot denied Y movement.',
+        });
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
+        const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        const stop = buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement;
+        expect(movePositive.disabled).toBe(true);
+        expect(movePositive.title).toBe('Robot denied Y movement.');
+        expect(stop.disabled).toBe(false);
+    });
+
+    it('rejects a negative Y step magnitude before directional transformation can overflow signed int32', async () => {
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
+        const stepInput = section.querySelector('input[type="number"]') as HTMLInputElement;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(stepInput, '-2147483648');
+        stepInput.dispatchEvent(new Event('input', { bubbles: true }));
+        await act(async () => { await Promise.resolve(); });
+
+        const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
+        const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        expect(movePositive.disabled).toBe(true);
+        expect(movePositive.title).toContain('Step magnitude must be an integer from 0 through 2147483647.');
+        expect(state.yInvokeCalls).toHaveLength(0);
+    });
+
+    it('renders Y telemetry value plus reply validity, status, profile health, and observation time', async () => {
+        Object.assign(state.v2Dashboard.data.y_axis, {
+            position_reply_valid: false,
+            position_status_code: 13,
+            speed_reply_valid: false,
+            speed_status_code: 14,
+            left_switch_raw: 1,
+            left_switch_reply_valid: true,
+            left_switch_status_code: 100,
+            profile_readback_valid: false,
+            profile_mismatches: ['SAP4 expected 1800; observed 1700'],
+            updated_at: 1,
+        });
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
+        const metric = (label: string) => [...section.querySelectorAll('dl > div')]
+            .find((row) => row.querySelector('dt')?.textContent === label)?.textContent ?? '';
+        expect(metric('Position')).toContain('Invalid reply · status 13');
+        expect(metric('Speed')).toContain('Invalid reply · status 14');
+        expect(metric('Home switch')).toContain('Valid reply · status 100');
+        expect(metric('Profile')).toContain('Invalid · SAP4 expected 1800; observed 1700');
+        expect(metric('Updated')).toContain('1970-01-01T00:00:01.000Z');
     });
 
     it('treats ownership-generation mismatch as observational while keeping normal Y and STOP reachable', async () => {

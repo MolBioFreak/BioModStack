@@ -6,7 +6,6 @@ import {
     BIOXP_Y_ABSOLUTE_MAX_STEPS,
     BIOXP_Y_ABSOLUTE_MIN_STEPS,
     BIOXP_Y_RELATIVE_MAX_STEPS,
-    BIOXP_Y_RELATIVE_MIN_STEPS,
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
@@ -321,8 +320,18 @@ export function BioXpCockpit() {
             && action.request_schema_version === 'bioxp.operator_interrupt_request.v1'
             && action.response_schema_version === 'bioxp.operator_interrupt_receipt.v1',
     );
-    const yActionDisabledReason = (actionId: string, fallback: string) =>
-        v2NormalActionById(actionId) == null ? fallback : 'Direct recovered-OEM command.';
+    const yActionDisabledReason = (actionId: string, fallback: string) => {
+        const action = v2NormalActionById(actionId);
+        if (action == null) return fallback;
+        if (action.enabled !== true) return action.disabled_reason ?? fallback;
+        if (actionId === 'oem.y.move_steps' && !yStepMagnitudeValid) {
+            return `Step magnitude must be an integer from 0 through ${BIOXP_Y_RELATIVE_MAX_STEPS}.`;
+        }
+        if (actionId === 'oem.y.move_absolute' && !yTargetInputValid) {
+            return `Absolute target must be an integer from ${BIOXP_Y_ABSOLUTE_MIN_STEPS} through ${BIOXP_Y_ABSOLUTE_MAX_STEPS}.`;
+        }
+        return 'Direct recovered-OEM command.';
+    };
     const actionUnavailableReason = (actionId: string, fallback: string) => {
         const action = operatorActionById(actionId);
         return action?.disabled_reason
@@ -585,8 +594,8 @@ export function BioXpCockpit() {
     const interruptY = () => {
         invokeInterrupt('oem.y.stop', 'BMS operator requested recovered-OEM addressed Y STOP');
     };
-    const yStepInputValid = Number.isInteger(yStepInput)
-        && yStepInput >= BIOXP_Y_RELATIVE_MIN_STEPS
+    const yStepMagnitudeValid = Number.isInteger(yStepInput)
+        && yStepInput >= 0
         && yStepInput <= BIOXP_Y_RELATIVE_MAX_STEPS;
     const yTargetInputValid = Number.isInteger(yTargetInput)
         && yTargetInput >= BIOXP_Y_ABSOLUTE_MIN_STEPS
@@ -626,8 +635,8 @@ export function BioXpCockpit() {
     const yMutationDisabled = (actionId: string) =>
         !v2AuthorityCoherent
         || invokeYAction.isPending
-        || v2NormalActionById(actionId) == null
-        || (actionId === 'oem.y.move_steps' && !yStepInputValid)
+        || v2NormalActionById(actionId)?.enabled !== true
+        || (actionId === 'oem.y.move_steps' && !yStepMagnitudeValid)
         || (actionId === 'oem.y.move_absolute' && !yTargetInputValid);
     const yStopDisabled = !linkConnected || generation <= 0 || interruptPending('oem.y.stop');
 
@@ -797,13 +806,16 @@ export function BioXpCockpit() {
                             </div>
                         </div>
                         <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd><dd className={yAxisV2?.position_reply_valid ? 'text-emerald-300' : 'text-amber-200'}>{yAxisV2 ? `${yAxisV2.position_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.position_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Reference</dt><dd className="font-mono">{yAxisV2?.reference_state ?? '—'}</dd></div>
-                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Speed</dt><dd className="font-mono">{yAxisV2?.speed_steps_s ?? '—'}</dd><dd className={yAxisV2?.speed_reply_valid ? 'text-emerald-300' : 'text-amber-200'}>{yAxisV2 ? `${yAxisV2.speed_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.speed_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Home switch</dt><dd className="font-mono">{yAxisV2?.left_switch_raw ?? '—'}</dd><dd className={yAxisV2?.left_switch_reply_valid ? 'text-emerald-300' : 'text-amber-200'}>{yAxisV2 ? `${yAxisV2.left_switch_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.left_switch_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Profile</dt><dd className={yAxisV2?.profile_readback_valid ? 'text-emerald-300' : 'text-amber-200'}>{yAxisV2 ? yAxisV2.profile_readback_valid ? 'Valid' : `Invalid${yAxisV2.profile_mismatches.length > 0 ? ` · ${yAxisV2.profile_mismatches.join('; ')}` : ''}` : '—'}</dd></div>
+                            <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Updated</dt><dd className="font-mono">{yAxisV2 ? new Date(yAxisV2.updated_at * 1000).toISOString() : '—'}</dd></div>
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Physical proof</dt><dd className="font-mono text-amber-200">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
                         </dl>
                         <div className="mt-3 grid gap-2">
-                            <label className="block text-xs text-slate-300">Step delta<input type="number" min={BIOXP_Y_RELATIVE_MIN_STEPS} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                            <label className="block text-xs text-slate-300">Step magnitude<input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
                             <label className="block text-xs text-slate-300">Absolute target<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
