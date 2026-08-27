@@ -354,6 +354,14 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         if (pairDigest !== session.alignment_pair_sha256) {
             throw new Error('Alignment pair authority is invalid.');
         }
+        const sessionSeed = `${expectedJobId}\0${session.mode}\0${Object.keys(session.artifacts).sort()
+            .map((role) => session.artifacts[role as keyof typeof session.artifacts]!.artifact_id).join('\0')}`;
+        const sessionDigest = [...new Uint8Array(await crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(sessionSeed),
+        ))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        if (session.session_id !== sessionDigest.slice(0, 24)) {
+            throw new Error('Alignment session identity is invalid.');
+        }
         return session;
     }));
     const primary = sessions[0];
@@ -377,7 +385,25 @@ export function bindAlignmentSessionsToResultAuthority(
         artifact_set_sha256: string;
         reference_sequence_sha256: string;
     },
+    expectedSessions: Array<{
+        session_id: string;
+        mode: string;
+        ready: boolean;
+        unavailable_reason: string | null;
+        reference_contig: string | null;
+    }>,
 ): AlignmentSession[] {
+    if (sessions.length !== expectedSessions.length) {
+        throw new Error('Scientific integrity error: alignment session list differs from the canonical result.');
+    }
+    for (const [index, session] of sessions.entries()) {
+        const expected = expectedSessions[index];
+        if (session.session_id !== expected.session_id || session.mode !== expected.mode
+            || session.ready !== expected.ready || session.unavailable_reason !== expected.unavailable_reason
+            || (session.reference?.contig ?? null) !== expected.reference_contig) {
+            throw new Error('Scientific integrity error: alignment session identity differs from the canonical result.');
+        }
+    }
     for (const session of sessions.filter((candidate) => candidate.ready)) {
         if (!session.reference
             || session.sequence_qc_manifest_sha256 !== authority.sequence_qc_manifest_sha256

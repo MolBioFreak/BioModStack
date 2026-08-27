@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job
 from services.job_result_roots import resolve_persisted_job_result_root
+from services.sqlite_backup import open_attested_sqlite_readonly_connection, verify_sqlite_backup
 from services.ont_ngs_completion import (
     is_ont_fastq_qc_job,
     validate_and_prepare_ont_fastq_qc_completion,
@@ -495,6 +496,7 @@ def validate_persisted_reconciliation_receipt(
     hierarchy_digest = hierarchy.get("digest") if isinstance(hierarchy, Mapping) else None
     source_snapshot = receipt.get("source_snapshot")
 
+    backup_job = None
     if provenance_preimage is None:
         backup = receipt.get("backup")
         backup_id = backup.get("backup_id") if isinstance(backup, Mapping) else None
@@ -503,13 +505,35 @@ def validate_persisted_reconciliation_receipt(
             raise OntFastqQcReconciliationError("reconciliation backup authority is unavailable")
         backup_path = Path(results_dir).resolve().parent / "backups" / "ngs-reconciliation" / backup_id
         try:
-            connection = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+            backup_record = cast(Mapping[str, Any], backup)
+            verify_sqlite_backup(
+                backup_path,
+                expected_size_bytes=int(backup_record["size_bytes"]),
+                expected_sha256=str(backup_record["sha256"]),
+            )
+            connection = open_attested_sqlite_readonly_connection(backup_path)
             try:
-                row = connection.execute("SELECT provenance FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                row = connection.execute(
+                    "SELECT id, status, queue_status, awaiting_input, paused, completed_at, params, provenance, "
+                    "completed_stages, stage_outputs, output_dir, error_message FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()
             finally:
                 connection.close()
-            provenance_preimage = json.loads(row[0]) if row and isinstance(row[0], str) else None
-        except (OSError, sqlite3.Error, json.JSONDecodeError) as exc:
+            if row is None:
+                raise OntFastqQcReconciliationError("reconciliation backup job is unavailable")
+            completed_at = datetime.fromisoformat(str(row[5]).replace("Z", "+00:00")) if row[5] else None
+            backup_job = SimpleNamespace(
+                id=row[0], status=row[1], queue_status=row[2], awaiting_input=bool(row[3]), paused=bool(row[4]),
+                completed_at=completed_at,
+                params=json.loads(row[6]) if isinstance(row[6], str) else row[6],
+                provenance=json.loads(row[7]) if isinstance(row[7], str) else row[7],
+                completed_stages=json.loads(row[8]) if isinstance(row[8], str) else row[8],
+                stage_outputs=json.loads(row[9]) if isinstance(row[9], str) else row[9],
+                output_dir=row[10], error_message=row[11],
+            )
+            provenance_preimage = backup_job.provenance
+        except (OSError, RuntimeError, ValueError, sqlite3.Error, json.JSONDecodeError) as exc:
             raise OntFastqQcReconciliationError("reconciliation backup authority is unavailable") from exc
     if not isinstance(provenance_preimage, Mapping):
         raise OntFastqQcReconciliationError("reconciliation provenance preimage is unavailable")
@@ -559,12 +583,29 @@ def validate_persisted_reconciliation_receipt(
             and isinstance(rotation_digest, str) and _SHA256_RE.fullmatch(rotation_digest) is not None
         )
     )
+    preimage_valid = True
+    if backup_job is not None:
+        preimage_valid = (
+            receipt.get("completed_stages_preimage_sha256") == reconciliation_authority_digest(
+                "completed-stages-preimage", backup_job.completed_stages
+            )
+            and receipt.get("stage_outputs_preimage_sha256") == reconciliation_authority_digest(
+                "stage-outputs-preimage", backup_job.stage_outputs
+            )
+            and receipt.get("provenance_preimage_sha256") == reconciliation_authority_digest(
+                "provenance-preimage", backup_job.provenance
+            )
+            and receipt.get("protected_row_preimage_sha256") == reconciliation_authority_digest(
+                "protected-row-preimage", _protected_preimage(backup_job)
+            )
+        )
     if (
         receipt.get("completed_stages") != completed_stages
         or receipt.get("stage_outputs") != canonical_outputs
         or any(receipt.get(key) != value for key, value in expected.items())
         or current_stable != expected_stable
         or not rotation_valid
+        or not preimage_valid
         or not isinstance(hierarchy_document, Mapping)
         or not isinstance(hierarchy_digest, str)
         or _canonical_sha256(hierarchy_document) != hierarchy_digest

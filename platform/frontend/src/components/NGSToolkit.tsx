@@ -2554,13 +2554,21 @@ export function NGSToolkit() {
         selectedOntWorkflowId,
     );
     const alignmentAuthorityBinding = useMemo(() => {
-        const authority = ontFastqQcResultState.result?.authority;
-        if (!isCanonicalFastqQcRun || !authority) {
+        const result = ontFastqQcResultState.result;
+        if (!isCanonicalFastqQcRun) {
             return { sessions: unboundAlignmentSessions, error: null as Error | null };
+        }
+        if (!result) {
+            return {
+                sessions: [] as AlignmentSession[],
+                error: new Error('Scientific integrity error: canonical result authority is unavailable.'),
+            };
         }
         try {
             return {
-                sessions: bindAlignmentSessionsToResultAuthority(unboundAlignmentSessions, authority),
+                sessions: bindAlignmentSessionsToResultAuthority(
+                    unboundAlignmentSessions, result.authority, result.alignment_sessions,
+                ),
                 error: null as Error | null,
             };
         } catch (reason: unknown) {
@@ -4547,7 +4555,7 @@ export function NGSToolkit() {
                                     )}
                                     <button
                                         onClick={() => void openIgvModal()}
-                                        disabled={!selectedJob}
+                                        disabled={!selectedJob || !!igvMissingReason}
                                         title={igvMissingReason || 'Open IGV genome viewer'}
                                         className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
                                     >

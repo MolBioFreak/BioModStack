@@ -218,12 +218,12 @@ const payload: AlignmentSessionResponse = {
     sessions: [
         {
             schema: 'bms.ngs.alignment-session.v1',
-            session_id: '1'.repeat(24),
+            session_id: 'dff31f503c17efd74ff97a0f',
             job_id: 'job-a',
             mode: 'primary',
             ready: true,
             unavailable_reason: null,
-            reads_url: `/api/jobs/job-a/reads?session_id=${'1'.repeat(24)}`,
+            reads_url: '/api/jobs/job-a/reads?session_id=dff31f503c17efd74ff97a0f',
             sequence_qc_manifest_sha256: '1'.repeat(64),
             verification_manifest_sha256: '2'.repeat(64),
             artifact_set_sha256: '3'.repeat(64),
@@ -304,6 +304,12 @@ test('normalizes every authoritative auxiliary artifact role through opaque job 
         const digest = (index + 6).toString(16).repeat(64);
         complete.sessions[0].artifacts[role] = artifact(digest, digest, index + 1);
     }
+    const sessionSeed = `job-a\0primary\0${Object.keys(complete.sessions[0].artifacts).sort()
+        .map((role) => complete.sessions[0].artifacts[role as keyof typeof complete.sessions[0]['artifacts']]!.artifact_id).join('\0')}`;
+    complete.sessions[0].session_id = [...new Uint8Array(await crypto.subtle.digest(
+        'SHA-256', new TextEncoder().encode(sessionSeed),
+    ))].map((byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 24);
+    complete.sessions[0].reads_url = `/api/jobs/job-a/reads?session_id=${complete.sessions[0].session_id}`;
 
     const session = (await normalizeAlignmentSessions(complete, 'job-a'))[0];
     assert.deepEqual(
@@ -332,9 +338,15 @@ test('cross-binds ready sessions to canonical result authority', async () => {
         artifact_set_sha256: '3'.repeat(64),
         reference_sequence_sha256: '4'.repeat(64),
     };
-    assert.equal(bindAlignmentSessionsToResultAuthority(sessions, authority), sessions);
+    const expectedSessions = [
+        { session_id: 'dff31f503c17efd74ff97a0f', mode: 'primary' as const, ready: true, unavailable_reason: null, reference_contig: 'plasmid' },
+        { session_id: '2'.repeat(24), mode: 'dimer_candidates' as const, ready: false, unavailable_reason: 'missing alignment index', reference_contig: null },
+    ];
+    assert.equal(bindAlignmentSessionsToResultAuthority(sessions, authority, expectedSessions), sessions);
     assert.throws(
-        () => bindAlignmentSessionsToResultAuthority(sessions, { ...authority, artifact_set_sha256: '0'.repeat(64) }),
+        () => bindAlignmentSessionsToResultAuthority(
+            sessions, { ...authority, artifact_set_sha256: '0'.repeat(64) }, expectedSessions,
+        ),
         /Scientific integrity error/u,
     );
 });
