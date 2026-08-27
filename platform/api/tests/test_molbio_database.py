@@ -217,6 +217,7 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "0003_idempotency_and_soft_delete",
             "0004_sequence_parent_foreign_key",
             "0005_authoritative_import_batches",
+            "0006_project_plasmid_metadata",
         ]
         async with engine.connect() as connection:
             foreign_keys = (await connection.execute(text("PRAGMA foreign_keys"))).scalar_one()
@@ -231,8 +232,8 @@ async def test_initialization_applies_ordered_migrations_and_sqlite_invariants(t
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 5,
-            "latest_migration": "0005_authoritative_import_batches",
+            "migration_count": 6,
+            "latest_migration": "0006_project_plasmid_metadata",
             "migrations_current": True,
             "database_schema_current": True,
             "database_schema_issue_count": 0,
@@ -295,9 +296,11 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
             "status": "healthy",
             "quick_check": "ok",
             "foreign_key_violations": 0,
-            "migration_count": 5,
-            "latest_migration": "0005_authoritative_import_batches",
+            "migration_count": 6,
+            "latest_migration": "0006_project_plasmid_metadata",
             "migrations_current": True,
+            "database_schema_current": True,
+            "database_schema_issue_count": 0,
             "immutable_trigger_count": 22,
             "immutable_triggers_current": True,
             "sequence_parent_foreign_key_current": True,
@@ -307,7 +310,7 @@ async def test_api_health_aggregates_molbio_diagnostics(monkeypatch: pytest.Monk
     monkeypatch.setattr(api_main, "molbio_health", healthy)
     payload = await api_main.health_check()
     assert payload["status"] == "healthy"
-    assert payload["molbio"]["latest_migration"] == "0005_authoritative_import_batches"
+    assert payload["molbio"]["latest_migration"] == "0006_project_plasmid_metadata"
 
     async def degraded():
         return {
@@ -650,7 +653,7 @@ async def test_existing_database_migration_adds_restricting_sequence_parent_fore
     try:
         await init_molbio_db(engine=engine)
         assert (await get_applied_molbio_migrations(engine=engine))[-1] == (
-            "0005_authoritative_import_batches"
+            "0006_project_plasmid_metadata"
         )
     finally:
         await engine.dispose()
