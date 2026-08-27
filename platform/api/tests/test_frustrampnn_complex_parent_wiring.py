@@ -421,13 +421,13 @@ def test_complex_candidate_preparation_materializes_exact_pdb_before_component()
     assert "path('prepared_source.pdb')" in prepare_block
     assert "path('prepared_request.json')" in prepare_block
     assert "canonical_source.pdb" in materialize_block
-    assert "workflow_component_request_v2.json" in materialize_block
+    assert "workflow_component_request_v3.json" in materialize_block
     assert "frustrampnn_structure_map_v1.json" in materialize_block
     assert "workflow_component_request_v1.json" not in materialize_block
     assert "CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)" in workflow
 
 
-def test_complex_prediction_transports_complete_bounded_typed_v2_settings() -> None:
+def test_complex_prediction_transports_complete_bounded_typed_v3_settings() -> None:
     workflow = _workflow()
     prepare_block = workflow.split("process PrepareComplexPredictionFrustraMPNNCandidate", 1)[1]
     prepare_block = prepare_block.split("process MaterializeComplexPredictionFrustraMPNNCandidate", 1)[0]
@@ -438,7 +438,7 @@ def test_complex_prediction_transports_complete_bounded_typed_v2_settings() -> N
     assert "frustrampnn_settings_value_origin" in enabled
     assert "canonicalJsonBytes(rawSettings)" in enabled
     assert "Arrays.equals(settingsBytes, canonicalSettingsBytes)" in enabled
-    assert "--request-version 2" in prepare_block
+    assert "--request-version 3" in prepare_block
     assert "--structure-map prepared_structure_map.json" in prepare_block
     assert "--settings-base64" in prepare_block
     assert "--settings-sha256" in prepare_block

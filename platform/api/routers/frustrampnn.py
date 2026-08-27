@@ -45,6 +45,7 @@ from database import (
     FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     FrustraMPNNReview,
     FrustraMPNNReviewArtifact,
     Job,
@@ -67,6 +68,10 @@ from services.frustrampnn.derived import (
     persist_guidance_plan,
 )
 from services.frustrampnn.persistence import landscape_page as persisted_landscape_page
+from services.frustrampnn.statistics_jobs import (
+    FrustraMPNNStatisticsJobError,
+    retry_statistics_child,
+)
 from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 from services.frustrampnn.contracts import (
     ContractValidationError,
@@ -79,6 +84,7 @@ from services.frustrampnn.contracts import (
 from services.conformational_mapping.contracts import validate_schema as validate_cm_schema
 from services.frustrampnn.configuration import (
     FrustraMPNNExecutionConfigurationV2,
+    FrustraMPNNExecutionConfigurationV3,
     execution_configuration,
 )
 from services.frustrampnn.jobs import (
@@ -401,19 +407,33 @@ Phase4Field = Literal[
 
 
 class FrustraMPNNStatisticsDocument(RootModel[dict[str, JsonValue]]):
-    """Exact persisted statistics authority validated by its canonical schema."""
+    """Exact historical-v1 or current-v2 persisted statistics authority."""
 
     @model_validator(mode="before")
     @classmethod
     def validate_statistics_schema(cls, value: Any) -> Any:
-        validate_schema("frustrampnn_statistics_v1", value)
+        if not isinstance(value, Mapping):
+            raise ValueError("FrustraMPNN statistics document must be an object")
+        schema_version = value.get("schema_version")
+        if schema_version == 1:
+            schema_id = "frustrampnn_statistics_v1"
+        elif schema_version == 2:
+            schema_id = "frustrampnn_statistics_v2"
+        else:
+            raise ValueError("FrustraMPNN statistics schema generation is unsupported")
+        validate_schema(schema_id, value)
         return value
 
     @classmethod
     def __get_pydantic_json_schema__(
         cls, _core_schema: Any, _handler: Any
     ) -> dict[str, Any]:
-        return load_schema("frustrampnn_statistics_v1")
+        return {
+            "oneOf": [
+                load_schema("frustrampnn_statistics_v1"),
+                load_schema("frustrampnn_statistics_v2"),
+            ]
+        }
 
 
 class FrustraMPNNSummaryV2Document(RootModel[dict[str, JsonValue]]):
@@ -430,6 +450,22 @@ class FrustraMPNNSummaryV2Document(RootModel[dict[str, JsonValue]]):
         cls, _core_schema: Any, _handler: Any
     ) -> dict[str, Any]:
         return load_schema("frustrampnn_summary_v2")
+
+
+class FrustraMPNNSummaryV3Document(RootModel[dict[str, JsonValue]]):
+    """Exact current core summary authority validated by its canonical schema."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_summary_schema(cls, value: Any) -> Any:
+        validate_schema("frustrampnn_summary_v3", value)
+        return value
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, _core_schema: Any, _handler: Any
+    ) -> dict[str, Any]:
+        return load_schema("frustrampnn_summary_v3")
 
 
 class FrustraMPNNHistoricalSummaryV1Document(RootModel[dict[str, JsonValue]]):
@@ -477,7 +513,7 @@ class FrustraMPNNStatisticsResponse(BaseModel):
     parent_job_id: str
     candidate_id: str
     invocation_id: str
-    authority_version: Literal["v2", "historical_v1"]
+    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     missing_fields: list[Phase4Field]
     settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -959,7 +995,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     summary_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
-    authority_version: Literal["v2", "historical_v1"]
+    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     statistics_available: bool
     missing_fields: list[Phase4Field]
@@ -971,7 +1007,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     statistics_json: FrustraMPNNStatisticsDocument | None = None
     comparison_compatibility_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: Literal["succeeded", "failed", "not_run"]
-    component_contract_version: Literal["1.0", "2.0"]
+    component_contract_version: Literal["1.0", "2.0", "3.0"]
     runtime_identity: FrustraMPNNRuntimeIdentityResponse
     runtime_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
@@ -980,7 +1016,11 @@ class FrustraMPNNResultItemResponse(BaseModel):
 
 
 class FrustraMPNNResultDetailResponse(FrustraMPNNResultItemResponse):
-    summary: FrustraMPNNSummaryV2Document | FrustraMPNNHistoricalSummaryV1Document
+    summary: (
+        FrustraMPNNSummaryV3Document
+        | FrustraMPNNSummaryV2Document
+        | FrustraMPNNHistoricalSummaryV1Document
+    )
     terminal_result: FrustraMPNNTerminalResultResponse
     execution_receipt: FrustraMPNNExecutionReceiptResponse | None
 
@@ -991,6 +1031,26 @@ class FrustraMPNNResultListResponse(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1, le=200)
     offset: int = Field(ge=0)
+
+
+class FrustraMPNNStatisticsAnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_id: str
+    parent_job_id: str
+    invocation_id: str
+    state: Literal["queued", "running", "completed", "failed"]
+    attempt_count: int = Field(ge=0)
+    core_artifact_id: str
+    core_landscape_sha256: str
+    core_manifest_sha256: str
+    formula_version: str
+    policy_version: str
+    package_version: str
+    schema_version: Literal[1]
+    artifact_sha256: str | None
+    statistics_sha256: str | None
+    diagnostic: str | None
 
 
 class FrustraMPNNLandscapeRowResponse(BaseModel):
@@ -1728,9 +1788,12 @@ class FrustraMPNNSafeRuntimeProjection(BaseModel):
 class FrustraMPNNSafeExecutionConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    configuration_id: Literal["frustrampnn_execution_configuration_v2"]
+    configuration_id: Literal[
+        "frustrampnn_execution_configuration_v2",
+        "frustrampnn_execution_configuration_v3",
+    ]
     schema_name: Literal["frustrampnn_execution_configuration"]
-    schema_version: Literal[2]
+    schema_version: Literal[2, 3]
     tool_id: Literal["frustrampnn"]
     tool_version: Literal["MegaScale"]
     effective_settings: FrustraMPNNEffectiveSettings
@@ -1748,6 +1811,17 @@ class FrustraMPNNSafeExecutionConfiguration(BaseModel):
     structure_map_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_pdb_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _configuration_generation_is_paired(
+        self,
+    ) -> "FrustraMPNNSafeExecutionConfiguration":
+        if (self.configuration_id, self.schema_version) not in {
+            ("frustrampnn_execution_configuration_v2", 2),
+            ("frustrampnn_execution_configuration_v3", 3),
+        }:
+            raise ValueError("execution configuration generation is inconsistent")
+        return self
 
 
 class FrustraMPNNSettingsValidationResponse(BaseModel):
@@ -2212,17 +2286,18 @@ async def _owned_source_bytes(
     invocation_id: str,
     session: AsyncSession,
 ) -> tuple[bytes, str]:
-    """Load one persisted v2 original source after validating its full attestation chain."""
+    """Load one persisted v2/v3 original source after validating its attestation chain."""
 
     result = await _scoped_result(invocation_id, job_id, session)
     manifest = result.manifest_json or {}
-    if manifest.get("schema_version") != 2 or result.effective_settings_json is None:
+    manifest_generation = manifest.get("schema_version")
+    if manifest_generation not in (2, 3) or result.effective_settings_json is None:
         raise HTTPException(
             409,
             "historical v1 result has no governed original-source authority",
         )
     try:
-        validate_schema("frustrampnn_result_manifest_v2", manifest)
+        validate_schema(f"frustrampnn_result_manifest_v{manifest_generation}", manifest)
     except Exception as exc:
         raise HTTPException(409, "result manifest authority is unavailable") from exc
     if canonical_sha256(manifest) != result.manifest_sha256:
@@ -2279,6 +2354,11 @@ async def _owned_source_bytes(
     if len(manifest_requests) != 1:
         raise HTTPException(409, "component request is not manifest-attested")
     manifest_request = manifest_requests[0]
+    if (
+        manifest_request.get("schema_name") != "workflow_component_request"
+        or manifest_request.get("schema_version") != manifest_generation
+    ):
+        raise HTTPException(409, "component request generation is not manifest-attested")
     try:
         request_path = _owned_manifest_artifact_path(
             root,
@@ -2303,7 +2383,11 @@ async def _owned_source_bytes(
         request_payload = canonical_json_loads(request_bytes)
         if canonical_json_bytes(request_payload) != request_bytes:
             raise ValueError("component request is not canonical JSON")
-        validate_schema("workflow_component_request_v2", request_payload)
+        if request_payload.get("schema_version") != manifest_generation:
+            raise ValueError("component request generation is not cross-bound")
+        validate_schema(
+            f"workflow_component_request_v{manifest_generation}", request_payload
+        )
     except Exception as exc:
         raise HTTPException(409, "component request byte identity is unavailable") from exc
     if (
@@ -2345,7 +2429,7 @@ async def _owned_source_bytes(
         record = record_matches[0]
         if (
             batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 2
+            or batch.get("schema_version") != manifest_generation
             or batch.get("execution_owner_job_id") != job_id
             or record.get("record_schema_name") != "bms_frustrampnn_scheduler_record"
             or record.get("record_schema_version") != 2
@@ -2425,7 +2509,8 @@ def _inspect_live_source(
 
 
 def _safe_configuration_projection(
-    configuration: FrustraMPNNExecutionConfigurationV2,
+    configuration: FrustraMPNNExecutionConfigurationV2
+    | FrustraMPNNExecutionConfigurationV3,
 ) -> FrustraMPNNSafeExecutionConfiguration:
     payload = configuration.model_dump(mode="json", exclude_none=False)
     runtime = dict(payload["runtime"])
@@ -2915,9 +3000,10 @@ _LANDSCAPE_FIELDS = (
 
 def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
     terminal = dict(result.terminal_result_json or {})
+    component_contract_version = terminal.get("component_contract_version")
     authority_version = (
-        "v2"
-        if terminal.get("component_contract_version") == "2.0"
+        "v3" if component_contract_version == "3.0"
+        else "v2" if component_contract_version == "2.0"
         else "historical_v1"
     )
     values = {field: getattr(result, field) for field in _PHASE4_FIELDS}
@@ -2927,11 +3013,23 @@ def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
         missing_fields = list(_PHASE4_FIELDS)
     else:
         missing_fields = [field for field, value in values.items() if value is None]
-    available = authority_version == "v2" and not missing_fields
+    core_fields = _PHASE4_FIELDS[:4]
+    statistics_fields = _PHASE4_FIELDS[4:]
+    core_available = authority_version in {"v2", "v3"} and not any(
+        field in missing_fields for field in core_fields
+    )
+    statistics_available = core_available and not any(
+        field in missing_fields for field in statistics_fields
+    )
+    available = (
+        core_available
+        if authority_version == "v3"
+        else core_available and statistics_available
+    )
     return {
         "authority_version": authority_version,
         "availability": available,
-        "statistics_available": available,
+        "statistics_available": statistics_available,
         "missing_fields": missing_fields,
         **values,
     }
@@ -3718,6 +3816,91 @@ async def statistics_query(
         "offset": body.offset,
         "next_offset": next_offset if next_offset < total else None,
     })
+
+
+@router.get(
+    "/results/{parent_job_id}/{invocation_id}/statistics/analysis",
+    response_model=FrustraMPNNStatisticsAnalysisResponse,
+)
+async def get_result_statistics_analysis(
+    parent_job_id: str,
+    invocation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> FrustraMPNNStatisticsAnalysisResponse:
+    child = (
+        await session.execute(
+            select(FrustraMPNNStatisticsAnalysis).where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == invocation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(status_code=404, detail="statistics analysis child not found")
+    return FrustraMPNNStatisticsAnalysisResponse(
+        analysis_id=child.analysis_id,
+        parent_job_id=child.parent_job_id,
+        invocation_id=child.invocation_id,
+        state=child.state,
+        attempt_count=child.attempt_count,
+        core_artifact_id=child.core_artifact_id,
+        core_landscape_sha256=child.core_landscape_sha256,
+        core_manifest_sha256=child.core_manifest_sha256,
+        formula_version=child.formula_version,
+        policy_version=child.policy_version,
+        package_version=child.package_version,
+        schema_version=child.schema_version,
+        artifact_sha256=child.artifact_sha256,
+        statistics_sha256=child.statistics_sha256,
+        diagnostic=child.diagnostic,
+    )
+
+
+@router.post(
+    "/results/{parent_job_id}/{invocation_id}/statistics/retry",
+    response_model=FrustraMPNNStatisticsAnalysisResponse,
+)
+async def retry_result_statistics_analysis(
+    parent_job_id: str,
+    invocation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> FrustraMPNNStatisticsAnalysisResponse:
+    child = (
+        await session.execute(
+            select(FrustraMPNNStatisticsAnalysis).where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == invocation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(status_code=404, detail="statistics analysis child not found")
+    try:
+        child = await retry_statistics_child(
+            session,
+            analysis_id=child.analysis_id,
+        )
+        await session.commit()
+    except FrustraMPNNStatisticsJobError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FrustraMPNNStatisticsAnalysisResponse(
+        analysis_id=child.analysis_id,
+        parent_job_id=child.parent_job_id,
+        invocation_id=child.invocation_id,
+        state=child.state,
+        attempt_count=child.attempt_count,
+        core_artifact_id=child.core_artifact_id,
+        core_landscape_sha256=child.core_landscape_sha256,
+        core_manifest_sha256=child.core_manifest_sha256,
+        formula_version=child.formula_version,
+        policy_version=child.policy_version,
+        package_version=child.package_version,
+        schema_version=child.schema_version,
+        artifact_sha256=child.artifact_sha256,
+        statistics_sha256=child.statistics_sha256,
+        diagnostic=child.diagnostic,
+    )
 
 
 @router.get(

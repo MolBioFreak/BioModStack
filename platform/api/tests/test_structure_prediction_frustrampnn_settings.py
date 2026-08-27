@@ -107,6 +107,8 @@ async def test_structure_prediction_enabled_custom_settings_persist_exact_normal
             "schema_name",
             "schema_version",
             "settings_value_origin",
+            "batching_enabled",
+            "structures_per_job",
             "protein_selection",
             "source_structure",
             "classification_policy",

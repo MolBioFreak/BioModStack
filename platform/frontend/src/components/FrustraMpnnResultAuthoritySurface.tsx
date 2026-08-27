@@ -1,12 +1,49 @@
-import type { FrustraMpnnResultDetail, FrustraMpnnStatistics } from '../lib/frustraMpnnApi.js';
+import type {
+    FrustraMpnnResultDetail,
+    FrustraMpnnStatistics,
+    FrustraMpnnStatisticsAnalysis,
+} from '../lib/frustraMpnnApi.js';
 import { FrustraMpnnRequestedEffectiveSummary } from './frustrampnn/FrustraMpnnRequestedEffectiveSummary.js';
 
 const fmt = (value: number | null) => value == null ? '—' : Number(value).toFixed(3);
 const shortHash = (value: string) => `${value.slice(0, 10)}…${value.slice(-8)}`;
 
+const boundedDiagnostic = (value: string | null): string | null => {
+    if (value === null) return null;
+    const limit = 320;
+    return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+};
+
+export function FrustraMpnnStatisticsAnalysisPanel({
+    analysis,
+    canRetry,
+    retryPending = false,
+    onRetry,
+}: {
+    analysis: FrustraMpnnStatisticsAnalysis;
+    canRetry: boolean;
+    retryPending?: boolean;
+    onRetry: () => void;
+}) {
+    const diagnostic = boundedDiagnostic(analysis.diagnostic);
+    return <section aria-label="FrustraMPNN statistics analysis lifecycle" className="rounded-xl border border-violet-500/25 bg-violet-950/10 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 className="font-semibold">Statistics analysis {analysis.state}</h2>
+                <p className="mt-1 text-xs text-slate-400">Attempt {analysis.attempt_count} · formula {analysis.formula_version} · policy {analysis.policy_version}</p>
+            </div>
+            {analysis.state === 'failed' && canRetry && <button type="button" disabled={retryPending} onClick={onRetry} className="rounded-lg border border-violet-400/50 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 disabled:opacity-40">{retryPending ? 'Retrying…' : 'Retry analysis'}</button>}
+        </div>
+        {analysis.state === 'queued' && <p role="status" className="mt-3 text-xs text-violet-100">Queued for derived-statistics execution.</p>}
+        {analysis.state === 'running' && <p role="status" className="mt-3 text-xs text-violet-100">Derived statistics are running.</p>}
+        {analysis.state === 'completed' && <p role="status" className="mt-3 text-xs text-emerald-200">Derived statistics completed.</p>}
+        {analysis.state === 'failed' && <div role="alert" className="mt-3 rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-100">{diagnostic || 'Derived statistics failed without a diagnostic.'}</div>}
+    </section>;
+}
+
 export function FrustraMpnnStatisticsSummary({ statistics }: { statistics: FrustraMpnnStatistics }) {
     return <section aria-label="Canonical FrustraMPNN statistics" className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-semibold">Canonical statistics</h2><p className="mt-1 text-xs text-slate-400">Persisted support, distributions, class burdens, and rankings from the governed statistics authority.</p></div><span className="font-mono text-[10px] text-sky-200">{shortHash(statistics.statistics_sha256)}</span></div>
+        <div className="flex flex-wrap items-start justify-between gap-2"><div><h2 className="font-semibold">Canonical statistics</h2><p className="mt-1 text-xs text-slate-400">Persisted support, distributions, class burdens, and rankings from the governed statistics authority.</p></div><div className="text-right"><span className="block text-[10px] text-sky-300">Statistics schema v{statistics.schema_version}</span><span className="font-mono text-[10px] text-sky-200">{shortHash(statistics.statistics_sha256)}</span></div></div>
         <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">
             {([
                 ['Selected residues', statistics.support.selected_residue_count],
@@ -21,7 +58,14 @@ export function FrustraMpnnStatisticsSummary({ statistics }: { statistics: Frust
     </section>;
 }
 
-export function FrustraMpnnResultAuthoritySurface({ detail }: { detail: FrustraMpnnResultDetail }) {
+export function FrustraMpnnResultAuthoritySurface({
+    detail,
+    statisticsOverride,
+}: {
+    detail: FrustraMpnnResultDetail;
+    statisticsOverride?: FrustraMpnnStatistics | null;
+}) {
+    const statistics = statisticsOverride !== undefined ? statisticsOverride : detail.statistics_json;
     return <>
         <section aria-label="FrustraMPNN result authority" className={`rounded-xl border p-4 ${detail.authority_version === 'v2' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
             <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Result authority: {detail.authority_version}</h2><span className="text-xs">{detail.availability ? 'available' : 'partially available'}</span></div>
@@ -36,8 +80,8 @@ export function FrustraMpnnResultAuthoritySurface({ detail }: { detail: FrustraM
                 <FrustraMpnnRequestedEffectiveSummary effective={detail.effective_settings_json} />
             </div> : <p className="mt-2 text-xs text-amber-100">Effective settings were not recorded for this historical result.</p>}
         </section>
-        {detail.statistics_json
-            ? <FrustraMpnnStatisticsSummary statistics={detail.statistics_json} />
+        {statistics
+            ? <FrustraMpnnStatisticsSummary statistics={statistics} />
             : <section aria-label="Canonical FrustraMPNN statistics" className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs text-amber-100"><h2 className="font-semibold">Canonical statistics unavailable</h2><p className="mt-1">{detail.authority_version === 'historical_v1' ? 'This historical result predates persisted statistics authority. Missing statistics remain explicit and are not reconstructed.' : `Typed missingness: ${detail.missing_fields.filter((field) => field.includes('statistics')).join(', ') || 'statistics_json'}.`}</p></section>}
     </>;
 }

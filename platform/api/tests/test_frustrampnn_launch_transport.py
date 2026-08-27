@@ -29,10 +29,13 @@ def _pdb() -> bytes:
 def _settings_payload() -> dict[str, object]:
     return {
         "schema_name": "frustrampnn_settings",
-        "schema_version": 1,
+        "schema_version": 2,
+        "batching_enabled": True,
+        "structures_per_job": 250,
         "protein_selection": {
             "mode": "all_protein_entities",
             "entities": [],
+            "regions": [],
             "residues": [],
         },
         "source_structure": {
@@ -192,7 +195,7 @@ async def test_every_direct_launch_body_and_multipart_form_transports_the_same_t
     [
         {
             "schema_name": "frustrampnn_settings",
-            "schema_version": 1,
+            "schema_version": 2,
         },
         {
             **_settings_payload(),
@@ -220,7 +223,7 @@ def test_reanalysis_replacement_rejects_partial_or_unknown_settings() -> None:
             {
                 "frustrampnn_settings": {
                     "schema_name": "frustrampnn_settings",
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "classification_policy": {"mode": "canonical"},
                 }
             }
@@ -257,7 +260,7 @@ async def test_upload_partial_settings_reject_before_child_creation(monkeypatch:
                 "pdb_file": ("candidate.pdb", _pdb(), "chemical/x-pdb"),
                 "frustrampnn_settings": (
                     None,
-                    json.dumps({"schema_name": "frustrampnn_settings", "schema_version": 1}),
+                    json.dumps({"schema_name": "frustrampnn_settings", "schema_version": 2}),
                 ),
             },
         )

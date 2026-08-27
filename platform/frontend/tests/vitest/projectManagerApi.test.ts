@@ -26,6 +26,7 @@ import {
     searchAdapterEntities,
     updateProject,
 } from '../../src/lib/projectManager';
+import * as projectManagerContract from '../../src/lib/projectManager';
 
 beforeEach(() => {
     transport.get.mockReset();
@@ -68,6 +69,117 @@ const resultSurface = {
 };
 
 describe('Project Manager API contract', () => {
+    it('reads a closed FrustraMPNN result scope from exact Project lineage', async () => {
+        const contract = projectManagerContract as unknown as {
+            fetchDomainFrustraMpnnResults?: (
+                projectId: string,
+                experimentId: string,
+                domainId: string,
+                globalExperimentRevisionId: string,
+                domainRevisionId: string,
+                signal?: AbortSignal,
+            ) => Promise<unknown>;
+        };
+        expect(contract.fetchDomainFrustraMpnnResults).toBeTypeOf('function');
+        const payload = {
+            schema: 'bms.project-frustrampnn-result-scope.v1',
+            project_id: 'project/1',
+            global_experiment_id: 'experiment 1',
+            domain_experiment_id: 'domain?1',
+            global_experiment_revision_id: 'global-revision/1',
+            domain_revision_id: 'domain revision?1',
+            items: [{
+                result_receipt_id: 'receipt-1',
+                parent_job_id: 'job-1',
+                invocation_id: 'invocation-1',
+                candidate_id: 'candidate-1',
+                manifest_sha256: 'a'.repeat(64),
+                content_digest: 'b'.repeat(64),
+                reopen_uri: '/designs/job-1?frustrampnn_invocation_id=invocation-1',
+            }],
+            count: 1,
+            bounded: true,
+        };
+        transport.get.mockResolvedValueOnce({ data: payload });
+        const signal = new AbortController().signal;
+        await expect(contract.fetchDomainFrustraMpnnResults!(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+            signal,
+        )).resolves.toEqual(payload);
+        expect(transport.get).toHaveBeenCalledWith(
+            '/api/projects/project%2F1/experiments/experiment%201/domains/domain%3F1/frustrampnn-results',
+            {
+                params: {
+                    global_experiment_revision_id: 'global-revision/1',
+                    domain_revision_id: 'domain revision?1',
+                },
+                signal,
+            },
+        );
+
+        transport.get.mockResolvedValueOnce({ data: { ...payload, unexpected: true } });
+        await expect(contract.fetchDomainFrustraMpnnResults!(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).rejects.toThrow(/unexpected/);
+    });
+
+    it('rejects malformed or mismatched FrustraMPNN revision-bound scope authority', async () => {
+        const contract = projectManagerContract as unknown as {
+            fetchDomainFrustraMpnnResults: (
+                projectId: string,
+                experimentId: string,
+                domainId: string,
+                globalExperimentRevisionId: string,
+                domainRevisionId: string,
+            ) => Promise<unknown>;
+        };
+        const payload = {
+            schema: 'bms.project-frustrampnn-result-scope.v1',
+            project_id: 'project-1',
+            global_experiment_id: 'experiment-1',
+            domain_experiment_id: 'domain-1',
+            global_experiment_revision_id: 'global-revision-1',
+            domain_revision_id: 'domain-revision-1',
+            items: [],
+            count: 0,
+            bounded: true,
+        };
+
+        transport.get.mockResolvedValueOnce({ data: { ...payload, domain_revision_id: 7 } });
+        await expect(contract.fetchDomainFrustraMpnnResults(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).rejects.toThrow(/domain_revision_id/);
+
+        transport.get.mockResolvedValueOnce({ data: { ...payload, global_experiment_revision_id: 'other-revision' } });
+        await expect(contract.fetchDomainFrustraMpnnResults(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).rejects.toThrow(/does not match/);
+
+        transport.get.mockResolvedValueOnce({ data: { ...payload, domain_experiment_id: 'other-domain' } });
+        await expect(contract.fetchDomainFrustraMpnnResults(
+            payload.project_id,
+            payload.global_experiment_id,
+            payload.domain_experiment_id,
+            payload.global_experiment_revision_id,
+            payload.domain_revision_id,
+        )).rejects.toThrow(/does not match/);
+    });
     it('accepts server-owned parent links on workflow and run map nodes', () => {
         const model = structuredClone(minimalSummary);
         model.map.nodes = [{

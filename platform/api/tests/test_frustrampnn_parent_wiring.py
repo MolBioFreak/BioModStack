@@ -64,7 +64,7 @@ def test_structure_prediction_has_one_canonical_v2_manifest_cutover() -> None:
     assert "frustrampnn_requiredness ?: 'required'" in workflow
     assert "frustrampnn_requiredness must be required" in workflow
     assert "CanonicalFrustraMPNNV2.out.result" in workflow
-    assert "workflow_component_request_v2.json" in workflow
+    assert "workflow_component_request_v3.json" in workflow
     assert "frustrampnn_structure_map_v1.json" in workflow
     assert "workflow_component_request_v1.json" not in workflow
     assert "checkpoint_id" not in workflow
@@ -341,7 +341,7 @@ def test_enabled_frustrampnn_reporters_request_job_root_relative_outputs() -> No
         assert "stage_reporter.py' --job-root-relative" in source, path
 
 
-def test_every_active_workflow_consumer_is_v2_only_for_new_writes() -> None:
+def test_every_active_workflow_consumer_is_v3_only_for_new_writes() -> None:
     consumers = {
         "structure_prediction": REPO_ROOT / "workflows" / "structure_prediction.nf",
         "protein_design": REPO_ROOT / "workflows" / "protein_design.nf",
@@ -358,7 +358,7 @@ def test_every_active_workflow_consumer_is_v2_only_for_new_writes() -> None:
     antibody_parent = (
         REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf"
     ).read_text(encoding="utf-8")
-    assert "workflow_component_request_v2.json" in antibody_parent
+    assert "workflow_component_request_v3.json" in antibody_parent
     assert "workflow_component_request_v1.json" not in antibody_parent
 
 

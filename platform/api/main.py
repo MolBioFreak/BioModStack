@@ -31,6 +31,7 @@ from services.gpu_orchestrator import GPUOrchestrator
 from services.md.reconcile import MdReconcilerWorker
 from services.ont_raw_signal_worker import OntRawSignalWorker
 from services.ont_signal_worker import OntSignalWorker
+from services.frustrampnn.statistics_jobs import FrustraMPNNStatisticsWorker
 from services.global_experiments.worker import (
     GlobalExperimentWorker,
     install_global_experiment_worker,
@@ -52,6 +53,7 @@ _md_reconciler: MdReconcilerWorker | None = None
 _global_experiment_worker: GlobalExperimentWorker | None = None
 _ont_raw_signal_worker: OntRawSignalWorker | None = None
 _ont_signal_worker: OntSignalWorker | None = None
+_frustrampnn_statistics_worker: FrustraMPNNStatisticsWorker | None = None
 
 
 async def _orchestrator_launch_job(job_id, model_id, mode, params, output_dir):
@@ -104,6 +106,7 @@ async def lifespan(app: FastAPI):
     global _global_experiment_worker
     global _ont_raw_signal_worker
     global _ont_signal_worker
+    global _frustrampnn_statistics_worker
     bioxp_runtime = None
     
     # Initialize independently owned core, global experiment, MolBio, and MolBio/NGS state stores.
@@ -111,6 +114,9 @@ async def lifespan(app: FastAPI):
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
+    _frustrampnn_statistics_worker = FrustraMPNNStatisticsWorker(async_session)
+    await _frustrampnn_statistics_worker.start()
+    logger.info("[STARTUP] FrustraMPNN statistics worker started")
     async with experiment_session_factory() as admission_session:
         async with async_session() as admission_core_session:
             pending_resource_evidence = await reconcile_startup_admissions(
@@ -231,6 +237,9 @@ async def lifespan(app: FastAPI):
     if _analysis_worker:
         await _analysis_worker.stop()
         logger.info("[SHUTDOWN] Analysis worker stopped")
+    if _frustrampnn_statistics_worker:
+        await _frustrampnn_statistics_worker.stop()
+        logger.info("[SHUTDOWN] FrustraMPNN statistics worker stopped")
     if _boltz_api_job_worker:
         await _boltz_api_job_worker.stop()
         logger.info("[SHUTDOWN] Boltz API submission worker stopped")

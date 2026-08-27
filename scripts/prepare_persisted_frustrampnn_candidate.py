@@ -175,10 +175,13 @@ def prepare(
     else:
         if structure_map_path is None or output_structure_map is None:
             raise ValueError("v2 record requires exact structure-map staging")
+        request_generation = request.get("schema_version")
+        if isinstance(request_generation, bool) or request_generation not in (2, 3):
+            raise ValueError("v2 record requires component request schema generation 2 or 3")
         _validate_relative_path(
             record["request_relative_path"],
             prefix=("inputs", "requests"),
-            filename="workflow_component_request_v2.json",
+            filename=f"workflow_component_request_v{request_generation}.json",
         )
         _validate_relative_path(
             record["source_relative_path"],
@@ -193,7 +196,7 @@ def prepare(
         structure_map_payload = _read_regular(structure_map_path)
         _verify_bytes("structure map", structure_map_payload, record, key="structure_map")
         structure_map = _canonical_object(structure_map_payload, label="structure map")
-        validate_schema("workflow_component_request_v2", request)
+        validate_schema(f"workflow_component_request_v{request_generation}", request)
         validate_schema("frustrampnn_structure_map_v1", structure_map)
         if request["normalized_pdb_sha256"] != record["source_sha256"]:
             raise ValueError("normalized PDB digest binding is invalid")

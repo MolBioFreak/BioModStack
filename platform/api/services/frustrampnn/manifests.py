@@ -46,6 +46,7 @@ EXTERNAL_CANONICAL_ARTIFACT_PATHS = (
 )
 MANIFEST_PATH = "frustrampnn_result_manifest_v1.json"
 V2_MANIFEST_PATH = "frustrampnn_result_manifest_v2.json"
+V3_MANIFEST_PATH = "frustrampnn_result_manifest_v3.json"
 V2_MANIFEST_ARTIFACT_PATHS = (
     "workflow_component_request_v2.json",
     "normalized_input.pdb",
@@ -71,6 +72,30 @@ V2_EXTERNAL_CANONICAL_ARTIFACT_PATHS = (
     *V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS,
     "workflow_component_result_v2.json",
 )
+V3_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v3.json",
+    "normalized_input.pdb",
+    "frustrampnn_structure_map_v1.json",
+    "raw_frustrampnn.csv",
+    "frustrampnn_landscape_v3.json",
+    "frustrampnn_summary_v3.json",
+    "frustrampnn_stdout.log",
+    "frustrampnn_stderr.log",
+    "frustrampnn_execution_receipt_v3.json",
+)
+V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v3.json",
+    AUTHORITY_ARTIFACT_PATH,
+    *V3_MANIFEST_ARTIFACT_PATHS[1:],
+)
+V3_CANONICAL_ARTIFACT_PATHS = (
+    *V3_MANIFEST_ARTIFACT_PATHS,
+    "workflow_component_result_v3.json",
+)
+V3_EXTERNAL_CANONICAL_ARTIFACT_PATHS = (
+    *V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS,
+    "workflow_component_result_v3.json",
+)
 _V1_SCHEMA_KEYS = {
     "workflow_component_request_v1.json": "workflow_component_request_v1",
     "frustrampnn_structure_map_v1.json": "frustrampnn_structure_map_v1",
@@ -88,7 +113,15 @@ _V2_SCHEMA_KEYS = {
     "frustrampnn_statistics_v1.json": "frustrampnn_statistics_v1",
     "workflow_component_result_v2.json": "workflow_component_result_v2",
 }
-_SCHEMA_KEYS = {**_V1_SCHEMA_KEYS, **_V2_SCHEMA_KEYS}
+_V3_SCHEMA_KEYS = {
+    "workflow_component_request_v3.json": "workflow_component_request_v3",
+    "frustrampnn_structure_map_v1.json": "frustrampnn_structure_map_v1",
+    "frustrampnn_landscape_v3.json": "frustrampnn_landscape_v3",
+    "frustrampnn_summary_v3.json": "frustrampnn_summary_v3",
+    "frustrampnn_execution_receipt_v3.json": "frustrampnn_execution_receipt_v3",
+    "workflow_component_result_v3.json": "workflow_component_result_v3",
+}
+_SCHEMA_KEYS = {**_V1_SCHEMA_KEYS, **_V2_SCHEMA_KEYS, **_V3_SCHEMA_KEYS}
 _MEDIA_TYPES = {
     AUTHORITY_ARTIFACT_PATH: "application/json",
     "workflow_component_request_v1.json": "application/json",
@@ -107,6 +140,11 @@ _MEDIA_TYPES = {
     "frustrampnn_execution_receipt_v2.json": "application/json",
     "frustrampnn_statistics_v1.json": "application/json",
     "workflow_component_result_v2.json": "application/json",
+    "workflow_component_request_v3.json": "application/json",
+    "frustrampnn_landscape_v3.json": "application/json",
+    "frustrampnn_summary_v3.json": "application/json",
+    "frustrampnn_execution_receipt_v3.json": "application/json",
+    "workflow_component_result_v3.json": "application/json",
 }
 
 # FrustraMPNN admits at most 64 MiB source structures. Derived scientific
@@ -150,7 +188,7 @@ def _open_root(root: Path | str) -> int:
 
 
 def _artifact_limit(relative: str) -> int:
-    if relative in {MANIFEST_PATH, V2_MANIFEST_PATH}:
+    if relative in {MANIFEST_PATH, V2_MANIFEST_PATH, V3_MANIFEST_PATH}:
         return MAX_MANIFEST_BYTES
     if relative.endswith(".log"):
         return MAX_RUNTIME_LOG_BYTES
@@ -303,7 +341,11 @@ def _load_manifest_bytes(
         raise ManifestValidationError("physical result manifest is not an object")
     if payload != canonical_json_bytes(manifest):
         raise ManifestValidationError("physical result manifest is not canonical bytes")
-    expected_version = 2 if manifest_name == V2_MANIFEST_PATH else 1
+    expected_version = {
+        MANIFEST_PATH: 1,
+        V2_MANIFEST_PATH: 2,
+        V3_MANIFEST_PATH: 3,
+    }[manifest_name]
     if manifest.get("schema_version") != expected_version:
         raise ManifestValidationError("physical result manifest filename/schema generation mismatch")
     return manifest, payload
@@ -445,13 +487,20 @@ def _observed_cardinality(relative: str, payload: bytes, instance: Any | None) -
         return {"kind": "records", "count": 1}
     if relative == "frustrampnn_structure_map_v1.json":
         return {"kind": "residues", "count": len(instance["rows"])}
-    if relative in {"frustrampnn_landscape_v1.json", "frustrampnn_landscape_v2.json"}:
+    if relative in {
+        "frustrampnn_landscape_v1.json",
+        "frustrampnn_landscape_v2.json",
+        "frustrampnn_landscape_v3.json",
+    }:
         return {"kind": "residues", "count": len(instance["residues"])}
     if relative in {
         "frustrampnn_summary_v1.json", "frustrampnn_summary_v2.json",
+        "frustrampnn_summary_v3.json",
         "frustrampnn_execution_receipt_v1.json", "frustrampnn_execution_receipt_v2.json",
+        "frustrampnn_execution_receipt_v3.json",
         "frustrampnn_statistics_v1.json",
         "workflow_component_result_v1.json", "workflow_component_result_v2.json",
+        "workflow_component_result_v3.json",
     }:
         return {"kind": "records", "count": 1}
     return None
@@ -473,18 +522,27 @@ def _record(
         expected_name = {
             "workflow_component_request_v1": "workflow_component_request",
             "workflow_component_request_v2": "workflow_component_request",
+            "workflow_component_request_v3": "workflow_component_request",
             "workflow_component_result_v1": "workflow_component_result",
             "workflow_component_result_v2": "workflow_component_result",
+            "workflow_component_result_v3": "workflow_component_result",
             "frustrampnn_structure_map_v1": "frustrampnn_structure_map",
             "frustrampnn_landscape_v1": "frustrampnn_landscape",
             "frustrampnn_landscape_v2": "frustrampnn_landscape",
+            "frustrampnn_landscape_v3": "frustrampnn_landscape",
             "frustrampnn_summary_v1": "frustrampnn_summary",
             "frustrampnn_summary_v2": "frustrampnn_summary",
+            "frustrampnn_summary_v3": "frustrampnn_summary",
             "frustrampnn_execution_receipt_v1": "frustrampnn_execution_receipt",
             "frustrampnn_execution_receipt_v2": "frustrampnn_execution_receipt",
+            "frustrampnn_execution_receipt_v3": "frustrampnn_execution_receipt",
             "frustrampnn_statistics_v1": "frustrampnn_statistics",
         }[schema_key]
-        expected_version = 2 if schema_key.endswith("_v2") else 1
+        expected_version = (
+            3 if schema_key.endswith("_v3")
+            else 2 if schema_key.endswith("_v2")
+            else 1
+        )
         if schema_name != expected_name or schema_version != expected_version:
             raise ManifestValidationError(f"schema identity mismatch for {relative}")
         try:
@@ -1235,6 +1293,80 @@ def _snapshot_v2(
         os.close(root_fd)
 
 
+def _snapshot_v3(
+    root: Path | str,
+    *,
+    require_manifest: bool,
+    manifest: Mapping[str, Any] | None = None,
+) -> dict[str, bytes]:
+    root_fd = _open_root(root)
+    try:
+        generation_before = _root_generation(root_fd)
+        observed: set[str] = set()
+        saw_manifest = False
+        for entry in os.scandir(root_fd):
+            if entry.name == V3_MANIFEST_PATH:
+                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                    raise ManifestValidationError("v3 result manifest path must be regular")
+                saw_manifest = True
+                continue
+            if entry.is_symlink():
+                raise ManifestValidationError(f"bundle contains symlink: {entry.name}")
+            if not entry.is_file(follow_symlinks=False):
+                raise ManifestValidationError(f"bundle contains nonregular entry: {entry.name}")
+            observed.add(entry.name)
+        path_options = (
+            (V3_CANONICAL_ARTIFACT_PATHS, V3_EXTERNAL_CANONICAL_ARTIFACT_PATHS)
+            if require_manifest
+            else (V3_MANIFEST_ARTIFACT_PATHS, V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS)
+        )
+        matching_paths = [paths for paths in path_options if observed == set(paths)]
+        if saw_manifest != require_manifest or len(matching_paths) != 1:
+            expected_sets = [set(paths) for paths in path_options]
+            raise ManifestValidationError(
+                "v3 bundle generation/path set mismatch; "
+                f"observed={sorted(observed)}, expected_one_of="
+                f"{[sorted(expected) for expected in expected_sets]}"
+            )
+        paths = matching_paths[0]
+        manifest_artifact_paths = paths[:-1] if require_manifest else paths
+        payloads: dict[str, bytes] = {}
+        if require_manifest:
+            physical, physical_bytes = _load_manifest_bytes(root_fd, V3_MANIFEST_PATH)
+            if manifest is None or physical != dict(manifest):
+                raise ManifestValidationError(
+                    "physical v3 result manifest is not exact canonical supplied bytes"
+                )
+            try:
+                validate_schema("frustrampnn_result_manifest_v3", physical)
+            except Exception as exc:
+                raise ManifestValidationError(f"v3 manifest schema failed: {exc}") from exc
+            limits = _declared_read_limits(physical, manifest_artifact_paths)
+            limits["workflow_component_result_v3.json"] = _artifact_limit(
+                "workflow_component_result_v3.json"
+            )
+            payloads[V3_MANIFEST_PATH] = physical_bytes
+        else:
+            limits = {relative: _artifact_limit(relative) for relative in paths}
+        for relative in paths:
+            payloads[relative] = _read_regular(
+                root_fd,
+                relative,
+                max_bytes=limits[relative],
+            )
+        _enforce_actual_bundle_size(payloads)
+        generation_after = _root_generation(root_fd)
+        final_names = {entry.name for entry in os.scandir(root_fd)}
+        expected_names = set(paths) | ({V3_MANIFEST_PATH} if require_manifest else set())
+        if generation_after != generation_before or final_names != expected_names:
+            raise ManifestValidationError(
+                "v3 bundle path set or root directory generation mutated during validation"
+            )
+        return payloads
+    finally:
+        os.close(root_fd)
+
+
 def _resolve_cm_source_alias_projection(
     requested: Any,
     effective: Any,
@@ -1501,6 +1633,144 @@ def validate_v2_input_closure(
     return structure, effective, configuration
 
 
+def validate_v3_input_closure(
+    request: Mapping[str, Any],
+    normalized_pdb: bytes,
+    structure_map_payload: bytes,
+    *,
+    allow_legacy_external_authority: bool = False,
+):
+    """Validate the exact three-file v3 execution authority before runtime access."""
+
+    from .configuration import FrustraMPNNExecutionConfigurationV3
+    from .settings import (
+        FrustraMPNNEffectiveSettings,
+        FrustraMPNNRequestedSettings,
+        resolve_effective_settings,
+    )
+
+    try:
+        schema_request = request
+        if (
+            allow_legacy_external_authority
+            and request.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+            and "bytes" not in request.get("identity_authority_artifact", {})
+        ):
+            schema_request = dict(request)
+            envelope = dict(request["identity_authority_artifact"])
+            envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+            schema_request["identity_authority_artifact"] = envelope
+        validate_schema("workflow_component_request_v3", schema_request)
+        structure = canonical_json_loads(structure_map_payload)
+        if not isinstance(structure, dict):
+            raise ManifestValidationError("v3 structure map is not an object")
+        if canonical_json_bytes(structure) != structure_map_payload:
+            raise ManifestValidationError("v3 structure map bytes are not canonical JSON")
+        validate_schema("frustrampnn_structure_map_v1", structure)
+        effective = FrustraMPNNEffectiveSettings.model_validate(request["effective_settings"])
+        requested = FrustraMPNNRequestedSettings.model_validate(request["requested_settings"])
+        configuration = FrustraMPNNExecutionConfigurationV3.model_validate(
+            request["execution_configuration"]
+        )
+    except ManifestValidationError:
+        raise
+    except Exception as exc:
+        raise ManifestValidationError(f"v3 request/map contract is invalid: {exc}") from exc
+
+    normalized_sha256 = hashlib.sha256(normalized_pdb).hexdigest()
+    structure_sha256 = hashlib.sha256(structure_map_payload).hexdigest()
+    if normalized_sha256 != request["normalized_pdb_sha256"]:
+        raise ManifestValidationError("physical normalized PDB hash disagrees with v3 request")
+    if structure_sha256 != request["structure_map_sha256"]:
+        raise ManifestValidationError("physical structure-map hash disagrees with v3 request")
+    resolution = effective.resolution_identity
+    producer_provenance = request.get("producer_provenance")
+    source_binding = (
+        producer_provenance.get("source_to_normalized_binding")
+        if isinstance(producer_provenance, Mapping)
+        else None
+    )
+    source_hashes_closed = (
+        structure["source_sha256"] == resolution.source_artifact_sha256
+    )
+    if isinstance(source_binding, Mapping):
+        source_hashes_closed = source_hashes_closed and (
+            source_binding.get("source_sha256") == structure["source_sha256"]
+            and source_binding.get("normalized_pdb_sha256") == normalized_sha256
+            and request["source_artifact"]["sha256"]
+            in {structure["source_sha256"], normalized_sha256}
+        )
+    else:
+        source_hashes_closed = source_hashes_closed and (
+            request["source_artifact"]["sha256"] == structure["source_sha256"]
+        )
+    if (
+        normalized_sha256 != structure["normalized_pdb_sha256"]
+        or normalized_sha256 != resolution.normalized_pdb_sha256
+        or structure_sha256 != resolution.structure_map_sha256
+        or not source_hashes_closed
+    ):
+        raise ManifestValidationError("v3 source/map/normalized resolution hashes are not closed")
+    if (
+        structure["parent_job_id"] != request["parent_job_id"]
+        or structure["candidate_id"] != request["candidate_id"]
+    ):
+        raise ManifestValidationError("v3 structure-map candidate/parent binding is stale")
+    source_settings = requested.source_structure
+    expected_altloc = source_settings.preferred_altloc or "<blank>"
+    if (
+        structure["selected_source_model"] != source_settings.selected_model_number
+        or structure["altloc_policy"] != f"blank_or_explicit:{expected_altloc}"
+    ):
+        raise ManifestValidationError("v3 structure-map model/altloc binding is stale")
+    authority = {
+        "pdb_coordinates": "pdb_self_identity_v1",
+        "mmcif_atom_site": "mmcif_atom_site_v1",
+        "producer_manifest": "producer_manifest_v1",
+        "cm_complex_snapshot": "producer_manifest_v1",
+    }[request["identity_authority"]]
+    if structure["identity_authority"] != authority:
+        raise ManifestValidationError("v3 structure-map identity authority binding is stale")
+
+    if request["identity_authority"] == "cm_complex_snapshot":
+        resolved_again = _resolve_cm_source_alias_projection(
+            requested, effective, structure,
+        )
+        map_resolved_chains = resolved_again.resolved_chains
+    else:
+        try:
+            resolved_again = resolve_effective_settings(requested, structure)
+        except Exception as exc:
+            raise ManifestValidationError(f"v3 effective residue resolution is invalid: {exc}") from exc
+        if resolved_again != effective:
+            raise ManifestValidationError("v3 effective settings are stale relative to the exact map")
+        map_resolved_chains = effective.resolved_chains
+
+    source_fields = (
+        "entity_instance_id", "source_entity_id", "label_asym_id", "auth_asym_id",
+        "auth_seq_id", "insertion_code", "sequence_index", "wt",
+        "pdb_chain_id", "model_position",
+    )
+    rows = structure["rows"]
+    matched_indexes: set[int] = set()
+    for chain in map_resolved_chains:
+        for residue in chain.residues:
+            expected = residue.model_dump(mode="json", exclude_none=False)
+            matches = [
+                index for index, row in enumerate(rows)
+                if all(row[field] == expected[field] for field in source_fields)
+            ]
+            if len(matches) != 1 or rows[matches[0]]["status"] != "mapped":
+                raise ManifestValidationError(
+                    "v3 effective residue does not match exactly one scoreable source/normalized map row"
+                )
+            if matches[0] in matched_indexes:
+                raise ManifestValidationError("v3 effective residue map match is duplicated")
+            matched_indexes.add(matches[0])
+    _validate_physical_pdb(normalized_pdb, structure)
+    return structure, effective, configuration
+
+
 def summarize_landscape_v2(landscape: Mapping[str, Any], effective: Any) -> dict[str, Any]:
     """Derive the exact complete selected-residue v2 summary."""
 
@@ -1562,6 +1832,70 @@ def summarize_landscape_v2(landscape: Mapping[str, Any], effective: Any) -> dict
         validate_schema("frustrampnn_summary_v2", summary)
     except Exception as exc:
         raise ManifestValidationError(f"v2 summary contract failed: {exc}") from exc
+    return summary
+
+
+def summarize_landscape_v3(landscape: Mapping[str, Any], effective: Any) -> dict[str, Any]:
+    """Derive the exact complete selected-residue v3 summary."""
+
+    residues = list(landscape["residues"])
+    all_slots = [slot for residue in residues for slot in residue["slots"]]
+    native = [slot for slot in all_slots if slot["native"]]
+    classes = ("high", "neutral", "minimal")
+    native_counts = {name: sum(slot["class"] == name for slot in native) for name in classes}
+    complete_counts = {name: sum(slot["class"] == name for slot in all_slots) for name in classes}
+    support = []
+    for chain in effective.resolved_chains:
+        count = len(chain.residues)
+        support.append({
+            "entity_instance_id": chain.entity.entity_instance_id,
+            "auth_asym_id": chain.entity.auth_asym_id,
+            "expected_residues": count,
+            "mapped_residues": count,
+            "scoreable_residues": count,
+            "expected_slots": count * len(AA_ORDER),
+            "observed_slots": count * len(AA_ORDER),
+            "scoreable_slots": count * len(AA_ORDER),
+        })
+    count = len(residues)
+    summary = {
+        "schema_name": "frustrampnn_summary",
+        "schema_version": 3,
+        **{
+            key: landscape[key]
+            for key in (
+                "execution_configuration_id", "execution_configuration_sha256",
+                "requested_settings_sha256", "effective_settings_sha256",
+                "runtime_identity_sha256", "target_id", "parent_job_id", "candidate_id",
+                "source_artifact_sha256", "structure_map_sha256", "normalized_pdb_sha256",
+                "threshold_policy_id", "threshold_policy", "threshold_policy_sha256",
+            )
+        },
+        "landscape_sha256": canonical_sha256(dict(landscape)),
+        "residue_support": {
+            "expected": count, "mapped": count, "scoreable": count,
+            "excluded": 0, "ambiguous": 0,
+        },
+        "slot_support": {
+            "expected": count * len(AA_ORDER),
+            "observed": count * len(AA_ORDER),
+            "scoreable": count * len(AA_ORDER),
+        },
+        "missingness_by_reason": {},
+        "native_slot_counts": native_counts,
+        "native_slot_fractions": {
+            name: native_counts[name] / count for name in classes
+        },
+        "complete_landscape_counts": complete_counts,
+        "complete_landscape_fractions": {
+            name: complete_counts[name] / (count * len(AA_ORDER)) for name in classes
+        },
+        "support_by_entity_chain": support,
+    }
+    try:
+        validate_schema("frustrampnn_summary_v3", summary)
+    except Exception as exc:
+        raise ManifestValidationError(f"v3 summary contract failed: {exc}") from exc
     return summary
 
 
@@ -1793,6 +2127,126 @@ def _validate_v2_closure(
             raise ManifestValidationError("v2 component-result manifest/payload closure failed")
 
 
+def _validate_v3_closure(
+    payloads: Mapping[str, bytes], manifest: Mapping[str, Any], *, require_result: bool,
+    allow_legacy_external_authority: bool = False,
+) -> None:
+    from .analysis import finalize_landscape_v2
+    from .runtime import compile_frustrampnn_command_plan
+    from . import settings as _settings
+
+    values: dict[str, Any] = {}
+    schema_paths = dict(_V3_SCHEMA_KEYS)
+    if not require_result:
+        schema_paths.pop("workflow_component_result_v3.json")
+    for relative in schema_paths:
+        _, _, values[relative] = _json_identity(payloads[relative], relative)
+        try:
+            schema_instance = values[relative]
+            if (
+                allow_legacy_external_authority
+                and relative == "workflow_component_request_v3.json"
+                and isinstance(schema_instance, Mapping)
+                and schema_instance.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+                and "bytes" not in schema_instance.get("identity_authority_artifact", {})
+            ):
+                schema_instance = dict(schema_instance)
+                envelope = dict(schema_instance["identity_authority_artifact"])
+                envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+                schema_instance["identity_authority_artifact"] = envelope
+            validate_schema(_V3_SCHEMA_KEYS[relative], schema_instance)
+        except Exception as exc:
+            raise ManifestValidationError(f"v3 schema validation failed for {relative}: {exc}") from exc
+    request = values["workflow_component_request_v3.json"]
+    structure, effective, configuration = validate_v3_input_closure(
+        request,
+        payloads["normalized_input.pdb"],
+        payloads["frustrampnn_structure_map_v1.json"],
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
+    authority_envelope = request.get("identity_authority_artifact")
+    legacy_missing_bytes = (
+        allow_legacy_external_authority
+        and request.get("schema_version") == 2
+        and isinstance(authority_envelope, Mapping)
+        and "bytes" not in authority_envelope
+    )
+    _validate_external_authority(
+        payloads,
+        request,
+        structure,
+        allow_embedded_only=legacy_missing_bytes,
+        allow_legacy_missing_bytes=legacy_missing_bytes,
+    )
+    landscape = values["frustrampnn_landscape_v3.json"]
+    summary = values["frustrampnn_summary_v3.json"]
+    receipt = values["frustrampnn_execution_receipt_v3.json"]
+    raw = payloads["raw_frustrampnn.csv"]
+    try:
+        merged, expected_landscape = finalize_landscape_v2(
+            (raw,), effective,
+            execution_configuration=configuration,
+            target_id=structure["target_id"],
+            parent_job_id=request["parent_job_id"],
+            candidate_id=request["candidate_id"],
+            source_artifact_sha256=request["source_artifact"]["sha256"],
+        )
+    except Exception as exc:
+        raise ManifestValidationError(f"v3 raw/landscape recomputation failed: {exc}") from exc
+    if merged != raw or expected_landscape != landscape:
+        raise ManifestValidationError("v3 raw bytes and landscape do not exactly recompute")
+    if summarize_landscape_v3(landscape, effective) != summary:
+        raise ManifestValidationError("v3 summary does not exactly recompute")
+    plan = compile_frustrampnn_command_plan(effective)
+    entries = [entry.canonical_payload() for entry in plan.entries]
+    if receipt["command_plan"] != {"entries": entries, "plan_sha256": plan.plan_sha256}:
+        raise ManifestValidationError("v3 receipt command plan disagrees with effective settings")
+    if any(command["status"] != "succeeded" or command["exit_code"] != 0 for command in receipt["commands"]):
+        raise ManifestValidationError("v3 success receipt contains a failed or partial command")
+    if (
+        receipt["invocation_id"] != request["invocation_id"]
+        or receipt["execution_configuration_sha256"] != request["execution_configuration_sha256"]
+        or receipt["requested_settings_sha256"] != request["requested_settings_sha256"]
+        or receipt["effective_settings_sha256"] != request["effective_settings_sha256"]
+        or receipt["runtime_identity_sha256"] != request["runtime_identity_sha256"]
+        or receipt["source_artifact_sha256"] != request["source_artifact"]["sha256"]
+        or receipt["structure_map_sha256"] != request["structure_map_sha256"]
+        or receipt["normalized_pdb_sha256"] != request["normalized_pdb_sha256"]
+        or receipt["merged_raw_csv_sha256"] != hashlib.sha256(raw).hexdigest()
+        or receipt["landscape_sha256"] != canonical_sha256(landscape)
+        or receipt["summary_sha256"] != canonical_sha256(summary)
+    ):
+        raise ManifestValidationError("v3 receipt request/config/settings/runtime/artifact hash closure failed")
+    _validate_receipt_argv_v2(receipt, configuration)
+    identity = (request["invocation_id"], request["parent_job_id"], request["candidate_id"])
+    if (
+        (manifest["invocation_id"], manifest["parent_job_id"], manifest["candidate_id"]) != identity
+        or manifest["request_sha256"] != request_sha256(request)
+        or manifest["source_artifact_sha256"] != request["source_artifact"]["sha256"]
+        or manifest["execution_configuration_sha256"] != request["execution_configuration_sha256"]
+    ):
+        raise ManifestValidationError("v3 manifest identity/request/source/config closure failed")
+    if require_result:
+        result = values["workflow_component_result_v3.json"]
+        if (
+            result["status"] != "succeeded"
+            or result["request_sha256"] != manifest["request_sha256"]
+            or (result["invocation_id"], result["parent_job_id"], result["candidate_id"]) != identity
+            or result["parent_workflow_id"] != request["parent_workflow_id"]
+            or result["result_manifest"] != {
+                "relative_path": V3_MANIFEST_PATH,
+                "sha256": canonical_sha256(dict(manifest)),
+            }
+            or result["result_payload"] != {
+                "relative_path": "frustrampnn_summary_v3.json",
+                "schema_name": "frustrampnn_summary",
+                "schema_version": 3,
+                "sha256": canonical_sha256(summary),
+            }
+        ):
+            raise ManifestValidationError("v3 component-result manifest/payload closure failed")
+
+
 def _build_result_manifest_v2(root: Path | str) -> dict[str, Any]:
     payloads = _snapshot_v2(root, require_manifest=False)
     instances = {
@@ -1903,12 +2357,117 @@ def _validate_result_manifest_v2(
     return dict(payloads)
 
 
+def _build_result_manifest_v3(root: Path | str) -> dict[str, Any]:
+    payloads = _snapshot_v3(root, require_manifest=False)
+    instances = {
+        relative: _json_identity(payloads[relative], relative)[2]
+        for relative in _V3_SCHEMA_KEYS
+        if relative != "workflow_component_result_v3.json"
+    }
+    request = instances["workflow_component_request_v3.json"]
+    structure = instances["frustrampnn_structure_map_v1.json"]
+    landscape = instances["frustrampnn_landscape_v3.json"]
+    cardinalities = {
+        "workflow_component_request_v3.json": None,
+        AUTHORITY_ARTIFACT_PATH: {"kind": "records", "count": 1},
+        "normalized_input.pdb": {
+            "kind": "residues",
+            "count": sum(row["status"] == "mapped" for row in structure["rows"]),
+        },
+        "frustrampnn_structure_map_v1.json": {
+            "kind": "residues", "count": len(structure["rows"]),
+        },
+        "raw_frustrampnn.csv": {
+            "kind": "rows", "count": len(landscape["residues"]) * len(AA_ORDER),
+        },
+        "frustrampnn_landscape_v3.json": {
+            "kind": "residues", "count": len(landscape["residues"]),
+        },
+        "frustrampnn_summary_v3.json": {"kind": "records", "count": 1},
+        "frustrampnn_stdout.log": None,
+        "frustrampnn_stderr.log": None,
+        "frustrampnn_execution_receipt_v3.json": {"kind": "records", "count": 1},
+    }
+    artifact_paths = (
+        V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS
+        if AUTHORITY_ARTIFACT_PATH in payloads
+        else V3_MANIFEST_ARTIFACT_PATHS
+    )
+    artifacts = []
+    for relative in artifact_paths:
+        record = _record(relative, payloads[relative], cardinalities[relative])
+        record.pop("role", None)
+        artifacts.append(record)
+    manifest = {
+        "schema_name": "frustrampnn_result_manifest",
+        "schema_version": 3,
+        "invocation_id": request["invocation_id"],
+        "parent_job_id": request["parent_job_id"],
+        "candidate_id": request["candidate_id"],
+        "request_sha256": request_sha256(request),
+        "source_artifact_sha256": request["source_artifact"]["sha256"],
+        "execution_configuration_sha256": request["execution_configuration_sha256"],
+        "artifact_count": len(artifacts),
+        "artifacts": artifacts,
+    }
+    try:
+        validate_schema("frustrampnn_result_manifest_v3", manifest)
+    except Exception as exc:
+        raise ManifestValidationError(f"v3 manifest contract failed: {exc}") from exc
+    _validate_v3_closure(payloads, manifest, require_result=False)
+    return manifest
+
+
+def _validate_result_manifest_v3(
+    root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    allow_legacy_external_authority: bool = False,
+) -> dict[str, bytes]:
+    try:
+        validate_schema("frustrampnn_result_manifest_v3", manifest)
+    except Exception as exc:
+        raise ManifestValidationError(f"v3 manifest schema failed: {exc}") from exc
+    payloads = _snapshot_v3(root, require_manifest=True, manifest=manifest)
+    physical = _json_identity(payloads[V3_MANIFEST_PATH], V3_MANIFEST_PATH)[2]
+    if physical != dict(manifest) or payloads[V3_MANIFEST_PATH] != canonical_json_bytes(physical):
+        raise ManifestValidationError("physical v3 result manifest is not exact canonical supplied bytes")
+    artifact_paths = (
+        V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS
+        if AUTHORITY_ARTIFACT_PATH in payloads
+        else V3_MANIFEST_ARTIFACT_PATHS
+    )
+    if [record["relative_path"] for record in manifest["artifacts"]] != list(artifact_paths):
+        raise ManifestValidationError("v3 manifest path order/set is not canonical")
+    for declared in manifest["artifacts"]:
+        observed = _record(
+            declared["relative_path"],
+            payloads[declared["relative_path"]],
+            declared["cardinality"],
+            allow_legacy_external_authority=allow_legacy_external_authority,
+        )
+        observed.pop("role", None)
+        if dict(declared) != observed:
+            raise ManifestValidationError(
+                f"v3 hash/size/schema/cardinality mismatch for {declared['relative_path']}"
+            )
+    _validate_v3_closure(
+        payloads,
+        manifest,
+        require_result=True,
+        allow_legacy_external_authority=allow_legacy_external_authority,
+    )
+    return dict(payloads)
+
+
 def build_result_manifest(root: Path | str) -> dict[str, Any]:
     root_fd = _open_root(root)
     try:
         names = {entry.name for entry in os.scandir(root_fd)}
     finally:
         os.close(root_fd)
+    if "workflow_component_request_v3.json" in names:
+        return _build_result_manifest_v3(root)
     if "workflow_component_request_v2.json" in names:
         return _build_result_manifest_v2(root)
     return _build_result_manifest_v1(root)
@@ -1921,6 +2480,8 @@ def validate_result_manifest(
     allow_legacy_v2_external_authority: bool = False,
 ) -> dict[str, bytes]:
     version = manifest.get("schema_version") if isinstance(manifest, Mapping) else None
+    if version == 3:
+        return _validate_result_manifest_v3(root, manifest)
     if version == 2:
         return _validate_result_manifest_v2(
             root,
@@ -1938,7 +2499,10 @@ def result_manifest_path(root: Path | str) -> str:
         names = {entry.name for entry in os.scandir(root_fd)}
     finally:
         os.close(root_fd)
-    present = [name for name in (MANIFEST_PATH, V2_MANIFEST_PATH) if name in names]
+    present = [
+        name for name in (MANIFEST_PATH, V2_MANIFEST_PATH, V3_MANIFEST_PATH)
+        if name in names
+    ]
     if len(present) != 1:
         raise ManifestValidationError("bundle must contain exactly one recognized manifest generation")
     return present[0]
@@ -1970,9 +2534,11 @@ def load_result_manifest_bytes_and_document(
 
 __all__ = [
     "CANONICAL_ARTIFACT_PATHS", "MANIFEST_PATH", "V2_CANONICAL_ARTIFACT_PATHS",
-    "V2_MANIFEST_ARTIFACT_PATHS", "V2_MANIFEST_PATH", "ManifestValidationError",
+    "V2_MANIFEST_ARTIFACT_PATHS", "V2_MANIFEST_PATH", "V3_CANONICAL_ARTIFACT_PATHS",
+    "V3_MANIFEST_ARTIFACT_PATHS", "V3_MANIFEST_PATH", "ManifestValidationError",
     "build_result_manifest", "load_result_manifest", "load_result_manifest_bytes_and_document",
     "result_manifest_path",
-    "summarize_landscape_v2", "validate_external_authority_artifact",
-    "validate_result_manifest", "validate_v2_input_closure",
+    "summarize_landscape_v2", "summarize_landscape_v3",
+    "validate_external_authority_artifact", "validate_result_manifest",
+    "validate_v2_input_closure", "validate_v3_input_closure",
 ]

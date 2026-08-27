@@ -71,6 +71,56 @@ def test_history_endpoint_reports_invalid_schema_as_unavailable(
     assert error.value.status_code == 503
 
 
+def test_chart_history_router_returns_compact_incremental_buckets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "telemetry.sqlite3"
+    store = TelemetryStore(path)
+    store.initialize()
+    base = 1_700_000_000_000
+    store.append_sample(_sample(base))
+    store.append_sample(_sample(base + 1_000))
+    store.append_sample(_sample(base + 2_000))
+    monkeypatch.setenv("BMS_TELEMETRY_DB_PATH", str(path))
+    app = FastAPI()
+    app.include_router(telemetry.router, prefix="/api")
+
+    with TestClient(app) as client:
+        initial = client.get(
+            "/api/telemetry/chart-history",
+            params={"start_ms": base, "end_ms": base + 4_000, "bucket_ms": 2_000},
+        )
+        delta = client.get(
+            "/api/telemetry/chart-history",
+            params={
+                "start_ms": base,
+                "end_ms": base + 4_000,
+                "bucket_ms": 2_000,
+                "since_ms": base + 2_000,
+            },
+        )
+        invalid_bucket = client.get(
+            "/api/telemetry/chart-history",
+            params={"start_ms": base, "end_ms": base + 4_000, "bucket_ms": 999},
+        )
+        invalid_span = client.get(
+            "/api/telemetry/chart-history",
+            params={"start_ms": base, "end_ms": base + 3_600_001, "bucket_ms": 30_000},
+        )
+
+    assert initial.status_code == 200
+    body = initial.json()
+    assert body["bucket_ms"] == 2_000
+    assert body["next_cursor_ms"] == base + 2_000
+    assert [point["timestamp_ms"] for point in body["points"]] == [base, base + 2_000]
+    assert "payload" not in body["points"][0]
+    assert delta.status_code == 200
+    assert [point["timestamp_ms"] for point in delta.json()["points"]] == [base + 2_000]
+    assert invalid_bucket.status_code == 422
+    assert invalid_span.status_code == 422
+
+
 def test_history_router_registration_and_query_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     path = tmp_path / "telemetry.sqlite3"
     store = TelemetryStore(path)

@@ -8,6 +8,7 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from services.frustrampnn.configuration import (
+    FrustraMPNNExecutionConfigurationV2,
     configuration_sha256,
     execution_configuration,
     global_configuration,
@@ -19,6 +20,7 @@ from services.frustrampnn.contracts import (
     validate_schema,
 )
 from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
     FrustraMPNNResolutionIdentity,
     FrustraMPNNResolvedChainSelection,
     FrustraMPNNResolvedResidue,
@@ -64,8 +66,16 @@ def _request() -> dict[str, object]:
     }
 
 
-def _effective():
-    requested = default_settings()
+def _historical_settings_v1() -> FrustraMPNNRequestedSettings:
+    payload = default_settings().model_dump(mode="json", exclude_none=False)
+    payload["schema_version"] = 1
+    payload.pop("batching_enabled")
+    payload.pop("structures_per_job")
+    return FrustraMPNNRequestedSettings.model_validate(payload)
+
+
+def _effective(requested: FrustraMPNNRequestedSettings | None = None):
+    requested = requested or default_settings()
     residue = FrustraMPNNResolvedResidue.model_validate(
         {
             "entity_instance_id": "entity-1",
@@ -111,9 +121,23 @@ def _effective():
 
 
 def _request_v2() -> dict[str, object]:
-    effective = _effective()
+    effective = _effective(_historical_settings_v1())
     requested = effective.requested_settings
-    configuration = execution_configuration(effective)
+    requested_payload = requested.model_dump(mode="json", exclude_none=False)
+    requested_payload.pop("batching_enabled")
+    requested_payload.pop("structures_per_job")
+    effective_payload = effective.model_dump(mode="json", exclude_none=False)
+    effective_payload["requested_settings"] = copy.deepcopy(requested_payload)
+    effective_payload["value_sources"].pop("batching_enabled")
+    effective_payload["value_sources"].pop("structures_per_job")
+    configuration = execution_configuration(effective).model_dump(
+        mode="json", exclude_none=False
+    )
+    configuration["configuration_id"] = "frustrampnn_execution_configuration_v2"
+    configuration["schema_version"] = 2
+    configuration["effective_settings"] = copy.deepcopy(effective_payload)
+    configuration["configuration_sha256"] = configuration_sha256(configuration)
+    FrustraMPNNExecutionConfigurationV2.model_validate(configuration)
     return {
         "schema_name": "workflow_component_request",
         "schema_version": 2,
@@ -133,19 +157,19 @@ def _request_v2() -> dict[str, object]:
         "requiredness": "required",
         "identity_authority": "pdb_coordinates",
         "settings_value_origin": requested.settings_value_origin,
-        "requested_settings": requested.model_dump(mode="json"),
+        "requested_settings": requested_payload,
         "requested_settings_sha256": effective.settings_sha256,
-        "effective_settings": effective.model_dump(mode="json"),
+        "effective_settings": effective_payload,
         "effective_settings_sha256": effective.effective_settings_sha256,
         "classification_policy_sha256": effective.threshold_policy_sha256,
         "capability_inventory_byte_sha256": (
             effective.capability_inventory_byte_sha256
         ),
-        "runtime_identity_sha256": configuration.runtime_identity_sha256,
+        "runtime_identity_sha256": configuration["runtime_identity_sha256"],
         "structure_map_sha256": effective.resolution_identity.structure_map_sha256,
         "normalized_pdb_sha256": effective.resolution_identity.normalized_pdb_sha256,
-        "execution_configuration": configuration.model_dump(mode="json"),
-        "execution_configuration_sha256": configuration.configuration_sha256,
+        "execution_configuration": configuration,
+        "execution_configuration_sha256": configuration["configuration_sha256"],
         "requested_outputs": [
             "structure_map",
             "raw_csv",
@@ -203,9 +227,13 @@ def _assert_closed_object_schemas(node: object, location: str = "$") -> None:
 def test_phase1_uses_separate_closed_draft_2020_12_schemas() -> None:
     expected = {
         "settings_v1.schema.json": "settings_v1",
+        "settings_v2.schema.json": "settings_v2",
         "effective_settings_v1.schema.json": "effective_settings_v1",
+        "effective_settings_v2.schema.json": "effective_settings_v2",
         "execution_configuration_v2.schema.json": "execution_configuration_v2",
+        "execution_configuration_v3.schema.json": "execution_configuration_v3",
         "workflow_component_request_v2.schema.json": "workflow_component_request_v2",
+        "workflow_component_request_v3.schema.json": "workflow_component_request_v3",
     }
     for filename, title in expected.items():
         schema = json.loads((SCHEMA_ROOT / filename).read_text(encoding="utf-8"))
@@ -221,7 +249,9 @@ def test_requested_settings_schema_enforces_closed_mode_and_canonical_threshold_
         (SCHEMA_ROOT / "settings_v1.schema.json").read_text(encoding="utf-8")
     )
     validator = Draft202012Validator(schema)
-    invalid_selection = default_settings().model_dump(mode="json")
+    invalid_selection = _historical_settings_v1().model_dump(mode="json")
+    invalid_selection.pop("batching_enabled")
+    invalid_selection.pop("structures_per_job")
     invalid_selection["protein_selection"]["entities"] = [
         {
             "entity_instance_id": "entity-1",
@@ -232,7 +262,9 @@ def test_requested_settings_schema_enforces_closed_mode_and_canonical_threshold_
     ]
     assert list(validator.iter_errors(invalid_selection))
 
-    invalid_threshold = default_settings().model_dump(mode="json")
+    invalid_threshold = _historical_settings_v1().model_dump(mode="json")
+    invalid_threshold.pop("batching_enabled")
+    invalid_threshold.pop("structures_per_job")
     invalid_threshold["classification_policy"].update(
         {"high_max": -0.5, "minimal_min": 0.25}
     )
@@ -250,9 +282,13 @@ def test_v2_request_carries_exact_execution_configuration_and_all_typed_receipts
     )
     validate_schema("workflow_component_request_v2", request)
 
-    expected = execution_configuration(_effective()).model_dump(mode="json")
-    assert request["execution_configuration"] == expected
-    assert request["execution_configuration_sha256"] == expected[
+    configuration = request["execution_configuration"]
+    assert isinstance(configuration, dict)
+    assert configuration["configuration_id"] == (
+        "frustrampnn_execution_configuration_v2"
+    )
+    assert configuration["schema_version"] == 2
+    assert request["execution_configuration_sha256"] == configuration[
         "configuration_sha256"
     ]
     assert request["source_artifact"]["sha256"] == request[

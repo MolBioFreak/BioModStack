@@ -11,7 +11,11 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from services.frustrampnn.analysis import finalize_landscape_v2
-from services.frustrampnn.configuration import execution_configuration
+from services.frustrampnn.configuration import (
+    FrustraMPNNExecutionConfigurationV2,
+    configuration_sha256,
+    execution_configuration,
+)
 from services.frustrampnn.contracts import (
     ContractValidationError,
     canonical_sha256,
@@ -55,6 +59,7 @@ def _assert_closed_objects(node: object, path: str = "$") -> None:
 
 def _effective():
     requested = FrustraMPNNRequestedSettings.model_validate({
+        "schema_version": 1,
         "protein_selection": {
             "mode": "selected_residues",
             "entities": [],
@@ -132,7 +137,20 @@ def _raw() -> bytes:
 
 def _artifacts():
     effective = _effective()
-    configuration = execution_configuration(effective)
+    current_configuration = execution_configuration(effective)
+    historical_configuration = current_configuration.model_dump(
+        mode="json", exclude_none=False
+    )
+    historical_configuration.update({
+        "configuration_id": "frustrampnn_execution_configuration_v2",
+        "schema_version": 2,
+    })
+    historical_configuration["configuration_sha256"] = configuration_sha256(
+        historical_configuration
+    )
+    configuration = FrustraMPNNExecutionConfigurationV2.model_validate(
+        historical_configuration
+    )
     merged, landscape = finalize_landscape_v2(
         (_raw(),),
         effective,

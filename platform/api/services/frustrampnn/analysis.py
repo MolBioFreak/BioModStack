@@ -230,12 +230,18 @@ def finalize_landscape_v2(
 
     from .configuration import (
         FrustraMPNNExecutionConfigurationV2,
+        FrustraMPNNExecutionConfigurationV3,
         validate_configuration,
     )
 
     effective = _validated_effective_settings(effective_settings)
-    if not isinstance(execution_configuration, FrustraMPNNExecutionConfigurationV2):
-        raise LandscapeValidationError("v2 finalization requires typed execution configuration")
+    if not isinstance(
+        execution_configuration,
+        (FrustraMPNNExecutionConfigurationV2, FrustraMPNNExecutionConfigurationV3),
+    ):
+        raise LandscapeValidationError(
+            "v2 landscape finalization requires a typed execution configuration"
+        )
     try:
         validate_configuration(execution_configuration.model_dump(mode="json"))
     except Exception as exc:
@@ -244,6 +250,11 @@ def finalize_landscape_v2(
         raise LandscapeValidationError(
             "execution configuration does not bind the exact effective settings"
         )
+    generation = (
+        3
+        if isinstance(execution_configuration, FrustraMPNNExecutionConfigurationV3)
+        else 2
+    )
     if any(not isinstance(value, str) or not value for value in (
         target_id, parent_job_id, candidate_id,
     )):
@@ -300,7 +311,7 @@ def finalize_landscape_v2(
         })
     landscape = {
         "schema_name": "frustrampnn_landscape",
-        "schema_version": 2,
+        "schema_version": generation,
         "execution_configuration_id": execution_configuration.configuration_id,
         "execution_configuration_sha256": execution_configuration.configuration_sha256,
         "requested_settings_sha256": effective.settings_sha256,
@@ -318,7 +329,7 @@ def finalize_landscape_v2(
         "threshold_policy_sha256": effective.threshold_policy_sha256,
         "residues": residues,
     }
-    validate_schema("frustrampnn_landscape_v2", landscape)
+    validate_schema(f"frustrampnn_landscape_v{generation}", landscape)
     return merged, landscape
 
 

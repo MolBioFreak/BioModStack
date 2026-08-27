@@ -16,7 +16,7 @@ process PreparePersistedFrustraMPNNCandidate {
     tuple val(record_base64), path(request_snapshot), path(source_snapshot), path(structure_map_snapshot)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
@@ -27,10 +27,10 @@ process PreparePersistedFrustraMPNNCandidate {
       --request '${request_snapshot}' \
       --source '${source_snapshot}' \
       --structure-map '${structure_map_snapshot}' \
-      --output-request .prepared_workflow_component_request_v2.json \
+      --output-request .prepared_workflow_component_request_v3.json \
       --output-source .prepared_canonical_source.pdb \
       --output-structure-map .prepared_frustrampnn_structure_map_v1.json
-    mv .prepared_workflow_component_request_v2.json workflow_component_request_v2.json
+    mv .prepared_workflow_component_request_v3.json workflow_component_request_v3.json
     mv .prepared_canonical_source.pdb canonical_source.pdb
     mv .prepared_frustrampnn_structure_map_v1.json frustrampnn_structure_map_v1.json
     """
@@ -99,14 +99,33 @@ workflow {
     }
     def manifestPath = file(params.frustrampnn_batch_manifest_path)
     def batch = new JsonSlurper().parse(manifestPath)
+    def batchKeys = [
+        'schema_name', 'schema_version', 'execution_owner_job_id',
+        'batching_enabled', 'structures_per_job', 'settings_sha256',
+        'expected_cardinality', 'records'
+    ] as Set
     if (
+        !(batch instanceof Map) ||
+        (batch.keySet() as Set) != batchKeys ||
         batch.schema_name != 'bms_frustrampnn_scheduler_batch' ||
-        batch.schema_version != 2 ||
+        batch.schema_version != 3 ||
         batch.execution_owner_job_id?.toString() != params.job_id.toString() ||
+        !(batch.batching_enabled instanceof Boolean) ||
+        !(batch.structures_per_job instanceof Integer) ||
+        batch.structures_per_job < 1 || batch.structures_per_job > 250 ||
+        !(batch.settings_sha256 ==~ /[a-f0-9]{64}/) ||
         !(batch.records instanceof List) ||
-        batch.records.isEmpty()
+        batch.records.isEmpty() ||
+        batch.expected_cardinality != batch.records.size() ||
+        batch.records.size() > batch.structures_per_job ||
+        (!batch.batching_enabled && batch.records.size() != 1)
     ) {
         throw new IllegalArgumentException('invalid persisted FrustraMPNN scheduler batch manifest')
+    }
+    if (batch.batching_enabled && batch.records.size() > 1) {
+        throw new IllegalArgumentException(
+            'FrustraMPNN grouped dispatch awaits BMS-DEV-29 workflow:structure_prediction ownership'
+        )
     }
     def authorityRoot = manifestPath.parent.parent
     def recordKeys = [
@@ -128,7 +147,7 @@ workflow {
         def requestRelative = record.request_relative_path?.toString()
         def sourceRelative = record.source_relative_path?.toString()
         def structureMapRelative = record.structure_map_relative_path?.toString()
-        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+\/workflow_component_request_v2\.json/) ||
+        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+\/workflow_component_request_v3\.json/) ||
             !(sourceRelative ==~ /inputs\/sources\/[A-Za-z0-9._-]+\/canonical_source\.pdb/) ||
             !(structureMapRelative ==~ /inputs\/maps\/[A-Za-z0-9._-]+\/frustrampnn_structure_map_v1\.json/)) {
             throw new IllegalArgumentException('invalid persisted FrustraMPNN snapshot path')

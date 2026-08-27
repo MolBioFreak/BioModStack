@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Postprocess manifest-validated global FrustraMPNN v2 bundles for CM."""
+"""Postprocess manifest-validated modern FrustraMPNN bundles for CM."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from services.conformational_mapping.state_landscape_analysis import (  # noqa: 
 )
 from services.frustrampnn.manifests import (  # noqa: E402
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     load_result_manifest_bytes_and_document,
     validate_result_manifest,
 )
@@ -135,11 +136,21 @@ def postprocess_canonical_bundles(
     loaded: dict[str, dict[str, Any]] = {}
     for bundle in bundle_dirs:
         manifest_name, manifest_bytes, manifest = load_result_manifest_bytes_and_document(bundle)
-        if manifest_name != V2_MANIFEST_PATH or manifest.get("schema_version") != 2:
-            raise CMFrustraMPNNPostprocessError("CM postprocessing requires result manifest v2")
+        generation = manifest.get("schema_version")
+        expected_manifest_name = {
+            2: V2_MANIFEST_PATH,
+            3: V3_MANIFEST_PATH,
+        }.get(generation)
+        if manifest_name != expected_manifest_name:
+            raise CMFrustraMPNNPostprocessError(
+                "CM postprocessing requires a recognized modern result manifest"
+            )
         payloads = validate_result_manifest(bundle, manifest)
-        component_request = _decode(payloads, "workflow_component_request_v2.json")
-        component_result = _decode(payloads, "workflow_component_result_v2.json")
+        request_name = f"workflow_component_request_v{generation}.json"
+        result_name = f"workflow_component_result_v{generation}.json"
+        landscape_name = f"frustrampnn_landscape_v{generation}.json"
+        component_request = _decode(payloads, request_name)
+        component_result = _decode(payloads, result_name)
         candidate_id = str(component_request.get("candidate_id") or "")
         if candidate_id in loaded or candidate_id not in prepared_by_id:
             raise CMFrustraMPNNPostprocessError(
@@ -149,18 +160,18 @@ def postprocess_canonical_bundles(
             **prepared_by_id[candidate_id],
             "parent_job_id": preparation["parent_job_id"],
         }
-        if hashlib.sha256(payloads["workflow_component_request_v2.json"]).hexdigest() != prepared[
+        if hashlib.sha256(payloads[request_name]).hexdigest() != prepared[
             "request_sha256"
         ]:
             raise CMFrustraMPNNPostprocessError(
                 f"canonical result request bytes are stale: {candidate_id}"
             )
         _exact_binding(prepared, component_request, component_result)
-        landscape = _decode(payloads, "frustrampnn_landscape_v2.json")
+        landscape = _decode(payloads, landscape_name)
         structure_map = _decode(payloads, "frustrampnn_structure_map_v1.json")
         if (
             landscape.get("schema_name") != "frustrampnn_landscape"
-            or landscape.get("schema_version") != 2
+            or landscape.get("schema_version") != generation
             or landscape.get("candidate_id") != candidate_id
             or landscape.get("source_artifact_sha256") != prepared["source_sha256"]
             or structure_map.get("candidate_id") != candidate_id
@@ -173,6 +184,7 @@ def postprocess_canonical_bundles(
             "manifest": manifest,
             "manifest_bytes": manifest_bytes,
             "payloads": payloads,
+            "landscape_name": landscape_name,
             "landscape": landscape,
             "structure_map": structure_map,
         }
@@ -234,7 +246,7 @@ def postprocess_canonical_bundles(
                     item["manifest_bytes"]
                 ).hexdigest(),
                 "landscape_sha256": hashlib.sha256(
-                    item["payloads"]["frustrampnn_landscape_v2.json"]
+                    item["payloads"][item["landscape_name"]]
                 ).hexdigest(),
                 "structure_map_sha256": hashlib.sha256(
                     item["payloads"]["frustrampnn_structure_map_v1.json"]

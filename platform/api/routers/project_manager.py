@@ -23,11 +23,13 @@ from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDispatchOutbox,
+    ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
     ExperimentLaunchContext,
     ExperimentResource,
     ExperimentRevision,
+    ExperimentRevisionEdge,
     ExperimentRunAttempt,
     ExperimentRunGroup,
     ExperimentRunGroupPreparation,
@@ -708,6 +710,161 @@ async def _domain_hierarchy(session: AsyncSession, project_id: str, experiment_i
     if domain is None or domain.aggregate_kind != "domain_experiment" or domain.workspace_id != project_id or domain.parent_id != experiment_id:
         raise NotFound("Domain Experiment not found in Global Experiment")
     return project, experiment, domain
+
+
+@router.get(
+    "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/frustrampnn-results"
+)
+async def list_domain_frustrampnn_results(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    global_experiment_revision_id: str = Query(min_length=1, max_length=128),
+    domain_revision_id: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _domain_hierarchy(session, project_id, experiment_id, domain_id)
+        global_revision = await session.get(
+            ExperimentRevision, global_experiment_revision_id
+        )
+        domain_revision = await session.get(ExperimentRevision, domain_revision_id)
+        if global_revision is None or global_revision.subject_id != experiment_id:
+            raise NotFound("Global Experiment revision not found in Global Experiment")
+        if domain_revision is None or domain_revision.subject_id != domain_id:
+            raise NotFound("Domain revision not found in Domain Experiment")
+    except ExperimentServiceError as exc:
+        raise _service_error(exc) from exc
+
+    rows = list(
+        (
+            await session.execute(
+                select(ExperimentExternalEntityReceipt, ExperimentRevisionEdge)
+                .join(
+                    ExperimentRevisionEdge,
+                    ExperimentRevisionEdge.target_resource_id
+                    == ExperimentExternalEntityReceipt.id,
+                )
+                .where(
+                    ExperimentExternalEntityReceipt.workspace_id == project_id,
+                    ExperimentExternalEntityReceipt.entity_kind == "frustrampnn_result",
+                    ExperimentExternalEntityReceipt.availability == "available",
+                    ExperimentRevisionEdge.revision_id == domain_revision_id,
+                )
+                .order_by(
+                    ExperimentExternalEntityReceipt.created_at.asc(),
+                    ExperimentExternalEntityReceipt.id.asc(),
+                    ExperimentRevisionEdge.role.asc(),
+                    ExperimentRevisionEdge.ordinal.asc(),
+                )
+                .limit(257)
+            )
+        ).all()
+    )
+    if len(rows) > 256:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "frustrampnn_scope_bound_exceeded",
+                "message": "FrustraMPNN experiment scope exceeds the supported 256-result bound",
+            },
+        )
+
+    items_by_identity: dict[tuple[str, str], dict[str, str]] = {}
+    for row, revision_edge in rows:
+        try:
+            acknowledgement = json.loads(row.acknowledgement_json)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt acknowledgement is invalid",
+                },
+            ) from exc
+        metadata = acknowledgement.get("metadata") if isinstance(acknowledgement, dict) else None
+        if (
+            not isinstance(acknowledgement, dict)
+            or revision_edge.expected_sha256 != row.content_digest
+            or acknowledgement.get("schema") != "bms.global.external-entity-receipt.v1"
+            or acknowledgement.get("store_id") != row.store_id
+            or acknowledgement.get("entity_kind") != row.entity_kind
+            or acknowledgement.get("entity_id") != row.entity_id
+            or acknowledgement.get("entity_revision_id")
+            != row.generation_or_revision
+            or acknowledgement.get("content_digest") != row.content_digest
+            or acknowledgement.get("availability") != row.availability
+            or acknowledgement.get("verifier_id") != row.verification_authority
+            or row.store_id != "core"
+            or row.entity_kind != "frustrampnn_result"
+            or row.verification_authority
+            != "bms.frustrampnn.result-reference.adapter.v1"
+            or not isinstance(metadata, dict)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt authority is invalid",
+                },
+            )
+        parent_job_id = metadata.get("parent_job_id")
+        invocation_id = metadata.get("invocation_id")
+        candidate_id = metadata.get("candidate_id")
+        manifest_sha256 = metadata.get("manifest_sha256")
+        reopen_uri = acknowledgement.get("reopen_uri")
+        if (
+            not isinstance(parent_job_id, str)
+            or not parent_job_id
+            or not isinstance(invocation_id, str)
+            or not invocation_id
+            or not isinstance(candidate_id, str)
+            or not candidate_id
+            or not isinstance(manifest_sha256, str)
+            or len(manifest_sha256) != 64
+            or not isinstance(reopen_uri, str)
+            or not reopen_uri
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt identity is incomplete",
+                },
+            )
+        item = {
+            "result_receipt_id": row.id,
+            "parent_job_id": parent_job_id,
+            "invocation_id": invocation_id,
+            "candidate_id": candidate_id,
+            "manifest_sha256": manifest_sha256,
+            "content_digest": row.content_digest,
+            "reopen_uri": reopen_uri,
+        }
+        identity = (parent_job_id, invocation_id)
+        prior = items_by_identity.get(identity)
+        if prior is not None and prior != item:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_identity_conflict",
+                    "message": "FrustraMPNN scope has conflicting receipts for one result identity",
+                },
+            )
+        items_by_identity[identity] = item
+
+    items = list(items_by_identity.values())
+    return {
+        "schema": "bms.project-frustrampnn-result-scope.v1",
+        "project_id": project_id,
+        "global_experiment_id": experiment_id,
+        "global_experiment_revision_id": global_experiment_revision_id,
+        "domain_experiment_id": domain_id,
+        "domain_revision_id": domain_revision_id,
+        "items": items,
+        "count": len(items),
+        "bounded": True,
+    }
 
 
 def _domain_capability_authority(

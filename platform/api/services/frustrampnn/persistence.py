@@ -39,10 +39,12 @@ from .contracts import canonical_json_bytes, canonical_json_loads
 from .manifests import (
     MANIFEST_PATH,
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     ManifestValidationError,
     load_result_manifest_bytes_and_document,
     validate_result_manifest,
 )
+from .statistics_jobs import ensure_statistics_child
 from .structure import StructureNormalizationError, read_structure_bytes
 
 
@@ -96,6 +98,18 @@ _V2_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
     "frustrampnn_stderr.log": ("stderr", "text/plain"),
     "frustrampnn_execution_receipt_v2.json": ("execution_receipt", "application/json"),
     "frustrampnn_statistics_v1.json": ("statistics", "application/json"),
+}
+_V3_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
+    "workflow_component_request_v3.json": ("component_request", "application/json"),
+    "authority_artifact_v1.json": ("identity_authority", "application/json"),
+    "normalized_input.pdb": ("normalized_input", "chemical/x-pdb"),
+    "frustrampnn_structure_map_v1.json": ("structure_map", "application/json"),
+    "raw_frustrampnn.csv": ("raw_csv", "text/csv"),
+    "frustrampnn_landscape_v3.json": ("landscape", "application/json"),
+    "frustrampnn_summary_v3.json": ("summary", "application/json"),
+    "frustrampnn_stdout.log": ("stdout", "text/plain"),
+    "frustrampnn_stderr.log": ("stderr", "text/plain"),
+    "frustrampnn_execution_receipt_v3.json": ("execution_receipt", "application/json"),
 }
 _FRUSTRA_LANDSCAPE_PARQUET_SCHEMA = pa.schema(
     [
@@ -181,7 +195,7 @@ def _terminal_identity_matches(
     terminal_result: Mapping[str, Any],
     contract_version: int,
 ) -> bool:
-    if contract_version == 2:
+    if contract_version in {2, 3}:
         try:
             return canonical_json_bytes(dict(terminal_envelope)) == canonical_json_bytes(
                 dict(terminal_result)
@@ -215,11 +229,15 @@ def load_and_validate_result_bundle(
         ) from exc
     manifest = _canonical_object(manifest_bytes, manifest_relative_path)
     contract_version = manifest.get("schema_version")
-    if contract_version not in {1, 2}:
+    if contract_version not in {1, 2, 3}:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN result manifest schema generation is unsupported"
         )
-    expected_manifest_path = MANIFEST_PATH if contract_version == 1 else V2_MANIFEST_PATH
+    expected_manifest_path = {
+        1: MANIFEST_PATH,
+        2: V2_MANIFEST_PATH,
+        3: V3_MANIFEST_PATH,
+    }[contract_version]
     if manifest_relative_path != expected_manifest_path:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN result manifest path contradicts its explicit schema generation"
@@ -252,24 +270,30 @@ def load_and_validate_result_bundle(
                 f"FrustraMPNN artifact size changed after validation: {relative_path}"
             )
 
-    names = (
-        {
+    names = {
+        1: {
             "request": "workflow_component_request_v1.json",
             "summary": "frustrampnn_summary_v1.json",
             "receipt": "frustrampnn_execution_receipt_v1.json",
             "terminal": "workflow_component_result_v1.json",
             "landscape": "frustrampnn_landscape_v1.json",
-        }
-        if contract_version == 1
-        else {
+        },
+        2: {
             "request": "workflow_component_request_v2.json",
             "summary": "frustrampnn_summary_v2.json",
             "receipt": "frustrampnn_execution_receipt_v2.json",
             "terminal": "workflow_component_result_v2.json",
             "landscape": "frustrampnn_landscape_v2.json",
             "statistics": "frustrampnn_statistics_v1.json",
-        }
-    )
+        },
+        3: {
+            "request": "workflow_component_request_v3.json",
+            "summary": "frustrampnn_summary_v3.json",
+            "receipt": "frustrampnn_execution_receipt_v3.json",
+            "terminal": "workflow_component_result_v3.json",
+            "landscape": "frustrampnn_landscape_v3.json",
+        },
+    }[contract_version]
     request = _canonical_object(payloads[names["request"]], names["request"])
     summary = _canonical_object(payloads[names["summary"]], names["summary"])
     receipt = _canonical_object(payloads[names["receipt"]], names["receipt"])
@@ -346,11 +370,11 @@ def _artifact_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     invocation_id = bundle.manifest["invocation_id"]
     parent_job_id = bundle.manifest["parent_job_id"]
-    contract = (
-        _V1_ARTIFACT_CONTRACT
-        if bundle.contract_version == 1
-        else _V2_ARTIFACT_CONTRACT
-    )
+    contract = {
+        1: _V1_ARTIFACT_CONTRACT,
+        2: _V2_ARTIFACT_CONTRACT,
+        3: _V3_ARTIFACT_CONTRACT,
+    }[bundle.contract_version]
     for record in bundle.artifact_records:
         relative_path = record["relative_path"]
         try:
@@ -404,7 +428,7 @@ def _landscape_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
         "threshold_policy": landscape["threshold_policy"],
         "threshold_policy_sha256": landscape["threshold_policy_sha256"],
     }
-    if bundle.contract_version == 2:
+    if bundle.contract_version in {2, 3}:
         provenance.update(
             {
                 "schema_name": landscape["schema_name"],
@@ -526,7 +550,7 @@ def _result_values(
     summary_path = (
         "frustrampnn_summary_v1.json"
         if bundle.contract_version == 1
-        else "frustrampnn_summary_v2.json"
+        else f"frustrampnn_summary_v{bundle.contract_version}.json"
     )
     summary_record = next(
         record
@@ -576,11 +600,7 @@ def _result_values(
         "statistics_json": None,
         "comparison_compatibility_id": None,
     }
-    if bundle.contract_version == 2:
-        if bundle.statistics is None:
-            raise FrustraMPNNPersistenceError(
-                "validated v2 FrustraMPNN bundle is missing exact statistics authority"
-            )
+    if bundle.contract_version in {2, 3}:
         values.update(
             {
                 "settings_sha256": request["requested_settings_sha256"],
@@ -593,6 +613,15 @@ def _result_values(
                 "capability_inventory_sha256": request[
                     "capability_inventory_byte_sha256"
                 ],
+            }
+        )
+    if bundle.contract_version == 2:
+        if bundle.statistics is None:
+            raise FrustraMPNNPersistenceError(
+                "validated v2 FrustraMPNN bundle is missing exact statistics authority"
+            )
+        values.update(
+            {
                 "statistics_sha256": bundle.statistics["statistics_sha256"],
                 "statistics_json": canonical_json_loads(
                     canonical_json_bytes(bundle.statistics)
@@ -873,9 +902,16 @@ def _apply_canonical_projection(design: Design, bundle: ValidatedResultBundle) -
         design.frustrampnn_summary_relpath = "frustrampnn_summary_v1.json"
         design.frustrampnn_runtime_sha256 = result["runtime_identity"]["sif_sha256"]
     else:
-        design.frustrampnn_manifest_relpath = V2_MANIFEST_PATH
-        design.frustrampnn_landscape_relpath = "frustrampnn_landscape_v2.json"
-        design.frustrampnn_summary_relpath = "frustrampnn_summary_v2.json"
+        design.frustrampnn_manifest_relpath = {
+            2: V2_MANIFEST_PATH,
+            3: V3_MANIFEST_PATH,
+        }[bundle.contract_version]
+        design.frustrampnn_landscape_relpath = (
+            f"frustrampnn_landscape_v{bundle.contract_version}.json"
+        )
+        design.frustrampnn_summary_relpath = (
+            f"frustrampnn_summary_v{bundle.contract_version}.json"
+        )
         design.frustrampnn_runtime_sha256 = bundle.request["execution_configuration"][
             "runtime"
         ]["sif_sha256"]
@@ -946,6 +982,26 @@ async def ingest_result_bundle(
             parent_workflow_id=bundle.request["parent_workflow_id"],
             candidate_id=bundle.manifest["candidate_id"],
         )
+        statistics_bundle_relative_path: str | None = None
+        if bundle.contract_version == 3:
+            owner_job = await session.get(Job, parent_job_id)
+            owner_root_value = (
+                owner_job.child_output_dir or owner_job.output_dir
+                if owner_job is not None
+                else None
+            )
+            if not isinstance(owner_root_value, str) or not owner_root_value.strip():
+                raise FrustraMPNNPersistenceError(
+                    "v3 core result has no owning Job output-root authority"
+                )
+            try:
+                statistics_bundle_relative_path = Path(bundle_root).resolve().relative_to(
+                    Path(owner_root_value).resolve()
+                ).as_posix()
+            except ValueError as exc:
+                raise FrustraMPNNPersistenceError(
+                    "v3 core result bundle escapes its owning Job output root"
+                ) from exc
         existing = await session.get(
             FrustraMPNNResult,
             (parent_job_id, bundle.manifest["invocation_id"]),
@@ -961,11 +1017,33 @@ async def ingest_result_bundle(
                 artifact_values,
                 landscape_values,
             )
+            if bundle.contract_version == 3:
+                assert statistics_bundle_relative_path is not None
+                landscape_receipt = (
+                    await session.execute(
+                        select(ScientificArtifactReceipt).where(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                            ScientificArtifactReceipt.owner_id
+                            == f"{parent_job_id}:{bundle.manifest['invocation_id']}",
+                            ScientificArtifactReceipt.role == "landscape",
+                        )
+                    )
+                ).scalar_one_or_none()
+                if landscape_receipt is None:
+                    raise FrustraMPNNPersistenceError(
+                        "v3 core replay has no immutable landscape artifact receipt"
+                    )
+                await ensure_statistics_child(
+                    session,
+                    result=existing,
+                    core_artifact_id=landscape_receipt.artifact_id,
+                    core_bundle_relative_path=statistics_bundle_relative_path,
+                )
             if design is not None:
                 _apply_canonical_projection(design, bundle)
                 await session.flush()
-                if commit:
-                    await session.commit()
+            if commit and (design is not None or bundle.contract_version == 3):
+                await session.commit()
             return existing
 
         result_values = _result_values(
@@ -1003,6 +1081,14 @@ async def ingest_result_bundle(
         # rows; ORM add order alone does not establish that dependency here.
         await session.flush()
         session.add_all(FrustraMPNNArtifact(**values) for values in artifact_values)
+        if bundle.contract_version == 3:
+            assert statistics_bundle_relative_path is not None
+            await ensure_statistics_child(
+                session,
+                result=result,
+                core_artifact_id=landscape_artifact.artifact_id,
+                core_bundle_relative_path=statistics_bundle_relative_path,
+            )
         if design is not None:
             _apply_canonical_projection(design, bundle)
         await session.flush()

@@ -1589,6 +1589,56 @@ class FrustraMPNNResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class FrustraMPNNStatisticsAnalysis(Base):
+    """Independently retryable CPU statistics child bound to one core result."""
+
+    __tablename__ = "frustrampnn_statistics_analyses"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_statistics_analysis_result",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "parent_job_id",
+            "invocation_id",
+            "core_landscape_sha256",
+            name="uq_frustrampnn_statistics_analysis_core",
+        ),
+        Index(
+            "ix_frustrampnn_statistics_analysis_state_created",
+            "state",
+            "created_at",
+        ),
+    )
+
+    analysis_id = Column(String(36), primary_key=True)
+    parent_job_id = Column(String(36), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False, index=True)
+    core_artifact_id = Column(String(384), nullable=False)
+    core_bundle_relative_path = Column(Text, nullable=False)
+    core_landscape_sha256 = Column(String(64), nullable=False)
+    core_manifest_sha256 = Column(String(64), nullable=False)
+    state = Column(String(16), nullable=False, default="queued", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    formula_version = Column(String(64), nullable=False)
+    policy_version = Column(String(64), nullable=False)
+    package_version = Column(String(64), nullable=False)
+    schema_version = Column(Integer, nullable=False)
+    artifact_relative_path = Column(Text, nullable=True)
+    artifact_sha256 = Column(String(64), nullable=True)
+    statistics_sha256 = Column(String(64), nullable=True)
+    diagnostic = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
 class FrustraMPNNReview(Base):
     """Durable operator interpretation bound to persisted FrustraMPNN results."""
 

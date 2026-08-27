@@ -52,16 +52,12 @@ class FrustraMPNNRuntimeIdentityV1(_StrictFrozenModel):
     image_version: NonEmptyString
 
 
-class FrustraMPNNExecutionConfigurationV2(_StrictFrozenModel):
-    """One immutable per-request execution configuration receipt."""
+class _FrustraMPNNExecutionConfigurationBase(_StrictFrozenModel):
+    """Fields and cross-bindings shared by immutable execution receipts."""
 
-    configuration_id: Literal["frustrampnn_execution_configuration_v2"] = (
-        "frustrampnn_execution_configuration_v2"
-    )
     schema_name: Literal["frustrampnn_execution_configuration"] = (
         "frustrampnn_execution_configuration"
     )
-    schema_version: Literal[2] = 2
     tool_id: Literal["frustrampnn"] = "frustrampnn"
     tool_version: Literal["MegaScale"] = "MegaScale"
     effective_settings: FrustraMPNNEffectiveSettings
@@ -83,7 +79,7 @@ class FrustraMPNNExecutionConfigurationV2(_StrictFrozenModel):
     configuration_sha256: Sha256String
 
     @model_validator(mode="after")
-    def _validate_cross_bindings(self) -> FrustraMPNNExecutionConfigurationV2:
+    def _validate_cross_bindings(self) -> _FrustraMPNNExecutionConfigurationBase:
         if self.runtime.model_dump(mode="json") != _RUNTIME:
             raise ValueError("runtime identity does not match the immutable runtime registry")
         if self.runtime_identity_sha256 != runtime_identity_sha256():
@@ -133,6 +129,24 @@ class FrustraMPNNExecutionConfigurationV2(_StrictFrozenModel):
         ):
             raise ValueError("configuration SHA-256 does not match its content")
         return self
+
+
+class FrustraMPNNExecutionConfigurationV2(_FrustraMPNNExecutionConfigurationBase):
+    """Historical per-request execution receipt for settings v1."""
+
+    configuration_id: Literal["frustrampnn_execution_configuration_v2"] = (
+        "frustrampnn_execution_configuration_v2"
+    )
+    schema_version: Literal[2] = 2
+
+
+class FrustraMPNNExecutionConfigurationV3(_FrustraMPNNExecutionConfigurationBase):
+    """Successor execution receipt for requested/effective settings v2."""
+
+    configuration_id: Literal["frustrampnn_execution_configuration_v3"] = (
+        "frustrampnn_execution_configuration_v3"
+    )
+    schema_version: Literal[3] = 3
 
 
 def _legacy_altloc_policy() -> str:
@@ -227,18 +241,30 @@ def _validate_legacy_configuration(configuration: Mapping[str, Any]) -> None:
 
 
 def validate_configuration(
-    configuration: Mapping[str, Any] | FrustraMPNNExecutionConfigurationV2,
+    configuration: Mapping[str, Any]
+    | FrustraMPNNExecutionConfigurationV2
+    | FrustraMPNNExecutionConfigurationV3,
 ) -> None:
     """Validate historical global v1 or per-request execution configuration v2."""
 
-    if isinstance(configuration, FrustraMPNNExecutionConfigurationV2):
+    if isinstance(
+        configuration,
+        (FrustraMPNNExecutionConfigurationV2, FrustraMPNNExecutionConfigurationV3),
+    ):
         payload = configuration.model_dump(mode="json", exclude_none=False)
     elif isinstance(configuration, Mapping):
         payload = dict(configuration)
     else:
         raise ConfigurationValidationError("configuration must be an object")
 
-    if payload.get("schema_version") == 2:
+    if payload.get("schema_version") == 3:
+        try:
+            FrustraMPNNExecutionConfigurationV3.model_validate(payload)
+        except ValidationError as exc:
+            raise ConfigurationValidationError(
+                f"execution configuration is invalid: {exc}"
+            ) from exc
+    elif payload.get("schema_version") == 2:
         try:
             FrustraMPNNExecutionConfigurationV2.model_validate(payload)
         except ValidationError as exc:
@@ -257,8 +283,8 @@ def global_configuration() -> dict[str, Any]:
 
 def execution_configuration(
     effective: FrustraMPNNEffectiveSettings,
-) -> FrustraMPNNExecutionConfigurationV2:
-    """Build one v2 receipt from one already validated effective settings object."""
+) -> FrustraMPNNExecutionConfigurationV3:
+    """Build one v3 receipt from one validated effective settings v2 object."""
 
     if not isinstance(effective, FrustraMPNNEffectiveSettings):
         raise ConfigurationValidationError(
@@ -275,9 +301,9 @@ def execution_configuration(
 
     resolution = validated_effective.resolution_identity
     payload: dict[str, Any] = {
-        "configuration_id": "frustrampnn_execution_configuration_v2",
+        "configuration_id": "frustrampnn_execution_configuration_v3",
         "schema_name": "frustrampnn_execution_configuration",
-        "schema_version": 2,
+        "schema_version": 3,
         "tool_id": "frustrampnn",
         "tool_version": "MegaScale",
         "effective_settings": validated_effective.model_dump(
@@ -301,7 +327,7 @@ def execution_configuration(
     }
     payload["configuration_sha256"] = configuration_sha256(payload)
     try:
-        return FrustraMPNNExecutionConfigurationV2.model_validate(payload)
+        return FrustraMPNNExecutionConfigurationV3.model_validate(payload)
     except ValidationError as exc:
         raise ConfigurationValidationError(
             f"execution configuration is invalid: {exc}"
@@ -331,6 +357,7 @@ def request_parameters() -> dict[str, Any]:
 __all__ = [
     "ConfigurationValidationError",
     "FrustraMPNNExecutionConfigurationV2",
+    "FrustraMPNNExecutionConfigurationV3",
     "FrustraMPNNRuntimeIdentityV1",
     "GLOBAL_CONFIGURATION_SHA256",
     "configuration_sha256",

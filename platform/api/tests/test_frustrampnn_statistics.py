@@ -11,10 +11,13 @@ import rfc8785
 from jsonschema import Draft202012Validator
 
 from services.frustrampnn import analytics
-from services.frustrampnn.configuration import execution_configuration
+from services.frustrampnn.configuration import (
+    FrustraMPNNExecutionConfigurationV2,
+    configuration_sha256,
+    execution_configuration,
+)
 from services.frustrampnn.contracts import ContractValidationError, canonical_sha256
 from services.frustrampnn.settings import (
-    FrustraMPNNClassificationPolicy,
     FrustraMPNNRequestedSettings,
     FrustraMPNNResolutionIdentity,
     FrustraMPNNResolvedChainSelection,
@@ -200,11 +203,40 @@ def _fixture(
         identity_authority=map_identity_authority,
     )
     map_sha256 = canonical_sha256(structure_map)
-    requested = FrustraMPNNRequestedSettings(
-        classification_policy=FrustraMPNNClassificationPolicy(
-            mode="custom", high_max=-0.5, minimal_min=0.5
-        )
+    requested = FrustraMPNNRequestedSettings.model_validate(
+        {
+            "protein_selection": {
+                "mode": "selected_residues",
+                "entities": [],
+                "regions": [],
+                "residues": [
+                    {
+                        key: residue[key]
+                        for key in (
+                            "entity_instance_id",
+                            "source_entity_id",
+                            "label_asym_id",
+                            "auth_asym_id",
+                            "auth_seq_id",
+                            "insertion_code",
+                            "sequence_index",
+                        )
+                    }
+                    for residue in residues
+                ],
+            },
+            "classification_policy": {
+                "mode": "custom",
+                "high_max": -0.5,
+                "minimal_min": 0.5,
+            },
+        }
     )
+    requested_payload = requested.model_dump(mode="json", exclude_none=False)
+    requested_payload["schema_version"] = 1
+    requested_payload.pop("batching_enabled")
+    requested_payload.pop("structures_per_job")
+    requested = FrustraMPNNRequestedSettings.model_validate(requested_payload)
     chains = []
     for entity, source_entity, label_asym, auth_chain, pdb_chain in (
         ("entity-1", "1", "AA", "X", "A"),
@@ -236,7 +268,22 @@ def _fixture(
             normalized_pdb_sha256="3" * 64,
         ),
     )
-    configuration = execution_configuration(effective)
+    effective_payload = effective.model_dump(mode="json", exclude_none=False)
+    effective_payload["requested_settings"] = requested_payload
+    effective_payload["value_sources"].pop("batching_enabled")
+    effective_payload["value_sources"].pop("structures_per_job")
+    configuration_payload = execution_configuration(effective).model_dump(
+        mode="json", exclude_none=False
+    )
+    configuration_payload["configuration_id"] = "frustrampnn_execution_configuration_v2"
+    configuration_payload["schema_version"] = 2
+    configuration_payload["effective_settings"] = effective_payload
+    configuration_payload["configuration_sha256"] = configuration_sha256(
+        configuration_payload
+    )
+    configuration = FrustraMPNNExecutionConfigurationV2.model_validate(
+        configuration_payload
+    )
     native_scores = (-1.0, -1.0, 0.0, 1.0)
     landscape_residues = []
     for residue, native_score in zip(residues, native_scores, strict=True):
@@ -367,16 +414,16 @@ def _fixture(
         "requiredness": "required",
         "identity_authority": request_identity_authority,
         "settings_value_origin": requested.settings_value_origin,
-        "requested_settings": requested.model_dump(mode="json"),
+        "requested_settings": requested_payload,
         "requested_settings_sha256": effective.settings_sha256,
-        "effective_settings": effective.model_dump(mode="json"),
+        "effective_settings": effective_payload,
         "effective_settings_sha256": effective.effective_settings_sha256,
         "classification_policy_sha256": effective.threshold_policy_sha256,
         "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
         "runtime_identity_sha256": configuration.runtime_identity_sha256,
         "structure_map_sha256": map_sha256,
         "normalized_pdb_sha256": "3" * 64,
-        "execution_configuration": configuration.model_dump(mode="json"),
+        "execution_configuration": configuration_payload,
         "execution_configuration_sha256": configuration.configuration_sha256,
         "requested_outputs": [
             "structure_map",

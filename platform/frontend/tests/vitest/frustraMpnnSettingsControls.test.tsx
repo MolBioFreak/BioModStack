@@ -157,6 +157,44 @@ describe('typed FrustraMPNN settings controls', () => {
         await act(async () => root.unmount());
     });
 
+    it('keeps batching checkbox, slider, numeric input, and canonical state synchronized', async () => {
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => root.render(<PanelHarness />));
+
+        const enabled = container.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]');
+        const slider = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]');
+        const numeric = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]');
+        expect(enabled?.checked).toBe(false);
+        expect(slider?.min).toBe('1');
+        expect(slider?.max).toBe('250');
+        expect(slider?.value).toBe('1');
+        expect(slider?.disabled).toBe(true);
+        expect(numeric?.value).toBe('1');
+        expect(numeric?.disabled).toBe(true);
+
+        await act(async () => enabled!.click());
+        expect(slider?.disabled).toBe(false);
+        expect(numeric?.disabled).toBe(false);
+        await act(async () => dispatchChange(slider!, '250'));
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.value).toBe('250');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"batching_enabled":true');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"structures_per_job":250');
+
+        const currentNumeric = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]');
+        await act(async () => dispatchChange(currentNumeric!, '17'));
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]')?.value).toBe('17');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"structures_per_job":17');
+
+        await act(async () => container.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]')!.click());
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.value).toBe('17');
+
+        await act(async () => root.unmount());
+    });
+
     it('derives generated-conformer normalization and exposes safe advanced sequence positions', async () => {
         const container = document.createElement('div');
         document.body.appendChild(container);

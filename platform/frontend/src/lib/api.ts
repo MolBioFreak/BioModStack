@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
 import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
 
@@ -532,6 +533,20 @@ export const fetchTelemetryHistory = (startMs: number, endMs: number, resolution
         params: { start_ms: startMs, end_ms: endMs, resolution, limit },
         timeout: 10_000,
     });
+export const fetchTelemetryChartHistory = (
+    startMs: number,
+    endMs: number,
+    bucketMs: number,
+    sinceMs: number | null,
+) => api.get<TelemetryChartHistoryResponse>('/api/telemetry/chart-history', {
+    params: {
+        start_ms: startMs,
+        end_ms: endMs,
+        bucket_ms: bucketMs,
+        ...(sinceMs == null ? {} : { since_ms: sinceMs }),
+    },
+    timeout: 10_000,
+});
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);

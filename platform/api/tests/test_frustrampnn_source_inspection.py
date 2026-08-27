@@ -173,7 +173,9 @@ def _settings(selection: dict[str, object] | None = None) -> FrustraMPNNRequeste
     return FrustraMPNNRequestedSettings.model_validate(
         {
             "schema_name": "frustrampnn_settings",
-            "schema_version": 1,
+            "schema_version": 2,
+            "batching_enabled": False,
+            "structures_per_job": 1,
             "protein_selection": selection or {"mode": "all_protein_entities"},
             "source_structure": {
                 "selected_model_number": 2,
@@ -450,11 +452,11 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         request_bytes = request_path.read_bytes()
         bundle = root / "fixture-result"
         bundle.mkdir()
-        retained_request = bundle / "workflow_component_request_v2.json"
+        retained_request = bundle / "workflow_component_request_v3.json"
         retained_request.write_bytes(request_bytes)
         request_sha256 = hashlib.sha256(request_bytes).hexdigest()
         artifact_contracts = [
-            (retained_request.name, "workflow_component_request", 2, None),
+            (retained_request.name, "workflow_component_request", 3, None),
             ("normalized_input.pdb", None, None, {"kind": "residues", "count": 1}),
             (
                 "frustrampnn_structure_map_v1.json",
@@ -464,29 +466,23 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ),
             ("raw_frustrampnn.csv", None, None, {"kind": "rows", "count": 1}),
             (
-                "frustrampnn_landscape_v2.json",
+                "frustrampnn_landscape_v3.json",
                 "frustrampnn_landscape",
-                2,
+                3,
                 {"kind": "residues", "count": 1},
             ),
             (
-                "frustrampnn_summary_v2.json",
+                "frustrampnn_summary_v3.json",
                 "frustrampnn_summary",
-                2,
+                3,
                 {"kind": "records", "count": 1},
             ),
             ("frustrampnn_stdout.log", None, None, None),
             ("frustrampnn_stderr.log", None, None, None),
             (
-                "frustrampnn_execution_receipt_v2.json",
+                "frustrampnn_execution_receipt_v3.json",
                 "frustrampnn_execution_receipt",
-                2,
-                {"kind": "records", "count": 1},
-            ),
-            (
-                "frustrampnn_statistics_v1.json",
-                "frustrampnn_statistics",
-                1,
+                3,
                 {"kind": "records", "count": 1},
             ),
         ]
@@ -505,7 +501,7 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         ]
         result_manifest = {
             "schema_name": "frustrampnn_result_manifest",
-            "schema_version": 2,
+            "schema_version": 3,
             "invocation_id": invocation_id,
             "parent_job_id": child.id,
             "candidate_id": lineage["candidate_id"],
@@ -514,9 +510,7 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             "execution_configuration_sha256": lineage["launch_authority"][
                 "configuration_sha256"
             ],
-            "statistics_sha256": "f" * 64,
-            "comparison_compatibility_id": "0" * 64,
-            "artifact_count": 10,
+            "artifact_count": len(manifest_artifacts),
             "artifacts": manifest_artifacts,
         }
         session.add(
@@ -536,7 +530,7 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 summary_json={},
                 runtime_identity_json={},
                 assigned_gpu_json={},
-                terminal_result_json={"component_contract_version": "2.0"},
+                terminal_result_json={"component_contract_version": "3.0"},
                 settings_sha256="c" * 64,
                 effective_settings_sha256="d" * 64,
                 effective_settings_json=lineage["launch_authority"]["effective_settings"],
@@ -557,7 +551,7 @@ async def governed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 content_sha256=request_sha256,
                 size_bytes=len(request_bytes),
                 media_type="application/json",
-                metadata_json={"schema_name": "workflow_component_request", "schema_version": 2},
+                metadata_json={"schema_name": "workflow_component_request", "schema_version": 3},
             )
         )
         await session.commit()

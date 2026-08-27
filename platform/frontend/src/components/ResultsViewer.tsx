@@ -66,6 +66,13 @@ import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
+import {
+    parseFrustraMpnnExperimentContext,
+    parseWorkflowResultViewState,
+    updateWorkflowResultViewSearch,
+    type FrustraMpnnResultScope,
+    type WorkflowResultModel,
+} from './frustrampnn/workflowResultViewState';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
@@ -1685,7 +1692,8 @@ export function ResultsViewer() {
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
-    const [resultSurface, setResultSurface] = useState<'workflow' | 'frustrampnn'>('workflow');
+    const [resultSurface, setResultSurfaceState] = useState<WorkflowResultModel>('workflow');
+    const [frustraMpnnScope, setFrustraMpnnScopeState] = useState<FrustraMpnnResultScope>('this-job');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -1829,9 +1837,28 @@ export function ResultsViewer() {
         [nonNgsJobs, selectedJobId]
     );
     const frustraMpnnSurfaceAvailable = hasFrustraMpnnResultSurface(activeJob);
+    const frustraMpnnExperimentContext = useMemo(
+        () => parseFrustraMpnnExperimentContext(location.search),
+        [location.search],
+    );
     useEffect(() => {
-        setResultSurface(frustraMpnnSurfaceAvailable ? 'frustrampnn' : 'workflow');
-    }, [activeJob?.id, frustraMpnnSurfaceAvailable]);
+        const viewState = parseWorkflowResultViewState(location.search, {
+            frustraMpnnAvailable: frustraMpnnSurfaceAvailable,
+            directFrustraMpnnJob: activeJob?.model_id === 'frustrampnn',
+        });
+        setResultSurfaceState(viewState.model);
+        setFrustraMpnnScopeState(viewState.scope);
+    }, [activeJob?.id, activeJob?.model_id, frustraMpnnSurfaceAvailable, location.search]);
+    const setResultSurface = useCallback((model: WorkflowResultModel) => {
+        const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
+    }, [frustraMpnnScope, location.pathname, location.search, navigate]);
+    const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, {
+            model: 'frustrampnn',
+            scope,
+        })}`, { replace: true });
+    }, [location.pathname, location.search, navigate]);
     const activeParentJob = useMemo(
         () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
         [nonNgsJobs, activeJob?.parent_job_id]
@@ -5034,6 +5061,22 @@ export function ResultsViewer() {
     const selectedFrustraMpnnDesigns = selectedDesignIds
         .map((designId) => orderedDesigns.find((design) => design.id === designId))
         .filter((design): design is Design => Boolean(design));
+    const resultModelSelector = activeJob && frustraMpnnSurfaceAvailable ? (
+        <nav aria-label="Result model" className="flex flex-wrap gap-2 text-xs">
+            {activeJob.model_id !== 'frustrampnn' && <button
+                type="button"
+                aria-pressed={resultSurface === 'workflow'}
+                onClick={() => setResultSurface('workflow')}
+                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === 'workflow' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
+            >Workflow output</button>}
+            <button
+                type="button"
+                aria-pressed={resultSurface === 'frustrampnn'}
+                onClick={() => setResultSurface('frustrampnn')}
+                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === 'frustrampnn' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
+            >FrustraMPNN</button>
+        </nav>
+    ) : null;
 
     if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
         if (!activeJob.conformational_mapping_request_id) {
@@ -5044,15 +5087,21 @@ export function ResultsViewer() {
         return <ConformationalMappingViewer requestId={activeJob.conformational_mapping_request_id} title={activeJob.name} job={activeJob} />;
     }
     if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
-        return <FrustraMpnnWorkbench
-            key={activeJob.id}
-            job={activeJob}
-            onBack={activeJob.model_id === 'frustrampnn'
-                ? () => navigate('/results')
-                : () => setResultSurface('workflow')}
-            backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
-            onOpenJob={handleSelectJob}
-        />;
+        return <div className="min-h-screen bg-slate-950 text-slate-200">
+            <div className="mx-auto max-w-[1800px] px-6 pt-4">{resultModelSelector}</div>
+            <FrustraMpnnWorkbench
+                key={activeJob.id}
+                job={activeJob}
+                onBack={activeJob.model_id === 'frustrampnn'
+                    ? () => navigate('/results')
+                    : () => setResultSurface('workflow')}
+                backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
+                onOpenJob={handleSelectJob}
+                scope={frustraMpnnScope}
+                onScopeChange={setFrustraMpnnScope}
+                experimentContext={frustraMpnnExperimentContext}
+            />
+        </div>;
     }
 
     return (
@@ -5071,17 +5120,9 @@ export function ResultsViewer() {
                         <p className="text-slate-400 text-sm mt-1">
                             {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
                         </p>
+                        <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {frustraMpnnSurfaceAvailable && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setResultSurface('frustrampnn')}
-                                        className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
-                                    >
-                                        Open Frustration analysis
-                                    </button>
-                                )}
                                 {selectedDesign && activeJob.status === 'completed' && (
                                     <button
                                         type="button"

@@ -74,7 +74,9 @@ def _custom_settings() -> FrustraMPNNRequestedSettings:
     return FrustraMPNNRequestedSettings.model_validate(
         {
             "schema_name": "frustrampnn_settings",
-            "schema_version": 1,
+            "schema_version": 2,
+            "batching_enabled": True,
+            "structures_per_job": 250,
             "protein_selection": {
                 "mode": "selected_residues",
                 "entities": [],
@@ -99,6 +101,15 @@ def _custom_settings() -> FrustraMPNNRequestedSettings:
                 "high_max": -0.8,
                 "minimal_min": 0.3,
             },
+        }
+    )
+
+
+def _batched_settings(structures_per_job: int = 2) -> FrustraMPNNRequestedSettings:
+    return default_settings().model_copy(
+        update={
+            "batching_enabled": True,
+            "structures_per_job": structures_per_job,
         }
     )
 
@@ -159,7 +170,11 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         assert manifest["execution_owner_job_id"] == child_id
         record = manifest["records"][0]
         assert manifest["schema_name"] == "bms_frustrampnn_scheduler_batch"
-        assert manifest["schema_version"] == 2
+        assert manifest["schema_version"] == 3
+        assert manifest["batching_enabled"] is False
+        assert manifest["structures_per_job"] == 1
+        assert manifest["settings_sha256"] == envelope["settings_sha256"]
+        assert manifest["expected_cardinality"] == 1
         assert record["record_schema_name"] == "bms_frustrampnn_scheduler_record"
         assert record["record_schema_version"] == 2
         assert set(record) == {
@@ -182,7 +197,7 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         request_path = root / record["request_relative_path"]
         source_path = root / record["source_relative_path"]
         structure_map_path = root / record["structure_map_relative_path"]
-        assert request_path.name == "workflow_component_request_v2.json"
+        assert request_path.name == "workflow_component_request_v3.json"
         assert source_path.name == "canonical_source.pdb"
         assert structure_map_path.name == "frustrampnn_structure_map_v1.json"
         assert stat.S_IMODE(request_path.stat().st_mode) == 0o444
@@ -195,9 +210,9 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         ]
         request = json.loads(request_path.read_text(encoding="utf-8"))
         structure_map = json.loads(structure_map_path.read_text(encoding="utf-8"))
-        child_jobs.validate_schema("workflow_component_request_v2", request)
-        assert request["schema_version"] == 2
-        assert request["component_contract_version"] == "2.0"
+        child_jobs.validate_schema("workflow_component_request_v3", request)
+        assert request["schema_version"] == 3
+        assert request["component_contract_version"] == "3.0"
         assert request["parent_job_id"] == child_id
         assert request["parent_workflow_id"] == "frustrampnn_analysis"
         assert request["candidate_id"] == record["candidate_id"] == structure_map["candidate_id"]
@@ -253,8 +268,8 @@ async def test_child_creation_commits_immutable_authority_and_builds_scheduler_h
         assert structure_map["normalized_pdb_sha256"] == record["source_sha256"]
         assert structure_map["parent_job_id"] == structure_map["target_id"] == child_id
         assert persisted.stage_outputs["canonical_frustrampnn"] == [
-            str(root / "frustrampnn" / "results" / "upload-1" / "frustrampnn_result_manifest_v2.json"),
-            str(root / "frustrampnn" / "results" / "upload-1" / "workflow_component_result_v2.json"),
+            str(root / "frustrampnn" / "results" / "upload-1" / "frustrampnn_result_manifest_v3.json"),
+            str(root / "frustrampnn" / "results" / "upload-1" / "workflow_component_result_v3.json"),
         ]
 
         monkeypatch.setattr(nextflow_service, "resolve_nextflow_executable", lambda: "/opt/nextflow-25.10.1")
@@ -550,8 +565,10 @@ async def test_child_authority_uses_requested_model_altloc_and_exact_residue_sel
         persisted = await session.get(Job, child_id)
         assert persisted is not None
         envelope = persisted.params[child_jobs.ENVELOPE_KEY]
-        assert envelope["settings_contract_version"] == "typed_v1"
+        assert envelope["settings_contract_version"] == "typed_v2"
         assert envelope["normalized_requested_settings"] == requested.model_dump(mode="json")
+        assert envelope["normalized_requested_settings"]["batching_enabled"] is True
+        assert envelope["normalized_requested_settings"]["structures_per_job"] == 250
         lineage_authority = envelope["selection"][0]["launch_authority"]
         assert lineage_authority["normalized_requested_settings"] == requested.model_dump(mode="json")
         assert lineage_authority["settings_sha256"] == envelope["settings_sha256"]
@@ -577,9 +594,9 @@ async def test_child_authority_uses_requested_model_altloc_and_exact_residue_sel
         record = batch["records"][0]
         assert "launch_authority" not in record
         request_files = sorted((Path(persisted.output_dir) / "inputs" / "requests").rglob("*.json"))
-        assert [path.name for path in request_files] == ["workflow_component_request_v2.json"]
+        assert [path.name for path in request_files] == ["workflow_component_request_v3.json"]
         request = json.loads(request_files[0].read_text())
-        assert request["schema_version"] == 2
+        assert request["schema_version"] == 3
         assert request["requested_settings"] == lineage_authority["normalized_requested_settings"]
         assert request["requested_settings_sha256"] == lineage_authority["settings_sha256"]
         assert request["effective_settings"] == lineage_authority["effective_settings"]
@@ -589,6 +606,7 @@ async def test_child_authority_uses_requested_model_altloc_and_exact_residue_sel
         assert request["structure_map_sha256"] == lineage_authority["structure_map_sha256"]
         assert list(Path(persisted.output_dir).rglob("frustrampnn_structure_map_v1.json"))
         assert not list(Path(persisted.output_dir).rglob("workflow_component_request_v1.json"))
+        assert not list(Path(persisted.output_dir).rglob("workflow_component_request_v2.json"))
 
 
 @pytest.mark.asyncio
@@ -609,7 +627,7 @@ async def test_batch_keeps_candidate_specific_effective_and_configuration_author
             selections=selections,
             source_parent=None,
             trigger="upload_analyze",
-            requested_settings=default_settings(),
+            requested_settings=_batched_settings(2),
         )
         child_id = child.id
 
@@ -655,10 +673,82 @@ async def test_new_v2_writer_resolves_each_candidate_settings_exactly_once(
             selections=selections,
             source_parent=None,
             trigger="structure_prediction_child",
-            requested_settings=default_settings(),
+            requested_settings=_batched_settings(2),
         )
 
     assert calls == ["upload-1", "upload-2"]
+
+
+@pytest.mark.asyncio
+async def test_new_child_rejects_historical_v1_requested_settings(child_db) -> None:
+    sessions, _results = child_db
+    historical = FrustraMPNNRequestedSettings.model_validate(
+        {
+            "schema_name": "frustrampnn_settings",
+            "schema_version": 1,
+            "settings_value_origin": "bms_default",
+            "protein_selection": {
+                "mode": "all_protein_entities",
+                "entities": [],
+                "regions": [],
+                "residues": [],
+            },
+            "source_structure": {
+                "selected_model_number": 1,
+                "preferred_altloc": "",
+            },
+            "classification_policy": {
+                "mode": "canonical",
+                "high_max": -1.0,
+                "minimal_min": 0.58,
+            },
+        }
+    )
+    selection = child_jobs.upload_selection(
+        filename="candidate.pdb", payload=_pdb(), expected_sha256=None
+    )
+
+    async with sessions() as session:
+        with pytest.raises(child_jobs.FrustraMPNNChildError, match="schema_version 2"):
+            await child_jobs.create_child_job(
+                session,
+                selections=[selection],
+                source_parent=None,
+                trigger="upload_analyze",
+                requested_settings=historical,
+            )
+
+
+@pytest.mark.asyncio
+async def test_batch_capacity_is_governed_by_requested_settings(child_db) -> None:
+    sessions, _results = child_db
+    selections = [
+        child_jobs.upload_selection(
+            filename=f"candidate-{chain}.pdb",
+            payload=_pdb_for_chain(chain),
+            expected_sha256=None,
+        )
+        for chain in ("A", "B")
+    ]
+
+    async with sessions() as session:
+        with pytest.raises(child_jobs.FrustraMPNNChildError, match="batching is disabled"):
+            await child_jobs.create_child_job(
+                session,
+                selections=selections,
+                source_parent=None,
+                trigger="upload_analyze",
+                requested_settings=default_settings(),
+            )
+    async with sessions() as session:
+        with pytest.raises(child_jobs.FrustraMPNNChildError, match="structures_per_job"):
+            await child_jobs.create_child_job(
+                session,
+                selections=selections,
+                source_parent=None,
+                trigger="upload_analyze",
+                requested_settings=_batched_settings(1),
+            )
 
 
 @pytest.mark.asyncio
@@ -670,7 +760,7 @@ async def test_batch_resolution_failure_is_atomic_before_job_commit(child_db) ->
     ]
     requested = FrustraMPNNRequestedSettings.model_validate(
         {
-            **default_settings().model_dump(mode="json"),
+            **_batched_settings(2).model_dump(mode="json"),
             "protein_selection": {
                 "mode": "selected_entities",
                 "entities": [
@@ -699,6 +789,77 @@ async def test_batch_resolution_failure_is_atomic_before_job_commit(child_db) ->
     async with sessions() as session:
         assert (await session.execute(select(func.count(Job.id)))).scalar_one() == 0
     assert list(results.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_reanalysis_upgrades_verified_typed_v1_settings_to_v2(child_db) -> None:
+    sessions, _results = child_db
+    selection = child_jobs.upload_selection(
+        filename="candidate.pdb", payload=_pdb(), expected_sha256=None
+    )
+    historical_payload = {
+        "schema_name": "frustrampnn_settings",
+        "schema_version": 1,
+        "settings_value_origin": "bms_default",
+        "protein_selection": {
+            "mode": "all_protein_entities",
+            "entities": [],
+            "regions": [],
+            "residues": [],
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "",
+        },
+        "classification_policy": {
+            "mode": "canonical",
+            "high_max": -1.0,
+            "minimal_min": 0.58,
+        },
+    }
+    historical = FrustraMPNNRequestedSettings.model_validate(historical_payload)
+    historical_sha256 = child_jobs.requested_settings_sha256(historical)
+
+    async with sessions() as session:
+        prior = await child_jobs.create_child_job(
+            session,
+            selections=[selection],
+            source_parent=None,
+            trigger="upload_analyze",
+            requested_settings=default_settings(),
+        )
+        params = dict(prior.params)
+        envelope = dict(params[child_jobs.ENVELOPE_KEY])
+        envelope["settings_contract_version"] = "typed_v1"
+        envelope["settings_value_origin"] = "bms_default"
+        envelope["normalized_requested_settings"] = historical_payload
+        envelope["settings_sha256"] = historical_sha256
+        lineage = json.loads(json.dumps(envelope["selection"]))
+        for item in lineage:
+            item["launch_authority"]["settings_value_origin"] = "bms_default"
+            item["launch_authority"]["normalized_requested_settings"] = historical_payload
+            item["launch_authority"]["settings_sha256"] = historical_sha256
+        envelope["selection"] = lineage
+        params[child_jobs.ENVELOPE_KEY] = envelope
+        prior.params = params
+        prior.queue_status = "completed"
+        prior.status = "completed"
+        await session.commit()
+        prior_id = prior.id
+
+    async with sessions() as session:
+        prior = await session.get(Job, prior_id)
+        upgraded = await child_jobs.create_reanalysis_child(
+            session,
+            prior_child=prior,
+            replacement_settings=None,
+        )
+        upgraded_envelope = upgraded.params[child_jobs.ENVELOPE_KEY]
+        assert upgraded_envelope["settings_contract_version"] == "typed_v2"
+        assert upgraded_envelope["normalized_requested_settings"]["schema_version"] == 2
+        assert upgraded_envelope["normalized_requested_settings"]["batching_enabled"] is False
+        assert upgraded_envelope["normalized_requested_settings"]["structures_per_job"] == 1
+        assert upgraded_envelope["settings_sha256"] != historical_sha256
 
 
 @pytest.mark.asyncio

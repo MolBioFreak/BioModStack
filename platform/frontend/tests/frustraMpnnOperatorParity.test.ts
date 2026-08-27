@@ -458,6 +458,32 @@ test('closed v2 result detail preserves authority, settings, statistics, and saf
     }
 });
 
+test('closed v3 result detail opens before derived statistics complete', () => {
+    const current = structuredClone(resultDetail);
+    current.authority_version = 'v3';
+    current.statistics_available = false;
+    current.missing_fields = [
+        'statistics_sha256',
+        'statistics_json',
+        'comparison_compatibility_id',
+    ];
+    current.statistics_sha256 = null;
+    current.statistics_json = null;
+    current.comparison_compatibility_id = null;
+    current.component_contract_version = '3.0';
+    current.summary.schema_version = 3;
+    current.summary.execution_configuration_id = 'frustrampnn_execution_configuration_v3';
+    current.terminal_result.schema_version = 3;
+    current.terminal_result.component_contract_version = '3.0';
+    current.terminal_result.result_payload.schema_version = 3;
+    current.execution_receipt.schema_version = 3;
+
+    const parsed = parseFrustraMpnnResultDetail(current);
+    assert.equal(parsed.authority_version, 'v3');
+    assert.equal(parsed.summary.schema_version, 3);
+    assert.equal(parsed.statistics_json, null);
+});
+
 test('v2 result summary enforces canonical minima, nonempty chain support, and closed finite fields', () => {
     const emptyChains = structuredClone(resultDetail);
     emptyChains.summary.support_by_entity_chain = [];

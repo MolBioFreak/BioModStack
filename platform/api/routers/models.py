@@ -70,6 +70,9 @@ class FrustraMPNNParameterDescriptorResponse(BaseModel):
     control_kind: str
     backing: str
     default_source: str
+    minimum: int | None = None
+    maximum: int | None = None
+    applicability: JsonValue | None = None
 
 
 class FrustraMPNNCompatibilityRuleResponse(BaseModel):
@@ -113,6 +116,28 @@ def _frustrampnn_discovery_metadata() -> dict:
             "control_kind": "governed_source_selector_or_upload",
             "backing": "pdb",
             "default_source": "owned_source",
+        },
+        {
+            "field": "batching_enabled",
+            "api_type": "boolean",
+            "ownership": "workflow_structure_grouping",
+            "control_kind": "checkbox",
+            "backing": "predict_batch",
+            "default_source": "bms_default",
+        },
+        {
+            "field": "structures_per_job",
+            "api_type": "integer",
+            "ownership": "workflow_structure_grouping",
+            "control_kind": "slider_with_numeric_input",
+            "backing": "predict_batch",
+            "default_source": "bms_default",
+            "minimum": 1,
+            "maximum": 250,
+            "applicability": {
+                "field": "batching_enabled",
+                "equals": True,
+            },
         },
         {
             "field": "protein_selection.mode",

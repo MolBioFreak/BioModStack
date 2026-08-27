@@ -12,7 +12,7 @@ process PrepareAntibodyFrustraMPNNCandidate {
         val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
@@ -28,9 +28,9 @@ process PrepareAntibodyFrustraMPNNCandidate {
     '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
       --source '${terminal_structure}' \
       --output-pdb canonical_source.pdb \
-      --request workflow_component_request_v2.json \
+      --request workflow_component_request_v3.json \
       --metadata-base64 '${metadataBase64}' \
-      --request-version 2 \
+      --request-version 3 \
       --structure-map frustrampnn_structure_map_v1.json \
       --settings-base64 '${settings_base64}' \
       --settings-sha256 '${settings_sha256}' \

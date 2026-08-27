@@ -1,0 +1,460 @@
+{
+  "$defs": {
+    "FrustraMPNNClassificationPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "canonical"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "high_max": {
+                "const": -1.0
+              },
+              "minimal_min": {
+                "const": 0.58
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "high_max": {
+          "title": "High Max",
+          "type": "number"
+        },
+        "minimal_min": {
+          "title": "Minimal Min",
+          "type": "number"
+        },
+        "mode": {
+          "enum": [
+            "canonical",
+            "custom"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "high_max",
+        "minimal_min"
+      ],
+      "title": "FrustraMPNNClassificationPolicy",
+      "type": "object"
+    },
+    "FrustraMPNNEntitySelector": {
+      "additionalProperties": false,
+      "description": "Stable source-backed identity for one protein entity/chain instance.",
+      "properties": {
+        "auth_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Auth Asym Id"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id"
+      ],
+      "title": "FrustraMPNNEntitySelector",
+      "type": "object"
+    },
+    "FrustraMPNNProteinSelection": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "all_protein_entities"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "regions": {
+                "maxItems": 0
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_entities"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "minItems": 1
+              },
+              "regions": {
+                "maxItems": 0
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_regions"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "regions": {
+                "minItems": 1
+              },
+              "residues": {
+                "maxItems": 0
+              }
+            },
+            "required": [
+              "regions"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "selected_residues"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "entities": {
+                "maxItems": 0
+              },
+              "regions": {
+                "maxItems": 0
+              },
+              "residues": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNEntitySelector"
+          },
+          "title": "Entities",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "mode": {
+          "enum": [
+            "all_protein_entities",
+            "selected_entities",
+            "selected_regions",
+            "selected_residues"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "regions": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNRegionSelector"
+          },
+          "title": "Regions",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "residues": {
+          "items": {
+            "$ref": "#/$defs/FrustraMPNNResidueSelector"
+          },
+          "title": "Residues",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "mode",
+        "entities",
+        "residues"
+      ],
+      "title": "FrustraMPNNProteinSelection",
+      "type": "object"
+    },
+    "FrustraMPNNResidueSelector": {
+      "additionalProperties": false,
+      "description": "One unambiguous source residue locator resolvable through structure-map rows.",
+      "properties": {
+        "auth_asym_id": {
+          "minLength": 1,
+          "title": "Auth Asym Id",
+          "type": "string"
+        },
+        "auth_seq_id": {
+          "title": "Auth Seq Id",
+          "type": "integer"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "insertion_code": {
+          "maxLength": 1,
+          "title": "Insertion Code",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "sequence_index": {
+          "minimum": 1,
+          "title": "Sequence Index",
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "insertion_code",
+        "sequence_index"
+      ],
+      "title": "FrustraMPNNResidueSelector",
+      "type": "object"
+    },
+    "FrustraMPNNSourceStructureSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "preferred_altloc": {
+          "pattern": "^(?:|[A-Za-z0-9])$",
+          "title": "Preferred Altloc",
+          "type": "string"
+        },
+        "selected_model_number": {
+          "minimum": 1,
+          "title": "Selected Model Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "selected_model_number",
+        "preferred_altloc"
+      ],
+      "title": "FrustraMPNNSourceStructureSettings",
+      "type": "object"
+    },
+    "FrustraMPNNRegionSelector": {
+      "additionalProperties": false,
+      "description": "One inclusive source-sequence region on one stable protein entity.",
+      "properties": {
+        "auth_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Auth Asym Id"
+        },
+        "entity_instance_id": {
+          "minLength": 1,
+          "title": "Entity Instance Id",
+          "type": "string"
+        },
+        "label_asym_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Label Asym Id"
+        },
+        "sequence_end": {
+          "minimum": 1,
+          "title": "Sequence End",
+          "type": "integer"
+        },
+        "sequence_start": {
+          "minimum": 1,
+          "title": "Sequence Start",
+          "type": "integer"
+        },
+        "source_entity_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Entity Id"
+        }
+      },
+      "required": [
+        "entity_instance_id",
+        "source_entity_id",
+        "label_asym_id",
+        "auth_asym_id",
+        "sequence_start",
+        "sequence_end"
+      ],
+      "title": "FrustraMPNNRegionSelector",
+      "type": "object"
+    }
+  },
+  "$id": "https://biomodstack.local/schemas/frustrampnn/settings_v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "classification_policy": {
+      "$ref": "#/$defs/FrustraMPNNClassificationPolicy"
+    },
+    "protein_selection": {
+      "$ref": "#/$defs/FrustraMPNNProteinSelection"
+    },
+    "schema_name": {
+      "const": "frustrampnn_settings",
+      "title": "Schema Name",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 2,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "batching_enabled": {
+      "default": false,
+      "title": "Batching Enabled",
+      "type": "boolean"
+    },
+    "structures_per_job": {
+      "default": 1,
+      "maximum": 250,
+      "minimum": 1,
+      "title": "Structures Per Job",
+      "type": "integer"
+    },
+    "source_structure": {
+      "$ref": "#/$defs/FrustraMPNNSourceStructureSettings"
+    },
+    "settings_value_origin": {
+      "enum": [
+        "bms_default",
+        "operator_request"
+      ],
+      "title": "Settings Value Origin",
+      "type": "string",
+      "readOnly": true
+    }
+  },
+  "required": [
+    "schema_name",
+    "schema_version",
+    "batching_enabled",
+    "structures_per_job",
+    "protein_selection",
+    "source_structure",
+    "classification_policy",
+    "settings_value_origin"
+  ],
+  "title": "settings_v2",
+  "type": "object"
+}

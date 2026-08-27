@@ -20,10 +20,13 @@ from services.frustrampnn.settings import (
 def _complete_settings_payload() -> dict[str, object]:
     return {
         "schema_name": "frustrampnn_settings",
-        "schema_version": 1,
+        "schema_version": 2,
+        "batching_enabled": False,
+        "structures_per_job": 1,
         "protein_selection": {
             "mode": "all_protein_entities",
             "entities": [],
+            "regions": [],
             "residues": [],
         },
         "source_structure": {

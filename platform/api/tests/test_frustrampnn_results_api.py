@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -17,10 +20,12 @@ from database import (
     Design,
     FrustraMPNNArtifact,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     Job,
     get_session,
 )
 from routers.frustrampnn import FrustraMPNNHistoricalSummaryV1Document, router
+from routers import frustrampnn as frustrampnn_router
 from services.frustrampnn.analytics import comparison_compatibility_id
 from services.frustrampnn.contracts import canonical_json_bytes, load_schema
 from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
@@ -29,6 +34,30 @@ from services.frustrampnn.settings import resolve_effective_settings
 
 
 TESTS_DIR = Path(__file__).resolve().parent
+
+
+def test_v3_core_result_is_available_before_statistics_complete() -> None:
+    result = SimpleNamespace(
+        terminal_result_json={"component_contract_version": "3.0"},
+        settings_sha256="1" * 64,
+        effective_settings_sha256="2" * 64,
+        effective_settings_json={"schema_name": "frustrampnn_effective_settings"},
+        capability_inventory_sha256="3" * 64,
+        statistics_sha256=None,
+        statistics_json=None,
+        comparison_compatibility_id=None,
+    )
+
+    authority = frustrampnn_router._result_authority(cast(Any, result))
+
+    assert authority["authority_version"] == "v3"
+    assert authority["availability"] is True
+    assert authority["statistics_available"] is False
+    assert authority["missing_fields"] == [
+        "statistics_sha256",
+        "statistics_json",
+        "comparison_compatibility_id",
+    ]
 
 
 def _fixture_module():
@@ -220,8 +249,30 @@ def _effective_settings_fixture() -> dict:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    structure_map = module.structure_map_fixture()
+    selection = {
+        "mode": "selected_residues",
+        "entities": [],
+        "regions": [],
+        "residues": [
+            {
+                key: row[key]
+                for key in (
+                    "entity_instance_id",
+                    "source_entity_id",
+                    "label_asym_id",
+                    "auth_asym_id",
+                    "auth_seq_id",
+                    "insertion_code",
+                    "sequence_index",
+                )
+            }
+            for row in structure_map["rows"]
+            if row["status"] == "mapped"
+        ],
+    }
     return resolve_effective_settings(
-        module._settings(), module.structure_map_fixture()
+        module._settings(selection), structure_map
     ).model_dump(mode="json")
 
 
@@ -686,6 +737,96 @@ async def test_result_list_and_detail_expose_persisted_phase4_hashes(api) -> Non
     }
 
 
+@pytest.mark.asyncio
+async def test_statistics_retry_requeues_only_failed_analysis_child(api) -> None:
+    client, sessions, _root = api
+    async with sessions() as session:
+        core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert core is not None
+        core_before = (
+            core.request_sha256,
+            core.manifest_sha256,
+            copy.deepcopy(core.terminal_result_json),
+        )
+        session.add(
+            FrustraMPNNStatisticsAnalysis(
+                analysis_id="11111111-1111-4111-8111-111111111111",
+                parent_job_id="job-1",
+                invocation_id="invoke-1",
+                core_artifact_id="artifact-1",
+                core_bundle_relative_path="bundle",
+                core_landscape_sha256="5" * 64,
+                core_manifest_sha256=core.manifest_sha256,
+                state="failed",
+                attempt_count=1,
+                formula_version="frustrampnn_statistics_formula_v1",
+                policy_version="frustrampnn_statistics_policy_v1",
+                package_version="biomodstack_frustrampnn_statistics_v1",
+                schema_version=1,
+                diagnostic="bounded analysis failure",
+            )
+        )
+        await session.commit()
+
+    async with sessions() as session:
+        receipt = await frustrampnn_router.retry_result_statistics_analysis(
+            "job-1",
+            "invoke-1",
+            session,
+        )
+    payload = receipt.model_dump(mode="json")
+    assert payload["analysis_id"] == "11111111-1111-4111-8111-111111111111"
+    assert payload["state"] == "queued"
+    assert payload["attempt_count"] == 1
+    assert payload["diagnostic"] is None
+
+    async with sessions() as session:
+        core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert core is not None
+        assert (
+            core.request_sha256,
+            core.manifest_sha256,
+            core.terminal_result_json,
+        ) == core_before
+
+
+@pytest.mark.asyncio
+async def test_statistics_analysis_status_is_read_only(api) -> None:
+    client, sessions, _root = api
+    async with sessions() as session:
+        core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert core is not None
+        session.add(
+            FrustraMPNNStatisticsAnalysis(
+                analysis_id="22222222-2222-4222-8222-222222222222",
+                parent_job_id="job-1",
+                invocation_id="invoke-1",
+                core_artifact_id="artifact-1",
+                core_bundle_relative_path="bundle",
+                core_landscape_sha256="5" * 64,
+                core_manifest_sha256=core.manifest_sha256,
+                state="queued",
+                attempt_count=0,
+                formula_version="frustrampnn_statistics_formula_v1",
+                policy_version="frustrampnn_statistics_policy_v1",
+                package_version="biomodstack_frustrampnn_statistics_v1",
+                schema_version=1,
+            )
+        )
+        await session.commit()
+
+    response = await client.get(
+        "/api/frustrampnn/results/job-1/invoke-1/statistics/analysis"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis_id"] == "22222222-2222-4222-8222-222222222222"
+    assert payload["state"] == "queued"
+    assert payload["attempt_count"] == 0
+    assert payload["statistics_sha256"] is None
+    assert payload["diagnostic"] is None
+
+
 def test_openapi_describes_statistics_response_and_comparison_override() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -712,6 +853,7 @@ def test_openapi_describes_statistics_response_and_comparison_override() -> None
     summary_schema = detail_schema["properties"]["summary"]
     summary_refs = {item["$ref"] for item in summary_schema["anyOf"]}
     assert summary_refs == {
+        "#/components/schemas/FrustraMPNNSummaryV3Document",
         "#/components/schemas/FrustraMPNNSummaryV2Document",
         "#/components/schemas/FrustraMPNNHistoricalSummaryV1Document",
     }
@@ -756,10 +898,13 @@ def test_openapi_describes_statistics_response_and_comparison_override() -> None
     assert set(PHASE4_FIELDS) == set(
         statistics_schema["properties"]["missing_fields"]["items"]["enum"]
     )
-    assert (
-        schema["components"]["schemas"]["FrustraMPNNStatisticsDocument"]
-        == load_schema("frustrampnn_statistics_v1")
-    )
+    document_schema = schema["components"]["schemas"]["FrustraMPNNStatisticsDocument"]
+    assert document_schema == {
+        "oneOf": [
+            load_schema("frustrampnn_statistics_v1"),
+            load_schema("frustrampnn_statistics_v2"),
+        ]
+    }
     for field in ("statistics_json", "statistics"):
         field_schema = statistics_schema["properties"][field]
         refs = [item.get("$ref") for item in field_schema["anyOf"]]

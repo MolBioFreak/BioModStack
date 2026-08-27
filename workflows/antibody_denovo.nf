@@ -23,7 +23,10 @@ def requireExactSettingsObject(value, Set<String> expectedKeys, String location)
 }
 
 def requireCompleteFrustraMPNNSettings(value) {
-    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    requireExactSettingsObject(value, ['schema_name', 'schema_version', 'batching_enabled', 'structures_per_job', 'protein_selection', 'source_structure', 'classification_policy'] as Set, 'frustrampnn_settings')
+    if (value.schema_name != 'frustrampnn_settings' || value.schema_version != 2 || !(value.batching_enabled instanceof Boolean) || !(value.structures_per_job instanceof Integer) || value.structures_per_job < 1 || value.structures_per_job > 250) {
+        throw new IllegalArgumentException('frustrampnn_settings v2 batching authority is invalid')
+    }
     requireExactSettingsObject(value.protein_selection, ['mode', 'entities', 'regions', 'residues'] as Set, 'frustrampnn_settings.protein_selection')
     requireExactSettingsObject(value.source_structure, ['selected_model_number', 'preferred_altloc'] as Set, 'frustrampnn_settings.source_structure')
     requireExactSettingsObject(value.classification_policy, ['mode', 'high_max', 'minimal_min'] as Set, 'frustrampnn_settings.classification_policy')
@@ -68,6 +71,19 @@ def sha256Hex(byte[] payload) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
     digest.update(payload)
     digest.digest().encodeHex().toString()
+}
+
+def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
+    def payload = canonicalJsonValue(value) as Map
+    payload['settings_value_origin'] = settingsValueOrigin
+    def selection = payload['protein_selection']
+    if (selection instanceof Map && selection['regions'] instanceof Collection && selection['regions'].isEmpty()) {
+        def compatibleSelection = new TreeMap<String, Object>()
+        compatibleSelection.putAll(selection)
+        compatibleSelection.remove('regions')
+        payload['protein_selection'] = compatibleSelection
+    }
+    return payload
 }
 
 
@@ -3280,10 +3296,9 @@ if (shouldPauseAfterFampnn || shouldPauseAfterCaliby) {
             error('frustrampnn_settings must be exact compact canonical JSON')
         }
         def settingsBase64 = settingsBytes.encodeBase64().toString()
-        def settingsWithOrigin = new TreeMap<String, Object>()
-        settingsWithOrigin.putAll(rawSettings)
-        settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
-        def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
+        def settingsSha256 = sha256Hex(canonicalJsonBytes(
+            requestedFrustraMPNNSettingsHashPayload(rawSettings, settingsValueOrigin)
+        ))
         log.info("Step 4.x: Running canonical FrustraMPNN on final antibody candidates...")
         typed_terminal_candidates = final_designs.flatMap { candidate_meta, structure_or_structures ->
             def structures = structure_or_structures instanceof Collection

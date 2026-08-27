@@ -63,7 +63,9 @@ export interface FrustraMpnnClassificationPolicy {
 
 export interface FrustraMpnnRequestedSettings {
     schema_name: 'frustrampnn_settings';
-    schema_version: 1;
+    schema_version: 2;
+    batching_enabled: boolean;
+    structures_per_job: number;
     protein_selection: FrustraMpnnProteinSelection;
     source_structure: FrustraMpnnSourceStructureSettings;
     classification_policy: FrustraMpnnClassificationPolicy;
@@ -96,10 +98,15 @@ export interface FrustraMpnnSelectionModeOption {
 const SETTINGS_KEYS = [
     'schema_name',
     'schema_version',
+    'batching_enabled',
+    'structures_per_job',
     'protein_selection',
     'source_structure',
     'classification_policy',
 ] as const;
+const HISTORICAL_SETTINGS_V1_KEYS = SETTINGS_KEYS.filter(
+    (key) => key !== 'batching_enabled' && key !== 'structures_per_job',
+);
 const SELECTION_KEYS = ['mode', 'entities', 'regions', 'residues'] as const;
 const ENTITY_KEYS = ['entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id'] as const;
 const REGION_KEYS = [...ENTITY_KEYS, 'sequence_start', 'sequence_end'] as const;
@@ -150,13 +157,26 @@ const requireNullableNonEmptyString = (value: unknown, label: string): string | 
     return requireNonEmptyString(value, label);
 };
 
-const requireInteger = (value: unknown, label: string, minimum?: number): number => {
+const requireInteger = (
+    value: unknown,
+    label: string,
+    minimum?: number,
+    maximum?: number,
+): number => {
     if (typeof value !== 'number' || !Number.isInteger(value)) {
         throw new Error(`${label} must be an integer`);
     }
     if (minimum !== undefined && value < minimum) {
         throw new Error(`${label} must be at least ${minimum}`);
     }
+    if (maximum !== undefined && value > maximum) {
+        throw new Error(`${label} must be at most ${maximum}`);
+    }
+    return value;
+};
+
+const requireBoolean = (value: unknown, label: string): boolean => {
+    if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`);
     return value;
 };
 
@@ -266,9 +286,19 @@ const ensureUnique = <T>(items: T[], key: (item: T) => string, label: string): v
 export const parseFrustraMpnnRequestedSettings = (value: unknown): FrustraMpnnRequestedSettings => {
     const settings = requireRecord(value, 'frustrampnn_settings');
     requireExactKeys(settings, SETTINGS_KEYS, 'frustrampnn_settings');
-    if (settings.schema_name !== 'frustrampnn_settings' || settings.schema_version !== 1) {
-        throw new Error('frustrampnn_settings schema identity must be frustrampnn_settings v1');
+    if (settings.schema_name !== 'frustrampnn_settings' || settings.schema_version !== 2) {
+        throw new Error('frustrampnn_settings schema identity must be frustrampnn_settings v2');
     }
+    const batchingEnabled = requireBoolean(
+        settings.batching_enabled,
+        'frustrampnn_settings.batching_enabled',
+    );
+    const structuresPerJob = requireInteger(
+        settings.structures_per_job,
+        'frustrampnn_settings.structures_per_job',
+        1,
+        250,
+    );
 
     const selectionRecord = requireRecord(settings.protein_selection, 'frustrampnn_settings.protein_selection');
     requireExactKeys(selectionRecord, SELECTION_KEYS, 'frustrampnn_settings.protein_selection');
@@ -368,7 +398,9 @@ export const parseFrustraMpnnRequestedSettings = (value: unknown): FrustraMpnnRe
 
     return {
         schema_name: 'frustrampnn_settings',
-        schema_version: 1,
+        schema_version: 2,
+        batching_enabled: batchingEnabled,
+        structures_per_job: structuresPerJob,
         protein_selection: proteinSelection,
         source_structure: sourceStructure,
         classification_policy: classificationPolicy,
@@ -378,7 +410,9 @@ export const parseFrustraMpnnRequestedSettings = (value: unknown): FrustraMpnnRe
 export const CANONICAL_FRUSTRAMPNN_SETTINGS: FrustraMpnnRequestedSettings = Object.freeze(
     parseFrustraMpnnRequestedSettings({
         schema_name: 'frustrampnn_settings',
-        schema_version: 1,
+        schema_version: 2,
+        batching_enabled: false,
+        structures_per_job: 1,
         protein_selection: {
             mode: 'all_protein_entities',
             entities: [],
@@ -408,20 +442,29 @@ export const hydrateFrustraMpnnSettings = (value: unknown): FrustraMpnnRequested
     const withRegions = Object.prototype.hasOwnProperty.call(selection, 'regions')
         ? persisted
         : { ...persisted, protein_selection: { ...selection, regions: [] } };
-    if (!Object.prototype.hasOwnProperty.call(persisted, 'settings_value_origin')) {
-        return parseFrustraMpnnRequestedSettings(withRegions);
-    }
+    const hasOrigin = Object.prototype.hasOwnProperty.call(persisted, 'settings_value_origin');
+    const keys = persisted.schema_version === 1 ? HISTORICAL_SETTINGS_V1_KEYS : SETTINGS_KEYS;
     requireExactKeys(
         persisted,
-        [...SETTINGS_KEYS, 'settings_value_origin'],
+        hasOrigin ? [...keys, 'settings_value_origin'] : keys,
         'persisted frustrampnn_settings',
     );
-    if (persisted.settings_value_origin !== 'bms_default' && persisted.settings_value_origin !== 'operator_request') {
+    if (
+        hasOrigin
+        && persisted.settings_value_origin !== 'bms_default'
+        && persisted.settings_value_origin !== 'operator_request'
+    ) {
         throw new Error('persisted frustrampnn_settings.settings_value_origin is invalid');
     }
-    return parseFrustraMpnnRequestedSettings(
-        Object.fromEntries(SETTINGS_KEYS.map((key) => [key, withRegions[key]])),
-    );
+    const normalized = Object.fromEntries(keys.map((key) => [key, withRegions[key]]));
+    return parseFrustraMpnnRequestedSettings(persisted.schema_version === 1
+        ? {
+            ...normalized,
+            schema_version: 2,
+            batching_enabled: false,
+            structures_per_job: 1,
+        }
+        : normalized);
 };
 
 export type FrustraMpnnLaunchParams =
