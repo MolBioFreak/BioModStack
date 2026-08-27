@@ -232,6 +232,7 @@ def open_verified_sqlite_backup(
     backup_identity = _identity(backup_stat)
     descriptor = _open_pinned_readonly(backup, backup_identity, label="backup replay")
     connection: sqlite3.Connection | None = None
+    sealed_connection: sqlite3.Connection | None = None
     try:
         if os.fstat(descriptor).st_size != expected_size_bytes:
             raise RuntimeError("SQLite backup replay size does not match its receipt")
@@ -249,15 +250,23 @@ def open_verified_sqlite_backup(
         foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
         if [str(row[0]) for row in integrity_rows] != ["ok"] or foreign_key_violations:
             raise RuntimeError("SQLite backup replay failed integrity validation")
+        sealed_connection = sqlite3.connect(":memory:")
+        connection.backup(sealed_connection)
+        if _sha256_descriptor(descriptor) != expected_sha256:
+            raise RuntimeError("SQLite backup bytes changed during verified readback")
         backup_path_after = _lstat(backup)
         if backup_path_after is None or _identity(backup_path_after) != backup_identity:
             raise RuntimeError("SQLite backup replay identity changed during verification")
-        result = connection
+        connection.close()
         connection = None
+        result = sealed_connection
+        sealed_connection = None
         return result
     finally:
         if connection is not None:
             connection.close()
+        if sealed_connection is not None:
+            sealed_connection.close()
         os.close(descriptor)
 
 
