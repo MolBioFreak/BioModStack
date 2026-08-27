@@ -1003,7 +1003,11 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         || parsedVerificationSummary.reference_length !== referenceLength
         || sourceRowCount !== referenceLength
         || coveragePoints.some((point) => point.reference !== referenceName || point.position_1based > referenceLength)
-        || alignmentSessions.some((session) => session.reference_contig !== null && session.reference_contig !== referenceName)
+        || alignmentSessions.some((session) => (
+            session.mode === 'primary'
+            && session.reference_contig !== null
+            && session.reference_contig !== referenceName
+        ))
     ) {
         throw new Error('reference identity is inconsistent across the result');
     }
