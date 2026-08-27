@@ -41,6 +41,19 @@ def _fixture_module():
 MANIFEST_FIXTURE = _fixture_module()
 
 
+def _component_fixture_module():
+    name = "_frustrampnn_component_fixture_for_ingester"
+    path = TESTS_DIR / "test_frustrampnn_component_phase3.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+COMPONENT_FIXTURE = _component_fixture_module()
+
+
 def _bundle(root: Path, *, job_id: str, design_id: str | None = "design-1") -> dict:
     assert job_id == "job-1"
     root.mkdir(parents=True)
@@ -553,6 +566,75 @@ async def test_explicit_terminal_outputs_use_only_canonical_manifest_ingestion(
         assert await session.get(FrustraMPNNResult, ("job-1", "invoke-1")) is not None
         retired_name = "ingest_frustration_" + "data"
         assert not hasattr(result_ingester, retired_name)
+
+
+@pytest.mark.asyncio
+async def test_classified_v3_failure_cannot_finalize_as_success(
+    tmp_path: Path, db
+) -> None:
+    component = COMPONENT_FIXTURE._component()
+    inputs = tmp_path / "inputs-build"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = COMPONENT_FIXTURE._v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+        request_generation=3,
+    )
+    request_path = inputs / "workflow_component_request_v3.json"
+    request_path.write_bytes(canonical_json_bytes(request))
+    stdout = inputs / "batch.stdout"
+    stderr = inputs / "batch.stderr"
+    stdout.write_bytes(b"")
+    stderr.write_bytes(b"upstream omitted one structure\n")
+    job_root = tmp_path / "job-root"
+    source = job_root / "inputs" / "original.pdb"
+    source.parent.mkdir(parents=True)
+    source.write_bytes((inputs / "source.pdb").read_bytes())
+    failure_root = job_root / "frustrampnn" / "results" / "candidate-v2"
+    failure_root.parent.mkdir(parents=True)
+    component.finalize_batched_component(
+        request_path=request_path,
+        source_structure=normalized,
+        structure_map=structure_map,
+        raw_csv=None,
+        terminal_evidence={
+            "ordinal": 0,
+            "candidate_id": request["candidate_id"],
+            "invocation_id": request["invocation_id"],
+            "pdb_stem": "0000_candidate",
+            "source_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
+            "started_at": "2026-08-27T12:00:00Z",
+            "terminal_at": "2026-08-27T12:00:02Z",
+            "status": "failed",
+            "failure_code": "upstream_output_omitted",
+            "diagnostic": "predict_batch returned no rows",
+            "row_count": None,
+            "output_csv": None,
+            "output_sha256": None,
+        },
+        batch_argv=("apptainer", "exec", "frustrampnn.sif", "predict_batch"),
+        batch_argv_sha256="b" * 64,
+        stdout_log=stdout,
+        stderr_log=stderr,
+        output_dir=failure_root,
+        physical_gpu_id=3,
+    )
+    await _seed_job(
+        db,
+        job_id="job-v2",
+        root=failure_root,
+        stage_outputs={
+            "frustrampnn": [
+                str(failure_root / "workflow_component_result_v3.json")
+            ]
+        },
+        design_id=None,
+    )
+
+    async with db() as session:
+        with pytest.raises(FrustraMPNNPersistenceError, match="failed"):
+            await ingest_job_results("job-v2", str(job_root), session, commit=False)
 
 
 @pytest.mark.asyncio

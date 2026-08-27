@@ -136,11 +136,14 @@ process ReportPersistedFrustraMPNNComplete {
     mapfile -t outputs < <('${params.api_python}' \
       '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
       --job-root '${params.out_dir}' \
+      --status-output frustrampnn_stage_status \
       published_*.json)
     test \"\${#outputs[@]}\" -gt 0
+    status=\$(<frustrampnn_stage_status)
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+      '${params.job_id}' frustrampnn \"\${status}\" \"\${outputs[@]}\"
     : > frustrampnn_complete.reported
+    test \"\${status}\" = complete
     """
 }
 

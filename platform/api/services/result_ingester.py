@@ -3973,6 +3973,11 @@ async def _ingest_explicit_frustrampnn_results(
         failed_identities.add(identity)
         failed_terminal_count += 1
 
+    if failed_terminal_count:
+        raise FrustraMPNNPersistenceError(
+            f"FrustraMPNN terminal stage contains {failed_terminal_count} failed candidate(s)"
+        )
+
     validated_candidates = []
     parent_designs: list[tuple[str, str, Path, Any]] = []
     invocation_roots: dict[str, Path] = {}
@@ -4151,7 +4156,7 @@ async def _ingest_explicit_frustrampnn_results(
     except Exception:
         await session.rollback()
         raise
-    return created + failed_terminal_count
+    return created
 
 
 def _canonical_protein_design_row_id(

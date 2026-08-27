@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path, PurePosixPath
 import sys
 from typing import Any
@@ -73,7 +74,8 @@ def _validate_closed_marker(
     *,
     job_root: Path,
     marker: Path,
-) -> tuple[str, ...]:
+    include_status: bool = False,
+) -> tuple[str, ...] | tuple[tuple[str, ...], str]:
     marker_root = marker.parent if marker.parent != Path(".") else Path.cwd()
     marker_payload = canonical_json_loads(_read_regular(marker_root, marker.name))
     paths = validate_marker(marker_payload)
@@ -93,7 +95,8 @@ def _validate_closed_marker(
             raise ValueError("classified failure source does not match request authority")
         if hashlib.sha256(_read_regular(job_root, paths["source"].as_posix())).hexdigest() != request["source_artifact"]["sha256"]:
             raise ValueError("classified failure source bytes contradict request authority")
-        return (paths["result"].as_posix(), paths["source"].as_posix())
+        outputs = (paths["result"].as_posix(), paths["source"].as_posix())
+        return (outputs, "failed") if include_status else outputs
     bundle_root = job_root.joinpath(*paths["manifest"].parent.parts)
     manifest = load_result_manifest(bundle_root)
     generation = manifest.get("schema_version")
@@ -118,18 +121,36 @@ def _validate_closed_marker(
     ]
     if generation == 2:
         outputs.append(paths["statistics"].as_posix())
-    return tuple(outputs)
+    validated_outputs = tuple(outputs)
+    return (validated_outputs, "complete") if include_status else validated_outputs
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job-root", required=True, type=Path)
+    parser.add_argument("--status-output", type=Path)
     parser.add_argument("markers", nargs="+", type=Path)
     args = parser.parse_args(argv)
     try:
         outputs: list[str] = []
+        statuses: set[str] = set()
         for marker in sorted(args.markers, key=lambda path: path.as_posix()):
-            outputs.extend(_validate_closed_marker(job_root=args.job_root, marker=marker))
+            marker_outputs, marker_status = _validate_closed_marker(
+                job_root=args.job_root, marker=marker, include_status=True
+            )
+            outputs.extend(marker_outputs)
+            statuses.add(marker_status)
+        if args.status_output is not None:
+            stage_status = "failed" if "failed" in statuses else "complete"
+            fd = os.open(
+                args.status_output,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(stage_status + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
     except (OSError, ValueError, TypeError, ManifestValidationError) as exc:
         print(f"invalid FrustraMPNN publication marker: {exc}", file=sys.stderr)
         return 2

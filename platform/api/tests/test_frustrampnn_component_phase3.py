@@ -1375,6 +1375,11 @@ def test_v3_batch_finalizer_publishes_classified_terminal_failure_without_fake_m
         "frustrampnn/results/candidate-v2/workflow_component_result_v3.json",
         "inputs/original.pdb",
     )
+    status_output = marker_root / "stage-status"
+    assert validator.main([
+        "--job-root", str(job_root), "--status-output", str(status_output), str(markers[0]),
+    ]) == 0
+    assert status_output.read_text(encoding="utf-8") == "failed\n"
 
 
 def test_v3_single_structure_producer_emits_predict_execution_method(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
