@@ -15,7 +15,7 @@ from typing import Any, Mapping, cast
 
 import rfc8785
 from jsonschema import Draft202012Validator, FormatChecker
-from sqlalchemy import update
+from sqlalchemy import JSON, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job
@@ -769,6 +769,10 @@ def bind_ont_fastq_qc_reconciliation_backup(
 
 
 def _equal(column: Any, value: Any) -> Any:
+    # SQLAlchemy stores Python None as JSON text `null` for JSON columns.
+    # `IS NULL` cannot match that representation during the guarded CAS.
+    if isinstance(column.type, JSON):
+        return column == value
     return column.is_(None) if value is None else column == value
 
 
