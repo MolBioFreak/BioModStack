@@ -34,6 +34,7 @@ export default defineConfig({
             './tests/vitest/ngsResultRoutingMounted.test.tsx',
             './tests/vitest/ngsWorkflowChooserMounted.test.tsx',
             './tests/vitest/ngsProjectPanelMounted.test.tsx',
+            './tests/vitest/molBioProjectHubMounted.test.tsx',
             './tests/vitest/ngsPayloadMounted.test.tsx',
             './tests/vitest/readAndSignalWorkbench.test.tsx',
             './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',

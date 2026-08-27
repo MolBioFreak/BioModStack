@@ -126,7 +126,7 @@ test('Nanopore launch uses immutable managed reference identity and full job det
     assert.match(ontRouter, /resolve_managed_reference_for_launch/);
 
     assert.match(ngs, /fetchFullJob\(selectedJobId as string\)/);
-    assert.match(ngs, /const selectedJob = fullJobQuery\.data \?\? null/);
+    assert.match(ngs, /const selectedJob = fullJobQuery\.data && isNgsJob\(fullJobQuery\.data\) \? fullJobQuery\.data : null/);
     assert.match(ngs, /disabled=\{!fullJobQuery\.isSuccess/);
     assert.match(ngs, /updateQueryParams\(\{ job_id:/);
 });

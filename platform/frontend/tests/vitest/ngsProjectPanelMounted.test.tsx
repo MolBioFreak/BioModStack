@@ -14,6 +14,15 @@ const managerMocks = vi.hoisted(() => ({
     createDomainExperiment: vi.fn(),
     linkNgsMolBioProject: vi.fn(),
 }));
+const contextState = vi.hoisted(() => ({
+    current: {
+        workspaceId: 'local-project-1' as string | null,
+        globalExperimentId: null as string | null,
+        domainExperimentId: null as string | null,
+        stateRevisionId: null as string | null,
+        selectedDomainExperiment: null as null | { domain_experiment_id: string },
+    },
+}));
 
 vi.mock('../../src/lib/projectManager', async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
@@ -22,11 +31,7 @@ vi.mock('../../src/lib/projectManager', async (importOriginal) => ({
 
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
-        workspaceId: 'local-project-1',
-        globalExperimentId: null,
-        domainExperimentId: null,
-        stateRevisionId: null,
-        selectedDomainExperiment: null,
+        ...contextState.current,
         availability: { canMutateDomain: false, reason: 'No domain selected.' },
         contextHref: (path: string) => path,
         updateQueryParams: vi.fn(),
@@ -58,6 +63,13 @@ let queryClient: QueryClient;
 
 beforeEach(() => {
     vi.clearAllMocks();
+    contextState.current = {
+        workspaceId: 'local-project-1',
+        globalExperimentId: null,
+        domainExperimentId: null,
+        stateRevisionId: null,
+        selectedDomainExperiment: null,
+    };
     managerMocks.searchProjects.mockImplementation(async ({ projectScope }: { projectScope: string }) => ({
         items: projectScope === 'global' ? [globalProject] : [localProject],
     }));
@@ -92,6 +104,17 @@ async function renderHub() {
     });
 }
 
+async function renderInlineHub() {
+    await act(async () => {
+        root.render(
+            <QueryClientProvider client={queryClient}>
+                <NgsMolBioProjectHub presentation="inline" />
+            </QueryClientProvider>,
+        );
+        await Promise.resolve();
+    });
+}
+
 function buttonNamed(name: string) {
     return Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === name) ?? null;
 }
@@ -107,6 +130,23 @@ async function enterValue(input: HTMLInputElement | HTMLTextAreaElement, value: 
 }
 
 describe('mounted NGS Projects launcher', () => {
+    it('makes an exact selected project the whole inline routine surface', async () => {
+        contextState.current = {
+            workspaceId: 'local-project-1',
+            globalExperimentId: 'experiment-1',
+            domainExperimentId: 'domain-1',
+            stateRevisionId: 'state-1',
+            selectedDomainExperiment: { domain_experiment_id: 'domain-1' },
+        };
+
+        await renderInlineHub();
+
+        expect(container.querySelector('[data-testid="domain-experiment-workspace"]')).not.toBeNull();
+        expect(container.textContent).not.toContain('Two-tier ownership');
+        expect(container.textContent).not.toContain('New local NGS/MolBio Project');
+        expect(managerMocks.searchProjects).not.toHaveBeenCalled();
+    });
+
     it('does not move focus to the launcher on initial mount', async () => {
         const existingControl = document.createElement('button');
         existingControl.textContent = 'Existing control';

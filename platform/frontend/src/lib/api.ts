@@ -5253,3 +5253,160 @@ export const fetchOntSignalViewerSession = (viewerSessionId: string) =>
     apiData(api.get<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`));
 export const updateOntSignalViewerSession = (viewerSessionId: string, request: OntSignalViewerSessionUpdate) =>
     apiData(api.patch<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`, request));
+
+export type ProjectHubSection = 'overview' | 'plasmids' | 'sequence-data' | 'experiments' | 'results' | 'activity';
+export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change';
+export type ProjectHubMapTone = 'accent' | 'success' | 'info' | 'warning' | 'secondary';
+
+export interface ProjectHubMapSegment {
+    start: number;
+    end: number;
+    tone: ProjectHubMapTone;
+}
+
+export interface ProjectHubPlasmidSummary {
+    sequence_id: string;
+    revision_id: string;
+    revision_number: number;
+    name: string;
+    description: string;
+    availability: string;
+    length_bp: number;
+    gc_percent: number | null;
+    feature_count: number;
+    feature_labels: string[];
+    cmv_promoter: boolean | null;
+    neor_kanr: boolean | null;
+    replication_origin_count: number | null;
+    saved_experiment_count: number;
+    molecule_type?: string;
+    topology?: string;
+    organism_host_context: string | null;
+    project_tags: string[];
+    project_notes: string;
+    reopen_href: string;
+    map_segments: ProjectHubMapSegment[];
+}
+
+export interface ProjectHubSequenceDataItem {
+    id: string;
+    plasmid_sequence_id: string;
+    plasmid_name: string;
+    kind: 'run' | 'read_set' | 'alignment' | 'clone_assessment' | 'viewer_evidence';
+    title: string;
+    summary: string;
+    status: string;
+    created_at: string;
+    reopen_href: string;
+}
+
+export interface ProjectHubExperimentSummary {
+    id: string;
+    persistence: 'saved' | 'unsaved';
+    kind: ProjectHubExperimentKind;
+    plasmid_sequence_id: string;
+    plasmid_name: string;
+    title: string;
+    status: string;
+    created_at: string;
+    reopen_href: string | null;
+}
+
+export interface ProjectHubResultSummary {
+    id: string;
+    plasmid_name: string;
+    type: string;
+    status: string;
+    owner: string;
+    created_at: string;
+    summary: string | null;
+    reopen_href: string;
+}
+
+export interface ProjectHubActivitySummary {
+    id: string;
+    summary: string;
+    occurred_at: string;
+    technical_event_type: string;
+    receipt_id: string;
+    envelope_sha256: string;
+}
+
+export interface ProjectHubReadModel {
+    schema: 'bms.project-hub.v1';
+    project: {
+        id: string;
+        name: string;
+        objective: string;
+        lifecycle_state: string;
+        created_at: string;
+        plasmid_count: number;
+        settings_href: string;
+        add_plasmid_href: string;
+    };
+    identity: {
+        workspace_id: string;
+        global_experiment_id: string;
+        domain_experiment_id: string;
+        selected_state_revision_id: string;
+        current_state_revision_id: string;
+        state_head_generation: number;
+        global_domain_revision_id: string;
+        membership_graph_sha256: string;
+        binding_status: string;
+        adapter_status: string;
+    };
+    plasmids: ProjectHubPlasmidSummary[];
+    sequence_data: {
+        items: ProjectHubSequenceDataItem[];
+        import_href: string;
+        launcher_href: string;
+    };
+    experiments: ProjectHubExperimentSummary[];
+    results: ProjectHubResultSummary[];
+    activity: ProjectHubActivitySummary[];
+}
+
+export interface ProjectHubPlasmidInfoDraft {
+    name: string;
+    molecule_type: string;
+    topology: string;
+    description: string;
+    organism_host_context: string | null;
+    project_tags: string[];
+    project_notes: string;
+}
+
+export interface UpdateProjectHubPlasmidInfoRequest {
+    expected_molecular_revision_id: string;
+    expected_state_revision_id: string;
+    expected_state_head_generation: number;
+    idempotency_key: string;
+    molecular_fields: Pick<ProjectHubPlasmidInfoDraft, 'name' | 'molecule_type' | 'topology' | 'description' | 'organism_host_context'>;
+    project_metadata: Pick<ProjectHubPlasmidInfoDraft, 'project_tags' | 'project_notes'>;
+}
+
+const projectHubRoot = (projectId: string, experimentId: string, domainId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/experiments/${encodeURIComponent(experimentId)}/domains/${encodeURIComponent(domainId)}/project-hub`;
+
+export const fetchProjectHub = (
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    stateRevisionId: string,
+    signal?: AbortSignal,
+) => apiData(api.get<ProjectHubReadModel>(projectHubRoot(projectId, experimentId, domainId), {
+    params: { state_revision_id: stateRevisionId },
+    signal,
+}));
+
+export const updateProjectHubPlasmidInfo = (
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    sequenceId: string,
+    request: UpdateProjectHubPlasmidInfoRequest,
+) => apiData(api.post<ProjectHubReadModel>(
+    `${projectHubRoot(projectId, experimentId, domainId)}/plasmids/${encodeURIComponent(sequenceId)}/info`,
+    request,
+));
