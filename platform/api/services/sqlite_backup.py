@@ -217,6 +217,50 @@ def inspect_sqlite_source_snapshot(
         os.close(source_descriptor)
 
 
+def open_verified_sqlite_backup(
+    backup_path: Path,
+    *,
+    expected_size_bytes: int,
+    expected_sha256: str,
+) -> sqlite3.Connection:
+    """Open one verified backup inode and return a connection bound to that inode."""
+
+    backup = Path(backup_path).expanduser().resolve()
+    backup_stat = _lstat(backup)
+    if backup_stat is None or not stat.S_ISREG(backup_stat.st_mode):
+        raise FileNotFoundError(f"SQLite backup does not exist: {backup}")
+    backup_identity = _identity(backup_stat)
+    descriptor = _open_pinned_readonly(backup, backup_identity, label="backup replay")
+    connection: sqlite3.Connection | None = None
+    try:
+        if os.fstat(descriptor).st_size != expected_size_bytes:
+            raise RuntimeError("SQLite backup replay size does not match its receipt")
+        if _sha256_descriptor(descriptor) != expected_sha256:
+            raise RuntimeError("SQLite backup replay digest does not match its receipt")
+        descriptors_before_open = _file_descriptor_identities()
+        connection = sqlite3.connect(f"file:{backup}?mode=ro", uri=True, timeout=30.0)
+        _attest_sqlite_connection(
+            connection,
+            descriptors_before_open,
+            backup_identity,
+            label="backup replay",
+        )
+        integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+        foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
+        if [str(row[0]) for row in integrity_rows] != ["ok"] or foreign_key_violations:
+            raise RuntimeError("SQLite backup replay failed integrity validation")
+        backup_path_after = _lstat(backup)
+        if backup_path_after is None or _identity(backup_path_after) != backup_identity:
+            raise RuntimeError("SQLite backup replay identity changed during verification")
+        result = connection
+        connection = None
+        return result
+    finally:
+        if connection is not None:
+            connection.close()
+        os.close(descriptor)
+
+
 def verify_sqlite_backup(
     backup_path: Path,
     *,
@@ -225,34 +269,12 @@ def verify_sqlite_backup(
 ) -> None:
     """Replay full integrity and byte checks against one immutable backup object."""
 
-    backup = Path(backup_path).expanduser().resolve()
-    backup_stat = _lstat(backup)
-    if backup_stat is None or not stat.S_ISREG(backup_stat.st_mode):
-        raise FileNotFoundError(f"SQLite backup does not exist: {backup}")
-    backup_identity = _identity(backup_stat)
-    descriptor = _open_pinned_readonly(backup, backup_identity, label="backup replay")
-    try:
-        if os.fstat(descriptor).st_size != expected_size_bytes:
-            raise RuntimeError("SQLite backup replay size does not match its receipt")
-        if _sha256_descriptor(descriptor) != expected_sha256:
-            raise RuntimeError("SQLite backup replay digest does not match its receipt")
-        descriptors_before_open = _file_descriptor_identities()
-        with sqlite3.connect(f"file:{backup}?mode=ro", uri=True, timeout=30.0) as connection:
-            _attest_sqlite_connection(
-                connection,
-                descriptors_before_open,
-                backup_identity,
-                label="backup replay",
-            )
-            integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
-            foreign_key_violations = len(connection.execute("PRAGMA foreign_key_check").fetchall())
-        if [str(row[0]) for row in integrity_rows] != ["ok"] or foreign_key_violations:
-            raise RuntimeError("SQLite backup replay failed integrity validation")
-        backup_path_after = _lstat(backup)
-        if backup_path_after is None or _identity(backup_path_after) != backup_identity:
-            raise RuntimeError("SQLite backup replay identity changed during verification")
-    finally:
-        os.close(descriptor)
+    connection = open_verified_sqlite_backup(
+        backup_path,
+        expected_size_bytes=expected_size_bytes,
+        expected_sha256=expected_sha256,
+    )
+    connection.close()
 
 
 def backup_sqlite_database(

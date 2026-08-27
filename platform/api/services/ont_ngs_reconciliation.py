@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import Job
 from services.job_result_roots import resolve_persisted_job_result_root
-from services.sqlite_backup import open_attested_sqlite_readonly_connection, verify_sqlite_backup
+from services.sqlite_backup import open_verified_sqlite_backup
 from services.ont_ngs_completion import (
     is_ont_fastq_qc_job,
     validate_and_prepare_ont_fastq_qc_completion,
@@ -506,12 +506,11 @@ def validate_persisted_reconciliation_receipt(
         backup_path = Path(results_dir).resolve().parent / "backups" / "ngs-reconciliation" / backup_id
         try:
             backup_record = cast(Mapping[str, Any], backup)
-            verify_sqlite_backup(
+            connection = open_verified_sqlite_backup(
                 backup_path,
                 expected_size_bytes=int(backup_record["size_bytes"]),
                 expected_sha256=str(backup_record["sha256"]),
             )
-            connection = open_attested_sqlite_readonly_connection(backup_path)
             try:
                 row = connection.execute(
                     "SELECT id, status, queue_status, awaiting_input, paused, completed_at, params, provenance, "
