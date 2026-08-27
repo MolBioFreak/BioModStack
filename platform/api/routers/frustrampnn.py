@@ -362,6 +362,19 @@ class FrustraMPNNStructureDatasetFanoutResponse(BaseModel):
     replayed: bool
     child_jobs: list[FrustraMPNNFanoutChildResponse] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_canonical_partition(self):
+        full_groups, remainder = divmod(
+            self.selected_structure_count, self.structures_per_job
+        )
+        expected = [self.structures_per_job] * full_groups
+        if remainder:
+            expected.append(remainder)
+        observed = [child.structure_count for child in self.child_jobs]
+        if observed != expected:
+            raise ValueError("child_jobs do not form the canonical partition")
+        return self
+
 
 class FrustraMPNNHandoffMetadataResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

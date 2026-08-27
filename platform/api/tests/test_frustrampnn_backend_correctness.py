@@ -17,6 +17,31 @@ from services.frustrampnn.settings import (
 )
 
 
+def _fanout_child(structure_count: int):
+    return frustrampnn_router.FrustraMPNNFanoutChildResponse.model_construct(
+        structure_count=structure_count
+    )
+
+
+@pytest.mark.parametrize(
+    "counts",
+    ([1, 2], [1, 1, 1], [2, 1, 1]),
+)
+def test_fanout_response_rejects_noncanonical_grouping(counts: list[int]) -> None:
+    with pytest.raises(ValidationError, match="canonical partition"):
+        frustrampnn_router.FrustraMPNNStructureDatasetFanoutResponse.model_validate(
+            {
+                "schema_name": "bms.structure-dataset-fanout.v1",
+                "fanout_id": "f" * 64,
+                "parent_job_id": "parent-1",
+                "selected_structure_count": sum(counts),
+                "structures_per_job": 2,
+                "replayed": False,
+                "child_jobs": [_fanout_child(count) for count in counts],
+            }
+        )
+
+
 def _complete_settings_payload() -> dict[str, object]:
     return {
         "schema_name": "frustrampnn_settings",

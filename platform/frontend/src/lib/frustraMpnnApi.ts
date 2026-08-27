@@ -1897,11 +1897,14 @@ export const parseFrustraMpnnStructureDatasetFanout = (
     });
     const selectedCount = fmInteger(payload.selected_structure_count, 'fan-out.selected_structure_count', 1);
     const structuresPerJob = fmInteger(payload.structures_per_job, 'fan-out.structures_per_job', 1);
-    if (childJobs.reduce((total, child) => total + child.structure_count, 0) !== selectedCount) {
-        throw new Error('FrustraMPNN structure dataset fan-out cardinality is inconsistent');
-    }
-    if (childJobs.some((child) => child.structure_count > structuresPerJob)) {
-        throw new Error('FrustraMPNN structure dataset fan-out exceeds structures_per_job');
+    const expectedCounts = Array(Math.floor(selectedCount / structuresPerJob)).fill(structuresPerJob) as number[];
+    const remainder = selectedCount % structuresPerJob;
+    if (remainder > 0) expectedCounts.push(remainder);
+    if (
+        childJobs.length !== expectedCounts.length
+        || childJobs.some((child, index) => child.structure_count !== expectedCounts[index])
+    ) {
+        throw new Error('FrustraMPNN structure dataset fan-out is not the canonical partition');
     }
     return {
         schema_name: payload.schema_name,

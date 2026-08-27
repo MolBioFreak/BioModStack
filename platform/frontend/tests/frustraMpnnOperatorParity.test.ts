@@ -368,6 +368,21 @@ test('structure dataset fan-out parser exposes every scheduler child and smaller
         ['child-1', 2],
         ['child-2', 1],
     ]);
+    for (const counts of [[1, 2], [1, 1, 1], [2, 1, 1]]) {
+        assert.throws(
+            () => parseFanout({
+                schema_name: 'bms.structure-dataset-fanout.v1',
+                fanout_id: hashes.f,
+                parent_job_id: 'job-1',
+                selected_structure_count: counts.reduce((total, count) => total + count, 0),
+                structures_per_job: 2,
+                replayed: false,
+                child_jobs: counts.map((count, index) => child({ id: `invalid-${index}`, count }))
+                    .map(({ handoff: _handoff, ...value }) => value),
+            }),
+            /canonical partition/i,
+        );
+    }
 });
 
 
