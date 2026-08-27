@@ -4958,10 +4958,15 @@ export function ResultsViewer() {
             });
         },
         onSuccess: (response) => {
-            const launchedJob = response.data.launched_job;
+            const launchedJobs = response.data.launched_jobs.length > 0
+                ? response.data.launched_jobs
+                : [response.data.launched_job];
+            const launchedSummary = launchedJobs
+                .map((job) => `${job.name} (${job.id})`)
+                .join(', ');
             setIterationMessage({
                 kind: 'success',
-                text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
+                text: `${response.data.message} New jobs: ${launchedSummary}.`,
             });
             setShowCdrIndelModal(false);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });

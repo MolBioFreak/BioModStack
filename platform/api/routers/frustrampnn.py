@@ -93,8 +93,16 @@ from services.frustrampnn.jobs import (
     create_child_job,
     create_reanalysis_child,
     design_selections,
+    discard_uncommitted_child_artifacts,
     handoff_selection,
     upload_selection,
+)
+from services.structure_dataset_fanout import (
+    FANOUT_SCHEMA,
+    StructureDatasetBatch,
+    StructureDatasetFanoutError,
+    StructureDatasetMember,
+    fan_out_structure_dataset,
 )
 from services.frustrampnn.settings import (
     FrustraMPNNEffectiveSettings,
@@ -337,6 +345,35 @@ class FrustraMPNNChildReceiptResponse(BaseModel):
     requested_settings_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     candidates: list[FrustraMPNNChildCandidateReceiptResponse]
     results: list[FrustraMPNNChildResultReceiptResponse]
+
+
+class FrustraMPNNFanoutChildResponse(FrustraMPNNChildReceiptResponse):
+    structure_count: int = Field(ge=1)
+
+
+class FrustraMPNNStructureDatasetFanoutResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_name: Literal["bms.structure-dataset-fanout.v1"]
+    fanout_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_job_id: str
+    selected_structure_count: int = Field(ge=1)
+    structures_per_job: int = Field(ge=1)
+    replayed: bool
+    child_jobs: list[FrustraMPNNFanoutChildResponse] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_canonical_partition(self):
+        full_groups, remainder = divmod(
+            self.selected_structure_count, self.structures_per_job
+        )
+        expected = [self.structures_per_job] * full_groups
+        if remainder:
+            expected.append(remainder)
+        observed = [child.structure_count for child in self.child_jobs]
+        if observed != expected:
+            raise ValueError("child_jobs do not form the canonical partition")
+        return self
 
 
 class FrustraMPNNHandoffMetadataResponse(BaseModel):
@@ -1894,6 +1931,72 @@ async def _child_job_receipt(session: AsyncSession, child: Job) -> dict[str, Any
     return await child_receipt(session, child=child)
 
 
+async def _fanout_design_selections(
+    session: AsyncSession,
+    *,
+    parent: Job,
+    selections: list[Any],
+    requested_settings: FrustraMPNNRequestedSettings,
+    trigger: str,
+):
+    members = [
+        StructureDatasetMember(
+            structure_id=str(selection.design_id or _candidate_id),
+            lineage={
+                "design_id": selection.design_id,
+                "source_job_id": selection.source_job_id,
+                "source_sha256": selection.source_sha256,
+                "producer_stage": selection.producer_stage,
+                "producer_coordinates": selection.producer_coordinates,
+            },
+            payload=selection,
+        )
+        for _candidate_id, selection in enumerate(selections, 1)
+    ]
+
+    async def create_batch(batch: StructureDatasetBatch[Any]) -> Job:
+        return await create_child_job(
+            session,
+            selections=[member.payload for member in batch.members],
+            source_parent=parent,
+            trigger=trigger,
+            requested_settings=requested_settings,
+            preallocated_job_id=batch.child_job_id,
+            commit=False,
+        )
+
+    return await fan_out_structure_dataset(
+        session,
+        workflow_id="frustrampnn.analyze-structures.v1",
+        parent_job=parent,
+        members=members,
+        structures_per_job=requested_settings.structures_per_job,
+        request_identity={
+            "requested_settings": requested_settings.model_dump(mode="json", exclude_none=False),
+            "trigger": trigger,
+        },
+        create_child=create_batch,
+        discard_child=discard_uncommitted_child_artifacts,
+    )
+
+
+async def _fanout_receipt(session: AsyncSession, fanout: Any) -> dict[str, Any]:
+    children: list[dict[str, Any]] = []
+    for child in fanout.child_jobs:
+        receipt = await _child_job_receipt(session, child)
+        receipt["structure_count"] = len(receipt["candidates"])
+        children.append(receipt)
+    return {
+        "schema_name": FANOUT_SCHEMA,
+        "fanout_id": fanout.fanout_id,
+        "parent_job_id": fanout.parent_job_id,
+        "selected_structure_count": fanout.selected_structure_count,
+        "structures_per_job": fanout.structures_per_job,
+        "replayed": fanout.replayed,
+        "child_jobs": children,
+    }
+
+
 def _multipart_requested_settings(form: Any) -> FrustraMPNNRequestedSettings:
     raw = form.get("frustrampnn_settings")
     if raw is None:
@@ -2870,14 +2973,14 @@ async def handoff_external_candidate(
 @router.post(
     "/jobs/{parent_job_id}/analyze",
     status_code=status.HTTP_202_ACCEPTED,
-    response_model=FrustraMPNNChildReceiptResponse,
+    response_model=FrustraMPNNStructureDatasetFanoutResponse,
 )
 async def analyze_designs(
     parent_job_id: str,
     body: AnalyzeDesignsRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Queue immutable selected Designs under an existing parent authority."""
+    """Fan out immutable selected Designs as scheduler-visible child Jobs."""
     parent = await session.get(Job, parent_job_id)
     if parent is None:
         raise HTTPException(404, "source parent Job not found")
@@ -2890,15 +2993,15 @@ async def analyze_designs(
             design_ids=design_ids,
             expected_sha256=expected,
         )
-        job = await create_child_job(
+        fanout = await _fanout_design_selections(
             session,
+            parent=parent,
             selections=selections,
-            source_parent=parent,
-            trigger="design_analyze",
             requested_settings=body.frustrampnn_settings,
+            trigger="design_analyze",
         )
-        return await _child_job_receipt(session, job)
-    except FrustraMPNNChildError as exc:
+        return await _fanout_receipt(session, fanout)
+    except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc
 

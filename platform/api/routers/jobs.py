@@ -23,7 +23,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -847,6 +847,9 @@ class AntibodyIterationLaunchRequest(BaseModel):
 
 class AntibodyIterationLaunchResponse(BaseModel):
     """Response for viewer-driven antibody iteration actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
     message: str
     action: str
     source_job_id: str
@@ -854,6 +857,8 @@ class AntibodyIterationLaunchResponse(BaseModel):
     selection_dir: str
     selected_design_count: int
     launched_job: JobResponse
+    launched_jobs: List[JobResponse] = Field(default_factory=list)
+    fanout_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class ManualMutagenesisLaunchRequest(BaseModel):
@@ -6898,9 +6903,10 @@ async def launch_antibody_iteration_from_designs(
             )
         from services.frustrampnn.jobs import (
             FrustraMPNNChildError,
-            create_child_job as create_frustrampnn_child_job,
             design_selections as resolve_frustrampnn_selections,
         )
+        from services.structure_dataset_fanout import StructureDatasetFanoutError
+        from routers.frustrampnn import _fanout_design_selections
 
         try:
             selections = await resolve_frustrampnn_selections(
@@ -6908,27 +6914,34 @@ async def launch_antibody_iteration_from_designs(
                 source_parent=source_job,
                 design_ids=design_ids,
             )
-            child = await create_frustrampnn_child_job(
-                session,
-                selections=selections,
-                source_parent=source_job,
-                trigger="antibody_iteration",
-                requested_settings=(
-                    request.frustrampnn_settings or default_frustrampnn_settings()
-                ),
+            requested_settings = (
+                request.frustrampnn_settings or default_frustrampnn_settings()
             )
-        except FrustraMPNNChildError as exc:
+            fanout = await _fanout_design_selections(
+                session,
+                parent=source_job,
+                selections=selections,
+                trigger="antibody_iteration",
+                requested_settings=requested_settings,
+            )
+        except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
             await session.rollback()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        launched_job = await get_job(str(child.id), session)
+        launched_jobs = [await get_job(str(child.id), session) for child in fanout.child_jobs]
+        launched_job = launched_jobs[0]
         return AntibodyIterationLaunchResponse(
-            message=f"Queued FrustraMPNN analysis for {len(ordered_designs)} selected designs.",
+            message=(
+                f"Queued {len(launched_jobs)} FrustraMPNN scheduler jobs for "
+                f"{len(ordered_designs)} selected designs."
+            ),
             action=action,
             source_job_id=source_job.id,
             root_job_id=root_job.id,
-            selection_dir=str(child.output_dir),
+            selection_dir=str(fanout.child_jobs[0].output_dir),
             selected_design_count=len(ordered_designs),
             launched_job=launched_job,
+            launched_jobs=launched_jobs,
+            fanout_id=fanout.fanout_id,
         )
 
     selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)

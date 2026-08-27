@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQueries } from '@tanstack/react-query';
 import { downloadDesignPdb } from '../lib/api.js';
 import {
     analyzeFrustraMpnnDesigns,
     fetchFrustraMpnnReceipt,
     inspectFrustraMpnnUploadedSource,
     validateFrustraMpnnUploadedSettings,
-    type FrustraMpnnChildReceipt,
     type FrustraMpnnRequestedSettings,
+    type FrustraMpnnStructureDatasetFanout,
 } from '../lib/frustraMpnnApi.js';
 import { useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
@@ -60,7 +60,7 @@ export default function FrustraMpnnAnalysisControls({
 }: FrustraMpnnAnalysisControlsProps) {
     const integrationQuery = useModelIntegrationConfig('frustrampnn');
     const integration = integrationQuery.data;
-    const [receipt, setReceipt] = useState<FrustraMpnnChildReceipt | null>(null);
+    const [fanout, setFanout] = useState<FrustraMpnnStructureDatasetFanout | null>(null);
     const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(CANONICAL_FRUSTRAMPNN_SETTINGS);
     const [governedPreview, setGovernedPreview] = useState<Awaited<ReturnType<typeof resolveOwnedSelection>> | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
@@ -103,19 +103,20 @@ export default function FrustraMpnnAnalysisControls({
                 frustrampnn_settings: frustrampnnSettings,
             });
         },
-        onSuccess: setReceipt,
+        onSuccess: setFanout,
     });
-    const activeReceipt = useQuery({
-        queryKey: ['frustrampnn-child-receipt', receipt?.child_job_id],
-        queryFn: () => fetchFrustraMpnnReceipt(receipt!.child_job_id),
-        enabled: Boolean(receipt?.child_job_id),
-        initialData: receipt ?? undefined,
-        refetchInterval: (query) => {
-            const status = query.state.data?.status;
-            return status === 'queued' || status === 'running' ? 3000 : false;
-        },
+    const activeReceipts = useQueries({
+        queries: (fanout?.child_jobs ?? []).map((receipt) => ({
+            queryKey: ['frustrampnn-child-receipt', receipt.child_job_id],
+            queryFn: () => fetchFrustraMpnnReceipt(receipt.child_job_id),
+            initialData: receipt,
+            refetchInterval: (query: { state: { data?: { status?: string } } }) => {
+                const status = query.state.data?.status;
+                return status === 'queued' || status === 'running' ? 3000 : false;
+            },
+        })),
     });
-    const current = activeReceipt.data ?? receipt;
+    const currentReceipts = activeReceipts.map((query, index) => query.data ?? fanout!.child_jobs[index]!);
 
     if (selectedDesigns.length === 0) return null;
     return (
@@ -131,7 +132,7 @@ export default function FrustraMpnnAnalysisControls({
                         </p>
                     )}
                     <p className="mt-1 text-xs text-slate-400">
-                        Submit the selected BMS-owned Design structures to the scheduler. The browser receives a child receipt and never waits for inference.
+                        Submit the selected BMS-owned Design structures to the scheduler. Every scheduler child remains visible and is polled independently.
                     </p>
                     <p className="mt-2 truncate text-[11px] text-slate-500" title={orderedNames}>
                         Locked order: {orderedNames}
@@ -166,15 +167,24 @@ export default function FrustraMpnnAnalysisControls({
                     {errorMessage(submission.error)}
                 </div>
             )}
-            {current && (
-                <div role="status" aria-live="polite" className={`mt-3 rounded-lg border p-3 text-xs ${stateClass(current.status)}`}>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold">Child {current.status}</span>
-                        <button type="button" onClick={() => onOpenJob(current.result_job_id)} className="rounded border border-current/50 px-3 py-1.5 hover:bg-white/10">
-                            Open persisted results
-                        </button>
+            {fanout && (
+                <div role="status" aria-live="polite" className="mt-3 space-y-2">
+                    <div className="text-xs text-cyan-100">
+                        {fanout.child_jobs.length} scheduler children for {fanout.selected_structure_count} structures
                     </div>
-                    <div className="mt-1 font-mono text-[10px] opacity-80">{current.child_job_id}</div>
+                    {currentReceipts.map((current, index) => (
+                        <div key={current.child_job_id} className={`rounded-lg border p-3 text-xs ${stateClass(current.status)}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-semibold">
+                                    Child {index + 1}/{fanout.child_jobs.length} · {fanout.child_jobs[index]!.structure_count} structure{fanout.child_jobs[index]!.structure_count === 1 ? '' : 's'} · {current.status}
+                                </span>
+                                <button type="button" onClick={() => onOpenJob(current.result_job_id)} className="rounded border border-current/50 px-3 py-1.5 hover:bg-white/10">
+                                    Open persisted results
+                                </button>
+                            </div>
+                            <div className="mt-1 font-mono text-[10px] opacity-80">{current.child_job_id}</div>
+                        </div>
+                    ))}
                 </div>
             )}
         </section>

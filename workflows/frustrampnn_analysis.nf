@@ -64,6 +64,60 @@ process PublishPersistedFrustraMPNNChildBundle {
     """
 }
 
+process RunPersistedFrustraMPNNGroupedBatch {
+    tag 'frustrampnn-grouped-predict-batch'
+    label 'frustrampnn_gpu'
+    errorStrategy 'terminate'
+    maxRetries 0
+
+    input:
+    val batch_manifest_path
+
+    output:
+    path 'grouped_results', emit: results
+
+    script:
+    def assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        error('grouped FrustraMPNN requires explicit scheduler-assigned physical GPU ID')
+    }
+    def apptainer_bin = params.get('apptainer_bin') ?: 'apptainer'
+    """
+    set -euo pipefail
+    export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
+    '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_grouped_batch.py' \
+      --batch-manifest '${batch_manifest_path}' \
+      --job-root '${params.out_dir}' \
+      --container '${params.container_dir}/frustrampnn.sif' \
+      --apptainer '${apptainer_bin}' \
+      --physical-gpu-id '${assigned_gpu}' > grouped_batch_terminal.json
+    test -d grouped_results
+    """
+}
+
+process PublishPersistedFrustraMPNNGroupedBundles {
+    tag 'frustrampnn-grouped-publish'
+    label 'CPU'
+    stageInMode 'copy'
+    errorStrategy 'terminate'
+    maxRetries 0
+
+    input:
+    path grouped_results
+
+    output:
+    path 'published_*.json', emit: marker
+
+    script:
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/publish_frustrampnn_grouped_results.py' \
+      --grouped-root '${grouped_results}' \
+      --job-root '${params.out_dir}' \
+      --marker-root .
+    """
+}
+
 process ReportPersistedFrustraMPNNComplete {
     label 'CPU'
     stageInMode 'copy'
@@ -82,11 +136,14 @@ process ReportPersistedFrustraMPNNComplete {
     mapfile -t outputs < <('${params.api_python}' \
       '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
       --job-root '${params.out_dir}' \
+      --status-output frustrampnn_stage_status \
       published_*.json)
     test \"\${#outputs[@]}\" -gt 0
+    status=\$(<frustrampnn_stage_status)
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+      '${params.job_id}' frustrampnn \"\${status}\" \"\${outputs[@]}\"
     : > frustrampnn_complete.reported
+    test \"\${status}\" = complete
     """
 }
 
@@ -122,11 +179,6 @@ workflow {
     ) {
         throw new IllegalArgumentException('invalid persisted FrustraMPNN scheduler batch manifest')
     }
-    if (batch.batching_enabled && batch.records.size() > 1) {
-        throw new IllegalArgumentException(
-            'FrustraMPNN grouped dispatch awaits BMS-DEV-29 workflow:structure_prediction ownership'
-        )
-    }
     def authorityRoot = manifestPath.parent.parent
     def recordKeys = [
         'record_schema_name', 'record_schema_version', 'ordinal', 'candidate_id',
@@ -160,9 +212,16 @@ workflow {
             file(authorityRoot.resolve(structureMapRelative))
         )
     }
-    preparedInputs = Channel.fromList(persisted)
-    PreparePersistedFrustraMPNNCandidate(preparedInputs)
-    CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)
-    PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNNV2.out.result)
-    ReportPersistedFrustraMPNNComplete(PublishPersistedFrustraMPNNChildBundle.out.marker.collect())
+    if (batch.batching_enabled && batch.records.size() > 1) {
+        RunPersistedFrustraMPNNGroupedBatch(manifestPath.toString())
+        PublishPersistedFrustraMPNNGroupedBundles(RunPersistedFrustraMPNNGroupedBatch.out.results)
+        publicationMarkers = PublishPersistedFrustraMPNNGroupedBundles.out.marker
+    } else {
+        preparedInputs = Channel.fromList(persisted)
+        PreparePersistedFrustraMPNNCandidate(preparedInputs)
+        CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)
+        PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNNV2.out.result)
+        publicationMarkers = PublishPersistedFrustraMPNNChildBundle.out.marker
+    }
+    ReportPersistedFrustraMPNNComplete(publicationMarkers.flatten().collect())
 }

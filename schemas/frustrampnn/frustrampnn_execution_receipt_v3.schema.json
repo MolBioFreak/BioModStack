@@ -183,6 +183,12 @@
     "schema_version": {
       "const": 3
     },
+    "execution_method": {
+      "enum": [
+        "predict",
+        "predict_batch"
+      ]
+    },
     "invocation_id": {
       "type": "string",
       "minLength": 1
@@ -260,6 +266,7 @@
   "required": [
     "schema_name",
     "schema_version",
+    "execution_method",
     "invocation_id",
     "execution_configuration_sha256",
     "requested_settings_sha256",

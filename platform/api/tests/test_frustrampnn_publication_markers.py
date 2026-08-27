@@ -23,18 +23,22 @@ def _run_validator(
     payload: dict[str, str],
     *,
     bare_marker: bool = False,
+    status_output: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     marker = tmp_path / "published_candidate.json"
     marker.write_text(json.dumps(payload), encoding="utf-8")
     marker_argument = marker.name if bare_marker else str(marker)
+    command = [
+        sys.executable,
+        str(VALIDATOR),
+        "--job-root",
+        str(job_root),
+    ]
+    if status_output is not None:
+        command.extend(["--status-output", str(status_output)])
+    command.append(marker_argument)
     return subprocess.run(
-        [
-            sys.executable,
-            str(VALIDATOR),
-            "--job-root",
-            str(job_root),
-            marker_argument,
-        ],
+        command,
         cwd=tmp_path,
         text=True,
         capture_output=True,
@@ -68,8 +72,11 @@ def test_v2_publication_marker_validator_accepts_closed_publisher_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_root, payload = _published_v2(tmp_path, monkeypatch)
+    status_output = tmp_path / "stage-status"
 
-    completed = _run_validator(tmp_path, job_root, payload)
+    completed = _run_validator(
+        tmp_path, job_root, payload, status_output=status_output
+    )
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.splitlines() == [
@@ -78,6 +85,7 @@ def test_v2_publication_marker_validator_accepts_closed_publisher_shape(
         payload["source"],
         payload["statistics"],
     ]
+    assert status_output.read_text(encoding="utf-8") == "complete\n"
 
 
 def test_v2_publication_marker_validator_accepts_bare_marker_from_work_directory(
@@ -176,4 +184,9 @@ def test_v2_workflow_reporters_execute_validator_before_stage_complete_callback(
         reporter = source.index("stage_reporter.py", validator)
         assert validator < reporter
         assert "--job-root '${params.out_dir}'" in source
-        assert "frustrampnn complete" in source
+    standalone = WORKFLOWS[0].read_text(encoding="utf-8")
+    assert "--status-output frustrampnn_stage_status" in standalone
+    assert "'${params.job_id}' frustrampnn" in standalone
+    assert "\\${status}" in standalone
+    assert "test \\\"\\${status}\\\" = complete" in standalone
+    assert "frustrampnn complete" in WORKFLOWS[1].read_text(encoding="utf-8")
