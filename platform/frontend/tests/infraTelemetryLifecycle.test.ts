@@ -20,25 +20,34 @@ import type { LiveSample } from '../src/components/infraTelemetryHistory.js';
 
 const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
 
-test('viewer reads bounded server-owned telemetry history without browser history writes', () => {
+test('viewer reads compact incremental server-bucketed telemetry without browser history writes', () => {
     const telemetrySource = readFileSync('src/components/InfraLiveTelemetry.tsx', 'utf8');
     const historySource = readFileSync('src/components/infraTelemetryHistory.ts', 'utf8');
+    const apiSource = readFileSync('src/lib/api.ts', 'utf8');
     assert.doesNotMatch(telemetrySource, /react-plotly\.js|plotly\.js/);
     assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
-    assert.match(telemetrySource, /fetchTelemetryHistory\(stableStartMs, requestEndMs, 'raw', 4000\)/);
-    assert.match(telemetrySource, /resampleTelemetrySamples\(rawSamples, bucketIntervalMs\)/);
+    assert.match(telemetrySource, /fetchTelemetryChartHistory\([\s\S]*?stableStartMs,[\s\S]*?requestEndMs,[\s\S]*?bucketIntervalMs,[\s\S]*?cursor/);
+    assert.match(telemetrySource, /resolveTelemetryChartCursor\(/);
+    assert.match(telemetrySource, /mergeTelemetryChartHistory\(/);
+    assert.doesNotMatch(telemetrySource, /fetchTelemetryHistory|resampleTelemetrySamples/);
+    assert.match(apiSource, /\/api\/telemetry\/chart-history/);
     assert.match(telemetrySource, /placeholderData: \(previousData\)/);
     assert.doesNotMatch(telemetrySource, /'minute'|mergeMinuteHistoryWithRawTail|downsampleTelemetryTail|MINUTE_LIVE_TAIL_MS/);
     assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
     assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
     assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
-    assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data \?\? latestPoint\?\.payload/);
+    assert.match(telemetrySource, /const payload = liveStatusQuery\.isError \? undefined : liveStatusQuery\.data\?\.data;/);
+    assert.match(telemetrySource, /const latestTimestampMs = historyQuery\.data\?\.next_cursor_ms \?\? latestPoint\?\.timestamp_ms \?\? null;/);
     assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?liveStatusQuery\.data\?\.data\.timestamp/);
     assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?historyQuery\.errorUpdatedAt[\s\S]*?liveStatusQuery\.errorUpdatedAt/);
     assert.match(telemetrySource, /historyQuery\.isError \|\| liveStatusQuery\.isError/);
     assert.match(telemetrySource, /resolveTelemetryNominalDomain\([\s\S]*?freshnessObservedAtMs,[\s\S]*?historyQuery\.isError \|\| historyIsStale/);
     assert.match(telemetrySource, /refetchOnWindowFocus: false/);
-    assert.match(telemetrySource, /buildSample\(point\.payload, 1000, point\.timestamp_ms\)/);
+    assert.match(telemetrySource, /buildChartSample\(point, 1000\)/);
+    assert.match(telemetrySource, /function HistoricalTelemetryFallback\(/);
+    assert.match(telemetrySource, /liveStatusQuery\.isError && historyPoints\.length > 0/);
+    assert.match(telemetrySource, /Live status unavailable\. Historical charts remain available\./);
+    assert.match(telemetrySource, /<HistoricalTelemetryFallback/);
     assert.match(telemetrySource, /Telemetry collection is stale/);
     assert.match(telemetrySource, /const xMin = xDomain\?\.\[0\]/);
     assert.match(telemetrySource, /const xMax = xDomain\?\.\[1\]/);
