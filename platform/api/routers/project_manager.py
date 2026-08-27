@@ -15,7 +15,13 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, get_session as get_core_session
+from database import (
+    Design,
+    FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
+    Job,
+    get_session as get_core_session,
+)
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
 from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
@@ -740,6 +746,7 @@ async def list_domain_frustrampnn_results(
     global_experiment_revision_id: str = Query(min_length=1, max_length=128),
     domain_revision_id: str = Query(min_length=1, max_length=128),
     session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
 ) -> dict[str, Any]:
     try:
         await _domain_hierarchy(session, project_id, experiment_id, domain_id)
@@ -765,7 +772,7 @@ async def list_domain_frustrampnn_results(
                 )
                 .where(
                     ExperimentExternalEntityReceipt.workspace_id == project_id,
-                    ExperimentExternalEntityReceipt.entity_kind == "frustrampnn_result",
+                    ExperimentExternalEntityReceipt.entity_kind.in_(("design", "frustrampnn_result")),
                     ExperimentRevisionEdge.revision_id == domain_revision_id,
                     ExperimentRevisionEdge.role == "source_receipt",
                 )
@@ -788,7 +795,8 @@ async def list_domain_frustrampnn_results(
             },
         )
 
-    items_by_identity: dict[tuple[str, str], dict[str, str]] = {}
+    items_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+    selected_design_memberships: list[tuple[ExperimentExternalEntityReceipt, int, str]] = []
     for row, revision_edge in rows:
         try:
             acknowledgement = json.loads(row.acknowledgement_json)
@@ -814,10 +822,36 @@ async def list_domain_frustrampnn_results(
             or acknowledgement.get("availability") != row.availability
             or acknowledgement.get("verifier_id") != row.verification_authority
             or row.store_id != "core"
-            or row.entity_kind != "frustrampnn_result"
+            or not isinstance(metadata, dict)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt authority is invalid",
+                },
+            )
+        if row.entity_kind == "design":
+            design_id = metadata.get("design_id")
+            if (
+                row.verification_authority != "bms.core.protein-result-reference.adapter.v1"
+                or row.availability != "available"
+                or not isinstance(design_id, str)
+                or design_id != row.entity_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_receipt_invalid",
+                        "message": "FrustraMPNN selected source membership is invalid",
+                    },
+                )
+            selected_design_memberships.append((row, int(revision_edge.ordinal), design_id))
+            continue
+        if (
+            row.entity_kind != "frustrampnn_result"
             or row.verification_authority
             != "bms.frustrampnn.result-reference.adapter.v1"
-            or not isinstance(metadata, dict)
         ):
             raise HTTPException(
                 status_code=409,
@@ -901,6 +935,222 @@ async def list_domain_frustrampnn_results(
                 },
             )
         items_by_identity[identity] = item
+
+    if selected_design_memberships:
+        selected_design_ids = [design_id for _row, _ordinal, design_id in selected_design_memberships]
+        if len(selected_design_ids) != len(set(selected_design_ids)):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_identity_conflict",
+                    "message": "FrustraMPNN scope repeats one selected Design membership",
+                },
+            )
+        designs = list((await core_session.scalars(
+            select(Design).where(Design.id.in_(selected_design_ids)).limit(257)
+        )).all())
+        designs_by_id = {str(design.id): design for design in designs}
+        if len(designs_by_id) != len(selected_design_ids):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_source_unavailable",
+                    "message": "A selected Domain-revision Design is unavailable in the core store",
+                },
+            )
+
+        source_job_ids = sorted({str(design.job_id) for design in designs})
+        source_jobs = list((await core_session.scalars(
+            select(Job).where(Job.id.in_(source_job_ids)).limit(257)
+        )).all())
+        if len(source_jobs) != len(source_job_ids):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_source_unavailable",
+                    "message": "A selected Domain-revision Design has no owning core Job",
+                },
+            )
+        source_batch_ids = sorted({
+            str(job.batch_id) for job in source_jobs if job.batch_id is not None
+        })
+        child_owner_predicates = [
+            Job.parent_job_id.in_(source_job_ids),
+            Job.selection_source_job_id.in_(source_job_ids),
+        ]
+        if source_batch_ids:
+            child_owner_predicates.append(Job.batch_id.in_(source_batch_ids))
+        child_jobs = list((await core_session.scalars(
+            select(Job)
+            .where(
+                Job.model_id == "frustrampnn",
+                Job.child_stage == "frustrampnn",
+                or_(*child_owner_predicates),
+            )
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .limit(257)
+        )).all())
+        if len(child_jobs) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN scheduler authority exceeds the supported 256-job bound",
+                },
+            )
+        authority_by_design: dict[str, tuple[Job, dict[str, Any]]] = {}
+        for child in child_jobs:
+            envelope = (child.params or {}).get("_frustrampnn_child_v1")
+            if not isinstance(envelope, dict):
+                continue
+            selection = envelope.get("selection")
+            invocation_ids = envelope.get("component_invocation_ids")
+            if (
+                envelope.get("schema_name") != "bms.frustrampnn.scheduler-child.v1"
+                or envelope.get("schema_version") != 1
+                or envelope.get("execution_owner_job_id") != child.id
+                or not isinstance(selection, list)
+                or not isinstance(invocation_ids, list)
+                or len(selection) > 256
+                or len(invocation_ids) != len(selection)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_scheduler_authority_invalid",
+                        "message": "FrustraMPNN scheduler child authority is invalid",
+                    },
+                )
+            for member in selection:
+                design_id = member.get("design_id") if isinstance(member, dict) else None
+                invocation_id = member.get("invocation_id") if isinstance(member, dict) else None
+                candidate_id = member.get("candidate_id") if isinstance(member, dict) else None
+                source_sha = member.get("sha256") if isinstance(member, dict) else None
+                if design_id not in designs_by_id:
+                    continue
+                if (
+                    not isinstance(invocation_id, str)
+                    or invocation_id not in invocation_ids
+                    or not isinstance(candidate_id, str)
+                    or not candidate_id
+                    or not isinstance(source_sha, str)
+                    or len(source_sha) != 64
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "frustrampnn_scope_scheduler_authority_invalid",
+                            "message": "FrustraMPNN selected member authority is invalid",
+                        },
+                    )
+                authority_by_design.setdefault(str(design_id), (child, member))
+
+        child_ids = [str(child.id) for child, _member in authority_by_design.values()]
+        results = list((await core_session.scalars(
+            select(FrustraMPNNResult)
+            .where(FrustraMPNNResult.parent_job_id.in_(child_ids or [""]))
+            .limit(257)
+        )).all())
+        if len(results) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN persisted results exceed the supported 256-result bound",
+                },
+            )
+        results_by_identity = {
+            (str(result.parent_job_id), str(result.invocation_id)): result for result in results
+        }
+        analyses = list((await core_session.scalars(
+            select(FrustraMPNNStatisticsAnalysis)
+            .where(FrustraMPNNStatisticsAnalysis.parent_job_id.in_(child_ids or [""]))
+            .order_by(FrustraMPNNStatisticsAnalysis.created_at.desc())
+            .limit(257)
+        )).all())
+        if len(analyses) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN statistics authority exceeds the supported 256-analysis bound",
+                },
+            )
+        analysis_by_identity: dict[tuple[str, str], FrustraMPNNStatisticsAnalysis] = {}
+        for analysis in analyses:
+            analysis_by_identity.setdefault(
+                (str(analysis.parent_job_id), str(analysis.invocation_id)), analysis
+            )
+
+        projected_items: list[dict[str, Any]] = []
+        for membership, ordinal, design_id in sorted(
+            selected_design_memberships, key=lambda item: (item[1], item[0].id)
+        ):
+            authority = authority_by_design.get(design_id)
+            if authority is None:
+                continue
+            child, member = authority
+            invocation_id = str(member["invocation_id"])
+            candidate_id = str(member["candidate_id"])
+            identity = (str(child.id), invocation_id)
+            result = results_by_identity.get(identity)
+            analysis = analysis_by_identity.get(identity)
+            child_state = str(child.queue_status or child.status or "").lower()
+            if child_state == "failed":
+                state = "failed"
+                diagnostic = _bounded_scope_diagnostic(child.error_message)
+            elif child_state in {"cancelled", "canceled"}:
+                state = "skipped"
+                diagnostic = _bounded_scope_diagnostic(child.error_message)
+            elif child_state == "completed" and result is not None:
+                state = "completed"
+                diagnostic = None
+            else:
+                state = "missing"
+                diagnostic = "expected persisted result absent"
+            manifest_sha = str(result.manifest_sha256) if result is not None else ""
+            projected_items.append({
+                "result_receipt_id": membership.id,
+                "parent_job_id": str(child.id),
+                "invocation_id": invocation_id,
+                "candidate_id": candidate_id,
+                "operator_label": str(designs_by_id[design_id].name)[:160],
+                "source_identity": {
+                    "design_id": design_id,
+                    "artifact_id": (
+                        str(result.source_artifact_id)
+                        if result is not None and result.source_artifact_id
+                        else design_id
+                    ),
+                    "artifact_sha256": str(member["sha256"]),
+                    "candidate_id": candidate_id,
+                },
+                "state": state,
+                "diagnostic": diagnostic,
+                "statistics_analysis": {
+                    "state": str(analysis.state) if analysis is not None else "not_started",
+                    "diagnostic": _bounded_scope_diagnostic(
+                        analysis.diagnostic if analysis is not None else None
+                    ),
+                },
+                "manifest_sha256": manifest_sha,
+                "content_digest": manifest_sha or membership.content_digest,
+                "reopen_uri": (
+                    f"/designs/{child.id}?frustrampnn_invocation_id={invocation_id}"
+                ),
+            })
+        for item in projected_items:
+            identity = (item["parent_job_id"], item["invocation_id"])
+            prior = items_by_identity.get(identity)
+            if prior is not None and prior != item:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_identity_conflict",
+                        "message": "FrustraMPNN scope has conflicting native authorities",
+                    },
+                )
+            items_by_identity[identity] = item
 
     items = list(items_by_identity.values())
     return {
