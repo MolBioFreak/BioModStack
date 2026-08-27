@@ -4389,9 +4389,9 @@ export function NGSToolkit() {
                                 New Nanopore Run
                             </button>
                         </div>
-                        <div className="overflow-x-auto">
+                        <div className="max-h-[22rem] overflow-auto overscroll-contain">
                             <table className="w-full text-sm">
-                                <thead className="bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+                                <thead className="sticky top-0 z-10 bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
                                     <tr>
                                         <th className="text-left px-4 py-2">Job</th>
                                         <th className="text-left px-4 py-2">Workflow</th>
