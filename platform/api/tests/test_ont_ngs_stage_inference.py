@@ -154,6 +154,7 @@ async def test_legacy_clone_stage_callback_persists_canonical_stage_id(tmp_path:
                 mode="construct_screening",
                 params={"run_assembly": True},
                 status=JobStatus.RUNNING.value,
+                queue_status="running",
                 provenance={
                     "workflow_stage_report_token_sha256": hashlib.sha256(token.encode("ascii")).hexdigest()
                 },
@@ -176,10 +177,11 @@ async def test_legacy_clone_stage_callback_persists_canonical_stage_id(tmp_path:
                 ["/results/assembly/wf_clone_out"],
                 session,
             )
-            await session.refresh(job)
+            stored = await session.get(Job, job.id)
+            assert stored is not None
 
-            assert job.completed_stages == ["wf_clone_validation"]
-            assert set(job.stage_outputs) == {"wf_clone_validation"}
-            assert set(job.provenance["stage_terminal_states"]) == {"wf_clone_validation"}
+            assert stored.completed_stages == ["wf_clone_validation"]
+            assert set(stored.stage_outputs) == {"wf_clone_validation"}
+            assert set(stored.provenance["stage_terminal_states"]) == {"wf_clone_validation"}
     finally:
         await engine.dispose()

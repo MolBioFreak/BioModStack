@@ -1017,8 +1017,8 @@ async def list_alignment_sessions(
 
 
 def find_canonical_fastq_manifest(result_root: Path) -> Path:
-    """Resolve only the canonical sequence-QC manifest for this router."""
-    return _find_canonical_fastq_manifest(result_root)
+    """Resolve the canonical manifest below an already pinned result root."""
+    return _find_canonical_fastq_manifest(result_root, pinned_root_descriptor=True)
 
 
 @router.get("/jobs/{job_id}/sequence-qc-manifest", responses=_STANDARD_GOVERNED_ERRORS)

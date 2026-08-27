@@ -833,6 +833,21 @@ def test_insecure_local_development_allowlist_contains_only_actual_loopback_addr
     assert router.LOCAL_DEVELOPMENT_ADMIN_HOSTS == frozenset({"127.0.0.1", "::1"})
 
 
+def test_sequence_qc_manifest_wrapper_accepts_the_pinned_result_root_descriptor(tmp_path: Path) -> None:
+    from routers import ngs_alignment_sessions as router
+
+    manifest = tmp_path / "fastq_qc" / "qc_manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}", encoding="utf-8")
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        assert router.find_canonical_fastq_manifest(Path(f"/proc/self/fd/{descriptor}")) == (
+            Path(f"/proc/self/fd/{descriptor}") / "fastq_qc" / "qc_manifest.json"
+        )
+    finally:
+        os.close(descriptor)
+
+
 def test_sequence_qc_manifest_is_available_below_job_scoped_cookie_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
