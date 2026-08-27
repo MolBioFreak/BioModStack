@@ -313,11 +313,16 @@ export default function DomainExperimentWorkspace() {
                 setStateRevisionId(model.identity.selected_state_revision_id);
             }
         },
-        onError: (error) => {
+        onError: async (error) => {
             const response = (error as { response?: { status?: number; data?: { detail?: { code?: string } } } }).response;
             const code = response?.data?.detail?.code;
             if (response?.status === 409 && (code === 'stale_generation' || code === 'stale_molecular_revision')) {
                 setProjectHubConflictMessage('Project state advanced. Review the refreshed state before retrying.');
+                const refreshedState = await queryClient.fetchQuery({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    queryFn: () => fetchMolBioNgsDomainState(exactDomainId as string),
+                });
+                setStateRevisionId(refreshedState.current_state_revision_id);
                 void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
             }
         },

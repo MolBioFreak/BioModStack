@@ -334,6 +334,9 @@ describe('mounted MolBio project hub', () => {
 
     it('refreshes stale authority and keeps edit input open for operator review', async () => {
         const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+        apiMocks.fetchMolBioNgsDomainState
+            .mockResolvedValueOnce({ current_state_revision_id: 'state-current', head_generation: 4 })
+            .mockResolvedValueOnce({ current_state_revision_id: 'state-refreshed', head_generation: 5 });
         apiMocks.updateProjectHubPlasmidInfo.mockRejectedValueOnce({
             response: { status: 409, data: { detail: { code: 'stale_generation', message: 'Domain state head changed' } } },
         });
@@ -350,6 +353,7 @@ describe('mounted MolBio project hub', () => {
         expect(container.querySelector('[role="alert"]')?.textContent).toContain('Project state advanced');
         expect(container.querySelector('[role="alert"]')?.textContent).toContain('Review the refreshed state before retrying');
         expect(invalidate).toHaveBeenCalledWith({ queryKey: ['molbio-project-hub', 'project-1', 'experiment-1', 'domain-1'] });
+        expect(contextMocks.setStateRevisionId).toHaveBeenCalledWith('state-refreshed');
     });
 
     it('renders populated Sequence Data from persisted typed summaries without bulk read payloads', async () => {
