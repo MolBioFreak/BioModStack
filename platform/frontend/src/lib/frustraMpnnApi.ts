@@ -682,6 +682,20 @@ export interface FrustraMpnnChildReceipt {
     handoff?: FrustraMpnnHandoffMetadata;
 }
 
+export interface FrustraMpnnFanoutChildReceipt extends FrustraMpnnChildReceipt {
+    structure_count: number;
+}
+
+export interface FrustraMpnnStructureDatasetFanout {
+    schema_name: 'bms.structure-dataset-fanout.v1';
+    fanout_id: string;
+    parent_job_id: string;
+    selected_structure_count: number;
+    structures_per_job: number;
+    replayed: boolean;
+    child_jobs: FrustraMpnnFanoutChildReceipt[];
+}
+
 export interface FrustraMpnnClassCounts {
     high: number;
     neutral: number;
@@ -1846,6 +1860,57 @@ export const parseFrustraMpnnChildReceipt = (
                 producer_id: fmString(handoff.producer_id, 'child receipt.handoff.producer_id'),
             },
         } : {}),
+    };
+};
+
+const STRUCTURE_DATASET_FANOUT_KEYS = [
+    'schema_name', 'fanout_id', 'parent_job_id', 'selected_structure_count',
+    'structures_per_job', 'replayed', 'child_jobs',
+] as const;
+
+export const parseFrustraMpnnStructureDatasetFanout = (
+    value: unknown,
+): FrustraMpnnStructureDatasetFanout => {
+    const payload = fmClosedProjection(
+        value,
+        'FrustraMPNN structure dataset fan-out',
+        STRUCTURE_DATASET_FANOUT_KEYS,
+        STRUCTURE_DATASET_FANOUT_KEYS,
+    );
+    if (payload.schema_name !== 'bms.structure-dataset-fanout.v1') {
+        throw new Error('FrustraMPNN structure dataset fan-out schema_name is invalid');
+    }
+    if (!Array.isArray(payload.child_jobs) || payload.child_jobs.length === 0) {
+        throw new Error('FrustraMPNN structure dataset fan-out child_jobs must be non-empty');
+    }
+    const childJobs = payload.child_jobs.map((value, index): FrustraMpnnFanoutChildReceipt => {
+        const child = fmClosedProjection(
+            value,
+            `FrustraMPNN structure dataset fan-out child_jobs[${index}]`,
+            [...CHILD_RECEIPT_KEYS, 'structure_count'],
+            [...CHILD_RECEIPT_KEYS, 'structure_count'],
+        );
+        const { structure_count: structureCount, ...receipt } = child;
+        const parsed = parseFrustraMpnnChildReceipt(receipt);
+        const count = fmInteger(structureCount, `fan-out child_jobs[${index}].structure_count`, 1);
+        return { ...parsed, structure_count: count };
+    });
+    const selectedCount = fmInteger(payload.selected_structure_count, 'fan-out.selected_structure_count', 1);
+    const structuresPerJob = fmInteger(payload.structures_per_job, 'fan-out.structures_per_job', 1);
+    if (childJobs.reduce((total, child) => total + child.structure_count, 0) !== selectedCount) {
+        throw new Error('FrustraMPNN structure dataset fan-out cardinality is inconsistent');
+    }
+    if (childJobs.some((child) => child.structure_count > structuresPerJob)) {
+        throw new Error('FrustraMPNN structure dataset fan-out exceeds structures_per_job');
+    }
+    return {
+        schema_name: payload.schema_name,
+        fanout_id: fmSha256(payload.fanout_id, 'fan-out.fanout_id'),
+        parent_job_id: fmString(payload.parent_job_id, 'fan-out.parent_job_id'),
+        selected_structure_count: selectedCount,
+        structures_per_job: structuresPerJob,
+        replayed: fmBoolean(payload.replayed, 'fan-out.replayed'),
+        child_jobs: childJobs,
     };
 };
 
@@ -3404,12 +3469,12 @@ export const analyzeFrustraMpnnDesigns = async (
     parentJobId: string,
     payload: FrustraMpnnAnalyzeRequest,
     signal?: AbortSignal,
-): Promise<FrustraMpnnChildReceipt> => {
+): Promise<FrustraMpnnStructureDatasetFanout> => {
     const normalizedPayload = {
         selections: payload.selections,
         frustrampnn_settings: parseFrustraMpnnRequestedSettings(payload.frustrampnn_settings),
     };
-    return parseFrustraMpnnChildReceipt((
+    return parseFrustraMpnnStructureDatasetFanout((
     await api.post<unknown>(
         `/api/frustrampnn/jobs/${encodeURIComponent(parentJobId)}/analyze`,
         normalizedPayload,

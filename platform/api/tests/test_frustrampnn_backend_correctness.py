@@ -76,12 +76,18 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
     async def fake_selections(*_args, **_kwargs):
         return [SimpleNamespace(candidate_id="candidate-1")]
 
-    async def fake_create(*_args, requested_settings, **_kwargs):
+    async def fake_fanout(*_args, requested_settings, **_kwargs):
         captured["settings"] = requested_settings
-        return SimpleNamespace(id="child-1", output_dir="/tmp/child-1")
+        return SimpleNamespace(
+            fanout_id="f" * 64,
+            child_jobs=(
+                SimpleNamespace(id="child-1", output_dir="/tmp/child-1"),
+                SimpleNamespace(id="child-2", output_dir="/tmp/child-2"),
+            ),
+        )
 
-    async def fake_get_job(_job_id, _session):
-        return {"id": "child-1"}
+    async def fake_get_job(job_id, _session):
+        return {"id": job_id}
 
     monkeypatch.setattr(jobs_router, "_resolve_antibody_root_job", fake_root)
     monkeypatch.setattr(jobs_router, "_resolve_saved_review_filter_set", lambda *_args: None)
@@ -89,7 +95,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
     monkeypatch.setattr(jobs_router, "get_job", fake_get_job)
     monkeypatch.setattr(jobs_router, "AntibodyIterationLaunchResponse", lambda **payload: payload)
     monkeypatch.setattr(frustrampnn_jobs, "design_selections", fake_selections)
-    monkeypatch.setattr(frustrampnn_jobs, "create_child_job", fake_create)
+    monkeypatch.setattr(frustrampnn_router, "_fanout_design_selections", fake_fanout)
 
     payload: dict[str, object] = {
         "source_job_id": "source-job",
@@ -100,7 +106,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
         payload["frustrampnn_settings"] = _complete_settings_payload()
     request = jobs_router.AntibodyIterationLaunchRequest.model_validate(payload)
 
-    await jobs_router.launch_antibody_iteration_from_designs(
+    response = await jobs_router.launch_antibody_iteration_from_designs(
         request,
         BackgroundTasks(),
         _IterationSession(),
@@ -113,6 +119,8 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
         else default_settings()
     )
     assert captured["settings"] == expected
+    assert response["fanout_id"] == "f" * 64
+    assert response["launched_jobs"] == [{"id": "child-1"}, {"id": "child-2"}]
 
 
 def test_antibody_iteration_frustrampnn_rejects_partial_settings_before_launch() -> None:
