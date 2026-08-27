@@ -333,13 +333,14 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         const alignmentIndex = session.artifacts.alignment_index!;
         const reference = session.artifacts.reference!;
         const referenceIndex = session.artifacts.reference_index!;
-        const sourceAuthorities = new Set([
-            session.sequence_qc_manifest_sha256,
-            session.verification_manifest_sha256,
-        ]);
-        if ([alignment, alignmentIndex, reference, referenceIndex].some(
-            (artifact) => !sourceAuthorities.has(artifact.source_manifest_sha256),
-        ) || reference.sha256 !== session.reference.fasta_sha256
+        const sourceAuthorities = new Set(
+            Object.values(session.artifacts)
+                .filter((artifact): artifact is AlignmentSessionArtifact => artifact !== null)
+                .map((artifact) => artifact.source_manifest_sha256),
+        );
+        if (sourceAuthorities.size !== 1
+            || (session.mode === 'primary' && !sourceAuthorities.has(session.sequence_qc_manifest_sha256))
+            || reference.sha256 !== session.reference.fasta_sha256
             || referenceIndex.sha256 !== session.reference.fai_sha256) {
             throw new Error('Alignment session artifact authority is cross-bound.');
         }
@@ -369,8 +370,7 @@ export async function normalizeAlignmentSessions(payload: AlignmentSessionRespon
         if (!primary.ready || !session.reference || !primary.reference
             || session.sequence_qc_manifest_sha256 !== primary.sequence_qc_manifest_sha256
             || session.verification_manifest_sha256 !== primary.verification_manifest_sha256
-            || session.artifact_set_sha256 !== primary.artifact_set_sha256
-            || session.reference.normalized_sequence_sha256 !== primary.reference.normalized_sequence_sha256) {
+            || session.artifact_set_sha256 !== primary.artifact_set_sha256) {
             throw new Error('Alignment session list package authority is inconsistent.');
         }
     }
@@ -409,7 +409,7 @@ export function bindAlignmentSessionsToResultAuthority(
             || session.sequence_qc_manifest_sha256 !== authority.sequence_qc_manifest_sha256
             || session.verification_manifest_sha256 !== authority.construct_verification_manifest_sha256
             || session.artifact_set_sha256 !== authority.artifact_set_sha256
-            || session.reference.normalized_sequence_sha256 !== authority.reference_sequence_sha256) {
+            || (session.mode === 'primary' && session.reference.normalized_sequence_sha256 !== authority.reference_sequence_sha256)) {
             throw new Error('Scientific integrity error: alignment session authority differs from the canonical result.');
         }
     }
