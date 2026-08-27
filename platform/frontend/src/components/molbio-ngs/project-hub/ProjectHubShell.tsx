@@ -85,9 +85,50 @@ function TechnicalDetails({ model }: { model: ProjectHubReadModel }) {
                     <div key={label} className="min-w-0 rounded-lg border border-border-primary bg-surface p-3">
                         <dt className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">{label}</dt>
                         <dd className="mt-1 break-all font-mono text-content-secondary">{String(value)}</dd>
+                        <button
+                            type="button"
+                            aria-label={`Copy ${label}`}
+                            className="mt-2 text-[10px] font-semibold text-accent"
+                            onClick={() => {
+                                if (navigator.clipboard) void navigator.clipboard.writeText(String(value)).catch(() => undefined);
+                            }}
+                        >Copy</button>
                     </div>
                 ))}
             </dl>
+            <h3 className="mt-5 font-semibold text-content">Plasmid technical records</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {model.plasmids.map((plasmid) => (
+                    <section key={plasmid.sequence_id} className="min-w-0 rounded-lg border border-border-primary bg-surface p-3">
+                        <h4 className="font-semibold text-content">{plasmid.name}</h4>
+                        <dl className="mt-2 space-y-2">
+                            {[
+                                ['molecular document ID', plasmid.sequence_id],
+                                ['molecular revision ID', plasmid.revision_id],
+                                ['receipt ID', plasmid.receipt_id],
+                                ['receipt SHA-256', plasmid.receipt_sha256],
+                                ['content digest', plasmid.content_digest],
+                                ['source store', plasmid.source_store_id],
+                                ['schema', plasmid.schema_name],
+                                ['exact reopen destination', plasmid.reopen_href],
+                            ].map(([label, value]) => (
+                                <div key={label}>
+                                    <dt className="text-[10px] font-semibold uppercase tracking-wide text-content-muted">{label}</dt>
+                                    <dd className="break-all font-mono text-content-secondary">{value}</dd>
+                                    <button
+                                        type="button"
+                                        aria-label={`Copy ${plasmid.name} ${label}`}
+                                        className="mt-1 text-[10px] font-semibold text-accent"
+                                        onClick={() => {
+                                            if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => undefined);
+                                        }}
+                                    >Copy</button>
+                                </div>
+                            ))}
+                        </dl>
+                    </section>
+                ))}
+            </div>
         </details>
     );
 }
@@ -105,7 +146,7 @@ function Presence({ label, value, suffix = 'Present' }: { label: string; value: 
     );
 }
 
-function PlasmidCard({ plasmid, canMutate, onEdit, onDetails }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onDetails: () => void }) {
+function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onCompare: () => void; onDetails: () => void }) {
     return (
         <article className={`${PANEL} flex min-h-[430px] min-w-0 flex-col p-4`}>
             <div className="flex items-start gap-3">
@@ -136,7 +177,7 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onDetails }: { plasmid: Proje
             </div>
             <div className="mt-auto grid grid-cols-2 gap-2 pt-4">
                 <Link className={PRIMARY} to={plasmid.reopen_href}>Open plasmid</Link>
-                <button type="button" className={BUTTON}>Compare</button>
+                <button type="button" className={BUTTON} onClick={onCompare}>Compare</button>
                 <button type="button" className={BUTTON} onClick={onDetails}>Plasmid details</button>
                 <button type="button" className={BUTTON} disabled={!canMutate} onClick={(event) => onEdit(event.currentTarget)}>Edit info</button>
             </div>
@@ -153,10 +194,10 @@ function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubR
         <>
             <div className="mb-3 flex items-end justify-between gap-4">
                 <div><h2 className="text-xl font-bold text-content">Plasmids</h2><p className="text-sm text-content-secondary">Project molecular inventory, construct summaries, and saved work.</p></div>
-                <button className="text-xs font-semibold text-accent" type="button">Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
+                <button className="text-xs font-semibold text-accent" type="button" onClick={() => onNavigate({ section: 'plasmids', plasmid: null })}>Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
             </div>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
+                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onCompare={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
                 <section className={`${PANEL} p-4`}><h3 className="font-semibold text-content">Recent project activity</h3><div className="mt-3 space-y-3">{model.activity.slice(0, 2).map((event) => <div key={event.id} className="flex gap-3 text-xs"><span className="mt-1 text-accent">●</span><div><strong className="block text-content">{event.summary}</strong><span className="text-content-muted">{formatDate(event.occurred_at)}</span></div></div>)}{model.activity.length === 0 && <EmptyInline title="No project activity yet" />}</div></section>
@@ -246,7 +287,31 @@ function ResultsTab({ model }: { model: ProjectHubReadModel }) {
 }
 
 function ActivityTab({ model }: { model: ProjectHubReadModel }) {
-    return <><div><h2 className="text-xl font-bold text-content">Activity</h2><p className="text-sm text-content-secondary">Readable project history. Technical event identity stays collapsed.</p></div><div className={`${PANEL} mt-4 divide-y divide-border-primary px-4`}>{model.activity.length ? model.activity.map((event) => <div key={event.id} className="flex gap-3 py-4"><span className="mt-1 text-accent">●</span><div><strong className="text-content">{event.summary}</strong><span className="mt-1 block text-xs text-content-muted">{formatDate(event.occurred_at)}</span></div></div>) : <div className="py-4"><EmptyInline title="No activity yet" /></div>}</div><TechnicalDetails model={model} /></>;
+    return (
+        <>
+            <div><h2 className="text-xl font-bold text-content">Activity</h2><p className="text-sm text-content-secondary">Readable project history. Technical event identity stays collapsed.</p></div>
+            <div className={`${PANEL} mt-4 divide-y divide-border-primary px-4`}>
+                {model.activity.length ? model.activity.map((event) => (
+                    <div key={event.id} className="flex gap-3 py-4">
+                        <span className="mt-1 text-accent">●</span>
+                        <div className="min-w-0 flex-1">
+                            <strong className="text-content">{event.summary}</strong>
+                            <span className="mt-1 block text-xs text-content-muted">{formatDate(event.occurred_at)}</span>
+                            <details data-testid={`activity-technical-${event.id}`} className="mt-2 text-xs text-content-secondary">
+                                <summary className="cursor-pointer font-semibold">Technical details</summary>
+                                <dl className="mt-2 grid gap-2 sm:grid-cols-3">
+                                    <div><dt className="text-content-muted">Event type</dt><dd className="break-all font-mono">{event.technical_event_type}</dd></div>
+                                    <div><dt className="text-content-muted">Receipt ID</dt><dd className="break-all font-mono">{event.receipt_id}</dd></div>
+                                    <div><dt className="text-content-muted">Envelope SHA-256</dt><dd className="break-all font-mono">{event.envelope_sha256}</dd></div>
+                                </dl>
+                            </details>
+                        </div>
+                    </div>
+                )) : <div className="py-4"><EmptyInline title="No activity yet" /></div>}
+            </div>
+            <TechnicalDetails model={model} />
+        </>
+    );
 }
 
 function EditDialog({ plasmid, saving, error, onCancel, onSave }: { plasmid: ProjectHubPlasmidSummary; saving: boolean; error: string | null; onCancel: () => void; onSave: (draft: ProjectHubPlasmidInfoDraft) => Promise<void> }) {
@@ -288,8 +353,8 @@ function EditDialog({ plasmid, saving, error, onCancel, onSave }: { plasmid: Pro
     const input = 'mt-1 w-full rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content outline-none focus:border-accent';
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation">
-            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="project-plasmid-edit-title" className="w-full max-w-2xl rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-2xl">
-                <div className="flex items-start justify-between gap-4"><div><span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Edit plasmid information</span><h2 id="project-plasmid-edit-title" className="mt-1 text-2xl font-bold text-content">{plasmid.name}</h2><p className="text-xs text-content-secondary">Project metadata for the current sequence record</p></div><button type="button" className={BUTTON} aria-label="Close edit dialog" disabled={saving} onClick={onCancel}>×</button></div>
+            <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="project-plasmid-edit-title" aria-describedby="project-plasmid-edit-description" className="w-full max-w-2xl rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-2xl">
+                <div className="flex items-start justify-between gap-4"><div><span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Edit plasmid information</span><h2 id="project-plasmid-edit-title" className="mt-1 text-2xl font-bold text-content">{plasmid.name}</h2><p id="project-plasmid-edit-description" className="text-xs text-content-secondary">Project metadata for the current sequence record</p></div><button type="button" className={BUTTON} aria-label="Close edit dialog" disabled={saving} onClick={onCancel}>×</button></div>
                 <form className="mt-5 grid gap-4 md:grid-cols-2" onSubmit={submit}>
                     <label className="text-xs font-semibold text-content-secondary">Plasmid name<input ref={firstRef} required name="name" className={input} value={draft.name} onChange={(event) => update('name', event.target.value)} /></label>
                     <label className="text-xs font-semibold text-content-secondary">Molecule type<select name="molecule_type" className={input} value={draft.molecule_type} onChange={(event) => update('molecule_type', event.target.value)}><option>Plasmid · circular dsDNA</option><option>Plasmid · linear dsDNA</option><option>Other DNA</option></select></label>

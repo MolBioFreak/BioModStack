@@ -5269,6 +5269,11 @@ export interface ProjectHubMapSegment {
 export interface ProjectHubPlasmidSummary {
     sequence_id: string;
     revision_id: string;
+    receipt_id: string;
+    receipt_sha256: string;
+    content_digest: string;
+    source_store_id: string;
+    schema_name: string;
     revision_number: number;
     name: string;
     description: string;

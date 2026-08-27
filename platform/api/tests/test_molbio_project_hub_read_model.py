@@ -149,6 +149,11 @@ async def test_project_hub_read_model_is_exact_linked_typed_and_bulk_free(hub_st
     assert payload["identity"]["current_state_revision_id"] == "state-current"
     assert payload["plasmids"][0]["sequence_id"] == "sequence-pl1480"
     assert payload["plasmids"][0]["revision_id"] == revision.id
+    assert payload["plasmids"][0]["receipt_id"]
+    assert payload["plasmids"][0]["receipt_sha256"]
+    assert payload["plasmids"][0]["content_digest"]
+    assert payload["plasmids"][0]["source_store_id"] == "molbio"
+    assert payload["plasmids"][0]["schema_name"]
     reopen_href = payload["plasmids"][0]["reopen_href"]
     assert f"workspace_id={project.id}" in reopen_href
     assert f"global_experiment_id={experiment.id}" in reopen_href

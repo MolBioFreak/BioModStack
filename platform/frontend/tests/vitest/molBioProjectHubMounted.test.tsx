@@ -70,6 +70,8 @@ import DomainExperimentWorkspace from '../../src/components/molbio-ngs/DomainExp
 const plasmids = [
     {
         sequence_id: 'sequence-pl1480', revision_id: 'revision-pl1480', revision_number: 1,
+        receipt_id: 'receipt-pl1480', receipt_sha256: 'receipt-sha-pl1480', content_digest: 'content-sha-pl1480',
+        source_store_id: 'molbio', schema_name: 'bms.molecular-revision.v1',
         name: 'PL1480', description: 'Synthetic circular DNA', availability: 'available',
         length_bp: 5512, gc_percent: 53.52, feature_count: 10,
         feature_labels: ['NeoR/KanR', 'CMV promoter', 'f1 ori', 'SV40 ori'],
@@ -80,6 +82,8 @@ const plasmids = [
     },
     {
         sequence_id: 'sequence-pl2190', revision_id: 'revision-pl2190', revision_number: 1,
+        receipt_id: 'receipt-pl2190', receipt_sha256: 'receipt-sha-pl2190', content_digest: 'content-sha-pl2190',
+        source_store_id: 'molbio', schema_name: 'bms.molecular-revision.v1',
         name: 'PL2190', description: 'Synthetic circular DNA', availability: 'available',
         length_bp: 5759, gc_percent: 47.32, feature_count: 8,
         feature_labels: ['CMV promoter', 'ori', 'NeoR/KanR'],
@@ -183,11 +187,20 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('10 features');
         expect(container.textContent).toContain('Saved Mol Bio experiments');
         expect(container.textContent).toContain('No sequencing data attached');
-        expect(container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]')?.open).toBe(false);
+        const technicalDetails = container.querySelector<HTMLDetailsElement>('details[data-testid="project-technical-details"]');
+        expect(technicalDetails?.open).toBe(false);
+        technicalDetails?.setAttribute('open', '');
+        expect(technicalDetails?.querySelector('button[aria-label="Copy Project / workspace ID"]')).not.toBeNull();
+        expect(technicalDetails?.querySelector('button[aria-label="Copy Selected state revision"]')).not.toBeNull();
+        expect(technicalDetails?.querySelector('button[aria-label="Copy PL1480 receipt ID"]')).not.toBeNull();
         const plasmidCards = Array.from(container.querySelectorAll('article')).filter((article) =>
             ['PL1480', 'PL2190'].includes(article.querySelector('h3')?.textContent ?? ''),
         );
         expect(plasmidCards[0]?.parentElement?.className.split(/\s+/)).toContain('xl:grid-cols-4');
+        await act(async () => buttonNamed('Compare all 2')?.click());
+        expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: null });
+        await act(async () => buttonNamed('Compare')?.click());
+        expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: 'sequence-pl1480' });
         expect(container.querySelector('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')?.textContent).toContain('Open plasmid');
     });
 
@@ -226,6 +239,8 @@ describe('mounted MolBio project hub', () => {
         await act(async () => { edit?.click(); await Promise.resolve(); });
         const dialog = container.querySelector<HTMLElement>('[role="dialog"]');
         expect(dialog?.getAttribute('aria-labelledby')).toBe('project-plasmid-edit-title');
+        expect(dialog?.getAttribute('aria-describedby')).toBe('project-plasmid-edit-description');
+        expect(dialog?.querySelector('#project-plasmid-edit-description')?.textContent).toContain('Project metadata');
         expect(dialog?.textContent).toContain('Edit plasmid information');
         expect(dialog?.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('PL1480');
         expect(dialog?.textContent).toContain('Molecule type');
@@ -342,7 +357,9 @@ describe('mounted MolBio project hub', () => {
             </MemoryRouter>,
         ));
         expect(container.textContent).toContain('PL1480 added to the project');
-        expect(container.textContent).not.toContain('molecular_member_attached');
-        expect(container.textContent).not.toContain('event-digest');
+        const activityTechnical = container.querySelector<HTMLDetailsElement>('details[data-testid="activity-technical-activity-1"]');
+        expect(activityTechnical?.open).toBe(false);
+        expect(activityTechnical?.textContent).toContain('molecular_member_attached');
+        expect(activityTechnical?.textContent).toContain('event-digest');
     });
 });

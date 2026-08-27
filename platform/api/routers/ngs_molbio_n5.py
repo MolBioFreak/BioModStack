@@ -579,6 +579,11 @@ async def project_hub(
         plasmids.append({
             "sequence_id": sequence_id,
             "revision_id": revision.id,
+            "receipt_id": receipt.receipt_id,
+            "receipt_sha256": receipt.receipt_sha256,
+            "content_digest": receipt.content_digest,
+            "source_store_id": receipt.source_store_id,
+            "schema_name": receipt.schema_name,
             "revision_number": revision.revision_number,
             "name": name,
             "description": str(snapshot.get("description") or ""),
