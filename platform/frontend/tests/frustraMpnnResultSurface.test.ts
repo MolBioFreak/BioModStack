@@ -16,6 +16,7 @@ test('parent workflows explicitly enabling FrustraMPNN own the same result surfa
         kind: 'integrated-parent',
         usesChildReceipt: false,
         canReanalyzePersistedInputs: false,
+        canRetryStatisticsAnalysis: true,
         executionLabel: 'Persisted workflow analysis',
     });
 });
@@ -25,6 +26,7 @@ test('only scheduler-owned FrustraMPNN children may use receipt and reanalysis A
         kind: 'scheduler-child',
         usesChildReceipt: true,
         canReanalyzePersistedInputs: true,
+        canRetryStatisticsAnalysis: true,
         executionLabel: 'Persisted execution child',
     });
 });

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import pyarrow.parquet as pq
 import rfc8785
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -504,6 +505,10 @@ async def test_statistics_worker_publishes_derived_artifact_without_rewriting_co
             copy.deepcopy(result.manifest_json),
             copy.deepcopy(result.terminal_result_json),
         )
+        await statistics_jobs.claim_statistics_child(
+            session, analysis_id=child.analysis_id
+        )
+        await session.commit()
         statistics = await statistics_jobs.run_statistics_child_once(
             session,
             analysis_id=child.analysis_id,
@@ -573,6 +578,150 @@ async def test_statistics_worker_adapter_claims_one_pending_child(
         assert child is not None and child.state == "completed"
         assert result is not None and result.statistics_sha256 is not None
         assert result.statistics_sha256 != expected_statistics_hash
+
+
+@pytest.mark.asyncio
+async def test_core_publication_flushes_parent_before_bounded_mapping_inserts(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _persistence()
+    _, terminal = _bundle(tmp_path / "parent-first-bundle")
+    await _seed_job(db)
+    statements: list[tuple[str, bool]] = []
+    engine = db.kw["bind"]
+    original_publish_table_rows = module.publish_table_rows
+
+    async def assert_parent_is_flushed(session, **kwargs):
+        parent = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert parent is not None
+        return await original_publish_table_rows(session, **kwargs)
+
+    monkeypatch.setattr(module, "publish_table_rows", assert_parent_is_flushed)
+
+    def capture_statement(
+        _connection, _cursor, statement, _parameters, context, executemany
+    ) -> None:
+        normalized = " ".join(statement.lower().split())
+        if normalized.startswith("insert into"):
+            statements.append((normalized, bool(executemany)))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        async with db() as session:
+            await module.ingest_result_bundle(
+                session,
+                tmp_path / "parent-first-bundle",
+                parent_job_id="job-1",
+                terminal_envelope=terminal,
+                commit=False,
+            )
+            result_count = int(
+                (await session.execute(select(func.count()).select_from(FrustraMPNNResult))).scalar_one()
+            )
+            artifact_count = int(
+                (await session.execute(select(func.count()).select_from(FrustraMPNNArtifact))).scalar_one()
+            )
+            receipt_count = int(
+                (
+                    await session.execute(
+                        select(func.count()).select_from(ScientificArtifactReceipt).where(
+                            ScientificArtifactReceipt.owner_id == "job-1:invoke-1"
+                        )
+                    )
+                ).scalar_one()
+            )
+            assert (result_count, artifact_count, receipt_count) == (1, 10, 1)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
+
+    result_insert = next(
+        index for index, (statement, _many) in enumerate(statements)
+        if statement.startswith("insert into frustrampnn_results")
+    )
+    receipt_insert = next(
+        index for index, (statement, _many) in enumerate(statements)
+        if statement.startswith("insert into scientific_artifact_receipts")
+    )
+    artifact_insert = next(
+        (index, many) for index, (statement, many) in enumerate(statements)
+        if statement.startswith("insert into frustrampnn_artifacts")
+    )
+    assert result_insert < artifact_insert[0]
+    assert result_insert < receipt_insert
+    assert artifact_insert[1] is True
+
+
+@pytest.mark.asyncio
+async def test_dense_parquet_stores_row_identity_without_repeated_invocation_provenance(
+    tmp_path: Path, db
+) -> None:
+    module = _persistence()
+    _, terminal = _bundle(tmp_path / "compact-provenance-bundle")
+    await _seed_job(db)
+
+    async with db() as session:
+        result = await module.ingest_result_bundle(
+            session,
+            tmp_path / "compact-provenance-bundle",
+            parent_job_id="job-1",
+            terminal_envelope=terminal,
+            commit=False,
+        )
+        receipt = await module._landscape_receipt(
+            session, result.parent_job_id, result.invocation_id
+        )
+        source_receipts = dict(receipt.source_receipts_json)
+        artifact_path = (
+            importlib.import_module("services.scientific_artifacts.writer").artifact_root()
+            / receipt.relative_path
+        )
+        schema_names = set(pq.read_schema(artifact_path).names)
+
+    assert "provenance_json" not in schema_names
+    assert {
+        "id",
+        "target_id",
+        "entity_instance_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "sequence_index",
+        "mutation_aa",
+    } <= schema_names
+    authority = source_receipts["invocation_authority"]
+    assert authority["landscape_sha256"] == result.summary_json["landscape_sha256"]
+    assert authority["structure_map_sha256"]
+    assert authority["normalized_pdb_sha256"]
+    assert authority["raw_csv_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_sql_rollback_removes_only_newly_installed_governed_artifacts(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _persistence()
+    artifact_root = tmp_path / "governed-artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
+    _, terminal = _bundle(tmp_path / "rollback-artifact-bundle")
+    await _seed_job(db)
+
+    async def fail_after_publication(*_args, **_kwargs) -> None:
+        raise module.FrustraMPNNPersistenceError("injected publication count mismatch")
+
+    monkeypatch.setattr(module, "_verify_publication_counts", fail_after_publication)
+    async with db() as session:
+        with pytest.raises(
+            module.FrustraMPNNPersistenceError,
+            match="injected publication count mismatch",
+        ):
+            await module.ingest_result_bundle(
+                session,
+                tmp_path / "rollback-artifact-bundle",
+                parent_job_id="job-1",
+                terminal_envelope=terminal,
+                commit=False,
+            )
+
+    assert not list(artifact_root.rglob("*.parquet"))
 
 
 @pytest.mark.asyncio
@@ -1438,9 +1587,11 @@ async def test_insert_failure_rolls_back_result_artifacts_rows_and_legacy_projec
 
 @pytest.mark.asyncio
 async def test_commit_false_flushes_for_caller_owned_transaction_without_committing(
-    tmp_path: Path, db
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _persistence()
+    artifact_root = tmp_path / "caller-owned-artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
     _, terminal = _bundle(tmp_path / "bundle")
     await _seed_job(db)
 
@@ -1454,7 +1605,9 @@ async def test_commit_false_flushes_for_caller_owned_transaction_without_committ
         )
         assert result.invocation_id == "invoke-1"
         assert await _counts(session) == (1, 10, 0)
+        assert list(artifact_root.rglob("*.parquet"))
         await session.rollback()
+        assert not list(artifact_root.rglob("*.parquet"))
 
     async with db() as session:
         assert await _counts(session) == (0, 0, 0)

@@ -743,6 +743,15 @@ async def test_statistics_retry_requeues_only_failed_analysis_child(api) -> None
     async with sessions() as session:
         core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
         assert core is not None
+        terminal = dict(core.terminal_result_json)
+        terminal["component_contract_version"] = "3.0"
+        terminal["status"] = "succeeded"
+        core.terminal_result_json = terminal
+        core.summary_json = {
+            **dict(core.summary_json),
+            "landscape_sha256": "5" * 64,
+        }
+        await session.commit()
         core_before = (
             core.request_sha256,
             core.manifest_sha256,

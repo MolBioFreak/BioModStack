@@ -580,7 +580,7 @@ export default function FrustraMpnnResultsViewer({
                 {retryStatistics.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(retryStatistics.error, 'Statistics analysis retry failed.')}</div>}
                 {statisticsAnalysis.data && <FrustraMpnnStatisticsAnalysisPanel
                     analysis={statisticsAnalysis.data}
-                    canRetry={resultContext.kind === 'scheduler-child' && resultContext.canReanalyzePersistedInputs}
+                    canRetry={resultContext.canRetryStatisticsAnalysis}
                     retryPending={retryStatistics.isPending}
                     onRetry={() => retryStatistics.mutate()}
                 />}
