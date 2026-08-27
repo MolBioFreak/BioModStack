@@ -56,12 +56,13 @@ from .conformational_mapping.persistence import (
     get_request as get_cm_request,
     ingest_result_bundle as ingest_cm_result_bundle,
 )
-from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads, validate_schema
 from .frustrampnn.identity import deterministic_candidate_id
 from .frustrampnn.manifests import (
     MANIFEST_PATH,
     V2_MANIFEST_PATH,
     V3_MANIFEST_PATH,
+    _read_regular as read_frustrampnn_regular,
     result_manifest_path,
 )
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
@@ -3903,9 +3904,9 @@ async def _ingest_explicit_frustrampnn_results(
     terminal_paths = [
         path for path in paths if path.name in _FRUSTRAMPNN_TERMINAL_RESULTS
     ]
-    if not manifests:
+    if not terminal_paths:
         raise FrustraMPNNPersistenceError(
-            "FrustraMPNN terminal stage output has no explicit canonical manifest"
+            "FrustraMPNN terminal stage output has no explicit terminal result"
         )
     manifest_roots = [os.fspath(path.parent.absolute()) for path in manifests]
     terminal_roots_list = [
@@ -3918,9 +3919,9 @@ async def _ingest_explicit_frustrampnn_results(
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN terminal stage output contains duplicate bundle roots"
         )
-    if set(manifest_roots) != set(terminal_roots_list):
+    if not set(manifest_roots).issubset(set(terminal_roots_list)):
         raise FrustraMPNNPersistenceError(
-            "FrustraMPNN canonical manifest and terminal envelope roots are not exact pairs"
+            "FrustraMPNN canonical manifest lacks its terminal envelope root"
         )
 
     roots: list[Path] = []
@@ -3936,6 +3937,41 @@ async def _ingest_explicit_frustrampnn_results(
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN canonical manifest lacks its explicit terminal envelope output"
         )
+
+    failed_terminal_roots = set(terminal_roots_list) - set(manifest_roots)
+    failed_terminal_count = 0
+    failed_identities: set[tuple[str, str]] = set()
+    for root_value in sorted(failed_terminal_roots):
+        root = Path(root_value)
+        terminal = _read_explicit_terminal_envelope(root, "workflow_component_result_v3.json")
+        request = canonical_json_loads(
+            read_frustrampnn_regular(root, "workflow_component_request_v3.json")
+        )
+        try:
+            validate_schema("workflow_component_result_v3", terminal)
+            validate_schema("workflow_component_request_v3", request)
+        except Exception as exc:
+            raise FrustraMPNNPersistenceError(
+                "classified FrustraMPNN failure terminal/request contract is invalid"
+            ) from exc
+        if (
+            terminal["status"] != "failed"
+            or terminal["result_manifest"] is not None
+            or terminal["result_payload"] is not None
+            or terminal["parent_job_id"] != str(current_job.id)
+            or request["parent_job_id"] != str(current_job.id)
+            or terminal["request_sha256"] != hashlib.sha256(canonical_json_bytes(request)).hexdigest()
+            or terminal["candidate_id"] != request["candidate_id"]
+            or terminal["invocation_id"] != request["invocation_id"]
+        ):
+            raise FrustraMPNNPersistenceError(
+                "classified FrustraMPNN failure does not bind immutable request authority"
+            )
+        identity = (terminal["invocation_id"], terminal["candidate_id"])
+        if identity in failed_identities:
+            raise FrustraMPNNPersistenceError("classified FrustraMPNN failure identity is duplicated")
+        failed_identities.add(identity)
+        failed_terminal_count += 1
 
     validated_candidates = []
     parent_designs: list[tuple[str, str, Path, Any]] = []
@@ -4115,7 +4151,7 @@ async def _ingest_explicit_frustrampnn_results(
     except Exception:
         await session.rollback()
         raise
-    return created
+    return created + failed_terminal_count
 
 
 def _canonical_protein_design_row_id(
