@@ -60,9 +60,15 @@ export function ProjectInspector({
             || selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
             || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
             || Array.isArray(selection.summary.planned_capability_ids));
+    const domainPayload = selection.summary.domain_payload;
+    const domainPayloadSchema = domainPayload && typeof domainPayload === 'object' && !Array.isArray(domainPayload)
+        ? domainPayload.schema
+        : null;
     const isNgsDomain = selection.node_type === 'domain_experiment'
         && (selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
-            || selection.summary.schema === 'bms.ngs-molbio-experiment.v1');
+            || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
+            || domainPayloadSchema === 'bms.ngs-molbio-experiment.v2'
+            || domainPayloadSchema === 'bms.ngs-molbio-experiment.v1');
 
     return (
         <aside aria-label="Selected node inspector" aria-busy={busy || undefined} className="flex h-full min-h-0 flex-col border-l border-border-primary bg-surface-secondary">

@@ -94,6 +94,7 @@ describe('NGS/MolBio frontend closure wiring', () => {
         expect(manager).toContain("section: 'analyses'");
         expect(manager).toContain('onOpenNgsRuns={openNgsRunInspector}');
         expect(inspector).toContain('Open NGS Run Inspector');
+        expect(inspector).toContain('selection.summary.domain_payload');
     });
 
     it('uses one pinned typed destination and retains exact return/reopen context', () => {
