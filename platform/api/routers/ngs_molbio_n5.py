@@ -6,6 +6,7 @@ import json
 import uuid
 from datetime import datetime
 from typing import Any, TypeVar
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -466,6 +467,26 @@ def _hub_href(value: Any) -> str | None:
     return None
 
 
+def _project_hub_molecular_href(
+    *,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    state_revision_id: str,
+    sequence_id: str,
+    revision_id: str,
+) -> str:
+    return "/designer?" + urlencode({
+        "workspace_id": project_id,
+        "global_experiment_id": experiment_id,
+        "domain_experiment_id": domain_id,
+        "state_revision_id": state_revision_id,
+        "section": "plasmids",
+        "molbio_sequence_id": sequence_id,
+        "molbio_revision_id": revision_id,
+    })
+
+
 @router.get(D + "/project-hub")
 async def project_hub(
     project_id: str,
@@ -575,7 +596,14 @@ async def project_hub(
             "organism_host_context": snapshot.get("organism"),
             "project_tags": list(metadata.tags or []) if metadata is not None and metadata.molecular_revision_id == revision.id else [],
             "project_notes": str(metadata.notes or "") if metadata is not None and metadata.molecular_revision_id == revision.id else "",
-            "reopen_href": _hub_href(json.loads(receipt.reopen_destination)) or f"/designer?molbio_sequence_id={sequence_id}&molbio_revision_id={revision.id}",
+            "reopen_href": _project_hub_molecular_href(
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                state_revision_id=selected.id,
+                sequence_id=sequence_id,
+                revision_id=revision.id,
+            ),
             "map_segments": map_segments,
         })
 
