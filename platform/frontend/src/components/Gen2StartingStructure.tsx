@@ -4,7 +4,7 @@ const STEPS = ['Starting structure', 'Chemistry', 'Protocol and output', 'Review
 
 export function Gen2StartingStructure({ returned = false, children }: { returned?: boolean; children?: ReactNode }) {
     return (
-        <section aria-label="Molecular Dynamics Gen 2 workflow" className="space-y-5">
+        <section aria-label="Molecular Dynamics workflow" className="space-y-5">
             {returned && (
                 <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-3">
                     <div className="text-sm font-semibold text-cyan-100">Returned from Structure Prediction</div>

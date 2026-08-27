@@ -154,7 +154,7 @@ const renderShell = async () => {
             </QueryClientProvider>,
         );
     });
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics Gen 2')); });
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics')); });
 };
 
 const click = async (label: string) => {
@@ -168,7 +168,7 @@ const completeRoundTrip = async () => {
     await act(async () => { await vi.waitFor(() => expect(container.querySelector('[data-mounted-structure-prediction]')).not.toBeNull()); });
     expect(container.querySelector('[data-source-sequence-id]')?.textContent).toBe(sequenceId);
     await click('Complete prediction and return');
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics Gen 2')); });
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics')); });
     expect(container.querySelector('[data-mounted-structure-prediction]')).toBeNull();
     await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Returned from Structure Prediction')); });
 };

@@ -52,9 +52,9 @@ The normalized job contract explicitly records:
 
 The run manifest records the normalized config, engine version/platform, stage ledger, relative artifact paths, byte counts, and SHA-256 checksums. Absolute host paths are excluded from the artifact contract.
 
-## Molecular Dynamics Gen 2 launcher
+## Molecular Dynamics launcher
 
-The Molecular Dynamics Gen 2 launcher uses a source-first boundary. The operator chooses one governed starting-structure identity, the server resolves immutable bytes and reports inspection/admission evidence, and the browser renders that evidence before any launch is possible. Supported sources are a verified managed fixture, an RCSB PDB accession, a direct PDB/mmCIF upload, a completed prediction artifact, an existing Design, a prior MD Job input (`prior_md_input`), or a policy-enumerated server file. The browser never submits a host filesystem path in the typed automatic-preparation lane.
+The Molecular Dynamics launcher uses a source-first boundary. The operator chooses one governed starting-structure identity, the server resolves immutable bytes and reports inspection/admission evidence, and the browser renders that evidence before any launch is possible. Supported sources are a verified managed fixture, an RCSB PDB accession, a direct PDB/mmCIF upload, a completed prediction artifact, an existing Design, a prior MD Job input (`prior_md_input`), or a policy-enumerated server file. The browser never submits a host filesystem path in the typed automatic-preparation lane.
 
 **Prediction-result handoff:** a sequence can be sent to the standard Structure Prediction launcher without fabricating coordinates in MD. After the prediction Job completes, the MD launcher lists bounded, typed source candidates from that exact Job. The selected candidate is still inspected and admitted against the selected chemistry profile before preview.
 

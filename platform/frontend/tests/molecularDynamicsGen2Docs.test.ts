@@ -5,11 +5,11 @@ import { describe, it } from 'node:test';
 
 const docs = (name: string) => readFileSync(resolve(process.cwd(), '../../docs', name), 'utf8');
 
-describe('Molecular Dynamics Gen 2 operator documentation', () => {
+describe('Molecular Dynamics operator documentation', () => {
     it('documents immutable starting-structure inspection, prediction handoff, preview, and typed launch identity', () => {
         const md = docs('Molecular_Dynamics_Suite.md');
         for (const phrase of [
-            'Molecular Dynamics Gen 2 launcher',
+            'Molecular Dynamics launcher',
             'bms.md.launch-intent.v1',
             'bms.md.launch-preview-request.v1',
             'bms.md.launch-request.v1',
