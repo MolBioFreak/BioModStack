@@ -117,6 +117,38 @@ export function isAlignmentAccessDenied(reason: unknown, expectedJobId?: string)
     return isExactNgsError(reason, 403, 'NGS_CAPABILITY_DENIED', expectedJobId);
 }
 
+export function describeNgsError(reason: unknown, fallback: string): string {
+    const response = (reason as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+    const data = response?.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const record = data as Record<string, unknown>;
+        const keys = Object.keys(record).sort();
+        const expectedKeys = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
+        if (
+            keys.length === expectedKeys.length
+            && keys.every((key, index) => key === expectedKeys[index])
+            && record.schema === 'bms.ngs.error.v1'
+            && typeof record.code === 'string'
+            && typeof record.message === 'string'
+            && record.message.length > 0
+            && record.message.length <= 512
+        ) {
+            const category = record.code.includes('INTEGRITY')
+                ? 'Integrity error'
+                : record.code.includes('CAPABILITY') || record.code.includes('AUTH') || record.code.includes('HIERARCHY')
+                    ? 'Authorization error'
+                    : record.code.includes('ROTATION')
+                        ? 'Access rotation error'
+                        : 'Governed NGS error';
+            return `${category} (${record.code}): ${record.message}`;
+        }
+    }
+    if (reason instanceof Error && reason.message.startsWith('Result parser error:')) return reason.message;
+    if (typeof response?.status === 'number') return `Network error (HTTP ${response.status}): ${fallback}`;
+    if (reason instanceof Error && reason.message) return `Network or transport error: ${reason.message}`;
+    return fallback;
+}
+
 export interface AlignmentRead {
     read_id: string;
     length: number | null;

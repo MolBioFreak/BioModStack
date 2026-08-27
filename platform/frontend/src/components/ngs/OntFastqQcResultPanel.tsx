@@ -89,7 +89,7 @@ function CheckCard({
                             </dt>
                             <dd className="text-right font-mono text-[var(--text-primary)]">
                                 {displayJsonValue(value)}
-                                {check.units[key] && !['categorical', 'boolean', 'fraction', 'evidence'].includes(check.units[key])
+                                {check.units[key] && !['categorical', 'boolean', 'evidence'].includes(check.units[key])
                                     ? ` ${check.units[key]}`
                                     : ''}
                             </dd>
@@ -165,17 +165,52 @@ export function OntFastqQcResultPanel({
     const coverageFraction = verification.summary.coverage_fraction;
     const sequenceIdentity = verification.summary.sequence_identity_fraction;
     const decisionMinimumDepth = verification.checks.coverage.metrics.minimum_depth;
+    const totalReads = metric(result, 'total_reads') ?? metric(result, 'reads_considered');
+    const mappedReads = metric(result, 'mapped_reads');
+    const referenceLengthValue = verification.summary.reference_length;
+    const referenceLength = typeof referenceLengthValue === 'number' ? referenceLengthValue : 0;
     const cards = [
-        ['Reads', metric(result, 'total_reads') ?? metric(result, 'reads_considered')],
-        ['Bases', metric(result, 'total_bases')],
-        ['Mapped reads', metric(result, 'mapped_reads')],
-        ['Coverage', typeof coverageFraction === 'number' ? coverageFraction * 100 : null, '%'],
-        ['Decision support minimum', typeof decisionMinimumDepth === 'number' ? decisionMinimumDepth : null],
-        ['Envelope minimum', result.coverage.minimum_depth],
-        ['Consensus identity', typeof sequenceIdentity === 'number' ? sequenceIdentity * 100 : null, '%'],
-    ] as const;
-    const presentArtifacts = result.artifacts.filter((artifact) => artifact.state === 'present');
-    const unavailableArtifacts = result.artifacts.filter((artifact) => artifact.state !== 'present');
+        { label: 'Total reads', value: display(totalReads), detail: 'integer read count' },
+        {
+            label: 'Mapped reads',
+            value: typeof mappedReads === 'number' && typeof totalReads === 'number'
+                ? `${mappedReads.toLocaleString()} / ${totalReads.toLocaleString()}`
+                : '—',
+            detail: 'mapped count over total reads',
+        },
+        { label: 'Total bases', value: display(metric(result, 'total_bases'), ' bp'), detail: 'sequenced bases' },
+        {
+            label: 'Reference coverage',
+            value: typeof coverageFraction === 'number' ? `${(coverageFraction * 100).toFixed(2)}%` : '—',
+            detail: 'bases with ≥1 base-covering alignment record',
+        },
+        {
+            label: 'Decision minimum support depth',
+            value: typeof decisionMinimumDepth === 'number' ? decisionMinimumDepth.toLocaleString() : '—',
+            detail: 'alignment observations from per-base support; deletion-spanning observations participate',
+        },
+        {
+            label: 'Coverage-envelope minimum',
+            value: `${result.coverage.minimum_depth.toLocaleString()} at ${result.coverage.minimum_depth_position_1based.toLocaleString()}`,
+            detail: 'base-covering alignment records from samtools depth -aa; deletion bases are excluded',
+        },
+        {
+            label: 'Consensus identity',
+            value: typeof sequenceIdentity === 'number' ? `${(sequenceIdentity * 100).toFixed(4)}%` : '—',
+            detail: 'observed consensus versus bound reference',
+        },
+    ];
+    const orderedArtifacts = [...result.artifacts].sort((left, right) => left.display_order - right.display_order);
+    const artifactRoleGroups = orderedArtifacts.reduce<Array<{
+        role: string;
+        artifacts: typeof orderedArtifacts;
+    }>>((groups, artifact) => {
+        const existing = groups.find((group) => group.role === artifact.scientific_role);
+        if (existing) existing.artifacts.push(artifact);
+        else groups.push({ role: artifact.scientific_role, artifacts: [artifact] });
+        return groups;
+    }, []);
+    const logArtifacts = orderedArtifacts.filter((artifact) => artifact.scientific_role === 'audit_log');
     const histogramX = result.read_length_histogram.bins.map((bin) => (bin.start_bp + bin.end_bp_exclusive) / 2);
     const histogramY = result.read_length_histogram.bins.map((bin) => bin.read_count);
     const coverageX = result.coverage.points.map((point) => point.position_1based);
@@ -212,10 +247,11 @@ export function OntFastqQcResultPanel({
             </section>
 
             <section className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7" aria-label="Run summary">
-                {cards.map(([label, value, suffix]) => (
-                    <div key={label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
-                        <div className="text-[11px] text-[var(--text-secondary)]">{label}</div>
-                        <div className="font-mono text-sm text-[var(--text-primary)]">{display(value, suffix ?? '')}</div>
+                {cards.map((card) => (
+                    <div key={card.label} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-3 py-2">
+                        <div className="text-[11px] text-[var(--text-secondary)]">{card.label}</div>
+                        <div className="font-mono text-sm text-[var(--text-primary)]">{card.value}</div>
+                        <div className="mt-1 text-[9px] leading-tight text-[var(--text-secondary)]">{card.detail}</div>
                     </div>
                 ))}
             </section>
@@ -232,8 +268,8 @@ export function OntFastqQcResultPanel({
             <section className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                 <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Read-length distribution</h4>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Purpose: Show read-length shape against the 5,570 bp reference. Server-derived fixed_width_v1 bins preserve all producer per-read counts without browser rebinning.</p>
-                    <p className="mt-1 text-[11px] text-amber-200">Reference marker: 5,570 bp. Historical producer denominator: {display(metric(result, 'expected_plasmid_size'), ' bp')}.</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Purpose: Show read-length shape against the {referenceLength.toLocaleString()} bp reference. Server-derived fixed_width_v1 bins preserve all producer per-read counts without browser rebinning.</p>
+                    <p className="mt-1 text-[11px] text-amber-200">Reference marker: {referenceLength.toLocaleString()} bp. Historical producer expected plasmid size: {display(metric(result, 'expected_plasmid_size'), ' bp')}; historical copy-number and multimer metrics do not control this decision.</p>
                     <Plot
                         data={[{
                             type: 'bar',
@@ -248,8 +284,8 @@ export function OntFastqQcResultPanel({
                             yaxis: { title: { text: 'Read count' } },
                             shapes: [{
                                 type: 'line',
-                                x0: 5570,
-                                x1: 5570,
+                                x0: referenceLength,
+                                x1: referenceLength,
                                 y0: 0,
                                 y1: 1,
                                 yref: 'paper',
@@ -308,6 +344,7 @@ export function OntFastqQcResultPanel({
                             <thead>
                                 <tr className="border-b border-[var(--border-primary)] text-[var(--text-secondary)]">
                                     <th className="px-2 py-1 text-left">Variant</th>
+                                    <th className="px-2 py-1 text-left">Kind</th>
                                     <th className="px-2 py-1 text-left">VCF record</th>
                                     <th className="px-2 py-1 text-left">Affected interval</th>
                                     <th className="px-2 py-1 text-left">Change</th>
@@ -323,8 +360,9 @@ export function OntFastqQcResultPanel({
                                     return (
                                         <tr key={variant.id} className="border-b border-[var(--border-primary)]/40">
                                             <td className="px-2 py-1 font-mono">{variant.id}</td>
+                                            <td className="px-2 py-1 font-mono">{variant.kind}</td>
                                             <td className="px-2 py-1 font-mono">{variant.record_start_1based}-{variant.record_end_1based}</td>
-                                            <td className="px-2 py-1">{affectedVariantInterval(variant)}</td>
+                                            <td className="px-2 py-1">{variant.affected_interval_kind}: {affectedVariantInterval(variant)}</td>
                                             <td className="px-2 py-1 font-mono">{variant.ref}→{variant.alt}</td>
                                             <td className="px-2 py-1 font-mono">{variant.depth?.toLocaleString() ?? '—'}</td>
                                             <td className="px-2 py-1 font-mono">
@@ -352,27 +390,76 @@ export function OntFastqQcResultPanel({
 
             <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3">
                 <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Governed downloads</h4>
-                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {presentArtifacts.map((artifact) => (
-                        <a
-                            key={`${artifact.source}:${artifact.kind}:${artifact.sha256}`}
-                            href={artifact.url || undefined}
-                            download
-                            className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs hover:border-sky-400/50"
-                        >
-                            <div className="font-semibold text-sky-300">{metricLabel(artifact.kind)}</div>
-                            <div className="mt-1 text-[var(--text-secondary)]">{artifact.source} · {artifact.size_bytes?.toLocaleString()} bytes</div>
-                            <div className="mt-1 font-mono text-[10px] text-[var(--text-secondary)]">SHA-256 {artifact.sha256?.slice(0, 16)}…</div>
-                        </a>
-                    ))}
-                    {unavailableArtifacts.map((artifact) => (
-                        <div key={`${artifact.source}:${artifact.kind}`} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs">
-                            <div className="font-semibold text-[var(--text-primary)]">{metricLabel(artifact.kind)}</div>
-                            <div className="mt-1 text-[var(--text-secondary)]">{artifact.unavailable_reason || artifact.state}</div>
-                        </div>
+                <div className="mt-2 space-y-3">
+                    {artifactRoleGroups.map((group) => (
+                        <section key={group.role} data-artifact-role={group.role}>
+                            <h5 className="mb-1 text-[11px] font-semibold text-[var(--text-secondary)]">{metricLabel(group.role)}</h5>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                {group.artifacts.map((artifact) => artifact.state === 'present' ? (
+                                    <a
+                                        key={`${artifact.source}:${artifact.kind}:${artifact.sha256}`}
+                                        href={artifact.url || undefined}
+                                        download
+                                        data-artifact-display-order={artifact.display_order}
+                                        className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs hover:border-sky-400/50"
+                                    >
+                                        <div className="font-semibold text-sky-300">{metricLabel(artifact.kind)}</div>
+                                        <div className="mt-1 text-[var(--text-secondary)]">{artifact.source} · {artifact.size_bytes?.toLocaleString()} bytes</div>
+                                        <div className="mt-1 font-mono text-[10px] text-[var(--text-secondary)]">SHA-256 {artifact.sha256?.slice(0, 16)}…</div>
+                                    </a>
+                                ) : (
+                                    <div key={`${artifact.source}:${artifact.kind}`} data-artifact-display-order={artifact.display_order} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] p-2 text-xs">
+                                        <div className="font-semibold text-[var(--text-primary)]">{metricLabel(artifact.kind)}</div>
+                                        <div className="mt-1 text-[var(--text-secondary)]">{artifact.unavailable_reason || artifact.state}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
                     ))}
                 </div>
             </section>
+
+            <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Alignment-session receipts</summary>
+                <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
+                    {result.alignment_sessions.map((session) => (
+                        <div key={session.session_id}>
+                            <span className="font-mono">{session.session_id}</span> · {session.mode} · {session.ready ? 'ready' : session.unavailable_reason}
+                        </div>
+                    ))}
+                </div>
+            </details>
+
+            <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Stage receipts</summary>
+                <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
+                    {result.stages.map((stage) => (
+                        <div key={stage.stage}>{stage.stage}: {stage.status} · {stage.output_count.toLocaleString()} governed outputs</div>
+                    ))}
+                </div>
+            </details>
+
+            <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Logs</summary>
+                <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
+                    {logArtifacts.map((artifact) => artifact.state === 'present' ? (
+                        <a key={artifact.display_order} href={artifact.url || undefined} download className="block text-sky-300 underline">
+                            {artifact.display_order}. {metricLabel(artifact.kind)} · {artifact.source}
+                        </a>
+                    ) : (
+                        <div key={artifact.display_order}>{artifact.display_order}. {metricLabel(artifact.kind)} · {artifact.unavailable_reason}</div>
+                    ))}
+                </div>
+            </details>
+
+            <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
+                <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Technical provenance and historical resource fields</summary>
+                <div className="mt-2 space-y-1 text-[var(--text-secondary)]">
+                    <div>Sequence-QC manifest SHA-256: <span className="font-mono">{result.authority.sequence_qc_manifest_sha256}</span></div>
+                    <div>Construct-verification manifest SHA-256: <span className="font-mono">{result.authority.construct_verification_manifest_sha256}</span></div>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all text-[10px]">{JSON.stringify(result.execution_resources, null, 2)}</pre>
+                </div>
+            </details>
 
             <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-xs">
                 <summary className="cursor-pointer font-semibold text-[var(--text-primary)]">Technical authority and lifecycle</summary>

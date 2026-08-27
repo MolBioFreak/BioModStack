@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { resolveAlignmentViewerArtifacts } from '../src/lib/ngsAlignmentViewer.js';
@@ -157,7 +158,25 @@ test('optional tracks are built only from the selected session artifacts', async
     assert.equal(tracks.some((track) => track.url === '/api/jobs/job-a/alignment-artifacts/generic-coverage-tsv'), false);
 });
 
-test('variant navigation is rejected when it is not bound to the selected session', async () => {
+test('optional IGV track failures cannot suppress a loaded primary alignment', () => {
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+    const primaryReady = source.indexOf('setIgvReadsTrackLoaded(true);');
+    const optionalLoop = source.indexOf('for (const trackConfig of auxiliaryTracks)');
+    const optionalFailure = source.indexOf('setIgvAuxTrackFailures', optionalLoop);
+
+    assert.ok(primaryReady >= 0 && primaryReady < optionalLoop);
+    assert.ok(optionalFailure > optionalLoop);
+    assert.match(source.slice(optionalLoop, optionalFailure + 200), /catch/);
+});
+
+test('primary IGV readiness requires the governed FASTA index', () => {
+    const toolkit = readFileSync(resolve(process.cwd(), 'src/components/NGSToolkit.tsx'), 'utf8');
+    assert.match(toolkit, /!activeIgvFaiUrl\s*\? 'Reference FASTA index \(\.fai\) not found yet\.'/u);
+    assert.match(toolkit, /Reference FASTA index \(\.fai, required\)/u);
+    assert.doesNotMatch(toolkit, /Reference FASTA index \(\.fai, optional\)/u);
+});
+
+test('variant navigation is rejected when it is not bound to the selected session reference', async () => {
     const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
     const boundLocus = module.resolveBoundSessionLocus as ((requested: string, selected: string, contig: string, start: number, end?: number) => string | null) | undefined;
     assert.equal(typeof boundLocus, 'function');

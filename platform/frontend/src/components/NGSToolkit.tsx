@@ -23,6 +23,7 @@ import {
 } from '../lib/ngsAlignmentViewer';
 import {
     disposeAlignmentAccess,
+    describeNgsError,
     fetchAlignmentSessions,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
@@ -2224,6 +2225,7 @@ export function NGSToolkit() {
     const [igvRangeInput, setIgvRangeInput] = useState('');
     const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
     const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
+    const [igvAuxTrackFailures, setIgvAuxTrackFailures] = useState<string[]>([]);
     const [igvVersion, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
     const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<OntSignalViewerAlignmentDisplayMode>('EXPANDED');
@@ -2868,7 +2870,7 @@ export function NGSToolkit() {
     }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
     const igvMissingReason = alignmentSessionsError
-        ? 'Authoritative alignment session is unavailable.'
+        ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
         : !selectedAlignmentSession
             ? 'No job-scoped alignment session was published.'
             : !selectedAlignmentSession.ready
@@ -2879,7 +2881,9 @@ export function NGSToolkit() {
                         ? 'BAM index (.bai/.csi) not found yet.'
                         : !activeIgvFastaUrl
                             ? 'Reference FASTA not found yet.'
-                            : null;
+                            : !activeIgvFaiUrl
+                                ? 'Reference FASTA index (.fai) not found yet.'
+                                : null;
     const igvReady = selectedAlignmentSession?.ready === true && !igvMissingReason;
     useEffect(() => {
         if (signalWorkbenchRequested && selectedJob && signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) {
@@ -2904,7 +2908,7 @@ export function NGSToolkit() {
                 path: activeIgvFastaPath,
             },
             {
-                label: 'Reference FASTA index (.fai, optional)',
+                label: 'Reference FASTA index (.fai, required)',
                 ok: Boolean(activeIgvFaiUrl),
                 path: activeIgvFaiPath,
             },
@@ -4023,6 +4027,7 @@ export function NGSToolkit() {
         }
         setIgvReadsTrackLoading(true);
         setIgvError(null);
+        setIgvAuxTrackFailures([]);
         const loadToken = igvLoadTokenRef.current;
         const sessionId = selectedAlignmentSession?.session_id || '';
         const isCurrentTrackLoad = () => (
@@ -4089,13 +4094,21 @@ export function NGSToolkit() {
                 colorBy: igvAlignmentColorBy,
                 groupBy: igvAlignmentGroupBy,
             });
+            setIgvReadsTrackLoaded(true);
 
             for (const trackConfig of auxiliaryTracks) {
-                const loadedTrack = await awaitCurrentGeneration(
-                    Promise.resolve(browser.loadTrack(trackConfig)),
-                    isCurrentTrackLoad,
-                );
-                if (loadedTrack === null || !isCurrentTrackLoad()) return;
+                try {
+                    const loadedTrack = await awaitCurrentGeneration(
+                        Promise.resolve(browser.loadTrack(trackConfig)),
+                        isCurrentTrackLoad,
+                    );
+                    if (loadedTrack === null || !isCurrentTrackLoad()) return;
+                } catch (error) {
+                    if (!isCurrentTrackLoad()) return;
+                    const label = typeof trackConfig.name === 'string' ? trackConfig.name : 'Optional track';
+                    const message = error instanceof Error ? error.message : String(error);
+                    setIgvAuxTrackFailures((current) => [...current, `${label}: ${message}`]);
+                }
             }
             if (!isCurrentTrackLoad()) return;
             patchIgvRulerContrast(browser);
@@ -4105,7 +4118,6 @@ export function NGSToolkit() {
             // the session-bound requested locus or the FASTA-derived initial locus.
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
             igvLoadedSourceKeyRef.current = activeIgvSourceKey;
-            setIgvReadsTrackLoaded(true);
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             if (isCurrentTrackLoad()) setIgvError(`Failed to load IGV tracks: ${msg}`);
@@ -5316,6 +5328,7 @@ export function NGSToolkit() {
                                 </div>
                                 )}
 
+                                {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Progress</h4>
                                     {stagesLoading ? (
@@ -5345,7 +5358,9 @@ export function NGSToolkit() {
                                         </div>
                                     )}
                                 </div>
+                                )}
 
+                                {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
                                     {Object.keys(stageOutputs).length === 0 ? (
@@ -5384,6 +5399,7 @@ export function NGSToolkit() {
                                         </div>
                                     )}
                                 </div>
+                                )}
                             </>
                         )}
                     </div>
@@ -5556,6 +5572,11 @@ export function NGSToolkit() {
                                 {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (
                                     <div className="absolute bottom-2 left-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
                                         Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
+                                    </div>
+                                )}
+                                {!igvLoading && !igvError && igvReadsTrackLoaded && igvAuxTrackFailures.length > 0 && (
+                                    <div role="status" className="absolute bottom-2 right-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
+                                        Optional tracks unavailable: {igvAuxTrackFailures.join(' · ')}
                                     </div>
                                 )}
                                 {signalWorkbenchRequested ? (

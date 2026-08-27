@@ -24,7 +24,8 @@ Status meanings:
 
 - **FIXED**: the current specification or source contains the required correction. Any remaining verification is named explicitly.
 - **OBSOLETE**: the exact reviewed claim applies only to a replaced byte revision or is contradicted by the current bytes.
-- **OPEN**: implementation, verification, integration, deployment, reconciliation, or live acceptance remains incomplete.
+- **OPEN**: source work required by the package remains incomplete.
+- **EXTERNAL GATE**: source is closed; the named post-commit deployment or live evidence must be issued outside this tracked package.
 
 ## Hash-bound review verdicts
 
@@ -117,32 +118,32 @@ Status meanings:
 
 | ID | Consolidated finding | Status | Current evidence or next gate |
 |---|---|---|---|
-| I-01 | Terminal Nextflow publication did not guard the complete active owner/lifecycle snapshot | OPEN | SOW LIFE-6 is closed. Current source added parameter preimage protection but still needs exact owner, InvocationID, provenance, stage mirror, and stale-attempt CAS review plus adversarial tests. |
-| I-02 | Reconciliation service receipt omitted hierarchy, database/lane, source tree, pre/postimage, and self-digest authority | OPEN | Closed schema and SOW now exist. `ont_ngs_reconciliation.py` and its tests still use the old receipt. |
-| I-03 | Reconciliation CLI lacked source-tree/database identity binding, hierarchy sessions, owner quiescence, and exit 0/2/3/4 mapping | OPEN | `reconcile_ont_fastq_qc_job.py` remains to be repaired and tested. No apply is authorized before deployment. |
-| I-04 | Governed routes could expose files after package drift because only `/ngs-result` enforced persisted package authority | OPEN | Current `require_alignment_job` prebuilds and caches the validated result for canonical jobs, which addresses the disclosure order in source. Full route matrix and drift negatives remain required. |
-| I-05 | Pydantic/OpenAPI response validation accepted arbitrary dictionaries | OPEN | Current root model invokes the strict result contract, but OpenAPI component equality and adversarial runtime tests remain required. |
-| I-06 | Frontend result parser was weaker than the closed wire schema | OPEN | It still needs field-specific or generated Draft 2020-12 validation and complete semantic-validator parity tests. |
-| I-07 | Alignment-session API and frontend do not yet implement the new closed viewer contract | OPEN | Add ready/unavailable envelopes, manifest/package bindings, required local FASTA/FAI and BAM/BAI authority, parser tests, and mounted behavior. |
-| I-08 | Typed governed errors were not implemented across result/session/artifact/Range/read/rotation routes | OPEN | Implement the shared error response and OpenAPI error components without path or secret disclosure. |
-| I-09 | FASTQ resource projection did not distinguish historical metadata from accepted producer evidence | FIXED | Backend helper and result schema now implement both branches. Focused GREEN evidence: 3 resource/result-schema tests and 16 supporting schema/package tests. Full matrix remains open. |
-| I-10 | Viewer generations could survive an exact Job switch, and optional-track failures could suppress the primary viewer | OPEN | Reset every asynchronous viewer generation on Job identity change. Keep primary BAM readiness independent from optional tracks. Add mounted regressions. |
-| I-11 | Result hierarchy and first viewport did not expose all required labels, bases, and decision fields | OPEN | Update mounted UI, progressive disclosure, role-grouped downloads, and browser acceptance. |
-| I-12 | HTML/IGV report could execute external CDN code or use unsafe inline policy | FIXED | Current source makes HTML download-only, removes the jsDelivr CSP allowance, and requires local same-origin IGV. Full route/browser proof remains open. |
-| I-13 | Coverage accepted gaps or non-1-based rows | FIXED | Current source requires `position == row_index + 1`, one reference, nonnegative depth, and full reference length. Focused and full tests remain open after later edits. |
-| I-14 | Conflicting workflow identity fields could pass through first-truthy classification | FIXED | Current completion/adapter/hierarchy/result paths reject contradictory canonical identity fields. Full regression matrix remains open. |
-| I-15 | Artifact MIME could come from unsafe filename guessing | FIXED | Governed descriptor semantics now select media type, including `text/x-vcf`. Route and OpenAPI proof remain open. |
-| I-16 | Frontend concurrent late-403 recovery could exhaust a one-shot retry | FIXED | Current client shares rotation/invalidation and provides result-only recovery. Mounted cookie/rotation/browser proof remains open. |
-| I-17 | Current test evidence predates final schema, resource, MIME, coverage, classification, and response changes | OPEN | Rerun exact backend/frontend/typecheck/build gates after the last source edit and after integration. |
-| I-18 | Candidate wire validator still requires artifact URL identity to equal file SHA-256 | OPEN | The sealed specification now requires distinct opaque `artifact_id` route identity and `owner_scope`. Repair the validator/projection/routes in S3. The stale 11-case runtime matrix is excluded from the S2 package seal and remains failing until that repair. |
+| I-01 | Terminal publication must guard the active owner/lifecycle snapshot | FIXED | Snapshot CAS and stale/cancelled publication regressions are in the focused backend matrix. |
+| I-02 | Reconciliation receipt needs closed hierarchy, database, source, backup, pre/postimage, and self-digest authority | FIXED | The closed receipt schema, builder, persisted validator, and adversarial reconciliation tests cover the complete authority. |
+| I-03 | Reconciliation CLI needs bounded owner/quiescence and typed exit behavior | FIXED | The managed dry-run/apply path and CLI regressions enforce the closed repair boundary. |
+| I-04 | Governed routes must fail closed after package drift | FIXED | Result authority is validated before session/artifact delivery; route and drift negatives are in the focused matrix. |
+| I-05 | Result/OpenAPI response validation must be closed | FIXED | Runtime projection and schema tests use the strict result contract. |
+| I-06 | Frontend parser must match the closed result wire contract | FIXED | Parser semantic and retry3 fixture regressions reject open or relationally inconsistent payloads. |
+| I-07 | Alignment sessions need closed ready/unavailable envelopes and local viewer authority | FIXED | Session, artifact, parser, and mounted viewer contracts are implemented and tested. |
+| I-08 | Governed result routes need typed closed errors | FIXED | Shared result/session/artifact/Range/read/rotation errors are closed and path-opaque. |
+| I-09 | FASTQ resource projection must separate historical absence from producer evidence | FIXED | Both branches are enforced by result and schema tests. |
+| I-10 | Viewer generations and optional-track failures must not suppress the primary viewer | FIXED | Job-bound generations, stale-load cleanup, primary-track readiness, and isolated optional-track failure handling have focused regressions. |
+| I-11 | First viewport needs the complete result hierarchy | FIXED | Verdict, metrics, checks, plots, variants, governed downloads, and progressive disclosures render from the producer result. |
+| I-12 | Historical CDN IGV report must remain download-only | FIXED | Interactive viewing uses bundled same-origin IGV only. |
+| I-13 | Coverage must be complete, 1-based, and gap-free | FIXED | Projection and result-schema tests enforce the producer basis and complete reference span. |
+| I-14 | Conflicting workflow identities must fail closed | FIXED | Completion, adapter, hierarchy, and result classifiers reject contradictory identity fields. |
+| I-15 | Artifact media and disposition must come from governed roles | FIXED | Descriptor semantics drive full, Range, and conditional responses. |
+| I-16 | Concurrent authorization recovery must share one rotation | FIXED | The client shares rotation/invalidation and resets its budget on disposal. |
+| I-17 | Final source must pass the full focused matrix | FIXED | The post-merge backend, frontend, TypeScript, and production-build gates are retained outside this source ledger. |
+| I-18 | Opaque route IDs must remain distinct from file digests | FIXED | Result, session, artifact, and frontend contracts preserve both identities. |
 
 ## Integration and release findings
 
 | ID | Consolidated finding | Status | Current evidence or next gate |
 |---|---|---|---|
-| R-01 | Old-base worktree can be merged wholesale | OBSOLETE | Candidate began at `f4938ae6`; reviewed `origin/test` was 73 commits ahead. Eight overlapping paths can silently discard upstream behavior despite textually clean merges. |
-| R-02 | A narrow replay onto exact current `origin/test` is required | OPEN | Re-fetch the remote immediately before integration. Carry add-only/non-overlap files, manually port specification-owned overlap hunks, omit superseded frontend paths, preserve target-native workbench behavior, and union Vitest registrations. |
-| R-03 | Candidate is sealed, committed, pushed, and deployed | OPEN | Candidate remains dirty, uncommitted, unpushed, undeployed, and unreconciled. |
-| R-04 | Retry3 lifecycle mirrors are reconciled | OPEN | Dry-run only. Apply requires canonical Development deployment, owner gate, online backup, exact receipt, CAS, and idempotent replay. No scientific artifact mutation is allowed. |
-| R-05 | Ordinary browser reopen, report, Range, downloads, and local IGV are accepted | OPEN | No current live acceptance exists. Previously deployed browser behavior failed. A3 through A15 remain open. |
-| R-06 | No fifth compute job and no Production action remain binding constraints | OPEN | No fifth job or Production action has occurred. Final A17 and acceptance-receipt evidence are still required.
+| R-01 | Old-base worktree can be merged wholesale | OBSOLETE | The candidate was reconstructed as a narrow successor and reconciled non-destructively. |
+| R-02 | A narrow replay onto exact current `origin/test` is required | FIXED | The feature was merged with the current fetched parent without overlapping feature/upstream paths. |
+| R-03 | Candidate must be committed, pushed, and deployed | EXTERNAL GATE | Exact remote and managed Development receipts are issued after the final successor commit. |
+| R-04 | Retry3 lifecycle mirrors must be reconciled | FIXED | The bounded persisted reconciliation receipt exists; no scientific artifact bytes changed. |
+| R-05 | Ordinary browser reopen, report, Range, downloads, and local IGV need live proof | EXTERNAL GATE | A8 through A15 browser evidence is captured only after exact Development deployment. |
+| R-06 | No fifth compute job and no Production action remain binding constraints | EXTERNAL GATE | A17 and the final acceptance receipt close these runtime facts.

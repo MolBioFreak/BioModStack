@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { fetchOntFastqQcResult, type OntFastqQcResult } from '../../lib/ontFastqQcResult';
-import { isAlignmentAccessDenied } from '../../lib/ngsAlignmentSession';
+import { describeNgsError, isAlignmentAccessDenied } from '../../lib/ngsAlignmentSession';
 import type { Job } from '../../lib/api';
 
 const TERMINAL_JOB_STATUSES: Array<Job['status']> = ['completed', 'failed', 'cancelled'];
@@ -36,7 +36,7 @@ export function useOntFastqQcResult(
     return {
         result: query.data ?? null,
         loading: query.isLoading || query.isFetching,
-        error: query.error instanceof Error ? query.error.message : query.error ? 'Unable to load ONT FASTQ-QC result' : null,
+        error: query.error ? describeNgsError(query.error, 'Unable to load ONT FASTQ-QC result') : null,
         accessDenied: isAlignmentAccessDenied(query.error),
     };
 }

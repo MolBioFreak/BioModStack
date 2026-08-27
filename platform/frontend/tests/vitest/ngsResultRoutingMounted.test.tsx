@@ -10,6 +10,7 @@ const ngsApiMocks = vi.hoisted(() => ({
     fetchJobs: vi.fn(),
 }));
 const alignmentMocks = vi.hoisted(() => ({
+    describeNgsError: vi.fn((_reason: unknown, fallback: string) => fallback),
     disposeAlignmentAccess: vi.fn(),
     fetchAlignmentSessions: vi.fn(),
     isAlignmentAccessDenied: vi.fn(),

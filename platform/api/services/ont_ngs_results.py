@@ -27,6 +27,10 @@ from services.ont_ngs_decision_projection import (
     OntNgsDecisionProjectionError,
     project_verification_manifest,
 )
+from services.ont_ngs_reconciliation import (
+    OntFastqQcReconciliationError,
+    validate_persisted_reconciliation_receipt,
+)
 from services.sequence_qc_manifest import VERIFICATION_SCHEMA, load_sequence_qc_manifest
 from services.resource_usage_evidence import (
     GLOBAL_RESOURCE_ADMISSION_PARAM,
@@ -131,6 +135,10 @@ def _require_persisted_package_authority(
     else:
         reconciliation = provenance.get("ont_fastq_qc_reconciliation_v1")
         authority = reconciliation if isinstance(reconciliation, dict) else {}
+        try:
+            validate_persisted_reconciliation_receipt(authority)
+        except OntFastqQcReconciliationError as exc:
+            raise OntNgsResultError("persisted reconciliation authority is invalid") from exc
         expected = {
             "schema": "bms.ont-fastq-qc-reconciliation.v1",
             "job_id": str(job.id),

@@ -470,6 +470,11 @@ def _validate_bound_receipt(receipt: Mapping[str, Any]) -> None:
     _stage_output_prefix(normalized_outputs)
 
 
+def validate_persisted_reconciliation_receipt(receipt: Mapping[str, Any]) -> None:
+    """Validate the complete persisted reconciliation authority before reuse."""
+    _validate_bound_receipt(receipt)
+
+
 def _normalized_request(job_id: str) -> dict[str, str]:
     return {
         "schema": "bms.ont-fastq-qc-reconciliation-request.v1",

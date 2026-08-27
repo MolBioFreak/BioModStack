@@ -4,6 +4,7 @@ import test from 'node:test';
 import { api } from '../src/lib/api.js';
 import {
     AlignmentReadScanTruncatedError,
+    describeNgsError,
     disposeAlignmentAccess,
     fetchAlignmentRead,
     isAlignmentAccessDenied,
@@ -45,6 +46,25 @@ test('alignment access recovery is offered only for the exact capability-denial 
     assert.equal(isAlignmentAccessDenied({ response: { status: 403 } }), false);
     assert.equal(isAlignmentAccessDenied({ response: { status: 404, data: { detail: 'alignment access denied' } } }), false);
     assert.equal(isAlignmentAccessDenied(new Error('alignment access denied')), false);
+});
+
+test('governed NGS failures retain a specific operator-visible category', () => {
+    assert.equal(
+        describeNgsError(ngsError('NGS_ARTIFACT_INTEGRITY_CONFLICT'), 'fallback'),
+        'Integrity error (NGS_ARTIFACT_INTEGRITY_CONFLICT): Denied.',
+    );
+    assert.equal(
+        describeNgsError(ngsError('NGS_ROTATION_CONFLICT', 'job-recovery-race', 409), 'fallback'),
+        'Access rotation error (NGS_ROTATION_CONFLICT): Denied.',
+    );
+    assert.equal(
+        describeNgsError(new Error('Result parser error: result.artifacts is invalid'), 'fallback'),
+        'Result parser error: result.artifacts is invalid',
+    );
+    assert.equal(
+        describeNgsError({ response: { status: 502, data: { detail: 'bad gateway' } } }, 'Unable to load result'),
+        'Network error (HTTP 502): Unable to load result',
+    );
 });
 
 test('rotation response is a closed exact authority contract', () => {

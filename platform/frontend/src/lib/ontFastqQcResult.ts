@@ -823,6 +823,9 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
     ) {
         throw new Error('artifact counts are inconsistent');
     }
+    if (parsedJob.status === 'completed' && artifacts.some((artifact) => artifact.state === 'missing_required')) {
+        throw new Error('completed result contains a missing required artifact');
+    }
 
     if (!Array.isArray(root.alignment_sessions) || root.alignment_sessions.length > 2) {
         throw new Error('alignment session inventory is invalid');
@@ -1042,11 +1045,18 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
         };
     });
     const canonicalStages = ['fastq_align', 'dimer_qc', 'fastq_qc', 'construct_verification'];
+    const canonicalStageOutputCounts = [5, 6, 8, 6];
     if (
         stages.length !== canonicalStages.length
         || stages.some((stage, index) => stage.stage !== canonicalStages[index])
     ) {
         throw new Error('canonical stage order is invalid');
+    }
+    if (
+        parsedJob.status === 'completed'
+        && stages.some((stage, index) => stage.status !== 'complete' || stage.output_count !== canonicalStageOutputCounts[index])
+    ) {
+        throw new Error('completed result stage state or output count is invalid');
     }
 
     const resources = object(root.execution_resources, 'execution resources');
@@ -1113,6 +1123,11 @@ export function parseOntFastqQcResult(value: unknown, expectedJobId: string): On
 export async function fetchOntFastqQcResult(jobId: string): Promise<OntFastqQcResult> {
     return withAlignmentAccessRecovery(jobId, async () => {
         const response = await api.get<unknown>(`/api/jobs/${encodeURIComponent(jobId)}/ngs-result`);
-        return parseOntFastqQcResult(response.data, jobId);
+        try {
+            return parseOntFastqQcResult(response.data, jobId);
+        } catch (reason) {
+            const message = reason instanceof Error ? reason.message : 'unknown parser failure';
+            throw new Error(`Result parser error: ${message}`, { cause: reason });
+        }
     });
 }

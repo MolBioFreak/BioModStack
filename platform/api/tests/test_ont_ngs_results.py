@@ -118,7 +118,9 @@ def test_result_reopen_accepts_exact_fresh_terminal_package_authority() -> None:
     )
 
 
-def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority() -> None:
+def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from services import ont_ngs_results as service
 
     require = cast(Any, getattr(service, "_require_persisted_package_authority", None))
@@ -135,6 +137,8 @@ def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority() 
         "verification_manifest_sha256": "e" * 64,
         **_observed_package_authority(),
     }
+    validated: list[dict[str, Any]] = []
+    monkeypatch.setattr(service, "validate_persisted_reconciliation_receipt", validated.append)
     job = SimpleNamespace(
         id="retry3",
         provenance={
@@ -152,6 +156,7 @@ def test_result_reopen_accepts_exact_additive_retry3_reconciliation_authority() 
         reference_sequence_sha256="b" * 64,
         source_fastq_sha256="c" * 64,
     )
+    assert validated == [reconciliation]
 
 
 def test_result_reopen_rejects_fresh_resource_receipt_without_persisted_bytes() -> None:

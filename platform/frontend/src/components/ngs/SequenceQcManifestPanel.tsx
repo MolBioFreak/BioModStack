@@ -133,7 +133,9 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                     </div>
                 )}
                 {status === 'available' && manifest && (
-                    <div className="space-y-3">
+                    <details>
+                        <summary className="cursor-pointer text-xs font-semibold text-[var(--text-primary)]">Sequence-QC and construct-verification manifest details</summary>
+                        <div className="mt-3 space-y-3">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                             <div>
                                 <div className="text-xs text-[var(--text-secondary)]">Schema</div>
@@ -277,7 +279,8 @@ export function SequenceQcManifestPanel({ status, manifest, message, onNavigateL
                                 {artifactCounts.unavailable} manifest artifact(s) are not present or not applicable; absence is tracked explicitly instead of fabricating paths.
                             </p>
                         )}
-                    </div>
+                        </div>
+                    </details>
                 )}
             </div>
             <ProjectAttachmentDialog

@@ -127,6 +127,17 @@ test('strict parser rejects relational and payload-bound drift', () => {
             const stages = payload.stages as Array<unknown>;
             [stages[0], stages[1]] = [stages[1], stages[0]];
         }, /canonical stage order/u],
+        ['completed stage missing', (payload) => {
+            (payload.stages as Array<Record<string, unknown>>)[0].status = 'missing';
+        }, /completed result stage state/u],
+        ['completed stage output count', (payload) => {
+            (payload.stages as Array<Record<string, unknown>>)[0].output_count = 4;
+        }, /completed result stage state/u],
+        ['completed required artifact missing', (payload) => {
+            const artifact = (payload.artifacts as Array<Record<string, unknown>>)
+                .find((item) => item.state !== 'present');
+            if (artifact) artifact.state = 'missing_required';
+        }, /missing required artifact/u],
         ['variant count', (payload) => {
             const summary = verification(payload).summary as Record<string, number>;
             summary.variant_count += 1;
