@@ -99,12 +99,14 @@ from services.frustrampnn.jobs import (
     workflow_selection,
 )
 from services.structure_dataset_fanout import (
+    FANOUT_CAPABILITY_CONSUMED_KEY,
     FANOUT_SCHEMA,
     StructureDatasetBatch,
     StructureDatasetFanoutError,
     StructureDatasetMember,
     fan_out_structure_dataset,
 )
+from services import stage_reporting
 from services.frustrampnn.settings import (
     FrustraMPNNEffectiveSettings,
     FrustraMPNNRequestedSettings,
@@ -2010,6 +2012,8 @@ async def _fanout_design_selections(
     selections: list[Any],
     requested_settings: FrustraMPNNRequestedSettings,
     trigger: str,
+    require_running_parent: bool = False,
+    workflow_capability_digest: str | None = None,
 ):
     members = [
         StructureDatasetMember(
@@ -2054,6 +2058,8 @@ async def _fanout_design_selections(
         },
         create_child=create_batch,
         discard_child=discard_uncommitted_child_artifacts,
+        require_running_parent=require_running_parent,
+        workflow_capability_digest=workflow_capability_digest,
     )
 
 
@@ -2891,6 +2897,15 @@ async def analyze_parent_workflow_dataset(
         raise HTTPException(404, "source parent Job not found")
     if parent.status != "running" or parent.queue_status != "running":
         raise HTTPException(409, "source parent Job is not authoritatively running")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, capability = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(
+        parent.provenance, capability
+    ):
+        raise HTTPException(403, "invalid parent workflow capability")
+    capability_digest = hashlib.sha256(capability.encode("ascii")).hexdigest()
+    if str((parent.provenance or {}).get(FANOUT_CAPABILITY_CONSUMED_KEY) or "") == capability_digest:
+        raise HTTPException(403, "parent workflow capability was already consumed")
     form = await request.form()
     if set(form) != {
         "structure_files", "dataset_manifest", "frustrampnn_settings",
@@ -2941,11 +2956,14 @@ async def analyze_parent_workflow_dataset(
             selections=selections,
             requested_settings=requested_settings,
             trigger="parent_workflow_terminal_dataset",
+            require_running_parent=True,
+            workflow_capability_digest=capability_digest,
         )
         return await _fanout_receipt(session, fanout)
     except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
         await session.rollback()
-        raise HTTPException(422, str(exc)) from exc
+        status_code = 409 if "mutation authority" in str(exc) else 422
+        raise HTTPException(status_code, str(exc)) from exc
 
 
 @router.post(

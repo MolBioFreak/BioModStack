@@ -16,6 +16,7 @@ from typing import Any, Sequence
 import requests
 
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+WORKFLOW_CAPABILITY_ENV = "BMS_STAGE_REPORT_TOKEN"
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -64,6 +65,7 @@ def execute_parent_fanout(
     poll_interval: int = 10,
     settings_value_origin: str = "bms_default",
     timeout: int = 0,
+    capability: str | None = None,
 ) -> dict[str, Any]:
     if parent_workflow_id not in {
         "structure_prediction", "complex_prediction", "protein_design",
@@ -74,6 +76,9 @@ def execute_parent_fanout(
         raise ValueError("settings_value_origin is invalid")
     if not candidate_dirs:
         raise ValueError("terminal structure dataset is empty")
+    capability = str(capability or os.environ.get(WORKFLOW_CAPABILITY_ENV) or "").strip()
+    if not capability:
+        raise ValueError("parent workflow capability is required")
     settings = json.loads(settings_json)
     if _canonical_bytes(settings) != settings_json.encode("utf-8"):
         raise ValueError("settings_json must be compact canonical JSON")
@@ -108,6 +113,7 @@ def execute_parent_fanout(
             "settings_value_origin": settings_value_origin,
         },
         files=files,
+        headers={"Authorization": f"Bearer {capability}"},
         timeout=120,
     )
     response.raise_for_status()

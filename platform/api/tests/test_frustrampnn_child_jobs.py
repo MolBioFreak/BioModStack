@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 import stat
 from pathlib import Path
 
@@ -15,11 +16,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Design, Job, get_session
+from routers import frustrampnn as frustrampnn_router
 from routers.frustrampnn import AnalyzeDesignsRequest, ReanalyzeRequest, router
-from services import nextflow as nextflow_service
+from services import nextflow as nextflow_service, stage_reporting
 from services.frustrampnn import jobs as child_jobs
 from services.frustrampnn.contracts import canonical_json_bytes
 from services.frustrampnn.settings import FrustraMPNNRequestedSettings, default_settings
+from services.structure_dataset_fanout import (
+    StructureDatasetMember,
+    fan_out_structure_dataset,
+)
 
 
 def _pdb() -> bytes:
@@ -934,6 +940,7 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
     sessions, results = child_db
     parent_root = results / "running-parent"
     parent_root.mkdir()
+    token, token_digest = stage_reporting.issue_stage_report_token()
     async with sessions() as session:
         session.add(Job(
             id="running-parent-job",
@@ -943,6 +950,7 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
             model_id="proteinmpnn",
             mode="protein_design",
             params={},
+            provenance={stage_reporting.PROVENANCE_DIGEST_KEY: token_digest},
             output_dir=str(parent_root),
             child_output_dir=str(parent_root),
         ))
@@ -985,11 +993,20 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
             "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
             data=request_data,
             files=files,
+            headers={"Authorization": f"Bearer {token}"},
         )
+        replacement_token, replacement_digest = stage_reporting.issue_stage_report_token()
+        async with sessions() as session:
+            parent = await session.get(Job, "running-parent-job")
+            provenance = dict(parent.provenance or {})
+            provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = replacement_digest
+            parent.provenance = provenance
+            await session.commit()
         replay = await client.post(
             "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
             data=request_data,
             files=files,
+            headers={"Authorization": f"Bearer {replacement_token}"},
         )
 
     assert response.status_code == 202, response.text
@@ -1012,6 +1029,143 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
         ).scalars().all()
         assert len(children) == 2
         assert all(child.child_stage == "frustrampnn" for child in children)
+
+
+@pytest.mark.asyncio
+async def test_parent_workflow_dataset_rejects_missing_wrong_replayed_and_foreign_parent_capabilities(
+    child_db,
+) -> None:
+    sessions, results = child_db
+    token, digest = stage_reporting.issue_stage_report_token()
+    foreign_token, foreign_digest = stage_reporting.issue_stage_report_token()
+    for parent_id, parent_digest in (("cap-parent", digest), ("foreign-parent", foreign_digest)):
+        root = results / parent_id
+        root.mkdir()
+        async with sessions() as session:
+            session.add(Job(
+                id=parent_id, name=parent_id, status="running", queue_status="running",
+                model_id="proteinmpnn", mode="protein_design", params={},
+                provenance={stage_reporting.PROVENANCE_DIGEST_KEY: parent_digest},
+                output_dir=str(root), child_output_dir=str(root),
+            ))
+            await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+    async def override_session():
+        async with sessions() as session:
+            yield session
+    app.dependency_overrides[get_session] = override_session
+    settings_payload = default_settings().model_dump(mode="json")
+    settings_payload.pop("settings_value_origin")
+    metadata = {
+        "candidate_id": "terminal-0", "parent_job_id": "cap-parent",
+        "parent_workflow_id": "protein_design", "producer_stage": "protein_design:terminal",
+        "producer_candidate_key": "terminal/terminal-0.pdb", "requiredness": "required",
+    }
+    data = {
+        "parent_workflow_id": "protein_design",
+        "dataset_manifest": json.dumps({"candidates": [metadata]}, sort_keys=True, separators=(",", ":")),
+        "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
+        "settings_value_origin": "bms_default",
+    }
+    files = [("structure_files", ("terminal-0.pdb", _pdb(), "chemical/x-pdb"))]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files
+        )
+        wrong = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files,
+            headers={"Authorization": "Bearer wrong-capability-value-0123456789"},
+        )
+        foreign = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files,
+            headers={"Authorization": f"Bearer {foreign_token}"},
+        )
+        accepted = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        replayed = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert [missing.status_code, wrong.status_code, foreign.status_code] == [403, 403, 403]
+    assert accepted.status_code == 202, accepted.text
+    assert replayed.status_code == 403
+    async with sessions() as session:
+        children = (await session.execute(select(Job).where(Job.parent_job_id == "cap-parent"))).scalars().all()
+        assert len(children) == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_transition_after_workflow_route_read_blocks_children_and_provenance(
+    child_db, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions, results = child_db
+    parent_id = "route-read-race-parent"
+    root = results / parent_id
+    root.mkdir()
+    token, digest = stage_reporting.issue_stage_report_token()
+    async with sessions() as session:
+        session.add(Job(
+            id=parent_id, name=parent_id, status="running", queue_status="running",
+            model_id="proteinmpnn", mode="protein_design", params={},
+            provenance={stage_reporting.PROVENANCE_DIGEST_KEY: digest},
+            output_dir=str(root), child_output_dir=str(root),
+        ))
+        await session.commit()
+
+    original_reader = frustrampnn_router._read_bounded_upload
+    transitioned = False
+    async def transition_after_route_read(upload):
+        nonlocal transitioned
+        if not transitioned:
+            transitioned = True
+            async with sessions() as competing:
+                parent = await competing.get(Job, parent_id)
+                parent.status = "cancelled"
+                parent.queue_status = "cancelled"
+                await competing.commit()
+        return await original_reader(upload)
+    monkeypatch.setattr(frustrampnn_router, "_read_bounded_upload", transition_after_route_read)
+
+    app = FastAPI()
+    app.include_router(router)
+    async def override_session():
+        async with sessions() as session:
+            yield session
+    app.dependency_overrides[get_session] = override_session
+    settings_payload = default_settings().model_dump(mode="json")
+    settings_payload.pop("settings_value_origin")
+    metadata = {
+        "candidate_id": "terminal-0", "parent_job_id": parent_id,
+        "parent_workflow_id": "protein_design", "producer_stage": "protein_design:terminal",
+        "producer_candidate_key": "terminal/terminal-0.pdb", "requiredness": "required",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/frustrampnn/jobs/{parent_id}/workflow-dataset/analyze",
+            data={
+                "parent_workflow_id": "protein_design",
+                "dataset_manifest": json.dumps({"candidates": [metadata]}, sort_keys=True, separators=(",", ":")),
+                "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
+                "settings_value_origin": "bms_default",
+            },
+            files=[("structure_files", ("terminal-0.pdb", _pdb(), "chemical/x-pdb"))],
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 409, response.text
+    async with sessions() as session:
+        parent = await session.get(Job, parent_id)
+        children = (await session.execute(select(Job).where(Job.parent_job_id == parent_id))).scalars().all()
+        assert parent.status == parent.queue_status == "cancelled"
+        assert children == []
+        assert "structure_dataset_fanout_v1" not in (parent.provenance or {})
 
 
 @pytest.mark.asyncio
@@ -1249,6 +1403,106 @@ async def test_concurrent_identical_dataset_fanout_reconciles_one_winner_without
             Path(child.params["frustrampnn_batch_manifest_path"]).is_file()
             for child in children
         )
+
+
+@pytest.mark.asyncio
+async def test_loser_cleanup_finishes_before_two_session_winner_installs_deterministic_manifests(
+    child_db,
+) -> None:
+    sessions, results = child_db
+    parent_root = results / "cleanup-race-parent"
+    parent_root.mkdir()
+    async with sessions() as setup:
+        setup.add(Job(
+            id="cleanup-race-parent", name="cleanup race parent", status="running",
+            queue_status="running", model_id="proteinmpnn", mode="protein_design",
+            params={}, output_dir=str(parent_root), child_output_dir=str(parent_root),
+        ))
+        await setup.commit()
+
+    members = tuple(
+        StructureDatasetMember(structure_id=f"candidate-{ordinal}", lineage={"ordinal": ordinal}, payload=ordinal)
+        for ordinal in range(2)
+    )
+    loser_created = asyncio.Event()
+    allow_loser_failure = asyncio.Event()
+    winner_created = asyncio.Event()
+    winner_roots: list[Path] = []
+
+    class InterleavingSession:
+        def __init__(self, inner):
+            self.inner = inner
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+        async def rollback(self):
+            await self.inner.rollback()
+            try:
+                await asyncio.wait_for(winner_created.wait(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+
+    async with sessions() as loser_inner, sessions() as winner_session:
+        loser_parent = await loser_inner.get(Job, "cleanup-race-parent")
+        winner_parent = await winner_session.get(Job, "cleanup-race-parent")
+        loser_session = InterleavingSession(loser_inner)
+        loser_calls = 0
+
+        async def loser_create(batch):
+            nonlocal loser_calls
+            loser_calls += 1
+            if loser_calls == 2:
+                raise RuntimeError("injected loser publication failure")
+            root = results / batch.child_job_id
+            root.mkdir()
+            (root / "manifest.json").write_text("loser\n", encoding="utf-8")
+            child = Job(
+                id=batch.child_job_id, name="loser child", status="queued", queue_status="queued",
+                model_id="frustrampnn", mode="analyze", params={}, parent_job_id=loser_parent.id,
+                output_dir=str(root), child_output_dir=str(root),
+            )
+            loser_inner.add(child)
+            loser_created.set()
+            await allow_loser_failure.wait()
+            return child
+
+        def loser_discard(child):
+            shutil.rmtree(Path(child.output_dir))
+
+        async def winner_create(batch):
+            root = results / batch.child_job_id
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "manifest.json").write_text("winner\n", encoding="utf-8")
+            winner_roots.append(root)
+            winner_created.set()
+            child = Job(
+                id=batch.child_job_id, name="winner child", status="queued", queue_status="queued",
+                model_id="frustrampnn", mode="analyze", params={}, parent_job_id=winner_parent.id,
+                output_dir=str(root), child_output_dir=str(root),
+            )
+            winner_session.add(child)
+            return child
+
+        loser_task = asyncio.create_task(fan_out_structure_dataset(
+            loser_session, workflow_id="protein_design.frustrampnn.v1", parent_job=loser_parent,
+            members=members, batching_enabled=False, structures_per_job=1,
+            request_identity={"trigger": "cleanup-race"}, create_child=loser_create,
+            discard_child=loser_discard,
+        ))
+        await loser_created.wait()
+        winner_task = asyncio.create_task(fan_out_structure_dataset(
+            winner_session, workflow_id="protein_design.frustrampnn.v1", parent_job=winner_parent,
+            members=members, batching_enabled=False, structures_per_job=1,
+            request_identity={"trigger": "cleanup-race"}, create_child=winner_create,
+            discard_child=lambda child: shutil.rmtree(Path(child.output_dir)),
+        ))
+        allow_loser_failure.set()
+        with pytest.raises(RuntimeError, match="injected loser publication failure"):
+            await loser_task
+        winner = await winner_task
+
+    assert winner.replayed is False
+    assert len(winner_roots) == 2
+    assert all((root / "manifest.json").read_text(encoding="utf-8") == "winner\n" for root in winner_roots)
 
 
 @pytest.mark.asyncio

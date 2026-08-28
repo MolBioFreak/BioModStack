@@ -95,6 +95,7 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
         calls.append(("POST", url))
         assert url.endswith("/api/frustrampnn/jobs/parent-1/workflow-dataset/analyze")
         assert kwargs["data"]["parent_workflow_id"] == "protein_design"
+        assert kwargs["headers"] == {"Authorization": "Bearer parent-fanout-capability"}
         manifest = json.loads(kwargs["data"]["dataset_manifest"])
         assert [item["candidate_id"] for item in manifest["candidates"]] == [
             "candidate-0", "candidate-1", "candidate-2"
@@ -182,6 +183,7 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
         output_bundles=bundle_root,
         api_url="http://api",
         poll_interval=0,
+        capability="parent-fanout-capability",
     )
 
     assert receipt["status"] == "complete"
@@ -301,6 +303,7 @@ def test_shared_client_canonicalizes_parent_dataset_order_across_arrival_orders(
             output_bundles=tmp_path / run_name,
             api_url="http://api",
             poll_interval=0,
+            capability="parent-fanout-capability",
         ))
 
     assert posted[0] == posted[1]
@@ -342,6 +345,7 @@ def test_shared_client_rejects_duplicate_parent_dataset_ordering_identities(
             output_receipt=tmp_path / "terminal.json",
             output_bundles=tmp_path / "bundles",
             api_url="http://api",
+            capability="parent-fanout-capability",
         )
 
 
@@ -405,4 +409,5 @@ def test_shared_client_fails_closed_when_any_required_child_fails(
             output_bundles=tmp_path / "bundles",
             api_url="http://api",
             poll_interval=0,
+            capability="parent-fanout-capability",
         )

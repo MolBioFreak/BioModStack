@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import hashlib
+import hmac
 import json
+import os
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Generic, Mapping, Sequence, TypeVar
 
 from sqlalchemy import update
@@ -16,6 +21,7 @@ from database import Job
 PayloadT = TypeVar("PayloadT")
 FANOUT_PROVENANCE_KEY = "structure_dataset_fanout_v1"
 FANOUT_SCHEMA = "bms.structure-dataset-fanout.v1"
+FANOUT_CAPABILITY_CONSUMED_KEY = "structure_dataset_fanout_capability_sha256"
 
 
 class StructureDatasetFanoutError(ValueError):
@@ -106,7 +112,7 @@ def _child_id(fanout_id: str, ordinal: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:structure-dataset-fanout:{fanout_id}:{ordinal}"))
 
 
-async def fan_out_structure_dataset(
+async def _fan_out_structure_dataset_locked(
     session: AsyncSession,
     *,
     workflow_id: str,
@@ -117,6 +123,8 @@ async def fan_out_structure_dataset(
     request_identity: Mapping[str, Any],
     create_child: ChildFactory[PayloadT],
     discard_child: ChildDiscard,
+    require_running_parent: bool = False,
+    workflow_capability_digest: str | None = None,
 ) -> StructureDatasetFanoutResult:
     """Create all scheduler Jobs in one DB transaction, or reconcile exact replay.
 
@@ -179,13 +187,40 @@ async def fan_out_structure_dataset(
     # its fan-out authority. On SQLite this no-op UPDATE obtains the RESERVED
     # writer lock; concurrent identical submissions wait, then refresh and replay
     # the winner instead of racing deterministic child roots.
+    initial_provenance = parent_job.provenance
+    lock_predicates = [Job.id == parent_job_id]
+    if require_running_parent:
+        lock_predicates.extend((Job.status == "running", Job.queue_status == "running"))
+    if workflow_capability_digest is not None:
+        lock_predicates.append(
+            Job.provenance.is_(None)
+            if initial_provenance is None
+            else Job.provenance == initial_provenance
+        )
     locked = await session.execute(
-        update(Job).where(Job.id == parent_job_id).values(provenance=Job.provenance)
+        update(Job).where(*lock_predicates).values(provenance=Job.provenance)
     )
     if locked.rowcount != 1:
-        raise StructureDatasetFanoutError("fan-out parent Job no longer exists")
+        raise StructureDatasetFanoutError("fan-out parent lost active mutation authority")
+    await session.refresh(parent_job)
+    if require_running_parent and (
+        parent_job.status != "running" or parent_job.queue_status != "running"
+    ):
+        raise StructureDatasetFanoutError("fan-out parent lost active mutation authority")
+    if workflow_capability_digest is not None:
+        provenance = dict(parent_job.provenance or {})
+        expected_digest = str(provenance.get("workflow_stage_report_token_sha256") or "")
+        consumed_digest = str(provenance.get(FANOUT_CAPABILITY_CONSUMED_KEY) or "")
+        if not hmac.compare_digest(expected_digest, workflow_capability_digest):
+            raise StructureDatasetFanoutError("workflow capability lost parent authority")
+        if hmac.compare_digest(consumed_digest, workflow_capability_digest):
+            raise StructureDatasetFanoutError("workflow capability was already consumed")
     replay = await reconcile_exact_replay()
     if replay is not None:
+        if workflow_capability_digest is not None:
+            provenance = dict(parent_job.provenance or {})
+            provenance[FANOUT_CAPABILITY_CONSUMED_KEY] = workflow_capability_digest
+            parent_job.provenance = provenance
         await session.commit()
         return replay
 
@@ -228,6 +263,8 @@ async def fan_out_structure_dataset(
             "child_job_ids": expected_child_ids,
         }
         provenance[FANOUT_PROVENANCE_KEY] = fanouts
+        if workflow_capability_digest is not None:
+            provenance[FANOUT_CAPABILITY_CONSUMED_KEY] = workflow_capability_digest
         parent_job.provenance = provenance
         await session.flush()
         await session.commit()
@@ -259,8 +296,59 @@ async def fan_out_structure_dataset(
     )
 
 
+async def fan_out_structure_dataset(
+    session: AsyncSession,
+    *,
+    workflow_id: str,
+    parent_job: Job,
+    members: Sequence[StructureDatasetMember[PayloadT]],
+    batching_enabled: bool,
+    structures_per_job: int,
+    request_identity: Mapping[str, Any],
+    create_child: ChildFactory[PayloadT],
+    discard_child: ChildDiscard,
+    require_running_parent: bool = False,
+    workflow_capability_digest: str | None = None,
+) -> StructureDatasetFanoutResult:
+    """Serialize deterministic filesystem publication through rollback cleanup."""
+
+    owner_root = Path(str(parent_job.child_output_dir or parent_job.output_dir or ""))
+    if not owner_root.is_absolute() or not owner_root.is_dir() or owner_root.is_symlink():
+        raise StructureDatasetFanoutError("fan-out parent output root is unavailable")
+    lock_path = owner_root / ".structure_dataset_fanout.lock"
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                await asyncio.sleep(0.01)
+        return await _fan_out_structure_dataset_locked(
+            session,
+            workflow_id=workflow_id,
+            parent_job=parent_job,
+            members=members,
+            batching_enabled=batching_enabled,
+            structures_per_job=structures_per_job,
+            request_identity=request_identity,
+            create_child=create_child,
+            discard_child=discard_child,
+            require_running_parent=require_running_parent,
+            workflow_capability_digest=workflow_capability_digest,
+        )
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 __all__ = [
     "FANOUT_PROVENANCE_KEY",
+    "FANOUT_CAPABILITY_CONSUMED_KEY",
     "FANOUT_SCHEMA",
     "StructureDatasetBatch",
     "StructureDatasetFanoutError",
