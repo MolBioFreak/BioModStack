@@ -207,14 +207,13 @@ async def _fan_out_structure_dataset_locked(
         parent_job.status != "running" or parent_job.queue_status != "running"
     ):
         raise StructureDatasetFanoutError("fan-out parent lost active mutation authority")
+    consumed_digest = ""
     if workflow_capability_digest is not None:
         provenance = dict(parent_job.provenance or {})
         expected_digest = str(provenance.get("workflow_stage_report_token_sha256") or "")
         consumed_digest = str(provenance.get(FANOUT_CAPABILITY_CONSUMED_KEY) or "")
         if not hmac.compare_digest(expected_digest, workflow_capability_digest):
             raise StructureDatasetFanoutError("workflow capability lost parent authority")
-        if hmac.compare_digest(consumed_digest, workflow_capability_digest):
-            raise StructureDatasetFanoutError("workflow capability was already consumed")
     replay = await reconcile_exact_replay()
     if replay is not None:
         if workflow_capability_digest is not None:
@@ -223,6 +222,11 @@ async def _fan_out_structure_dataset_locked(
             parent_job.provenance = provenance
         await session.commit()
         return replay
+
+    if workflow_capability_digest is not None and hmac.compare_digest(
+        consumed_digest, workflow_capability_digest
+    ):
+        raise StructureDatasetFanoutError("workflow capability was already consumed")
 
     provenance = dict(parent_job.provenance or {})
     fanouts = dict(provenance.get(FANOUT_PROVENANCE_KEY) or {})

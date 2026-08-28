@@ -995,18 +995,11 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
             files=files,
             headers={"Authorization": f"Bearer {token}"},
         )
-        replacement_token, replacement_digest = stage_reporting.issue_stage_report_token()
-        async with sessions() as session:
-            parent = await session.get(Job, "running-parent-job")
-            provenance = dict(parent.provenance or {})
-            provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = replacement_digest
-            parent.provenance = provenance
-            await session.commit()
         replay = await client.post(
             "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
             data=request_data,
             files=files,
-            headers={"Authorization": f"Bearer {replacement_token}"},
+            headers={"Authorization": f"Bearer {token}"},
         )
 
     assert response.status_code == 202, response.text
@@ -1032,7 +1025,7 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
 
 
 @pytest.mark.asyncio
-async def test_parent_workflow_dataset_rejects_missing_wrong_replayed_and_foreign_parent_capabilities(
+async def test_consumed_parent_capability_replays_only_the_exact_canonical_fanout(
     child_db,
 ) -> None:
     sessions, results = child_db
@@ -1058,18 +1051,24 @@ async def test_parent_workflow_dataset_rejects_missing_wrong_replayed_and_foreig
     app.dependency_overrides[get_session] = override_session
     settings_payload = default_settings().model_dump(mode="json")
     settings_payload.pop("settings_value_origin")
-    metadata = {
-        "candidate_id": "terminal-0", "parent_job_id": "cap-parent",
-        "parent_workflow_id": "protein_design", "producer_stage": "protein_design:terminal",
-        "producer_candidate_key": "terminal/terminal-0.pdb", "requiredness": "required",
-    }
+    metadata = [
+        {
+            "candidate_id": f"terminal-{ordinal}", "parent_job_id": "cap-parent",
+            "parent_workflow_id": "protein_design", "producer_stage": "protein_design:terminal",
+            "producer_candidate_key": f"terminal/terminal-{ordinal}.pdb", "requiredness": "required",
+        }
+        for ordinal in range(2)
+    ]
     data = {
         "parent_workflow_id": "protein_design",
-        "dataset_manifest": json.dumps({"candidates": [metadata]}, sort_keys=True, separators=(",", ":")),
+        "dataset_manifest": json.dumps({"candidates": metadata}, sort_keys=True, separators=(",", ":")),
         "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
         "settings_value_origin": "bms_default",
     }
-    files = [("structure_files", ("terminal-0.pdb", _pdb(), "chemical/x-pdb"))]
+    files = [
+        ("structure_files", (f"terminal-{ordinal}.pdb", _pdb_for_chain(chr(65 + ordinal)), "chemical/x-pdb"))
+        for ordinal in range(2)
+    ]
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         missing = await client.post(
@@ -1091,13 +1090,63 @@ async def test_parent_workflow_dataset_rejects_missing_wrong_replayed_and_foreig
             "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze", data=data, files=files,
             headers={"Authorization": f"Bearer {token}"},
         )
+        changed_member_data = dict(data)
+        changed_member_metadata = [dict(item) for item in metadata]
+        changed_member_metadata[1]["candidate_id"] = "terminal-changed"
+        changed_member_metadata[1]["producer_candidate_key"] = "terminal/terminal-changed.pdb"
+        changed_member_data["dataset_manifest"] = json.dumps(
+            {"candidates": changed_member_metadata}, sort_keys=True, separators=(",", ":")
+        )
+        changed_member_files = list(files)
+        changed_member_files[1] = (
+            "structure_files",
+            ("terminal-changed.pdb", files[1][1][1], "chemical/x-pdb"),
+        )
+        changed_member = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze",
+            data=changed_member_data,
+            files=changed_member_files,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        changed_order_data = dict(data)
+        changed_order_data["dataset_manifest"] = json.dumps(
+            {"candidates": list(reversed(metadata))}, sort_keys=True, separators=(",", ":")
+        )
+        changed_order = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze",
+            data=changed_order_data,
+            files=list(reversed(files)),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        changed_settings_payload = dict(settings_payload)
+        changed_settings_payload["structures_per_job"] = 2
+        changed_settings_data = dict(data)
+        changed_settings_data["frustrampnn_settings"] = json.dumps(
+            changed_settings_payload, sort_keys=True, separators=(",", ":")
+        )
+        changed_settings = await client.post(
+            "/api/frustrampnn/jobs/cap-parent/workflow-dataset/analyze",
+            data=changed_settings_data,
+            files=files,
+            headers={"Authorization": f"Bearer {token}"},
+        )
 
     assert [missing.status_code, wrong.status_code, foreign.status_code] == [403, 403, 403]
     assert accepted.status_code == 202, accepted.text
-    assert replayed.status_code == 403
+    assert replayed.status_code == 202, replayed.text
+    assert replayed.json()["replayed"] is True
+    assert replayed.json()["child_jobs"] == accepted.json()["child_jobs"]
+    assert [changed_member.status_code, changed_order.status_code, changed_settings.status_code] == [
+        422, 422, 422,
+    ]
+    assert {
+        changed_member.json()["detail"],
+        changed_order.json()["detail"],
+        changed_settings.json()["detail"],
+    } == {"workflow capability was already consumed"}
     async with sessions() as session:
         children = (await session.execute(select(Job).where(Job.parent_job_id == "cap-parent"))).scalars().all()
-        assert len(children) == 1
+        assert len(children) == 2
 
 
 @pytest.mark.asyncio

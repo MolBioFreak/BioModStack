@@ -99,7 +99,6 @@ from services.frustrampnn.jobs import (
     workflow_selection,
 )
 from services.structure_dataset_fanout import (
-    FANOUT_CAPABILITY_CONSUMED_KEY,
     FANOUT_SCHEMA,
     StructureDatasetBatch,
     StructureDatasetFanoutError,
@@ -2904,8 +2903,6 @@ async def analyze_parent_workflow_dataset(
     ):
         raise HTTPException(403, "invalid parent workflow capability")
     capability_digest = hashlib.sha256(capability.encode("ascii")).hexdigest()
-    if str((parent.provenance or {}).get(FANOUT_CAPABILITY_CONSUMED_KEY) or "") == capability_digest:
-        raise HTTPException(403, "parent workflow capability was already consumed")
     form = await request.form()
     if set(form) != {
         "structure_files", "dataset_manifest", "frustrampnn_settings",
