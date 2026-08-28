@@ -78,13 +78,21 @@ def execute_parent_fanout(
     if _canonical_bytes(settings) != settings_json.encode("utf-8"):
         raise ValueError("settings_json must be compact canonical JSON")
 
-    records: list[dict[str, Any]] = []
-    files: list[tuple[str, tuple[str, bytes, str]]] = []
+    dataset: list[tuple[tuple[str, str], dict[str, Any], tuple[str, bytes, str]]] = []
     for raw_dir in candidate_dirs:
         metadata, source = _candidate_authority(Path(raw_dir), parent_job_id, parent_workflow_id)
-        records.append(metadata)
         media_type = "chemical/x-mmcif" if source.suffix.lower() in {".cif", ".mmcif"} else "chemical/x-pdb"
-        files.append(("structure_files", (source.name, source.read_bytes(), media_type)))
+        ordering_identity = (
+            str(metadata["producer_candidate_key"]),
+            str(metadata["candidate_id"]),
+        )
+        dataset.append((ordering_identity, metadata, (source.name, source.read_bytes(), media_type)))
+    ordering_identities = [item[0] for item in dataset]
+    if len(set(ordering_identities)) != len(ordering_identities):
+        raise ValueError("terminal structure dataset has duplicate ordering identities")
+    dataset.sort(key=lambda item: item[0])
+    records = [item[1] for item in dataset]
+    files = [("structure_files", item[2]) for item in dataset]
     candidate_ids = [str(record["candidate_id"]) for record in records]
     if len(set(candidate_ids)) != len(candidate_ids):
         raise ValueError("terminal structure dataset has duplicate candidate IDs")
@@ -116,6 +124,17 @@ def execute_parent_fanout(
     child_ids = [str(child.get("job_id") or "") for child in children]
     if "" in child_ids or len(set(child_ids)) != len(child_ids):
         raise RuntimeError("scheduler fan-out child identities are invalid")
+    fanout_candidate_ids: list[str] = []
+    for child in children:
+        child_candidates = child.get("candidates")
+        if not isinstance(child_candidates, list) or len(child_candidates) != child.get("structure_count"):
+            raise RuntimeError("scheduler fan-out candidate grouping is invalid")
+        for candidate in child_candidates:
+            if not isinstance(candidate, dict) or not candidate.get("candidate_id"):
+                raise RuntimeError("scheduler fan-out candidate grouping is invalid")
+            fanout_candidate_ids.append(str(candidate["candidate_id"]))
+    if fanout_candidate_ids != candidate_ids:
+        raise RuntimeError("scheduler fan-out candidate order is invalid")
 
     status_endpoint = f"{api_url.rstrip('/')}/api/jobs/{parent_job_id}/children/status"
     started = time.monotonic()
@@ -155,6 +174,9 @@ def execute_parent_fanout(
         )
         receipt_response.raise_for_status()
         receipt = receipt_response.json()
+        child_candidate_ids = [
+            str(item["candidate_id"]) for item in child["candidates"]
+        ]
         expected_ids = [str(item.get("candidate_id")) for item in receipt.get("candidates", [])]
         result_ids = [
             str(item.get("candidate_id"))
@@ -164,6 +186,7 @@ def execute_parent_fanout(
         if (
             receipt.get("job_id") != child_id
             or receipt.get("status") != "completed"
+            or expected_ids != child_candidate_ids
             or expected_ids != result_ids
             or len(expected_ids) != child.get("structure_count")
             or (len(expected_ids) > 1 and not receipt.get("grouped_terminal_artifact"))

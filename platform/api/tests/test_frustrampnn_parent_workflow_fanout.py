@@ -110,8 +110,19 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
                 "effective_structures_per_job": 2,
                 "replayed": False,
                 "child_jobs": [
-                    {"job_id": child_ids[0], "structure_count": 2},
-                    {"job_id": child_ids[1], "structure_count": 1},
+                    {
+                        "job_id": child_ids[0],
+                        "structure_count": 2,
+                        "candidates": [
+                            {"candidate_id": "candidate-0"},
+                            {"candidate_id": "candidate-1"},
+                        ],
+                    },
+                    {
+                        "job_id": child_ids[1],
+                        "structure_count": 1,
+                        "candidates": [{"candidate_id": "candidate-2"}],
+                    },
                 ],
             }
         )
@@ -183,6 +194,157 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
     assert calls[0] == ("POST", "http://api/api/frustrampnn/jobs/parent-1/workflow-dataset/analyze")
 
 
+def test_shared_client_canonicalizes_parent_dataset_order_across_arrival_orders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_client()
+    candidates: list[Path] = []
+    authorities = [
+        ("candidate-b", "zeta/source.pdb", "B"),
+        ("candidate-c", "alpha/source.pdb", "C"),
+        ("candidate-a", "alpha/source.pdb", "A"),
+    ]
+    for candidate_id, producer_key, chain in authorities:
+        candidate_dir = tmp_path / candidate_id
+        candidate_dir.mkdir()
+        (candidate_dir / "source.pdb").write_text(f"ATOM {chain}\n", encoding="ascii")
+        (candidate_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "candidate_id": candidate_id,
+                    "parent_job_id": "parent-1",
+                    "parent_workflow_id": "protein_design",
+                    "producer_stage": "protein_design:terminal",
+                    "producer_candidate_key": producer_key,
+                    "requiredness": "required",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        candidates.append(candidate_dir)
+
+    expected_ids = ["candidate-a", "candidate-c", "candidate-b"]
+    posted: list[tuple[str, list[tuple[str, bytes, str]]]] = []
+
+    class Response:
+        ok = True
+        status_code = 200
+        text = ""
+        def __init__(self, payload): self.payload = payload
+        def json(self): return self.payload
+        def raise_for_status(self): return None
+
+    def fake_post(_url, **kwargs):
+        posted.append((kwargs["data"]["dataset_manifest"], [item[1] for item in kwargs["files"]]))
+        return Response({
+            "schema_name": "bms.structure-dataset-fanout.v1",
+            "fanout_id": "a" * 64,
+            "parent_job_id": "parent-1",
+            "selected_structure_count": 3,
+            "structures_per_job": 3,
+            "effective_structures_per_job": 3,
+            "replayed": len(posted) > 1,
+            "child_jobs": [{
+                "job_id": "child-a",
+                "structure_count": 3,
+                "candidates": [{"candidate_id": candidate_id} for candidate_id in expected_ids],
+            }],
+        })
+
+    child_root = tmp_path / "child-root"
+    for candidate_id in expected_ids:
+        bundle = child_root / "frustrampnn" / "results" / candidate_id
+        bundle.mkdir(parents=True)
+        (bundle / "workflow_component_result_v3.json").write_text("{}\n", encoding="utf-8")
+
+    def fake_get(url, **_kwargs):
+        if url.endswith("/children/status"):
+            return Response({
+                "completed": 1, "failed": 0, "cancelled": 0, "all_done": True,
+                "child_ids": ["child-a"],
+                "children": [{"job_id": "child-a", "status": "completed", "output_dir": str(child_root)}],
+            })
+        return Response({
+            "job_id": "child-a", "status": "completed",
+            "candidates": [{"candidate_id": candidate_id} for candidate_id in expected_ids],
+            "results": [{"candidate_id": candidate_id, "status": "succeeded"} for candidate_id in expected_ids],
+            "grouped_terminal_artifact": {"content_sha256": "b" * 64},
+        })
+
+    copied: list[tuple[str, str]] = []
+    original_copytree = module.shutil.copytree
+    def recording_copytree(source, destination, **kwargs):
+        copied.append((Path(destination).parent.name, Path(destination).name))
+        return original_copytree(source, destination, **kwargs)
+
+    monkeypatch.setattr(module.requests, "post", fake_post)
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    monkeypatch.setattr(module.shutil, "copytree", recording_copytree)
+    settings_json = json.dumps(
+        {"batching_enabled": True, "structures_per_job": 3},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    receipts = []
+    for run_name, arrival_order in (
+        ("forward", candidates),
+        ("reverse", list(reversed(candidates))),
+    ):
+        receipts.append(module.execute_parent_fanout(
+            parent_job_id="parent-1",
+            parent_workflow_id="protein_design",
+            settings_json=settings_json,
+            candidate_dirs=arrival_order,
+            output_receipt=tmp_path / f"{run_name}.json",
+            output_bundles=tmp_path / run_name,
+            api_url="http://api",
+            poll_interval=0,
+        ))
+
+    assert posted[0] == posted[1]
+    assert [item["candidate_id"] for item in json.loads(posted[0][0])["candidates"]] == expected_ids
+    assert [file_payload[1] for file_payload in posted[0][1]] == [b"ATOM A\n", b"ATOM C\n", b"ATOM B\n"]
+    assert [receipt["candidate_ids"] for receipt in receipts] == [expected_ids, expected_ids]
+    assert copied == [
+        ("forward", candidate_id) for candidate_id in expected_ids
+    ] + [
+        ("reverse", candidate_id) for candidate_id in expected_ids
+    ]
+
+
+def test_shared_client_rejects_duplicate_parent_dataset_ordering_identities(
+    tmp_path: Path,
+) -> None:
+    module = _load_client()
+    candidates = []
+    for ordinal in range(2):
+        candidate_dir = tmp_path / f"duplicate-{ordinal}"
+        candidate_dir.mkdir()
+        (candidate_dir / "source.pdb").write_text(f"ATOM {ordinal}\n", encoding="ascii")
+        (candidate_dir / "metadata.json").write_text(json.dumps({
+            "candidate_id": "candidate-a",
+            "parent_job_id": "parent-1",
+            "parent_workflow_id": "protein_design",
+            "producer_stage": "protein_design:terminal",
+            "producer_candidate_key": "terminal/candidate-a.pdb",
+            "requiredness": "required",
+        }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        candidates.append(candidate_dir)
+
+    with pytest.raises(ValueError, match="duplicate ordering identities"):
+        module.execute_parent_fanout(
+            parent_job_id="parent-1",
+            parent_workflow_id="protein_design",
+            settings_json='{"batching_enabled":false,"structures_per_job":1}',
+            candidate_dirs=candidates,
+            output_receipt=tmp_path / "terminal.json",
+            output_bundles=tmp_path / "bundles",
+            api_url="http://api",
+        )
+
+
 def test_shared_client_fails_closed_when_any_required_child_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -218,7 +380,10 @@ def test_shared_client_fails_closed_when_any_required_child_fails(
         "schema_name": "bms.structure-dataset-fanout.v1", "fanout_id": "a" * 64,
         "parent_job_id": "parent-1", "selected_structure_count": 1,
         "structures_per_job": 1, "effective_structures_per_job": 1,
-        "replayed": False, "child_jobs": [{"job_id": "child-a", "structure_count": 1}],
+        "replayed": False, "child_jobs": [{
+            "job_id": "child-a", "structure_count": 1,
+            "candidates": [{"candidate_id": "candidate-0"}],
+        }],
     }))
     monkeypatch.setattr(module.requests, "get", lambda *args, **kwargs: Response({
         "total": 1, "completed": 0, "failed": 1, "cancelled": 0,

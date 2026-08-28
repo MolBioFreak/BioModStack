@@ -973,21 +973,34 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
         ("structure_files", (f"terminal-{ordinal}.pdb", _pdb_for_chain(chr(65 + ordinal)), "chemical/x-pdb"))
         for ordinal in range(3)
     ]
+    request_data = {
+        "parent_workflow_id": "protein_design",
+        "dataset_manifest": json.dumps({"candidates": candidates}, sort_keys=True, separators=(",", ":")),
+        "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
+        "settings_value_origin": "bms_default",
+    }
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
-            data={
-                "parent_workflow_id": "protein_design",
-                "dataset_manifest": json.dumps({"candidates": candidates}, sort_keys=True, separators=(",", ":")),
-                "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
-                "settings_value_origin": "bms_default",
-            },
+            data=request_data,
+            files=files,
+        )
+        replay = await client.post(
+            "/api/frustrampnn/jobs/running-parent-job/workflow-dataset/analyze",
+            data=request_data,
             files=files,
         )
 
     assert response.status_code == 202, response.text
+    assert replay.status_code == 202, replay.text
     payload = response.json()
+    replay_payload = replay.json()
+    assert payload["replayed"] is False
+    assert replay_payload["replayed"] is True
+    assert [child["job_id"] for child in replay_payload["child_jobs"]] == [
+        child["job_id"] for child in payload["child_jobs"]
+    ]
     assert [child["structure_count"] for child in payload["child_jobs"]] == [2, 1]
     assert [
         [candidate["candidate_id"] for candidate in child["candidates"]]
@@ -999,6 +1012,75 @@ async def test_running_parent_workflow_uploads_terminal_dataset_to_generic_sched
         ).scalars().all()
         assert len(children) == 2
         assert all(child.child_stage == "frustrampnn" for child in children)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("parent_status", "parent_queue_status"),
+    [
+        ("completed", "completed"),
+        ("failed", "failed"),
+        ("cancelled", "cancelled"),
+        ("running", "queued"),
+        ("queued", "running"),
+    ],
+)
+async def test_parent_workflow_dataset_rejects_non_authoritatively_running_parent_before_child_creation(
+    child_db, parent_status: str, parent_queue_status: str,
+) -> None:
+    sessions, results = child_db
+    parent_id = f"inactive-{parent_status}-{parent_queue_status}"
+    parent_root = results / parent_id
+    parent_root.mkdir()
+    async with sessions() as session:
+        session.add(Job(
+            id=parent_id,
+            name="inactive parent",
+            status=parent_status,
+            queue_status=parent_queue_status,
+            model_id="proteinmpnn",
+            mode="protein_design",
+            params={},
+            output_dir=str(parent_root),
+            child_output_dir=str(parent_root),
+        ))
+        await session.commit()
+
+    app = FastAPI()
+    app.include_router(router)
+    async def override_session():
+        async with sessions() as session:
+            yield session
+    app.dependency_overrides[get_session] = override_session
+    settings_payload = default_settings().model_dump(mode="json")
+    settings_payload.pop("settings_value_origin")
+    metadata = {
+        "candidate_id": "terminal-0",
+        "parent_job_id": parent_id,
+        "parent_workflow_id": "protein_design",
+        "producer_stage": "protein_design:terminal",
+        "producer_candidate_key": "terminal/terminal-0.pdb",
+        "requiredness": "required",
+    }
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/api/frustrampnn/jobs/{parent_id}/workflow-dataset/analyze",
+            data={
+                "parent_workflow_id": "protein_design",
+                "dataset_manifest": json.dumps({"candidates": [metadata]}, sort_keys=True, separators=(",", ":")),
+                "frustrampnn_settings": json.dumps(settings_payload, sort_keys=True, separators=(",", ":")),
+                "settings_value_origin": "bms_default",
+            },
+            files=[("structure_files", ("terminal-0.pdb", _pdb(), "chemical/x-pdb"))],
+        )
+
+    assert response.status_code == 409, response.text
+    async with sessions() as session:
+        children = (
+            await session.execute(select(Job).where(Job.parent_job_id == parent_id))
+        ).scalars().all()
+        assert children == []
 
 
 @pytest.mark.asyncio

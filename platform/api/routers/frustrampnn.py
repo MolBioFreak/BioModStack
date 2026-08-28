@@ -2889,6 +2889,8 @@ async def analyze_parent_workflow_dataset(
     parent = await session.get(Job, parent_job_id)
     if parent is None:
         raise HTTPException(404, "source parent Job not found")
+    if parent.status != "running" or parent.queue_status != "running":
+        raise HTTPException(409, "source parent Job is not authoritatively running")
     form = await request.form()
     if set(form) != {
         "structure_files", "dataset_manifest", "frustrampnn_settings",
