@@ -93,6 +93,7 @@ process DoradoAlign {
     fi
 
     samtools index aligned.bam
+    rm -f -- reference.fasta
     cp reference.snapshot.fasta reference.fasta
     samtools faidx reference.fasta
 

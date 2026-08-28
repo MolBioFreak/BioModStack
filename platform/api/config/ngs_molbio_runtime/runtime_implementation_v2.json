@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e23a58208fe6a20dfda54be45531b51f350b498c8d4189b7eb00121b80bcdc58",
+  "content_sha256": "b6d159f703da372143504cfead67af6e751f2825afca9fa87e40e142421ffa0f",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -149,8 +149,8 @@
     },
     {
       "path": "modules/ngs/dorado_align.nf",
-      "sha256": "246f012cc10f8d17ded0f630ddf3960d4b69a5ed80679511b6589eb26568bf4d",
-      "size_bytes": 5648
+      "sha256": "535c4bfc73174ec8224757c9d265a518ba25bd435154883490c4b2ec66409a1a",
+      "size_bytes": 5677
     },
     {
       "path": "modules/ngs/dorado_basecall.nf",
@@ -997,8 +997,8 @@
     "content_sha256": "ca7b67e71a408b3cc51048701a0ef2ac20b3ff503d490d225909908384492297",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "367dbf713594fe216c9df7ff060b8c1df22e2780",
-  "successor_source_tree": "1ae9db0a0c4e39232ab883b32f6195a6e31c97ff",
+  "successor_source_commit": "321af4f9225ff5eabb38399567fe5caf276e2ba1",
+  "successor_source_tree": "6512d6dfba50486e29614796541b931040e45113",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
