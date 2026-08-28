@@ -297,7 +297,7 @@ def test_runner_registers_frustrampnn_migration_identities_and_latest_statistics
         (26, "add_frustrampnn_statistics"),
         (27, "add_frustrampnn_reviews"),
     ]
-    assert identities[-1] == (41, "add_frustrampnn_statistics_analyses")
+    assert identities[-1] == (42, "add_frustrampnn_statistics_claim_leases")
     assert [version for version, _name in identities] == sorted(
         version for version, _name in identities
     )

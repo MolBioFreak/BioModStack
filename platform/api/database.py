@@ -1611,6 +1611,11 @@ class FrustraMPNNStatisticsAnalysis(Base):
             "state",
             "created_at",
         ),
+        Index(
+            "ix_frustrampnn_statistics_analysis_lease",
+            "state",
+            "lease_expires_at",
+        ),
     )
 
     analysis_id = Column(String(36), primary_key=True)
@@ -1630,6 +1635,10 @@ class FrustraMPNNStatisticsAnalysis(Base):
     artifact_sha256 = Column(String(64), nullable=True)
     statistics_sha256 = Column(String(64), nullable=True)
     diagnostic = Column(Text, nullable=True)
+    claim_token = Column(String(36), nullable=True)
+    claim_owner = Column(String(128), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,

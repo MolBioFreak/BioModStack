@@ -4,6 +4,7 @@ import hashlib
 import copy
 import importlib.util
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -804,6 +805,56 @@ async def test_statistics_retry_requeues_only_failed_analysis_child(api) -> None
             core.manifest_sha256,
             core.terminal_result_json,
         ) == core_before
+
+
+@pytest.mark.asyncio
+async def test_statistics_retry_api_requeues_expired_claim_without_changing_core(api) -> None:
+    _client, sessions, _root = api
+    async with sessions() as session:
+        core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert core is not None
+        terminal = dict(core.terminal_result_json)
+        terminal.update(component_contract_version="3.0", status="succeeded")
+        core.terminal_result_json = terminal
+        core.summary_json = {**dict(core.summary_json), "landscape_sha256": "5" * 64}
+        await session.commit()
+        immutable_before = (
+            core.request_sha256,
+            core.manifest_sha256,
+            copy.deepcopy(core.terminal_result_json),
+        )
+        session.add(FrustraMPNNStatisticsAnalysis(
+            analysis_id="33333333-3333-4333-8333-333333333333",
+            parent_job_id="job-1", invocation_id="invoke-1",
+            core_artifact_id="artifact-1", core_bundle_relative_path="bundle",
+            core_landscape_sha256="5" * 64, core_manifest_sha256=core.manifest_sha256,
+            state="running", attempt_count=1,
+            formula_version="frustrampnn_statistics_formula_v1",
+            policy_version="frustrampnn_statistics_policy_v1",
+            package_version="biomodstack_frustrampnn_statistics_v1", schema_version=1,
+            claim_token="expired-token", claim_owner="dead-worker",
+            heartbeat_at=datetime.utcnow() - timedelta(minutes=2),
+            lease_expires_at=datetime.utcnow() - timedelta(seconds=1),
+        ))
+        await session.commit()
+
+    async with sessions() as session:
+        receipt = await frustrampnn_router.retry_result_statistics_analysis(
+            "job-1", "invoke-1", session
+        )
+    assert receipt.state == "queued"
+    assert receipt.attempt_count == 1
+
+    async with sessions() as session:
+        core = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        child = await session.get(
+            FrustraMPNNStatisticsAnalysis,
+            "33333333-3333-4333-8333-333333333333",
+        )
+        assert core is not None and child is not None
+        assert (core.request_sha256, core.manifest_sha256, core.terminal_result_json) == immutable_before
+        assert child.claim_token is None
+        assert child.claim_owner is None
 
 
 @pytest.mark.asyncio

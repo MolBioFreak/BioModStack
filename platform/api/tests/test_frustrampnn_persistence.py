@@ -522,13 +522,16 @@ async def test_statistics_worker_publishes_derived_artifact_without_rewriting_co
             copy.deepcopy(result.manifest_json),
             copy.deepcopy(result.terminal_result_json),
         )
-        await statistics_jobs.claim_statistics_child(
-            session, analysis_id=child.analysis_id
+        claimed = await statistics_jobs.claim_statistics_child(
+            session,
+            analysis_id=child.analysis_id,
+            claim_owner="persistence-test-worker",
         )
         await session.commit()
         statistics = await statistics_jobs.run_statistics_child_once(
             session,
             analysis_id=child.analysis_id,
+            claim_token=claimed.claim_token,
         )
         await session.commit()
 

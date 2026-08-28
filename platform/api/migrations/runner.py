@@ -47,6 +47,9 @@ from migrations.add_frustrampnn_statistics import migrate as migrate_frustrampnn
 from migrations.add_frustrampnn_statistics_analyses import (
     migrate as migrate_frustrampnn_statistics_analyses,
 )
+from migrations.add_frustrampnn_statistics_claim_leases import (
+    migrate as migrate_frustrampnn_statistics_claim_leases,
+)
 from migrations.add_frustrampnn_reviews import migrate as migrate_frustrampnn_reviews
 from migrations.add_ont_raw_signal_ledger import migrate as migrate_ont_raw_signal_ledger
 from migrations.add_ont_external_registration_identity import (
@@ -139,6 +142,11 @@ MIGRATIONS: List[Migration] = [
         41,
         "add_frustrampnn_statistics_analyses",
         migrate_frustrampnn_statistics_analyses,
+    ),
+    Migration(
+        42,
+        "add_frustrampnn_statistics_claim_leases",
+        migrate_frustrampnn_statistics_claim_leases,
     ),
 ]
 
