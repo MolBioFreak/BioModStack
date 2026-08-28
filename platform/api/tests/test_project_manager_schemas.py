@@ -216,6 +216,7 @@ def _read_model() -> dict:
         "pagination": {},
         "project": {
             "id": "project-1",
+            "project_scope": "global",
             "name": "Project",
             "objective": "Objective",
             "lifecycle_state": "active",

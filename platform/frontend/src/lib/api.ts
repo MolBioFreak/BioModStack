@@ -2543,6 +2543,8 @@ export interface NucleotideSequence {
 
 export interface NucleotideSequenceListItem {
     id: string;
+    revision_id?: string;
+    reopen_href?: string;
     name: string;
     description: string | null;
     sequence_type: 'dna' | 'rna';
@@ -5264,6 +5266,9 @@ export interface ProjectHubMapSegment {
     start: number;
     end: number;
     tone: ProjectHubMapTone;
+    label: string;
+    feature_type: string;
+    strand: 'forward' | 'reverse' | 'unknown';
 }
 
 export interface ProjectHubPlasmidSummary {

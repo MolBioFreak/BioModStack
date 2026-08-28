@@ -120,6 +120,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     const selectedGlobalId = summary && selection ? globalExperimentForNode(summary, selection.node_key) : null;
     const domainContext = summary ? selectedDomainContext(summary) : null;
     const [name, setName] = useState('');
+    const [projectScope, setProjectScope] = useState<'global' | 'ngs_molbio_local'>('global');
     const [description, setDescription] = useState('');
     const [objective, setObjective] = useState('');
     const [question, setQuestion] = useState('');
@@ -187,6 +188,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
     useEffect(() => {
         if (!mode) return;
         setName('');
+        setProjectScope('global');
         setDescription('');
         setObjective('');
         setQuestion('');
@@ -245,7 +247,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
             if (mode === 'create_project') {
                 return createProject({
                     schema: 'bms.project.v2',
-                    project_scope: 'global',
+                    project_scope: projectScope,
                     name,
                     description,
                     research_objective: objective,
@@ -495,8 +497,15 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         </>
                     ) : (
                         <>
+                            {mode === 'create_project' && <label className="block text-xs font-semibold text-content-secondary">Project type
+                                <select aria-label="Project type" value={projectScope} onChange={(event) => setProjectScope(event.target.value as 'global' | 'ngs_molbio_local')} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content">
+                                    <option value="global">Global Project</option>
+                                    <option value="ngs_molbio_local">Standalone NGS/MolBio Project</option>
+                                </select>
+                                <span className="mt-1 block font-normal text-content-muted">Standalone NGS/MolBio Projects can be linked to a Global Project later.</span>
+                            </label>}
                             <label className="block text-xs font-semibold text-content-secondary">Name
-                                <input autoFocus value={name} onChange={(event) => setName(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
+                                <input aria-label={mode === 'create_project' ? 'Project name' : 'Name'} autoFocus value={name} onChange={(event) => setName(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
                             </label>
                             {(mode === 'create_project' || mode === 'create_global' || (mode === 'edit' && (selection?.node_type === 'project' || selection?.node_type === 'global_experiment'))) && <label className="block text-xs font-semibold text-content-secondary">Description
                                 <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-sm text-content outline-none focus:border-accent focus:ring-2 focus:ring-accent/30" />
@@ -618,7 +627,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                     <div className="flex justify-end gap-2 border-t border-border-primary pt-4">
                         <button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button>
                         <button type="submit" disabled={!canSubmit || mutation.isPending} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 focus:ring-2 focus:ring-accent">
-                            {mutation.isPending ? 'Saving…' : mode === 'archive' ? 'Archive without cancelling runs' : mode === 'restore' ? 'Restore' : mode === 'record' ? `Append ${recordKind}` : 'Save immutable revision'}
+                            {mutation.isPending ? 'Saving…' : mode === 'create_project' ? 'Create Project' : mode === 'archive' ? 'Archive without cancelling runs' : mode === 'restore' ? 'Restore' : mode === 'record' ? `Append ${recordKind}` : 'Save immutable revision'}
                         </button>
                     </div>
                 </form>

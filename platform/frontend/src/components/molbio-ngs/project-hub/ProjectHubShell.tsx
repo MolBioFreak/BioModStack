@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { ProjectAttachmentDialog, type ProjectAttachmentSource } from '../../project-manager/ProjectAttachmentDialog';
 import {
     type ProjectHubExperimentKind,
     type ProjectHubExperimentSummary,
@@ -49,18 +50,41 @@ function PlasmidMap({ plasmid, size = 88 }: { plasmid: ProjectHubPlasmidSummary;
         accent: '#24d2e2', success: '#64d989', info: '#5ba6ff', warning: '#ffb454', secondary: '#9f8cff',
     };
     return (
-        <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={`${plasmid.name} circular plasmid map`} className="shrink-0">
-            <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-border-primary" />
-            {plasmid.map_segments.map((segment, index) => {
-                const span = Math.max(0, segment.end - segment.start);
-                const dash = plasmid.length_bp > 0 ? span / plasmid.length_bp * circumference : 0;
-                const offset = plasmid.length_bp > 0 ? -(segment.start / plasmid.length_bp * circumference) : 0;
-                return <circle key={`${segment.start}-${segment.end}-${index}`} cx="50" cy="50" r={radius} fill="none" stroke={tones[segment.tone] ?? tones.accent} strokeWidth="8" strokeLinecap="round" strokeDasharray={`${dash} ${Math.max(0, circumference - dash)}`} strokeDashoffset={offset} transform="rotate(-90 50 50)" />;
-            })}
-            <circle cx="50" cy="50" r="27" className="fill-surface-secondary" />
-            <text x="50" y="49" textAnchor="middle" className="fill-content text-[8px] font-bold">{plasmid.name}</text>
-            <text x="50" y="59" textAnchor="middle" className="fill-content-muted text-[5px]">{plasmid.length_bp.toLocaleString()} bp</text>
-        </svg>
+        <Link
+            to={plasmid.reopen_href}
+            data-testid="plasmid-mini-map"
+            aria-label={`Open full plasmid map for ${plasmid.name}, ${plasmid.length_bp.toLocaleString()} bp`}
+            className="shrink-0 rounded-full outline-none focus:ring-2 focus:ring-accent"
+        >
+            <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={`Miniature circular map for ${plasmid.name}`}>
+                <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" strokeWidth="8" className="text-border-primary" />
+                {plasmid.map_segments.map((segment, index) => {
+                    const rawSpan = segment.end >= segment.start
+                        ? segment.end - segment.start
+                        : plasmid.length_bp - segment.start + segment.end;
+                    const span = Math.max(0, Math.min(plasmid.length_bp, rawSpan));
+                    const dash = plasmid.length_bp > 0 ? span / plasmid.length_bp * circumference : 0;
+                    const offset = plasmid.length_bp > 0 ? -(segment.start / plasmid.length_bp * circumference) : 0;
+                    const arrowCoordinate = segment.strand === 'reverse' ? segment.start : segment.end;
+                    const arrowAngle = plasmid.length_bp > 0 ? (arrowCoordinate / plasmid.length_bp * Math.PI * 2) - Math.PI / 2 : 0;
+                    const arrowX = 50 + Math.cos(arrowAngle) * radius;
+                    const arrowY = 50 + Math.sin(arrowAngle) * radius;
+                    const direction = segment.strand === 'unknown' ? 'strand not recorded' : segment.strand;
+                    const featureLabel = segment.label || plasmid.feature_labels[index] || `Feature ${index + 1}`;
+                    const accessibleLabel = `${featureLabel}, ${segment.feature_type}, ${segment.start.toLocaleString()} to ${segment.end.toLocaleString()} bp, ${direction}`;
+                    return (
+                        <g key={`${segment.start}-${segment.end}-${index}`} tabIndex={0} role="img" aria-label={accessibleLabel} data-feature-label={featureLabel}>
+                            <title>{accessibleLabel}</title>
+                            <circle cx="50" cy="50" r={radius} fill="none" stroke={tones[segment.tone] ?? tones.accent} strokeWidth="8" strokeLinecap="round" strokeDasharray={`${dash} ${Math.max(0, circumference - dash)}`} strokeDashoffset={offset} transform="rotate(-90 50 50)" />
+                            <circle data-feature-direction={segment.strand} cx={arrowX} cy={arrowY} r="2.5" fill={tones[segment.tone] ?? tones.accent} />
+                        </g>
+                    );
+                })}
+                <circle cx="50" cy="50" r="27" className="fill-surface-secondary" />
+                <text x="50" y="49" textAnchor="middle" className="fill-content text-[8px] font-bold">{plasmid.name}</text>
+                <text x="50" y="59" textAnchor="middle" className="fill-content-muted text-[5px]">{plasmid.length_bp.toLocaleString()} bp</text>
+            </svg>
+        </Link>
     );
 }
 
@@ -146,7 +170,7 @@ function Presence({ label, value, suffix = 'Present' }: { label: string; value: 
     );
 }
 
-function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onCompare: () => void; onDetails: () => void }) {
+function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails, onAttach }: { plasmid: ProjectHubPlasmidSummary; canMutate: boolean; onEdit: (invoker: HTMLButtonElement) => void; onCompare: () => void; onDetails: () => void; onAttach: () => void }) {
     const unavailable = plasmid.availability === 'unavailable';
     return (
         <article className={`${PANEL} flex min-h-[430px] min-w-0 flex-col p-4`}>
@@ -182,6 +206,7 @@ function PlasmidCard({ plasmid, canMutate, onEdit, onCompare, onDetails }: { pla
                 <button type="button" className={BUTTON} onClick={onCompare}>Compare</button>
                 <button type="button" className={BUTTON} onClick={onDetails}>Plasmid details</button>
                 <button type="button" className={BUTTON} disabled={!canMutate || unavailable} onClick={(event) => onEdit(event.currentTarget)}>Edit info</button>
+                <button type="button" className={`${BUTTON} col-span-2`} disabled={unavailable} onClick={onAttach}>Add current work to Project</button>
             </div>
         </article>
     );
@@ -191,7 +216,7 @@ function EmptyInline({ title, detail }: { title: string; detail?: string }) {
     return <div className="rounded-lg border border-dashed border-border-primary bg-surface px-4 py-3"><strong className="block text-sm text-content">{title}</strong>{detail && <span className="mt-1 block text-xs text-content-muted">{detail}</span>}</div>;
 }
 
-function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubReadModel; canMutate: boolean; onEdit: (p: ProjectHubPlasmidSummary, invoker: HTMLButtonElement) => void; onNavigate: ProjectHubShellProps['onNavigate'] }) {
+function Overview({ model, canMutate, onEdit, onAttach, onNavigate }: { model: ProjectHubReadModel; canMutate: boolean; onEdit: (p: ProjectHubPlasmidSummary, invoker: HTMLButtonElement) => void; onAttach: (p: ProjectHubPlasmidSummary) => void; onNavigate: ProjectHubShellProps['onNavigate'] }) {
     return (
         <>
             <div className="mb-3 flex items-end justify-between gap-4">
@@ -199,7 +224,7 @@ function Overview({ model, canMutate, onEdit, onNavigate }: { model: ProjectHubR
                 <button className="text-xs font-semibold text-accent" type="button" onClick={() => onNavigate({ section: 'plasmids', plasmid: null })}>Compare all {model.plasmids.length === 4 ? 'four' : model.plasmids.length}</button>
             </div>
             <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
-                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onCompare={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} />)}
+                {model.plasmids.map((plasmid) => <PlasmidCard key={plasmid.sequence_id} plasmid={plasmid} canMutate={canMutate} onEdit={(invoker) => onEdit(plasmid, invoker)} onCompare={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onDetails={() => onNavigate({ section: 'plasmids', plasmid: plasmid.sequence_id })} onAttach={() => onAttach(plasmid)} />)}
             </div>
             <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
                 <section className={`${PANEL} p-4`}><h3 className="font-semibold text-content">Recent project activity</h3><div className="mt-3 space-y-3">{model.activity.slice(0, 2).map((event) => <div key={event.id} className="flex gap-3 text-xs"><span className="mt-1 text-accent">●</span><div><strong className="block text-content">{event.summary}</strong><span className="text-content-muted">{formatDate(event.occurred_at)}</span></div></div>)}{model.activity.length === 0 && <EmptyInline title="No project activity yet" />}</div></section>
@@ -385,6 +410,7 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
     const isHistorical = model.identity.selected_state_revision_id !== model.identity.current_state_revision_id;
     const effectiveCanMutate = canMutate && !isHistorical;
     const [editing, setEditing] = useState<ProjectHubPlasmidSummary | null>(null);
+    const [attachmentSource, setAttachmentSource] = useState<ProjectAttachmentSource | null>(null);
     const editInvoker = useRef<HTMLElement | null>(null);
     const wasEditing = useRef(false);
     useEffect(() => {
@@ -406,7 +432,7 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
         if (requested === 'experiments') return <ExperimentsTab model={model} selectedPlasmidId={selectedPlasmidId} onNavigate={onNavigate} />;
         if (requested === 'results') return <ResultsTab model={model} />;
         if (requested === 'activity') return <ActivityTab model={model} />;
-        return <Overview model={model} canMutate={effectiveCanMutate} onEdit={openEdit} onNavigate={onNavigate} />;
+        return <Overview model={model} canMutate={effectiveCanMutate} onEdit={openEdit} onAttach={(plasmid) => setAttachmentSource({ adapterId: 'bms.molbio.member-molecular-revision.adapter.v1', entityId: plasmid.revision_id, label: `${plasmid.name} saved revision ${plasmid.revision_number}`, revision: plasmid.revision_id, digest: plasmid.content_digest, availability: plasmid.availability })} onNavigate={onNavigate} />;
     }, [effectiveCanMutate, model, requested, selectedPlasmidId, onNavigate]);
     return (
         <div className="w-full px-4 pb-6 sm:px-5 lg:px-6">
@@ -421,6 +447,7 @@ export default function ProjectHubShell({ model, canMutate, mutationBlocker, sel
                 <main id={`project-panel-${requested}`} role="tabpanel" aria-labelledby={`project-tab-${requested}`} className="mt-5">{content}</main>
             </div>
             {editing && <EditDialog plasmid={editing} saving={saving} error={saveError} onCancel={closeDialog} onSave={async (draft) => { await onSavePlasmidInfo(editing, draft); closeDialog(); }} />}
+            <ProjectAttachmentDialog open={attachmentSource !== null} source={attachmentSource ?? undefined} onClose={() => setAttachmentSource(null)} />
         </div>
     );
 }

@@ -364,6 +364,7 @@ export interface ProjectSearchOptions {
 
 export interface ProjectHeadSummary {
     id: string;
+    project_scope: 'global' | 'ngs_molbio_local';
     name: string;
     objective: string;
     lifecycle_state: string;
@@ -1221,7 +1222,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         'adapter_versions', 'reconciliation', 'counts', 'status_summary', 'recent_activity', 'result_previews', 'pagination',
         'project', 'tree', 'map', 'selection', 'runs', 'warnings', 'allowed_actions',
     ]);
-    const project = exactRecord(record.project, `${label}.project`, ['id', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
+    const project = exactRecord(record.project, `${label}.project`, ['id', 'project_scope', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
     const tree = exactRecord(record.tree, `${label}.tree`, ['nodes']);
     const map = exactRecord(record.map, `${label}.map`, ['focus_node_key', 'nodes', 'edges', 'truncated', 'next_cursor']);
     const runs = exactRecord(record.runs, `${label}.runs`, ['items', 'next_cursor']);
@@ -1269,6 +1270,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         },
         project: {
             id: requireString(project.id, `${label}.project.id`),
+            project_scope: requireLiteral(project.project_scope, `${label}.project.project_scope`, ['global', 'ngs_molbio_local']),
             name: requireString(project.name, `${label}.project.name`),
             objective: requireString(project.objective, `${label}.project.objective`),
             lifecycle_state: requireString(project.lifecycle_state, `${label}.project.lifecycle_state`),

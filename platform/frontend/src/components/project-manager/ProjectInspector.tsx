@@ -83,7 +83,7 @@ export function ProjectInspector({
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                     {selection.node_type === 'domain_experiment' && actions.has('attach') && (
-                        <button type="button" onClick={onAddExisting} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-secondary">Add existing</button>
+                        <button type="button" onClick={onAddExisting} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-secondary">Attach existing record</button>
                     )}
                     {selection.node_type === 'global_experiment' && (
                         <button type="button" onClick={onCreateDomain} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">New Domain Experiment</button>

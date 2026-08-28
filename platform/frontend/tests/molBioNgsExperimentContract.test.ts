@@ -141,7 +141,7 @@ test('history, PCR, runs, and evidence remain immutable and typed', () => {
 
     assert.match(history, /Server immutable revision history/);
     assert.match(history, /Local edit\/undo history/);
-    assert.match(toolkit, /Open current editable projection/);
+    assert.match(toolkit, /Open latest editable version/);
     assert.match(toolkit, /isExactMolecularAuthority/);
 
     assert.match(pcr, /Persist immutable PCR revision/);

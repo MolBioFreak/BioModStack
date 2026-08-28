@@ -86,6 +86,7 @@ def _tree_node(
 def _head_summary(head: ExperimentAggregateHead, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": head.aggregate_id,
+        "project_scope": payload.get("project_scope", "global"),
         "name": str(payload.get("name") or head.display_name),
         "objective": str(payload.get("research_objective") or payload.get("objective") or ""),
         "lifecycle_state": head.lifecycle_state,

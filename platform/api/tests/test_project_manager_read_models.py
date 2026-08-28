@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -36,12 +37,26 @@ from experiment_services import (
 )
 from routers.project_manager import router as project_manager_router
 from services.global_experiments.launch_contexts import create_launch_context
-from services.global_experiments.read_models import build_project_manager_read_model
+from services.global_experiments.read_models import _head_summary, build_project_manager_read_model
 
 
 PAGE_LIMIT = 100
 ATTACHMENT_TOTAL = PAGE_LIMIT + 5
 RESULT_TOTAL = ATTACHMENT_TOTAL - 1
+
+
+def test_project_head_summary_exposes_scope_and_defaults_legacy_projects_to_global() -> None:
+    head = type("Head", (), {
+        "aggregate_id": "project-1",
+        "display_name": "Project",
+        "lifecycle_state": "active",
+        "head_generation": 1,
+        "current_revision_id": "revision-1",
+        "updated_at": "2026-08-27T00:00:00Z",
+    })()
+    typed_head = cast(Any, head)
+    assert _head_summary(typed_head, {"name": "Project"})["project_scope"] == "global"
+    assert _head_summary(typed_head, {"name": "Project", "project_scope": "ngs_molbio_local"})["project_scope"] == "ngs_molbio_local"
 
 
 @pytest_asyncio.fixture

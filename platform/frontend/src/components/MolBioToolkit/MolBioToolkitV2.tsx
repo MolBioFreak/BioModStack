@@ -49,6 +49,7 @@ import {
 import { loadDemoPlasmids } from './demoConstructs';
 import {
     calculatePrimerTm,
+    fetchProjectHub,
     fetchMolecularRevision,
     fetchPrimerTmOptions,
     type MolecularRevision,
@@ -59,6 +60,7 @@ import {
     type NucleotideSequenceCreate,
 } from '../../lib/api';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
+import { projectHubPlasmidsToConstructShelf } from './utils/projectConstructShelf';
 import type {
     AnalysisTrack,
     SequenceData,
@@ -117,11 +119,14 @@ interface SequenceLibraryProps {
     demos: SequenceData[];
     demoLoading: boolean;
     selectedId: string | null;
-    onSelect: (id: string) => void;
+    onSelect: (sequence: NucleotideSequenceListItem) => void;
     onRefresh: () => void;
     onLoadDemo: (demo: SequenceData) => void;
     loading: boolean;
     width: number;
+    projectScoped: boolean;
+    showAllConstructs: boolean;
+    onToggleAllConstructs: () => void;
 }
 
 function SequenceLibrary({
@@ -133,7 +138,10 @@ function SequenceLibrary({
     onRefresh,
     onLoadDemo,
     loading,
-    width
+    width,
+    projectScoped,
+    showAllConstructs,
+    onToggleAllConstructs,
 }: SequenceLibraryProps) {
     const [showDemos, setShowDemos] = useState(false);
 
@@ -145,7 +153,7 @@ function SequenceLibrary({
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
                     <h3 className="font-semibold text-slate-200">Construct Shelf</h3>
-                    <p className="text-xs text-slate-500">Recent constructs and public demo plasmids</p>
+                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'Constructs in this Project' : 'All recent constructs'}</p>
                 </div>
                 <button
                     onClick={onRefresh}
@@ -158,6 +166,7 @@ function SequenceLibrary({
                     </svg>
                 </button>
             </div>
+            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project constructs' : 'All constructs'}</button>}
 
             <div
                 data-molbio-scroll-region="construct-shelf"
@@ -200,7 +209,7 @@ function SequenceLibrary({
                     sequences.map((seq) => (
                         <button
                             key={seq.id}
-                            onClick={() => onSelect(seq.id)}
+                            onClick={() => onSelect(seq)}
                             className={`w-full text-left p-3 border-b border-slate-800 hover:bg-slate-800 transition-colors ${selectedId === seq.id ? 'bg-slate-700' : ''}`}
                         >
                             <div className="font-medium text-slate-200 truncate">{seq.name}</div>
@@ -621,7 +630,7 @@ function sourceDisplayStrandForSequenceData(sequenceData: SequenceData): Nucleot
 
 export function MolBioToolkitV2() {
     const location = useLocation();
-    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const { workspaceId, globalExperimentId, domainExperimentId, stateRevisionId, updateQueryParams, contextHref } = useGlobalExperimentContext();
     const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const requestedMolecularSequenceId = queryParams.get('molbio_sequence_id')?.trim() || null;
     const requestedMolecularRevisionId = queryParams.get('molbio_revision_id')?.trim() || null;
@@ -641,6 +650,7 @@ export function MolBioToolkitV2() {
     const openedDeepLinkRef = useRef<string | null>(null);
     // State
     const [sequences, setSequences] = useState<NucleotideSequenceListItem[]>([]);
+    const [showAllConstructs, setShowAllConstructs] = useState(false);
     const [selectedSequenceId, setSelectedSequenceId] = useState<string | null>(null);
     const [showInputModal, setShowInputModal] = useState(false);
     const [visibility, setVisibility] = useState<VisibilityState>(DEFAULT_VISIBILITY);
@@ -753,13 +763,18 @@ export function MolBioToolkitV2() {
 
     // Load sequence library on mount
     const loadLibrary = useCallback(async () => {
+        if (!showAllConstructs && workspaceId && globalExperimentId && domainExperimentId && stateRevisionId) {
+            const model = await fetchProjectHub(workspaceId, globalExperimentId, domainExperimentId, stateRevisionId);
+            setSequences(projectHubPlasmidsToConstructShelf(model));
+            return;
+        }
         const seqs = await listSequences({
             limit: 24,
             sort_by: 'updated_at',
             sort_desc: true,
         });
         setSequences(seqs);
-    }, [listSequences]);
+    }, [domainExperimentId, globalExperimentId, listSequences, showAllConstructs, stateRevisionId, workspaceId]);
 
     useEffect(() => {
         loadLibrary();
@@ -2271,11 +2286,23 @@ export function MolBioToolkitV2() {
                             demos={demoPlasmids}
                             demoLoading={demoLoading}
                             selectedId={selectedSequenceId}
-                            onSelect={loadSequence}
+                            onSelect={(sequence) => {
+                                if (sequence.revision_id) {
+                                    updateQueryParams({
+                                        molbio_sequence_id: sequence.id,
+                                        molbio_revision_id: sequence.revision_id,
+                                    });
+                                    return;
+                                }
+                                void loadSequence(sequence.id);
+                            }}
                             onRefresh={loadLibrary}
                             onLoadDemo={loadDemo}
                             loading={loading}
                             width={viewerLayout.leftPanelWidth}
+                            projectScoped={Boolean(workspaceId && globalExperimentId && domainExperimentId && stateRevisionId)}
+                            showAllConstructs={showAllConstructs}
+                            onToggleAllConstructs={() => setShowAllConstructs((value) => !value)}
                         />
                         {viewerLayout.showLibraryResizeHandle && (
                             <button
@@ -2345,37 +2372,35 @@ export function MolBioToolkitV2() {
                             )}
                             {selectedExactMolecularRevision && (
                                 <div className="space-y-3">
-                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-3">
                                         <div>
-                                            <div className="font-semibold uppercase tracking-[0.12em] text-amber-200">
-                                                Exact immutable revision · read-only authority
+                                            <div className="font-semibold text-amber-200">
+                                                Viewing saved revision #{selectedExactMolecularRevision.revision_number} · Read-only
                                             </div>
-                                            <div className="mt-1 text-slate-300">
-                                                This snapshot never auto-follows the current editable projection.
-                                            </div>
+                                            <div className="mt-1 text-slate-300">Changes are disabled until you open the latest editable version.</div>
                                         </div>
                                         <button
                                             type="button"
                                             onClick={openCurrentEditableProjection}
                                             className="rounded-md border border-cyan-600 bg-cyan-950/60 px-3 py-1.5 font-medium text-cyan-200 transition-colors hover:bg-cyan-900/60"
                                         >
-                                            Open current editable projection
+                                            Open latest editable version
                                         </button>
                                     </div>
-                                    <dl className="grid gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
-                                        <div><dt className="text-slate-500">Sequence ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.sequence_id}</dd></div>
-                                        <div><dt className="text-slate-500">Revision ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.revision_id}</dd></div>
-                                        <div><dt className="text-slate-500">Revision</dt><dd className="text-slate-200">#{selectedExactMolecularRevision.revision_number} · {selectedExactMolecularRevision.relation}</dd></div>
-                                        <div><dt className="text-slate-500">Created</dt><dd className="text-slate-200">{new Date(selectedExactMolecularRevision.created_at).toLocaleString()}</dd></div>
-                                        <div className="sm:col-span-2 xl:col-span-4"><dt className="text-slate-500">Content SHA-256</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.content_sha256}</dd></div>
-                                        <div><dt className="text-slate-500">Change kind</dt><dd className="text-slate-200">{selectedExactMolecularRevision.change_kind.replace(/_/g, ' ')}</dd></div>
-                                        <div><dt className="text-slate-500">Parent revision</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.parent_revision_id ?? 'root revision'}</dd></div>
-                                        <div><dt className="text-slate-500">Operation ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.operation_id ?? 'none'}</dd></div>
-                                        <div><dt className="text-slate-500">Created by</dt><dd className="break-all text-slate-200">{selectedExactMolecularRevision.created_by ?? 'not recorded'}</dd></div>
-                                    </dl>
                                     <details className="rounded border border-amber-800/60 bg-slate-950/50 px-3 py-2">
-                                        <summary className="cursor-pointer font-medium text-amber-200">Immutable provenance</summary>
-                                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-[11px] text-slate-300">{JSON.stringify(selectedExactMolecularRevision.provenance, null, 2)}</pre>
+                                        <summary className="cursor-pointer font-medium text-amber-200">Revision details</summary>
+                                        <dl className="mt-3 grid gap-x-4 gap-y-2 sm:grid-cols-2 xl:grid-cols-4">
+                                            <div><dt className="text-slate-500">Sequence ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.sequence_id}</dd></div>
+                                            <div><dt className="text-slate-500">Revision ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.revision_id}</dd></div>
+                                            <div><dt className="text-slate-500">Revision</dt><dd className="text-slate-200">#{selectedExactMolecularRevision.revision_number} · {selectedExactMolecularRevision.relation}</dd></div>
+                                            <div><dt className="text-slate-500">Created</dt><dd className="text-slate-200">{new Date(selectedExactMolecularRevision.created_at).toLocaleString()}</dd></div>
+                                            <div className="sm:col-span-2 xl:col-span-4"><dt className="text-slate-500">Content SHA-256</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.content_sha256}</dd></div>
+                                            <div><dt className="text-slate-500">Change kind</dt><dd className="text-slate-200">{selectedExactMolecularRevision.change_kind.replace(/_/g, ' ')}</dd></div>
+                                            <div><dt className="text-slate-500">Parent revision</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.parent_revision_id ?? 'root revision'}</dd></div>
+                                            <div><dt className="text-slate-500">Operation ID</dt><dd className="break-all font-mono text-slate-200">{selectedExactMolecularRevision.operation_id ?? 'none'}</dd></div>
+                                            <div><dt className="text-slate-500">Created by</dt><dd className="break-all text-slate-200">{selectedExactMolecularRevision.created_by ?? 'not recorded'}</dd></div>
+                                        </dl>
+                                        <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-all border-t border-amber-800/60 pt-3 text-[11px] text-slate-300">{JSON.stringify(selectedExactMolecularRevision.provenance, null, 2)}</pre>
                                     </details>
                                 </div>
                             )}
@@ -2722,8 +2747,9 @@ export function MolBioToolkitV2() {
 
                             {/* Error display */}
                             {error && (
-                                <div className="p-3 bg-red-900/50 border-t border-red-800 text-red-300 text-sm flex-shrink-0">
-                                    Error: {error}
+                                <div role="alert" className="p-3 bg-red-900/50 border-t border-red-800 text-red-200 text-sm flex-shrink-0">
+                                    <strong className="block">MolBio request unavailable</strong>
+                                    <span className="mt-1 block">Retry the action. {String(error).replace(/\s*\(?HTTP\s+\d+\)?/gi, '').trim()}</span>
                                 </div>
                             )}
                         </div>

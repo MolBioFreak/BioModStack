@@ -610,7 +610,14 @@ async def project_hub(
         names_by_sequence[sequence_id] = name
         saved_count = sum(sequence_id in receipt_sequence_ids.get(row.id, set()) for row in operation_receipts)
         map_segments = [
-            {"start": int(item.get("start", 0)), "end": int(item.get("end", 0)), "tone": "accent"}
+            {
+                "start": int(item.get("start", 0)),
+                "end": int(item.get("end", 0)),
+                "tone": "accent",
+                "label": str(item.get("name") or item.get("label") or item.get("type") or "Feature"),
+                "feature_type": str(item.get("type") or "feature"),
+                "strand": "reverse" if item.get("strand") in (-1, "-1", "reverse") else "forward" if item.get("strand") in (1, "1", "forward") else "unknown",
+            }
             for item in features[:24] if isinstance(item, dict)
         ]
         metadata = project_metadata.get(sequence_id)

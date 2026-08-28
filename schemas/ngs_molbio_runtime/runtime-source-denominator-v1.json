@@ -1,5 +1,5 @@
 {
-  "content_sha256": "dac29eb1d2b00ec13fa7b6a563bea10d2c6e3505111427a79d22bf9ae203068b",
+  "content_sha256": "4edc8bc6f64b7c4bb51ac707929033b51bb1c2533c115d89f04b5694e5446f34",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -94,6 +94,7 @@
     "platform/api/workflow_job_runner.py",
     "platform/frontend/src/App.tsx",
     "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
+    "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
     "platform/frontend/src/components/NGSToolkit.tsx",
     "platform/frontend/src/components/NanoporeTemplate.tsx",
     "platform/frontend/src/components/experiments/GlobalExperimentContext.tsx",
@@ -103,11 +104,13 @@
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLibrary.tsx",
     "platform/frontend/src/components/molbio-ngs/ExperimentReferenceLinks.tsx",
     "platform/frontend/src/components/molbio-ngs/NgsMolBioProjectHub.tsx",
+    "platform/frontend/src/components/molbio-ngs/project-hub/ProjectHubShell.tsx",
     "platform/frontend/src/components/ngs/NanoporeWorkflowChooser.tsx",
     "platform/frontend/src/components/ngs/OntInstrumentPanel.tsx",
     "platform/frontend/src/components/ngs/RawReadInspector.tsx",
     "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
     "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
+    "platform/frontend/src/components/project-manager/ProjectAttachmentDialog.tsx",
     "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
     "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
     "platform/frontend/src/lib/api.ts",

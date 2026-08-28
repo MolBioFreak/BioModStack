@@ -11,6 +11,7 @@ import {
     internalRouteHref,
     isPermissionError,
     issuePreparedLaunchContext,
+    listNgsMolBioProjectLinks,
     listDomainWorkflowPlanRevisions,
     prepareDomainWorkflowPlanRevision,
     publishDomainWorkflowPlanRevision,
@@ -106,15 +107,41 @@ function ProjectManagerErrorState({ error, onRetry, permission = false }: { erro
     );
 }
 
+function LocalProjectAssociationBadge({ projectId }: { projectId: string }) {
+    const links = useQuery({
+        queryKey: ['project-manager', 'local-project-links', projectId],
+        queryFn: () => listNgsMolBioProjectLinks(projectId),
+    });
+    if (links.isLoading) return <span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">Link state loading</span>;
+    if (links.isError) return <span className="rounded-full border border-red-700 px-2 py-1 text-xs text-red-300">Link state unavailable</span>;
+    return <span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{links.data?.length ? 'Linked' : 'Standalone'}</span>;
+}
+
 function ProjectsIndex() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
     const [query, setQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [archiveFilter, setArchiveFilter] = useState('active');
+    const requestedScope = searchParams.get('scope');
+    const scope = requestedScope === 'global' || requestedScope === 'ngs-molbio' ? requestedScope : 'all';
+    const apiScope = scope === 'ngs-molbio' ? 'ngs_molbio_local' : scope;
+    useEffect(() => {
+        if (requestedScope === null || requestedScope === 'all' || requestedScope === 'global' || requestedScope === 'ngs-molbio') return;
+        const next = new URLSearchParams(searchParams);
+        next.delete('scope');
+        setSearchParams(next, { replace: true });
+    }, [requestedScope, searchParams, setSearchParams]);
+    const selectScope = (nextScope: 'all' | 'global' | 'ngs-molbio') => {
+        const next = new URLSearchParams(searchParams);
+        if (nextScope === 'all') next.delete('scope');
+        else next.set('scope', nextScope);
+        setSearchParams(next);
+    };
     const projectsQuery = useInfiniteQuery({
-        queryKey: ['project-manager', 'projects', query.trim(), statusFilter, archiveFilter],
+        queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
         initialPageParam: undefined as string | undefined,
         queryFn: ({ pageParam, signal }) => searchProjects({
             query,
@@ -122,7 +149,7 @@ function ProjectsIndex() {
             archive: archiveFilter as 'active' | 'archived' | 'all',
             cursor: pageParam,
             limit: 50,
-            projectScope: 'global',
+            projectScope: apiScope,
             signal,
         }),
         getNextPageParam: (page) => page.next_cursor ?? undefined,
@@ -145,14 +172,19 @@ function ProjectsIndex() {
             <div className="mx-auto max-w-6xl">
                 <header className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Global research organization</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Research organization</p>
                         <h1 className="mt-2 text-2xl font-semibold text-content sm:text-3xl">Project Manager</h1>
                         <p className="mt-2 max-w-2xl text-sm text-content-secondary">Open a durable Project relationship map or create a new research container. Scientific records remain authoritative in their owning BMS stores.</p>
                     </div>
                     <button type="button" onClick={() => setDialogMode('create_project')} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white focus:ring-2 focus:ring-accent">Create Project</button>
                 </header>
 
-                <section aria-label="Project discovery controls" className="mt-6 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
+                <div role="tablist" aria-label="Project scope" className="mt-6 inline-flex rounded-xl border border-border-primary bg-surface-secondary p-1">
+                    {([['all', 'All'], ['global', 'Global'], ['ngs-molbio', 'NGS/MolBio']] as const).map(([value, label]) => (
+                        <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
+                    ))}
+                </div>
+                <section aria-label="Project discovery controls" className="mt-3 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
                     <select aria-label="Archive filter" value={archiveFilter} onChange={(event) => setArchiveFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="active">Current only</option><option value="archived">Archived only</option><option value="all">Current and archived</option></select>
@@ -167,15 +199,17 @@ function ProjectsIndex() {
                     <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         {projects.map((project) => {
                             const payload = project.payload ?? {};
+                            const projectScope = payload.project_scope === 'ngs_molbio_local' ? 'ngs_molbio_local' : 'global';
                             const activeCount = typeof project.active_experiment_count === 'number' ? project.active_experiment_count : typeof payload.active_experiment_count === 'number' ? payload.active_experiment_count : null;
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
                                 <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
-                                    <div className="flex items-start justify-between gap-3"><span className="rounded-full border border-border-primary px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-content-secondary">{project.status}</span><span className="text-[10px] text-content-muted">Revision {project.head_generation}</span></div>
+                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge projectId={project.id} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
                                     <div className="mt-3 space-y-1 text-[10px] text-content-muted"><p>{activeCount === null ? 'Active experiments unavailable' : `${activeCount} active experiments`}</p><p>{failureCount === null ? 'Unresolved failures unavailable' : `${failureCount} unresolved failures`}</p></div>
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
+                                    <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
                                 </Link>
                             );
                         })}
@@ -208,6 +242,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const queryClient = useQueryClient();
     const [searchParams, setSearchParams] = useSearchParams();
     const focusId = searchParams.get('focus') ?? routeFocusId;
+    const stateRevisionId = searchParams.get('state_revision_id');
     const selectedNodeKey = searchParams.get('selected')
         ?? (routeDomainId ? `domain_experiment:${routeDomainId}` : routeFocusId ? `global_experiment:${routeFocusId}` : undefined);
     const [mapCursor, setMapCursor] = useState<string | undefined>();
@@ -466,8 +501,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             global_experiment_id: selectedGlobalExperimentId,
             domain_experiment_id: selectedDomainExperimentId,
             section: 'workflow-plans',
-            ownership_scope: 'global',
+            ownership_scope: summary.project.project_scope,
         });
+        if (stateRevisionId) query.set('state_revision_id', stateRevisionId);
         navigate(`/ngs?${query.toString()}`);
     };
 
@@ -483,8 +519,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             global_experiment_id: selectedGlobalExperimentId,
             domain_experiment_id: selectedDomainExperimentId,
             section: 'analyses',
-            ownership_scope: 'global',
+            ownership_scope: summary.project.project_scope,
         });
+        if (stateRevisionId) query.set('state_revision_id', stateRevisionId);
         navigate(`/ngs?${query.toString()}`);
     };
 
@@ -746,7 +783,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         else if (folder === 'decisions') setDecisionCursor(summary.pagination.decisions.next_cursor ?? undefined);
         else if (folder === 'activity') setActivityCursor(summary.pagination.activity.next_cursor ?? undefined);
     };
-    const inspectExecution = (kind: 'workflow' | 'workflow_run', id: string, _run: ProjectManagerReadModel['runs']['items'][number]) => {
+    const inspectExecution = (kind: 'workflow' | 'workflow_run', id: string, run: ProjectManagerReadModel['runs']['items'][number]) => {
+        void run;
         const nodeKey = `${kind}:${id}`;
         setSelection(nodeKey, kind, null);
     };
@@ -779,11 +817,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <Link to="/projects" className="rounded-lg border border-border-primary px-2.5 py-2 text-xs text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent">All Projects</Link>
                     <div className="min-w-0">
                         <h1 className="truncate text-sm font-semibold text-content">{summary.project.name}</h1>
-                        <p className="truncate text-[10px] text-content-muted">{summary.project.objective || 'No objective recorded'} · revision {summary.project.head_generation}</p>
+                        <p className="truncate text-xs text-content-muted">{summary.project.project_scope === 'ngs_molbio_local' ? 'NGS/MolBio Project' : 'Global Project'} · {summary.project.objective || 'No objective recorded'}</p>
                     </div>
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">Attach existing record</button>
                     <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>
                     <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>
                     {summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New Global Experiment</button>}

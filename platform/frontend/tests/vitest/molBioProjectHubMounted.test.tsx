@@ -14,7 +14,7 @@ const apiMocks = vi.hoisted(() => ({
     fetchMolBioNgsReferences: vi.fn(),
     fetchMolBioNgsEvidence: vi.fn(),
 }));
-const managerMocks = vi.hoisted(() => ({ getProject: vi.fn() }));
+const managerMocks = vi.hoisted(() => ({ getProject: vi.fn(), listProjects: vi.fn(), listDomainAdapters: vi.fn() }));
 const contextMocks = vi.hoisted(() => ({
     updateQueryParams: vi.fn(),
     setStateRevisionId: vi.fn(),
@@ -66,6 +66,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
 }));
 
 import DomainExperimentWorkspace from '../../src/components/molbio-ngs/DomainExperimentWorkspace';
+import { projectHubPlasmidsToConstructShelf } from '../../src/components/MolBioToolkit/utils/projectConstructShelf';
 
 const plasmids = [
     {
@@ -78,7 +79,7 @@ const plasmids = [
         cmv_promoter: true, neor_kanr: true, replication_origin_count: 3,
         saved_experiment_count: 0, organism_host_context: null, project_tags: ['new plasmid'], project_notes: '',
         reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl1480&molbio_revision_id=revision-pl1480',
-        map_segments: [{ start: 0, end: 500, tone: 'accent' }],
+        map_segments: [{ start: 5300, end: 120, tone: 'accent', label: 'NeoR/KanR', feature_type: 'CDS', strand: 'reverse' }],
     },
     {
         sequence_id: 'sequence-pl2190', revision_id: 'revision-pl2190', revision_number: 1,
@@ -139,6 +140,8 @@ beforeEach(() => {
     apiMocks.fetchMolBioNgsReferences.mockResolvedValue([]);
     apiMocks.fetchMolBioNgsEvidence.mockResolvedValue([]);
     managerMocks.getProject.mockResolvedValue({ id: 'project-1', name: 'Syenex New Plasmids', payload: { project_scope: 'ngs_molbio_local' } });
+    managerMocks.listProjects.mockResolvedValue({ items: [], next_cursor: null });
+    managerMocks.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [] });
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 60_000 }, mutations: { retry: false } } });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -172,6 +175,13 @@ function buttonNamed(name: string) {
 }
 
 describe('mounted MolBio project hub', () => {
+    it('builds the default Construct Shelf only from exact Project membership', () => {
+        const shelf = projectHubPlasmidsToConstructShelf(readModel);
+        expect(shelf.map((item) => item.name)).toEqual(['PL1480', 'PL2190']);
+        expect(shelf.map((item) => item.name)).not.toContain('pGM12_pEb-HS2-fluc');
+        expect(shelf[0]?.revision_id).toBe('revision-pl1480');
+        expect(shelf[0]?.reopen_href).toContain('molbio_revision_id=revision-pl1480');
+    });
     it('leads with the approved project header, tab order, extended plasmid cards, and collapsed technical details', async () => {
         await renderWorkspace();
 
@@ -181,6 +191,8 @@ describe('mounted MolBio project hub', () => {
         ]);
         expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview');
         expect(container.textContent).toContain('Routine new plasmid onboarding.');
+        expect(container.querySelector('header')?.textContent).toContain('Local NGS / Mol Bio project');
+        expect(container.querySelector('header')?.textContent).not.toContain('state-current');
         expect(container.textContent).toContain('PL1480');
         expect(container.textContent).toContain('5,512 bp');
         expect(container.textContent).toContain('53.52%');
@@ -203,7 +215,19 @@ describe('mounted MolBio project hub', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: null });
         await act(async () => buttonNamed('Compare')?.click());
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: 'sequence-pl1480' });
-        expect(container.querySelector('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')?.textContent).toContain('Open plasmid');
+        expect(Array.from(container.querySelectorAll('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')).some((link) => link.textContent?.includes('Open plasmid'))).toBe(true);
+        const miniMap = container.querySelector<HTMLAnchorElement>('a[data-testid="plasmid-mini-map"][href*="molbio_sequence_id=sequence-pl1480"]');
+        expect(miniMap?.getAttribute('aria-label')).toBe('Open full plasmid map for PL1480, 5,512 bp');
+        expect(miniMap?.querySelector('title')?.textContent).toContain('NeoR/KanR');
+        expect(miniMap?.querySelector('[data-feature-direction="reverse"]')).not.toBeNull();
+        expect(miniMap?.querySelector('[data-feature-label="NeoR/KanR"][tabindex="0"]')).not.toBeNull();
+        expect(miniMap?.querySelector('circle[stroke-dasharray^="0 "]')).toBeNull();
+        const attachButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Add current work to Project');
+        expect(attachButton).toBeDefined();
+        await act(async () => attachButton?.click());
+        await act(async () => { await Promise.resolve(); });
+        expect(container.textContent).toContain('PL1480 saved revision 1');
+        expect(container.textContent).not.toContain('Canonical source adapter');
     });
 
     it('renders an explicit responsive comparison surface and stacked plasmid records', async () => {
