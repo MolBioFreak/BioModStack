@@ -6,8 +6,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-plotly.js', () => ({
-    default: ({ layout }: { layout?: { title?: { text?: string } } }) => (
-        <div data-testid="scientific-plot">{layout?.title?.text || 'plot'}</div>
+    default: ({ data, layout }: { data?: Array<{ type?: string }>; layout?: { title?: { text?: string } } }) => (
+        <div data-testid="scientific-plot" data-trace-types={(data || []).map((trace) => trace.type || '').join(',')}>
+            {layout?.title?.text || 'plot'}
+        </div>
     ),
 }));
 
@@ -74,7 +76,9 @@ describe('ONT FASTQ-QC decision report', () => {
         expect(container.textContent).toContain('samtools_depth_aa_default_filters_excludes_deletions_v1');
         expect(container.textContent).toContain('Envelope minimum: 24,840 at position 3,516');
         expect(container.textContent).toContain('Decision support minimum: 49,126 (alignment observations; separate per-base-support basis)');
-        expect(container.querySelectorAll('[data-testid="scientific-plot"]')).toHaveLength(2);
+        const scientificPlots = container.querySelectorAll<HTMLElement>('[data-testid="scientific-plot"]');
+        expect(scientificPlots).toHaveLength(2);
+        expect(scientificPlots[1]?.dataset.traceTypes).toBe('scatter');
         expect(container.textContent).toContain('MIXED_ALLELES_DETECTED');
         expect(container.textContent).toContain('VARIANT_SUPPORT_AMBIGUOUS');
         expect(container.textContent).toContain('Affected interval');

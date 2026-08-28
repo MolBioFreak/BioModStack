@@ -310,7 +310,7 @@ export function OntFastqQcResultPanel({
                     </p>
                     <Plot
                         data={[{
-                            type: 'scattergl',
+                            type: 'scatter',
                             mode: 'lines',
                             x: coverageX,
                             y: coverageY,
