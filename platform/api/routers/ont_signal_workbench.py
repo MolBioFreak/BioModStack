@@ -88,9 +88,14 @@ class ExternalMoveBamRegistrationCreate(ClosedModel):
 class ExternalAlignmentCreate(ClosedModel):
     move_source_id: str
     reference_revision_id: str
+    global_domain_experiment_id: str
+    molbio_ngs_state_revision_id: str
     name: str = Field(min_length=1, max_length=128)
 
-    @field_validator("move_source_id", "reference_revision_id")
+    @field_validator(
+        "move_source_id", "reference_revision_id",
+        "global_domain_experiment_id", "molbio_ngs_state_revision_id",
+    )
     @classmethod
     def opaque_authority_id(cls, value: str) -> str:
         if not OPAQUE.fullmatch(value):
@@ -1126,6 +1131,8 @@ async def create_external_alignment_job(
             domain_session,
             move_source_id=request.move_source_id,
             reference_revision_id=request.reference_revision_id,
+            global_domain_experiment_id=request.global_domain_experiment_id,
+            molbio_ngs_state_revision_id=request.molbio_ngs_state_revision_id,
         )
         server_params = dict(authority["params"])
         submit_request = OntNgsSubmitRequest(
@@ -1133,6 +1140,7 @@ async def create_external_alignment_job(
             params={
                 "bam_path": authority["bam_path"],
                 "reference_fasta": authority["reference_fasta"],
+                "bam_force_realign": True,
                 **server_params,
             },
             source_instrument_run_id=server_params["source_instrument_run_id"],
@@ -1140,7 +1148,7 @@ async def create_external_alignment_job(
         job = _job_create_for_ont_submit(
             "ont_plasmid_qc",
             submit_request,
-            trusted_server_params=frozenset(server_params),
+            trusted_server_params=frozenset({*server_params, "bam_force_realign"}),
             trusted_result_paths=frozenset({"bam_path"}),
             trusted_reference_fasta=Path(str(authority["reference_fasta"])),
         )

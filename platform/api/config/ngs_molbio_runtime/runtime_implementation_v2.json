@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "225d0540b6e825ac322aec59ba40df4a13866c3e2d9c5f038f347a1a035cf274",
+  "content_sha256": "34ef583ca748329bacc39ebcbdc580ef89293c0e7d3e2966bc741c5f749f8c28",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -141,6 +141,16 @@
       "path": "docs/specs/2026-08-12-protein-in-silico-global-project-integration-sow.md",
       "sha256": "a5cd891988f81e6f5f56b858e36aae4ee0f06dcba05930f936e4b98dd23bed05",
       "size_bytes": 94046
+    },
+    {
+      "path": "modules/ngs/bam_prepare.nf",
+      "sha256": "f8545cfde7398fa08a40f4f5152bf115d5ace14f22a395d970fbf268d62c9b2c",
+      "size_bytes": 9297
+    },
+    {
+      "path": "modules/ngs/dorado_align.nf",
+      "sha256": "246f012cc10f8d17ded0f630ddf3960d4b69a5ed80679511b6589eb26568bf4d",
+      "size_bytes": 5648
     },
     {
       "path": "modules/ngs/dorado_basecall.nf",
@@ -409,8 +419,8 @@
     },
     {
       "path": "platform/api/routers/ont_signal_workbench.py",
-      "sha256": "b1b8c9e5b3623f7b9fef2d8e8dc8230a617038adf40c7fcc3678a1e52b9c1382",
-      "size_bytes": 52156
+      "sha256": "1d7c47016f9a179981eff808f8e07a7eb40bbd3c9b89741a288e157efaf3763a",
+      "size_bytes": 52540
     },
     {
       "path": "platform/api/routers/payload_ownership_audit.py",
@@ -589,8 +599,8 @@
     },
     {
       "path": "platform/api/services/ont_signal_workbench.py",
-      "sha256": "bcea5dce80676b4314cf063bb690c25fe8679ec82e7989af6c8ba7812b072b8b",
-      "size_bytes": 180891
+      "sha256": "459432691d88c544c6b63dab3be87a341845f627fdfeace777a5432b3c571d04",
+      "size_bytes": 182458
     },
     {
       "path": "platform/api/services/ont_signal_worker.py",
@@ -599,8 +609,8 @@
     },
     {
       "path": "platform/api/services/ont_submission_trust.py",
-      "sha256": "4f805baca4df85d2ee74bc007d3f38a4429fb4b42b1f48a8ef3451aee0da292d",
-      "size_bytes": 12310
+      "sha256": "9ebcb49b8c0a142f02d71f0c76f9db7efffd691e4ce00838030c35a606edecd6",
+      "size_bytes": 17711
     },
     {
       "path": "platform/api/services/payload_ownership_audit.py",
@@ -639,8 +649,8 @@
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
-      "sha256": "dd030c0ee100f3b7d8780ec042b0383d267dc1984e48896fa6fd34fa01c80b5e",
-      "size_bytes": 50983
+      "sha256": "64b21ac7c64dc7a078b2553d89631e2334e3d48f2e568ce6e5496a7f72b65858",
+      "size_bytes": 53399
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison_runtime_contract.py",
@@ -849,8 +859,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-      "sha256": "c7ba16e51eecfcb48b34da6d56363b10965d6a7399afcc8652dfbf1fbc53039f",
-      "size_bytes": 10488
+      "sha256": "e40d2d6826b43ae9d30a75190a462f4ec13572810c393b56b201c262da0d2d08",
+      "size_bytes": 10557
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -984,11 +994,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "57d15f64df9af1bd1f00d8abc22b8ddf81ba8a083c022d3aeb2e4678ab9b6a6f",
+    "content_sha256": "ca7b67e71a408b3cc51048701a0ef2ac20b3ff503d490d225909908384492297",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "eb46c1a26c184b0fdb2f2d2f36a1b23859cad938",
-  "successor_source_tree": "c8613cfab69cf19a876c1e2255bdcf913193bc2d",
+  "successor_source_commit": "88eae53be4b614b6e81da07132eba8668ff83841",
+  "successor_source_tree": "f70257ece155e71960072af54942c1c1a1292ed8",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

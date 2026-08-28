@@ -45,8 +45,11 @@ from molbio_ngs_models import (
     MolBioNGSReferenceArtifact,
     MolBioNGSReferenceRevision,
 )
-from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
+from molbio_ngs_services import MolBioNGSServiceError, resolve_state_analysis_launch_policy
+from paths import get_allowed_roots, get_results_dir
 from services import ngs_alignment_sessions
+from services.molbio_ngs_references import resolve_managed_reference_for_launch
+from services.ont_submission_trust import publish_immutable_launch_snapshot
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_EXTERNAL_MOVE_SOURCE_ATTEMPTS = 3
@@ -2126,42 +2129,14 @@ async def _resolve_reference_authority(
     return revision, artifact
 
 
-def _resolve_exact_managed_file(
-    value: Any,
-    *,
-    root: Path,
-    expected_sha256: str,
-    expected_size_bytes: int,
-    label: str,
-) -> Path:
-    if not isinstance(value, str) or not value:
-        raise OntSignalError(f"{label} authority is unavailable")
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        raise OntSignalError(f"{label} authority is outside its managed root")
-    try:
-        resolved_root = root.resolve(strict=True)
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(resolved_root)
-    except (OSError, ValueError) as exc:
-        raise OntSignalError(f"{label} authority is outside its managed root") from exc
-    if resolved != candidate:
-        raise OntSignalError(f"{label} authority cannot use symbolic links")
-    try:
-        actual_sha256, actual_size = _stable_file_identity(resolved)
-    except OSError as exc:
-        raise OntSignalError(f"{label} authority is unavailable") from exc
-    if actual_sha256 != expected_sha256 or actual_size != expected_size_bytes:
-        raise OntSignalError(f"{label} bytes diverged from retained authority")
-    return resolved
-
-
 async def resolve_external_alignment_launch_authority(
     session: AsyncSession,
     domain_session: AsyncSession,
     *,
     move_source_id: str,
     reference_revision_id: str,
+    global_domain_experiment_id: str,
+    molbio_ngs_state_revision_id: str,
 ) -> dict[str, Any]:
     source = await session.get(OntMoveTableSource, move_source_id)
     if (
@@ -2199,6 +2174,8 @@ async def resolve_external_alignment_launch_authority(
         or representation.state != "ready"
         or representation.run_id != source.run_id
         or representation.observed_generation != source.observed_generation
+        or not isinstance(representation.manifest_sha256, str)
+        or not HEX64.fullmatch(representation.manifest_sha256)
     ):
         raise OntSignalError("ready raw-signal authority is required")
     validation_receipt = (
@@ -2218,41 +2195,69 @@ async def resolve_external_alignment_launch_authority(
         or filtered_size <= 0
     ):
         raise OntSignalError("validated filtered move-BAM authority is invalid")
-    filtered_bam = _resolve_exact_managed_file(
-        managed_outputs.get("filtered_move_bam"),
-        root=Path(get_results_dir()),
-        expected_sha256=filtered_sha256,
-        expected_size_bytes=filtered_size,
-        label="filtered move-BAM",
-    )
-    revision, reference_artifact = await _resolve_reference_authority(
-        domain_session, reference_revision_id,
-    )
-    reference_fasta = _resolve_exact_managed_file(
-        str(Path(get_molbio_ngs_reference_root()) / reference_artifact.managed_relative_path),
-        root=Path(get_molbio_ngs_reference_root()),
-        expected_sha256=reference_artifact.sha256,
-        expected_size_bytes=reference_artifact.size_bytes,
-        label="managed reference FASTA",
-    )
+    filtered_source = managed_outputs.get("filtered_move_bam")
+    if not isinstance(filtered_source, str) or not filtered_source:
+        raise OntSignalError("validated filtered move-BAM authority is unavailable")
+    try:
+        expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
+            domain_session,
+            global_domain_experiment_id=global_domain_experiment_id,
+            state_revision_id=molbio_ngs_state_revision_id,
+            canonical_workflow_id="ont_plasmid_qc",
+        )
+        managed_reference = await resolve_managed_reference_for_launch(
+            domain_session,
+            global_domain_experiment_id=global_domain_experiment_id,
+            molbio_ngs_state_revision_id=molbio_ngs_state_revision_id,
+            ngs_reference_revision_id=reference_revision_id,
+        )
+        filtered_bam = publish_immutable_launch_snapshot(
+            Path(filtered_source),
+            source_root=Path(get_results_dir()),
+            family="ont_external_move_launch_snapshots",
+            authority_id=receipt.id,
+            expected_sha256=filtered_sha256,
+            expected_size_bytes=filtered_size,
+            suffix=".bam",
+        )
+    except (KeyError, OSError, ValueError, MolBioNGSServiceError) as exc:
+        raise OntSignalError(str(exc)) from exc
+    if (
+        managed_reference.global_domain_experiment_id != global_domain_experiment_id
+        or managed_reference.molbio_ngs_state_revision_id != molbio_ngs_state_revision_id
+        or managed_reference.ngs_reference_revision_id != reference_revision_id
+    ):
+        raise OntSignalError("managed reference launch authority diverged")
     dataset_id = receipt.id
     return {
         "dataset_id": dataset_id,
         "bam_path": str(filtered_bam),
-        "reference_fasta": str(reference_fasta),
+        "reference_fasta": str(managed_reference.reference_fasta_path),
         "params": {
             "dataset_id": dataset_id,
             "source_instrument_run_id": source.run_id,
             "source_instrument_observed_generation": source.observed_generation,
+            "source_instrument_artifact_manifest_sha256": representation.manifest_sha256,
+            "source_instrument_artifact_sha256": filtered_sha256,
+            "source_instrument_artifact_bytes": filtered_size,
             "source_raw_representation_id": source.raw_representation_id,
             "source_move_source_id": source.id,
             "source_external_move_registration_receipt_id": receipt.id,
             "source_move_bam_sha256": source.artifact_sha256,
             "source_filtered_move_bam_sha256": filtered_sha256,
             "source_read_inventory_sha256": source.read_inventory_sha256,
-            "ngs_reference_revision_id": revision.id,
-            "ngs_reference_artifact_id": reference_artifact.id,
-            "expected_reference_fasta_sha256": reference_artifact.sha256,
+            "bam_source_sha256": filtered_sha256,
+            "global_domain_experiment_id": managed_reference.global_domain_experiment_id,
+            "molbio_ngs_state_revision_id": managed_reference.molbio_ngs_state_revision_id,
+            "ngs_reference_id": managed_reference.ngs_reference_id,
+            "ngs_reference_revision_id": managed_reference.ngs_reference_revision_id,
+            "ngs_reference_artifact_id": managed_reference.ngs_reference_artifact_id,
+            "state_membership_receipt_id": managed_reference.state_membership_receipt_id,
+            "selected_reference_sha256": managed_reference.selected_reference_sha256,
+            "expected_reference_fasta_sha256": managed_reference.expected_reference_fasta_sha256,
+            "managed_reference_snapshot_sha256": managed_reference.launch_snapshot_sha256,
+            "managed_reference_snapshot_size_bytes": managed_reference.launch_snapshot_size_bytes,
+            "expected_result_manifest_schema": expected_result_manifest_schema,
         },
     }
 
@@ -2313,6 +2318,10 @@ async def _require_exact_alignment_read_set_binding(
             != receipt.id
             or alignment_params.get("source_move_bam_sha256")
             != move_source.artifact_sha256
+            or alignment_params.get("source_filtered_move_bam_sha256")
+            != alignment_params.get("bam_source_sha256")
+            or not isinstance(alignment_params.get("source_filtered_move_bam_sha256"), str)
+            or not HEX64.fullmatch(alignment_params["source_filtered_move_bam_sha256"])
         ):
             raise OntSignalError("external move-source alignment authority diverged")
     alignment_generation = alignment_params.get("source_instrument_observed_generation")

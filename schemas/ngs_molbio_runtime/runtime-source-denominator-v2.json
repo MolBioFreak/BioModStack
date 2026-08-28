@@ -1,5 +1,5 @@
 {
-  "content_sha256": "57d15f64df9af1bd1f00d8abc22b8ddf81ba8a083c022d3aeb2e4678ab9b6a6f",
+  "content_sha256": "ca7b67e71a408b3cc51048701a0ef2ac20b3ff503d490d225909908384492297",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -19,6 +19,8 @@
     "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
     "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
     "docs/specs/2026-08-12-protein-in-silico-global-project-integration-sow.md",
+    "modules/ngs/bam_prepare.nf",
+    "modules/ngs/dorado_align.nf",
     "modules/ngs/dorado_basecall.nf",
     "modules/ngs/fastq_plasmid_qc.nf",
     "platform/api/config/models/nanopore.yaml",
