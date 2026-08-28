@@ -1191,14 +1191,25 @@ async def create_external_alignment_job(
             move_source_id=request.move_source_id,
             reference_revision_id=request.reference_revision_id,
         )
-    except (KeyError, ValueError, service.OntSignalError) as exc:
-        await session.rollback()
+    except BaseException as exc:
+        cleanup_errors: list[BaseException] = []
+        try:
+            await session.rollback()
+        except BaseException as rollback_exc:
+            cleanup_errors.append(rollback_exc)
         if authority is not None and not snapshots_claimed:
             try:
                 service.discard_unclaimed_external_alignment_snapshots(authority)
-            except service.OntSignalError as cleanup_exc:
-                raise _error(cleanup_exc) from exc
-        raise _error(exc) from exc
+            except BaseException as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
+        for cleanup_exc in cleanup_errors:
+            exc.add_note(
+                "external-alignment rollback/cleanup failure: "
+                f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+            )
+        if isinstance(exc, (KeyError, ValueError, service.OntSignalError)):
+            raise _error(exc) from exc
+        raise
 
 
 @router.get("/mappings/{mapping_job_id}", response_model=MappingJobResponse)

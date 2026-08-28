@@ -636,7 +636,6 @@ async def _create_pipeline_job(
     launch_context_id = current_launch_context_id.get()
     if launch_context_id:
         job = job.model_copy(update={"launch_context_id": launch_context_id})
-        commit = True
     token, token_digest = alignment_access.issue_alignment_access_token()
     trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
     try:

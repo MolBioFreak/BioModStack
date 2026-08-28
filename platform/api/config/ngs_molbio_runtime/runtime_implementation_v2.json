@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "9959834facfc2d6fa6893d639ae33cfcfa58cf6bdca41b6e7b7bdfb6ac038a3f",
+  "content_sha256": "6e8bace45813cc2c6e4f36fbf696167bd9f5363493881154de037b62dc4f66ad",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -414,13 +414,13 @@
     },
     {
       "path": "platform/api/routers/ont_runs.py",
-      "sha256": "e48426c4643e3cc1d7e99eee58464f2f3d0dff8480d555ef53cd31d76c18e32d",
-      "size_bytes": 62675
+      "sha256": "20d2bea6794ce0e0aeac2ed59a9719bb02d5c8c7521cb78cbe40882e8927dcb6",
+      "size_bytes": 62653
     },
     {
       "path": "platform/api/routers/ont_signal_workbench.py",
-      "sha256": "2d3c43517554f6fc7d68e903ca226477146cd95ff0eb6c9908690437163ca603",
-      "size_bytes": 53174
+      "sha256": "28bddbd001845233432d4cb08a01885571af7b8e7993b6f1b019f7825aae23b7",
+      "size_bytes": 53596
     },
     {
       "path": "platform/api/routers/payload_ownership_audit.py",
@@ -649,8 +649,8 @@
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
-      "sha256": "ac3828400a0c5629859d928ff4de2a591bb272cdc847e29a532e5f3221c02f74",
-      "size_bytes": 64186
+      "sha256": "5864af488182e07d5b9d567cf079829aeb551cbdee30ec7f4e064060a67887e3",
+      "size_bytes": 67531
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison_runtime_contract.py",
@@ -997,8 +997,8 @@
     "content_sha256": "ca7b67e71a408b3cc51048701a0ef2ac20b3ff503d490d225909908384492297",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "ecb44448f7dcd43418dd6397bfa69f23541f8810",
-  "successor_source_tree": "0c9f97edaaed29bb6e060af8f80215538ae9229e",
+  "successor_source_commit": "172333b44e1d1e09fb087ff0aa0574a26eb1cbf6",
+  "successor_source_tree": "e41bb7d54b029b9f43630f8bbfcba7f28d72b57a",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

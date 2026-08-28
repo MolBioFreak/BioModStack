@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
@@ -326,6 +326,98 @@ def test_external_alignment_route_validates_before_snapshot_and_discards_unclaim
     assert invalid.status_code == 422
     assert failed.status_code == 409
     assert resolver_calls == 1
+    assert discarded == [authority]
+    assert fake_session.rollbacks == 1
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_status"),
+    [("pipeline_http", 503), ("commit", 500)],
+)
+def test_external_alignment_route_discards_snapshots_for_every_preclaim_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    expected_status: int,
+) -> None:
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def principal(request: Request, call_next):
+        request.state.authenticated_principal = {
+            "subject": "operator-1", "roles": ["operator"],
+        }
+        return await call_next(request)
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+
+        async def commit(self) -> None:
+            if failure_stage == "commit":
+                raise RuntimeError("forced commit failure")
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    fake_session = FakeSession()
+
+    async def session_override():
+        yield fake_session
+
+    authority = {
+        "dataset_id": "receipt-1",
+        "bam_path": "/managed/inputs/external.bam",
+        "reference_fasta": "/managed/inputs/reference.fasta",
+        "params": {"source_instrument_run_id": "run-1"},
+    }
+
+    async def resolve_authority(*_args, **_kwargs):
+        return authority
+
+    def build_job(_workflow_id, request, **_kwargs):
+        return SimpleNamespace(
+            name=request.name, model_id="nanopore", mode="plasmid_qc",
+            params=dict(request.params), pinned_gpu=None,
+        )
+
+    async def create_job(*_args, **_kwargs):
+        if failure_stage == "pipeline_http":
+            raise HTTPException(status_code=503, detail="forced launch rejection")
+        return SimpleNamespace(
+            id="alignment-job-1", name="valid alignment", status="queued",
+        )
+
+    discarded: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        router_module.service, "resolve_external_alignment_launch_authority",
+        resolve_authority,
+    )
+    monkeypatch.setattr(
+        router_module.service, "discard_unclaimed_external_alignment_snapshots",
+        lambda value: discarded.append(dict(value)),
+    )
+    monkeypatch.setattr(router_module, "_job_create_for_ont_submit", build_job)
+    monkeypatch.setattr(router_module, "_create_pipeline_job", create_job)
+    app.dependency_overrides[router_module.get_session] = session_override
+    app.dependency_overrides[router_module.get_molbio_ngs_session] = session_override
+    app.dependency_overrides[router_module.get_experiment_session] = session_override
+    app.include_router(router_module.router, prefix="/api/ont/signal-workbench")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/ont/signal-workbench/external-alignment-jobs",
+            json={
+                "move_source_id": "moves-1",
+                "reference_revision_id": "reference-1",
+                "global_domain_experiment_id": "domain-1",
+                "molbio_ngs_state_revision_id": "state-1",
+                "name": "valid alignment",
+            },
+        )
+
+    assert response.status_code == expected_status
+    if failure_stage == "pipeline_http":
+        assert response.json() == {"detail": "forced launch rejection"}
     assert discarded == [authority]
     assert fake_session.rollbacks == 1
 

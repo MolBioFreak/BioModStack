@@ -366,6 +366,51 @@ def test_capability_issuance_failure_occurs_before_ont_job_creation(monkeypatch)
     assert ont_submission_trust.alignment_capability_digest() is None
 
 
+def test_explicit_deferred_commit_survives_launch_context(monkeypatch) -> None:
+    import routers.jobs as jobs_router
+
+    created = JobResponse(
+        id="job-deferred-1",
+        name="deferred",
+        model_id="nanopore",
+        mode="plasmid_qc",
+        status=JobStatus.QUEUED,
+        params={},
+        created_at=datetime(2026, 8, 28),
+        output_dir="/tmp/out/job-deferred-1",
+        design_count=0,
+    )
+    captured: dict[str, Any] = {}
+
+    class JobData:
+        def model_copy(self, *, update: dict[str, Any]):
+            captured["launch_context_id"] = update["launch_context_id"]
+            return self
+
+    async def fake_create_job(_job, _tasks, _session, **kwargs):
+        captured["commit"] = kwargs["_commit"]
+        return created
+
+    monkeypatch.setattr(jobs_router, "create_job", fake_create_job)
+    request = Request({
+        "type": "http", "method": "POST", "scheme": "https",
+        "path": "/api/ont/signal-workbench/external-alignment-jobs", "headers": [],
+    })
+    token = ont_runs.current_launch_context_id.set("launch-context-1")
+    try:
+        asyncio.run(ont_runs._create_pipeline_job(
+            JobData(), BackgroundTasks(), object(), object(), Response(), request,
+            commit=False,
+        ))
+    finally:
+        ont_runs.current_launch_context_id.reset(token)
+
+    assert captured == {
+        "launch_context_id": "launch-context-1",
+        "commit": False,
+    }
+
+
 def test_nanopore_model_registry_accepts_direct_ont_product_modes() -> None:
     registry = ModelRegistry()
     for mode, params in {
