@@ -45,11 +45,19 @@ from molbio_ngs_models import (
     MolBioNGSReferenceArtifact,
     MolBioNGSReferenceRevision,
 )
-from molbio_ngs_services import MolBioNGSServiceError, resolve_state_analysis_launch_policy
-from paths import get_allowed_roots, get_results_dir
+from molbio_ngs_services import (
+    MolBioNGSServiceError,
+    get_state_revision,
+    resolve_state_analysis_launch_policy,
+    verify_state_revision_integrity,
+)
+from paths import get_allowed_roots, get_inputs_dir, get_results_dir
 from services import ngs_alignment_sessions
 from services.molbio_ngs_references import resolve_managed_reference_for_launch
-from services.ont_submission_trust import publish_immutable_launch_snapshot
+from services.ont_submission_trust import (
+    discard_unclaimed_launch_snapshot,
+    publish_immutable_launch_snapshot,
+)
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_EXTERNAL_MOVE_SOURCE_ATTEMPTS = 3
@@ -2198,6 +2206,8 @@ async def resolve_external_alignment_launch_authority(
     filtered_source = managed_outputs.get("filtered_move_bam")
     if not isinstance(filtered_source, str) or not filtered_source:
         raise OntSignalError("validated filtered move-BAM authority is unavailable")
+    managed_reference: Any | None = None
+    filtered_bam: Path | None = None
     try:
         expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
             domain_session,
@@ -2211,6 +2221,12 @@ async def resolve_external_alignment_launch_authority(
             molbio_ngs_state_revision_id=molbio_ngs_state_revision_id,
             ngs_reference_revision_id=reference_revision_id,
         )
+        if (
+            managed_reference.global_domain_experiment_id != global_domain_experiment_id
+            or managed_reference.molbio_ngs_state_revision_id != molbio_ngs_state_revision_id
+            or managed_reference.ngs_reference_revision_id != reference_revision_id
+        ):
+            raise ValueError("managed reference launch authority diverged")
         filtered_bam = publish_immutable_launch_snapshot(
             Path(filtered_source),
             source_root=Path(get_results_dir()),
@@ -2221,13 +2237,32 @@ async def resolve_external_alignment_launch_authority(
             suffix=".bam",
         )
     except (KeyError, OSError, ValueError, MolBioNGSServiceError) as exc:
+        cleanup_failed = False
+        if filtered_bam is not None:
+            try:
+                discard_unclaimed_launch_snapshot(
+                    filtered_bam,
+                    snapshot_root=get_inputs_dir() / "ont_external_move_launch_snapshots",
+                    expected_sha256=filtered_sha256,
+                    expected_size_bytes=filtered_size,
+                )
+            except (OSError, ValueError):
+                cleanup_failed = True
+        if managed_reference is not None:
+            try:
+                discard_unclaimed_launch_snapshot(
+                    Path(managed_reference.reference_fasta_path),
+                    snapshot_root=get_inputs_dir() / "molbio_ngs_managed_launch_snapshots",
+                    expected_sha256=managed_reference.launch_snapshot_sha256,
+                    expected_size_bytes=managed_reference.launch_snapshot_size_bytes,
+                )
+            except (OSError, ValueError):
+                cleanup_failed = True
+        if cleanup_failed:
+            raise OntSignalError(
+                "unclaimed external-alignment snapshot cleanup failed"
+            ) from exc
         raise OntSignalError(str(exc)) from exc
-    if (
-        managed_reference.global_domain_experiment_id != global_domain_experiment_id
-        or managed_reference.molbio_ngs_state_revision_id != molbio_ngs_state_revision_id
-        or managed_reference.ngs_reference_revision_id != reference_revision_id
-    ):
-        raise OntSignalError("managed reference launch authority diverged")
     dataset_id = receipt.id
     return {
         "dataset_id": dataset_id,
@@ -2260,6 +2295,46 @@ async def resolve_external_alignment_launch_authority(
             "expected_result_manifest_schema": expected_result_manifest_schema,
         },
     }
+
+
+def discard_unclaimed_external_alignment_snapshots(authority: Mapping[str, Any]) -> None:
+    params = authority.get("params")
+    if not isinstance(params, Mapping):
+        raise OntSignalError("unclaimed external-alignment snapshot authority is incomplete")
+    cleanup_specs = (
+        (
+            authority.get("bam_path"),
+            get_inputs_dir() / "ont_external_move_launch_snapshots",
+            params.get("source_instrument_artifact_sha256"),
+            params.get("source_instrument_artifact_bytes"),
+        ),
+        (
+            authority.get("reference_fasta"),
+            get_inputs_dir() / "molbio_ngs_managed_launch_snapshots",
+            params.get("managed_reference_snapshot_sha256"),
+            params.get("managed_reference_snapshot_size_bytes"),
+        ),
+    )
+    failures: list[str] = []
+    for raw_path, root, raw_sha256, raw_size in cleanup_specs:
+        try:
+            if (
+                not isinstance(raw_path, str)
+                or not isinstance(raw_sha256, str)
+                or isinstance(raw_size, bool)
+                or not isinstance(raw_size, int)
+            ):
+                raise ValueError("snapshot cleanup authority is incomplete")
+            discard_unclaimed_launch_snapshot(
+                Path(raw_path),
+                snapshot_root=root,
+                expected_sha256=raw_sha256,
+                expected_size_bytes=raw_size,
+            )
+        except (OSError, ValueError) as exc:
+            failures.append(str(exc))
+    if failures:
+        raise OntSignalError("unclaimed external-alignment snapshot cleanup failed")
 
 
 def _alignment_authority(job: Job) -> dict[str, str]:
@@ -2310,6 +2385,17 @@ async def _require_exact_alignment_read_set_binding(
         ):
             raise OntSignalError("external move-source alignment authority diverged")
         dataset_id = receipt.id
+        validation_receipt = (
+            move_source.validation_receipt
+            if isinstance(move_source.validation_receipt, dict)
+            else {}
+        )
+        managed_output_sha256s = validation_receipt.get("managed_output_sha256s")
+        authoritative_filtered_sha256 = (
+            managed_output_sha256s.get("filtered_move_bam_sha256")
+            if isinstance(managed_output_sha256s, dict)
+            else None
+        )
         if (
             alignment_params.get("source_raw_representation_id")
             != move_source.raw_representation_id
@@ -2320,6 +2406,8 @@ async def _require_exact_alignment_read_set_binding(
             != move_source.artifact_sha256
             or alignment_params.get("source_filtered_move_bam_sha256")
             != alignment_params.get("bam_source_sha256")
+            or alignment_params.get("source_filtered_move_bam_sha256")
+            != authoritative_filtered_sha256
             or not isinstance(alignment_params.get("source_filtered_move_bam_sha256"), str)
             or not HEX64.fullmatch(alignment_params["source_filtered_move_bam_sha256"])
         ):
@@ -2344,6 +2432,54 @@ async def _require_exact_alignment_read_set_binding(
         "observed_generation": observed_generation,
         "read_inventory_sha256": move_source.read_inventory_sha256,
     }
+
+
+def _require_exact_alignment_reference_binding(
+    alignment_params: Mapping[str, Any],
+    *,
+    revision: Any,
+    artifact: Any,
+    state_membership: Mapping[str, Any],
+) -> str:
+    state_revision_id = alignment_params.get("molbio_ngs_state_revision_id")
+    expected_reopen_destination = {
+        "surface": "molbio-ngs-reference-revision",
+        "params": {
+            "global_domain_experiment_id": revision.global_domain_experiment_id,
+            "reference_id": revision.reference_id,
+            "revision_id": revision.id,
+        },
+    }
+    if (
+        not isinstance(state_revision_id, str)
+        or not state_revision_id
+        or alignment_params.get("reference_sequence_sha256")
+        != revision.normalized_sequence_sha256
+        or alignment_params.get("global_domain_experiment_id")
+        != revision.global_domain_experiment_id
+        or alignment_params.get("ngs_reference_id") != revision.reference_id
+        or alignment_params.get("ngs_reference_revision_id") != revision.id
+        or alignment_params.get("ngs_reference_artifact_id") != artifact.id
+        or alignment_params.get("state_membership_receipt_id")
+        != state_membership.get("receipt_id")
+        or alignment_params.get("selected_reference_sha256")
+        != revision.canonical_fasta_sha256
+        or state_membership.get("role") != "ngs_reference"
+        or state_membership.get("source_store_id") != "molbio-ngs-domain"
+        or state_membership.get("entity_kind") != "ngs_reference_revision"
+        or state_membership.get("entity_id") != revision.id
+        or state_membership.get("source_generation_or_revision")
+        != str(revision.revision_number)
+        or state_membership.get("content_digest") != revision.canonical_fasta_sha256
+        or state_membership.get("source_schema")
+        != "bms.molbio-ngs.reference-revision.v1"
+        or state_membership.get("availability") != "available"
+        or state_membership.get("reopen_destination") != expected_reopen_destination
+    ):
+        raise OntSignalError(
+            "alignment job reference authority does not equal the selected managed reference revision"
+        )
+    return state_revision_id
 
 
 def _require_primary_alignment_session(alignment: Mapping[str, Any]) -> dict[str, Any]:
@@ -2442,12 +2578,47 @@ async def create_mapping_job(
             run_id=run_id,
             observed_generation=observed_generation,
         )
+        alignment_params = (
+            alignment_job.params if isinstance(alignment_job.params, dict) else {}
+        )
+        state_revision_id = alignment_params.get("molbio_ngs_state_revision_id")
+        if not isinstance(state_revision_id, str) or not state_revision_id:
+            raise OntSignalError(
+                "alignment job reference authority does not equal the selected managed reference revision"
+            )
+        try:
+            state_revision = await get_state_revision(
+                domain_session,
+                revision.global_domain_experiment_id,
+                state_revision_id,
+            )
+            _, state_membership = await verify_state_revision_integrity(
+                domain_session, state_revision
+            )
+        except MolBioNGSServiceError as exc:
+            raise OntSignalError(
+                "alignment job reference authority does not equal the selected managed reference revision"
+            ) from exc
+        membership_receipt_id = alignment_params.get("state_membership_receipt_id")
+        exact_members = [
+            member
+            for member in state_membership
+            if member.get("receipt_id") == membership_receipt_id
+        ]
+        if len(exact_members) != 1:
+            raise OntSignalError(
+                "alignment job reference authority does not equal the selected managed reference revision"
+            )
+        _require_exact_alignment_reference_binding(
+            alignment_params,
+            revision=revision,
+            artifact=reference_artifact,
+            state_membership=exact_members[0],
+        )
         domain_revision = await _resolve_domain_revision_authority(
             domain_session, revision.global_domain_experiment_id
         )
         authority = _alignment_authority(alignment_job)
-        if authority["source_reference_sha256"] != revision.normalized_sequence_sha256:
-            raise OntSignalError("alignment job reference does not equal the managed reference revision")
         alignment = await _resolve_primary_alignment_session_async(
             alignment_job.id,
             str(alignment_session_id),

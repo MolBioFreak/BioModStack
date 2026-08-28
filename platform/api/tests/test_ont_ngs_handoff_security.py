@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -332,3 +333,87 @@ def test_external_launch_snapshot_rejects_intermediate_directory_symlink(
             expected_size_bytes=source.stat().st_size,
             suffix=".bam",
         )
+
+
+def test_external_registration_marker_requires_complete_prelaunch_snapshot_authority() -> None:
+    with pytest.raises(
+        ValueError, match="ONT instrument artifact snapshot authority is incomplete",
+    ):
+        ont_submission_trust.verify_instrument_artifact_snapshot({
+            "source_external_move_registration_receipt_id": "receipt-1",
+            "bam_path": "/managed/external.bam",
+        })
+
+
+def test_runtime_snapshot_closes_leaf_descriptor_when_fstat_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    source = root / "source.bam"
+    root.mkdir()
+    source.write_bytes(b"bam")
+    real_fstat = os.fstat
+    real_close = os.close
+    leaf_fd: int | None = None
+    closed: list[int] = []
+
+    def failing_fstat(fd: int):
+        nonlocal leaf_fd
+        try:
+            target = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            target = ""
+        if target == str(source):
+            leaf_fd = fd
+            closed.clear()
+            raise OSError("forced fstat failure")
+        return real_fstat(fd)
+
+    def recording_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(ont_submission_trust.os, "fstat", failing_fstat)
+    monkeypatch.setattr(ont_submission_trust.os, "close", recording_close)
+
+    with pytest.raises(OSError, match="forced fstat failure"):
+        ont_submission_trust._open_runtime_snapshot(source, root, label="test")
+
+    assert leaf_fd is not None
+    assert leaf_fd in closed
+
+
+def test_unclaimed_launch_snapshot_cleanup_is_exact_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    inputs_root = tmp_path / "inputs"
+    source = results_root / "source.bam"
+    results_root.mkdir()
+    inputs_root.mkdir()
+    source.write_bytes(b"bam")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
+    snapshot = ont_submission_trust.publish_immutable_launch_snapshot(
+        source,
+        source_root=results_root,
+        family="ont_external_move_launch_snapshots",
+        authority_id="receipt-1",
+        expected_sha256=digest,
+        expected_size_bytes=source.stat().st_size,
+        suffix=".bam",
+    )
+
+    assert ont_submission_trust.discard_unclaimed_launch_snapshot(
+        snapshot,
+        snapshot_root=inputs_root / "ont_external_move_launch_snapshots",
+        expected_sha256=digest,
+        expected_size_bytes=3,
+    ) is True
+    assert not snapshot.exists()
+    assert ont_submission_trust.discard_unclaimed_launch_snapshot(
+        snapshot,
+        snapshot_root=inputs_root / "ont_external_move_launch_snapshots",
+        expected_sha256=digest,
+        expected_size_bytes=3,
+    ) is False

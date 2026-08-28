@@ -120,8 +120,21 @@ def test_external_alignment_submit_route_uses_only_server_resolved_authority(
         }
         return await call_next(request)
 
+    class FakeSession:
+        def __init__(self) -> None:
+            self.commits = 0
+            self.rollbacks = 0
+
+        async def commit(self) -> None:
+            self.commits += 1
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    fake_session = FakeSession()
+
     async def session_override():
-        yield object()
+        yield fake_session
 
     server_params = {
         "dataset_id": "receipt-1",
@@ -167,7 +180,8 @@ def test_external_alignment_submit_route_uses_only_server_resolved_authority(
             params=dict(request.params), pinned_gpu=None,
         )
 
-    async def create_job(job, *_args, **_kwargs):
+    async def create_job(job, *_args, **kwargs):
+        captured["create_kwargs"] = kwargs
         return {
             "id": "alignment-job-1", "name": job.name, "status": "queued",
             "model_id": job.model_id, "mode": job.mode, "params": job.params,
@@ -221,6 +235,99 @@ def test_external_alignment_submit_route_uses_only_server_resolved_authority(
     assert build_kwargs["trusted_reference_fasta"] == Path(
         "/managed/inputs/reference.fasta"
     )
+    assert captured["create_kwargs"]["commit"] is False
+    assert fake_session.commits == 1
+    assert fake_session.rollbacks == 0
+
+
+def test_external_alignment_route_validates_before_snapshot_and_discards_unclaimed_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def principal(request: Request, call_next):
+        request.state.authenticated_principal = {
+            "subject": "operator-1", "roles": ["operator"],
+        }
+        return await call_next(request)
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rollbacks = 0
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    fake_session = FakeSession()
+
+    async def session_override():
+        yield fake_session
+
+    resolver_calls = 0
+    authority = {
+        "dataset_id": "receipt-1",
+        "bam_path": "/managed/inputs/external.bam",
+        "reference_fasta": "/managed/inputs/reference.fasta",
+        "params": {"source_instrument_run_id": "run-1"},
+    }
+
+    async def resolve_authority(*_args, **_kwargs):
+        nonlocal resolver_calls
+        resolver_calls += 1
+        return authority
+
+    def build_job(_workflow_id, request, **_kwargs):
+        return SimpleNamespace(
+            name=request.name, model_id="nanopore", mode="plasmid_qc",
+            params=dict(request.params), pinned_gpu=None,
+        )
+
+    async def create_job(*_args, **_kwargs):
+        raise ValueError("forced pre-commit failure")
+
+    discarded: list[dict[str, Any]] = []
+
+    def discard(value):
+        discarded.append(dict(value))
+
+    monkeypatch.setattr(
+        router_module.service, "resolve_external_alignment_launch_authority",
+        resolve_authority,
+    )
+    monkeypatch.setattr(
+        router_module.service, "discard_unclaimed_external_alignment_snapshots",
+        discard,
+        raising=False,
+    )
+    monkeypatch.setattr(router_module, "_job_create_for_ont_submit", build_job)
+    monkeypatch.setattr(router_module, "_create_pipeline_job", create_job)
+    app.dependency_overrides[router_module.get_session] = session_override
+    app.dependency_overrides[router_module.get_molbio_ngs_session] = session_override
+    app.dependency_overrides[router_module.get_experiment_session] = session_override
+    app.include_router(router_module.router, prefix="/api/ont/signal-workbench")
+    body = {
+        "move_source_id": "moves-1",
+        "reference_revision_id": "reference-1",
+        "global_domain_experiment_id": "domain-1",
+        "molbio_ngs_state_revision_id": "state-1",
+    }
+
+    with TestClient(app) as client:
+        invalid = client.post(
+            "/api/ont/signal-workbench/external-alignment-jobs",
+            json={**body, "name": "../invalid"},
+        )
+        failed = client.post(
+            "/api/ont/signal-workbench/external-alignment-jobs",
+            json={**body, "name": "valid alignment"},
+        )
+
+    assert invalid.status_code == 422
+    assert failed.status_code == 409
+    assert resolver_calls == 1
+    assert discarded == [authority]
+    assert fake_session.rollbacks == 1
 
 
 @pytest.mark.asyncio
@@ -373,6 +480,9 @@ async def test_external_move_source_alignment_binding_accepts_only_exact_receipt
         run_id="run-1", observed_generation=7, raw_representation_id="raw-1",
         artifact_sha256="a" * 64, artifact_size_bytes=123,
         read_inventory_sha256="b" * 64, molecule_type="dna",
+        validation_receipt={
+            "managed_output_sha256s": {"filtered_move_bam_sha256": "c" * 64},
+        },
     )
     receipt = SimpleNamespace(id=receipt_id, **receipt_body)
     alignment = SimpleNamespace(params={
@@ -411,6 +521,76 @@ async def test_external_move_source_alignment_binding_accepts_only_exact_receipt
             session, alignment_job=cast(Any, alignment), move_source=cast(Any, source),
             run_id="run-1", observed_generation=7,
         )
+
+    alignment.params["source_filtered_move_bam_sha256"] = "d" * 64
+    alignment.params["bam_source_sha256"] = "d" * 64
+    with pytest.raises(
+        service.OntSignalError, match="external move-source alignment authority diverged",
+    ):
+        await service._require_exact_alignment_read_set_binding(
+            session, alignment_job=cast(Any, alignment), move_source=cast(Any, source),
+            run_id="run-1", observed_generation=7,
+        )
+
+
+def test_alignment_reference_binding_requires_exact_revision_state_and_membership() -> None:
+    revision = SimpleNamespace(
+        id="reference-revision-1",
+        reference_id="reference-1",
+        global_domain_experiment_id="domain-1",
+        revision_number=4,
+        normalized_sequence_sha256="a" * 64,
+        canonical_fasta_sha256="b" * 64,
+    )
+    artifact = SimpleNamespace(id="reference-artifact-1", sha256="b" * 64)
+    member = {
+        "receipt_id": "membership-1",
+        "role": "ngs_reference",
+        "source_store_id": "molbio-ngs-domain",
+        "entity_kind": "ngs_reference_revision",
+        "entity_id": revision.id,
+        "source_generation_or_revision": "4",
+        "content_digest": revision.canonical_fasta_sha256,
+        "source_schema": "bms.molbio-ngs.reference-revision.v1",
+        "availability": "available",
+        "reopen_destination": {
+            "surface": "molbio-ngs-reference-revision",
+            "params": {
+                "global_domain_experiment_id": revision.global_domain_experiment_id,
+                "reference_id": revision.reference_id,
+                "revision_id": revision.id,
+            },
+        },
+    }
+    params = {
+        "reference_sequence_sha256": revision.normalized_sequence_sha256,
+        "global_domain_experiment_id": revision.global_domain_experiment_id,
+        "molbio_ngs_state_revision_id": "state-1",
+        "ngs_reference_id": revision.reference_id,
+        "ngs_reference_revision_id": revision.id,
+        "ngs_reference_artifact_id": artifact.id,
+        "state_membership_receipt_id": member["receipt_id"],
+        "selected_reference_sha256": revision.canonical_fasta_sha256,
+    }
+
+    assert service._require_exact_alignment_reference_binding(
+        params, revision=revision, artifact=artifact, state_membership=member,
+    ) == "state-1"
+
+    for field, divergent in (
+        ("global_domain_experiment_id", "domain-other"),
+        ("molbio_ngs_state_revision_id", ""),
+        ("ngs_reference_id", "reference-other"),
+        ("ngs_reference_revision_id", "reference-revision-other"),
+        ("ngs_reference_artifact_id", "reference-artifact-other"),
+        ("state_membership_receipt_id", "membership-other"),
+        ("selected_reference_sha256", "c" * 64),
+    ):
+        candidate = {**params, field: divergent}
+        with pytest.raises(service.OntSignalError, match="reference authority"):
+            service._require_exact_alignment_reference_binding(
+                candidate, revision=revision, artifact=artifact, state_membership=member,
+            )
 
 
 def _request() -> dict[str, object]:
@@ -1147,3 +1327,92 @@ def test_migration_42_registers_immutable_comparison_ledgers(tmp_path: Path) -> 
         assert {"trg_ont_signal_comparison_job_identity_no_update", "trg_ont_signal_comparison_job_terminal_no_update", "trg_ont_signal_comparison_artifact_no_update", "trg_ont_signal_comparison_events_no_update", "trg_ont_signal_manual_reviews_no_update"} <= triggers
     registration = [(item.version, item.name) for item in MIGRATIONS if item.name == "add_ont_signal_comparisons"]
     assert registration == [(43, "add_ont_signal_comparisons")]
+
+
+@pytest.mark.asyncio
+async def test_external_alignment_resolver_discards_reference_if_bam_publication_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    inputs_root = tmp_path / "inputs"
+    results_root = tmp_path / "results"
+    reference_snapshot = inputs_root / "molbio_ngs_managed_launch_snapshots" / "one" / "reference.fasta"
+    reference_snapshot.parent.mkdir(parents=True)
+    reference_bytes = b">eGFP\nACGT\n"
+    reference_snapshot.write_bytes(reference_bytes)
+    reference_sha = hashlib.sha256(reference_bytes).hexdigest()
+    filtered_bam = results_root / "filtered.bam"
+    results_root.mkdir()
+    filtered_bam.write_bytes(b"bam")
+    filtered_sha = hashlib.sha256(filtered_bam.read_bytes()).hexdigest()
+    receipt_body = {
+        "candidate_id": "c" * 64, "server_relative_path": "external.bam",
+        "root_device": 1, "root_inode": 2, "file_device": 3, "file_inode": 4,
+        "file_mtime_ns": 5, "file_ctime_ns": 6, "artifact_sha256": "a" * 64,
+        "artifact_size_bytes": 123, "run_id": "run-1", "observed_generation": 7,
+        "raw_representation_id": "raw-1", "molecule_type": "dna",
+    }
+    receipt_id = f"ont-external-move-{service._digest(receipt_body)}"
+    source = SimpleNamespace(
+        id="moves-1", run_id="run-1", observed_generation=7,
+        raw_representation_id="raw-1", validation_state="ready",
+        source_job_id=None, external_registration_receipt_id=receipt_id,
+        artifact_sha256="a" * 64, artifact_size_bytes=123,
+        read_inventory_sha256="b" * 64, molecule_type="dna",
+        validation_receipt={
+            "managed_outputs": {"filtered_move_bam": str(filtered_bam)},
+            "managed_output_sha256s": {
+                "filtered_move_bam_sha256": filtered_sha,
+                "filtered_move_bam_size_bytes": 3,
+            },
+        },
+    )
+    core = _LookupSession({
+        ("OntMoveTableSource", "moves-1"): source,
+        ("OntExternalMoveBamRegistrationReceipt", receipt_id): SimpleNamespace(
+            id=receipt_id, **receipt_body,
+        ),
+        ("OntRawSignalRepresentation", "raw-1"): SimpleNamespace(
+            id="raw-1", run_id="run-1", observed_generation=7,
+            state="ready", manifest_sha256="e" * 64,
+        ),
+    })
+
+    async def resolve_reference(*_args, **_kwargs):
+        return SimpleNamespace(
+            global_domain_experiment_id="domain-1",
+            molbio_ngs_state_revision_id="state-1",
+            ngs_reference_id="reference-aggregate-1",
+            ngs_reference_revision_id="reference-revision-1",
+            ngs_reference_artifact_id="reference-artifact-1",
+            state_membership_receipt_id="membership-1",
+            reference_fasta_path=reference_snapshot,
+            selected_reference_sha256=reference_sha,
+            expected_reference_fasta_sha256=reference_sha,
+            launch_snapshot_sha256=reference_sha,
+            launch_snapshot_size_bytes=len(reference_bytes),
+        )
+
+    async def resolve_policy(*_args, **_kwargs):
+        return "bms.ont-fastq-qc-result.v1"
+
+    def fail_bam_publication(*_args, **_kwargs):
+        raise ValueError("forced BAM publication failure")
+
+    monkeypatch.setattr(service, "get_results_dir", lambda: results_root)
+    monkeypatch.setattr(service, "get_inputs_dir", lambda: inputs_root)
+    monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
+    monkeypatch.setattr(service, "resolve_managed_reference_for_launch", resolve_reference)
+    monkeypatch.setattr(service, "resolve_state_analysis_launch_policy", resolve_policy)
+    monkeypatch.setattr(service, "publish_immutable_launch_snapshot", fail_bam_publication)
+
+    with pytest.raises(service.OntSignalError, match="forced BAM publication failure"):
+        await service.resolve_external_alignment_launch_authority(
+            core,
+            _LookupSession({}),
+            move_source_id="moves-1",
+            reference_revision_id="reference-revision-1",
+            global_domain_experiment_id="domain-1",
+            molbio_ngs_state_revision_id="state-1",
+        )
+
+    assert not reference_snapshot.exists()

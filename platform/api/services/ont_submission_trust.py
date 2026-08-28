@@ -172,7 +172,12 @@ def _open_runtime_snapshot(
                 os.close(current_fd)
             current_fd = child_fd
         file_fd = os.open(relative.parts[-1], flags, dir_fd=current_fd)
-        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+        try:
+            file_mode = os.fstat(file_fd).st_mode
+        except BaseException:
+            os.close(file_fd)
+            raise
+        if not stat.S_ISREG(file_mode):
             os.close(file_fd)
             raise ValueError(f"{label} snapshot is not a regular file")
         return file_fd
@@ -184,6 +189,32 @@ def _open_runtime_snapshot(
         if current_fd != root_fd:
             os.close(current_fd)
         os.close(root_fd)
+
+
+def _open_runtime_snapshot_parent(
+    path: Path, root: Path, *, label: str,
+) -> tuple[int, str]:
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} snapshot is outside the server-owned launch root") from exc
+    if not relative.parts:
+        raise ValueError(f"{label} snapshot path is invalid")
+    flags, directory_flag = _descriptor_flags()
+    directory_flags = flags | directory_flag
+    try:
+        current_fd = os.open(os.sep, directory_flags)
+    except (AttributeError, NotImplementedError, OSError) as exc:
+        raise ValueError(f"{label} snapshot descriptor verification is unavailable") from exc
+    try:
+        for component in (*root.parts[1:], *relative.parts[:-1]):
+            child_fd = os.open(component, directory_flags, dir_fd=current_fd)
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd, relative.parts[-1]
+    except BaseException:
+        os.close(current_fd)
+        raise
 
 
 def _open_or_create_private_directory(parent_fd: int, component: str) -> int:
@@ -310,6 +341,61 @@ def publish_immutable_launch_snapshot(
         os.close(base_fd)
 
 
+def discard_unclaimed_launch_snapshot(
+    path: Path,
+    *,
+    snapshot_root: Path,
+    expected_sha256: str,
+    expected_size_bytes: int,
+) -> bool:
+    """Remove one exact unclaimed launch snapshot without following links."""
+
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in expected_sha256)
+        or isinstance(expected_size_bytes, bool)
+        or not isinstance(expected_size_bytes, int)
+        or expected_size_bytes < 0
+    ):
+        raise ValueError("unclaimed launch snapshot authority is invalid")
+    canonical_path = _canonical_absolute_path(path)
+    canonical_root = _canonical_absolute_path(snapshot_root)
+    if canonical_path is None or canonical_root is None:
+        raise ValueError("unclaimed launch snapshot path is invalid")
+    parent_fd, leaf_name = _open_runtime_snapshot_parent(
+        canonical_path,
+        canonical_root,
+        label="unclaimed launch",
+    )
+    file_fd = -1
+    try:
+        flags, _ = _descriptor_flags()
+        try:
+            file_fd = os.open(leaf_name, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return False
+        metadata = os.fstat(file_fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("unclaimed launch snapshot is not a regular file")
+        digest = hashlib.sha256()
+        byte_count = 0
+        while chunk := os.read(file_fd, 1024 * 1024):
+            digest.update(chunk)
+            byte_count += len(chunk)
+        if byte_count != expected_size_bytes or digest.hexdigest() != expected_sha256:
+            raise ValueError("unclaimed launch snapshot authority diverged")
+        current = os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
+        if current.st_dev != metadata.st_dev or current.st_ino != metadata.st_ino:
+            raise ValueError("unclaimed launch snapshot identity changed")
+        os.unlink(leaf_name, dir_fd=parent_fd)
+        return True
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(parent_fd)
+
+
 def verify_instrument_artifact_snapshot(
     params: Mapping[str, Any],
     *,
@@ -324,6 +410,9 @@ def verify_instrument_artifact_snapshot(
         "source_instrument_artifact_bytes",
     }
     present = {key for key in authority_fields if params.get(key) is not None}
+    external_move_receipt = params.get("source_external_move_registration_receipt_id")
+    if external_move_receipt is not None and present != authority_fields:
+        raise ValueError("ONT instrument artifact snapshot authority is incomplete")
     if not present:
         return
     if present != authority_fields:
@@ -353,7 +442,11 @@ def verify_instrument_artifact_snapshot(
     ):
         raise ValueError("ONT instrument artifact snapshot authority is invalid")
 
-    external_move_snapshot = bool(params.get("source_external_move_registration_receipt_id"))
+    external_move_snapshot = external_move_receipt is not None
+    if external_move_snapshot and (
+        not isinstance(external_move_receipt, str) or not external_move_receipt
+    ):
+        raise ValueError("ONT instrument artifact snapshot authority is invalid")
     configured_root = snapshot_root or (
         get_inputs_dir()
         / ("ont_external_move_launch_snapshots" if external_move_snapshot else "ont_instrument_launch_snapshots")

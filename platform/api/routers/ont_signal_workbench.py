@@ -18,7 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_session
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
-from routers.ont_runs import OntNgsSubmitRequest, _create_pipeline_job, _job_create_for_ont_submit
+from routers.ont_runs import (
+    OntNgsSubmitRequest,
+    _create_pipeline_job,
+    _job_create_for_ont_submit,
+    _safe_ont_job_name,
+)
 from schemas import JobResponse
 from services import ont_signal_workbench as service
 
@@ -101,6 +106,11 @@ class ExternalAlignmentCreate(ClosedModel):
         if not OPAQUE.fullmatch(value):
             raise ValueError("alignment parents must be opaque governed IDs")
         return value
+
+    @field_validator("name")
+    @classmethod
+    def safe_job_name(cls, value: str) -> str:
+        return _safe_ont_job_name(value, "external ONT alignment")
 
 
 class ExternalAlignmentJobResponse(ClosedModel):
@@ -1125,6 +1135,8 @@ async def create_external_alignment_job(
     domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> ExternalAlignmentJobResponse:
     _comparison_principal(http_request)
+    authority: dict[str, Any] | None = None
+    snapshots_claimed = False
     try:
         authority = await service.resolve_external_alignment_launch_authority(
             session,
@@ -1159,7 +1171,10 @@ async def create_external_alignment_job(
             experiment_session,
             response,
             http_request,
+            commit=False,
         )
+        await session.commit()
+        snapshots_claimed = True
         created_job = JobResponse.model_validate(created)
         created_status = (
             created_job.status.value
@@ -1178,6 +1193,11 @@ async def create_external_alignment_job(
         )
     except (KeyError, ValueError, service.OntSignalError) as exc:
         await session.rollback()
+        if authority is not None and not snapshots_claimed:
+            try:
+                service.discard_unclaimed_external_alignment_snapshots(authority)
+            except service.OntSignalError as cleanup_exc:
+                raise _error(cleanup_exc) from exc
         raise _error(exc) from exc
 
 
