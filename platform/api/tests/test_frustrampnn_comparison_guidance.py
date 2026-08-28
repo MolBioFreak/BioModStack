@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from database import (
     Base,
     FrustraMPNNComparison,
+    FrustraMPNNArtifact,
     FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
@@ -685,6 +686,15 @@ async def test_external_candidate_handoff_api_binds_parent_and_producer_metadata
             "settings_value_origin": "bms_default",
             "requested_settings": requested.model_dump(mode="json"),
             "requested_settings_sha256": requested_settings_sha256(requested),
+            "batch_manifest": {
+                "schema_name": "bms_frustrampnn_scheduler_batch",
+                "schema_version": 3,
+                "sha256": "a" * 64,
+                "size_bytes": 1,
+                "expected_cardinality": 1,
+                "ordered_candidate_ids": ["variant-api"],
+                "ordered_invocation_ids": ["invoke-handoff"],
+            },
             "candidates": [],
             "results": [],
         }
@@ -943,8 +953,13 @@ async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
                 }
                 if has_v2_authority
                 else {
+                    "schema_name": "frustrampnn_summary",
+                    "schema_version": 1,
                     "configuration_id": landscape["configuration_id"],
                     "configuration_sha256": landscape["configuration_sha256"],
+                    "landscape_sha256": "5" * 64,
+                    "structure_map_sha256": landscape["structure_map_sha256"],
+                    "normalized_pdb_sha256": landscape["normalized_pdb_sha256"],
                     "threshold_policy": landscape["threshold_policy"],
                     "threshold_policy_sha256": landscape[
                         "threshold_policy_sha256"
@@ -977,6 +992,20 @@ async def derived_session(tmp_path, monkeypatch: pytest.MonkeyPatch):
                 ),
                 created_at=datetime(2026, 8, 2),
             ))
+            session.add(
+                FrustraMPNNArtifact(
+                    artifact_id=f"raw-csv-{invocation_id}",
+                    parent_job_id="job-derived",
+                    invocation_id=invocation_id,
+                    role="raw_csv",
+                    relative_path="raw_frustrampnn.csv",
+                    storage_path=f"/fixture/{invocation_id}/raw_frustrampnn.csv",
+                    content_sha256=landscape["raw_csv_sha256"],
+                    size_bytes=1,
+                    media_type="text/csv",
+                    metadata_json={},
+                )
+            )
             artifact_rows = []
             for residue in landscape["residues"]:
                 residue_json = {key: value for key, value in residue.items() if key != "slots"}

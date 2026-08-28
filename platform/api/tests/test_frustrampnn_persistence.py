@@ -120,6 +120,23 @@ def test_nonstatistics_persistence_keeps_existing_canonical_profile() -> None:
         )
 
 
+def test_landscape_invocation_authority_requires_complete_provenance() -> None:
+    persistence = _persistence()
+    complete = {
+        "landscape_sha256": "1" * 64,
+        "structure_map_sha256": "2" * 64,
+        "normalized_pdb_sha256": "3" * 64,
+        "raw_csv_sha256": "4" * 64,
+        "threshold_policy": {"id": "frustrampnn_class_v1"},
+        "threshold_policy_sha256": "5" * 64,
+    }
+
+    assert persistence._complete_landscape_invocation_authority(complete)
+    assert not persistence._complete_landscape_invocation_authority(
+        {key: value for key, value in complete.items() if key != "raw_csv_sha256"}
+    )
+
+
 def _load_json(root: Path, relative: str) -> dict:
     return canonical_json_loads((root / relative).read_bytes())
 
@@ -676,6 +693,18 @@ async def test_dense_parquet_stores_row_identity_without_repeated_invocation_pro
             / receipt.relative_path
         )
         schema_names = set(pq.read_schema(artifact_path).names)
+        page = await module.landscape_page(
+            session, result.parent_job_id, result.invocation_id, limit=1
+        )
+        raw_csv = (
+            await session.execute(
+                select(FrustraMPNNArtifact).where(
+                    FrustraMPNNArtifact.parent_job_id == result.parent_job_id,
+                    FrustraMPNNArtifact.invocation_id == result.invocation_id,
+                    FrustraMPNNArtifact.role == "raw_csv",
+                )
+            )
+        ).scalar_one()
 
     assert "provenance_json" not in schema_names
     assert {
@@ -687,11 +716,12 @@ async def test_dense_parquet_stores_row_identity_without_repeated_invocation_pro
         "sequence_index",
         "mutation_aa",
     } <= schema_names
-    authority = source_receipts["invocation_authority"]
+    assert "invocation_authority" not in source_receipts
+    authority = page["items"][0]["provenance"]
     assert authority["landscape_sha256"] == result.summary_json["landscape_sha256"]
     assert authority["structure_map_sha256"]
     assert authority["normalized_pdb_sha256"]
-    assert authority["raw_csv_sha256"]
+    assert authority["raw_csv_sha256"] == raw_csv.content_sha256
 
 
 @pytest.mark.asyncio

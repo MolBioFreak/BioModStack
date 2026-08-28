@@ -512,12 +512,9 @@ def _landscape_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
 
 def _landscape_artifact_values(
     values: Sequence[Mapping[str, Any]],
-) -> tuple[list[dict[str, Any]], str, dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
     rows: list[dict[str, Any]] = []
     digest = hashlib.sha256()
-    invocation_authority = (
-        dict(values[0]["provenance_json"]) if values else {}
-    )
     for index, value in enumerate(values):
         row = {
             "row_index": index,
@@ -540,7 +537,7 @@ def _landscape_artifact_values(
         rows.append(row)
         digest.update(canonical_json_bytes(row))
         digest.update(b"\n")
-    return rows, digest.hexdigest(), invocation_authority
+    return rows, digest.hexdigest()
 
 
 def _result_values(
@@ -945,7 +942,7 @@ async def _assert_identical_replay(
     receipt = await _landscape_receipt(
         session, existing.parent_job_id, existing.invocation_id
     )
-    _expected_artifact_rows, expected_source_sha256, _authority = _landscape_artifact_values(
+    _expected_artifact_rows, expected_source_sha256 = _landscape_artifact_values(
         landscape_values
     )
     source_receipts = receipt.source_receipts_json
@@ -1140,7 +1137,7 @@ async def ingest_result_bundle(
             result_values["statistics_json"] = statistics_reference
             result.statistics_json = statistics_reference
 
-        landscape_artifact_rows, landscape_source_sha256, invocation_authority = _landscape_artifact_values(
+        landscape_artifact_rows, landscape_source_sha256 = _landscape_artifact_values(
             landscape_values
         )
         landscape_artifact = await publish_table_rows(
@@ -1154,17 +1151,6 @@ async def ingest_result_bundle(
             schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
             installed_artifacts=installed_artifacts,
         )
-        landscape_receipt = await session.get(
-            ScientificArtifactReceipt, landscape_artifact.artifact_id
-        )
-        if landscape_receipt is None:
-            raise FrustraMPNNPersistenceError(
-                "FrustraMPNN landscape scientific receipt was not installed"
-            )
-        landscape_receipt.source_receipts_json = {
-            **dict(landscape_receipt.source_receipts_json),
-            "invocation_authority": invocation_authority,
-        }
         await _insert_core_mappings(
             session, FrustraMPNNArtifact.__table__, artifact_values
         )
@@ -1269,6 +1255,148 @@ async def list_result_artifacts(
     ]
 
 
+def _required_sha256(value: Any) -> str | None:
+    if (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    ):
+        return value
+    return None
+
+
+def _complete_landscape_invocation_authority(authority: Any) -> bool:
+    if not isinstance(authority, Mapping):
+        return False
+    common_sha256_fields = (
+        "landscape_sha256",
+        "structure_map_sha256",
+        "normalized_pdb_sha256",
+        "raw_csv_sha256",
+        "threshold_policy_sha256",
+    )
+    if (
+        any(_required_sha256(authority.get(field)) is None for field in common_sha256_fields)
+        or not isinstance(authority.get("threshold_policy"), Mapping)
+    ):
+        return False
+    schema_version = authority.get("schema_version")
+    if schema_version not in (2, 3):
+        return schema_version in (None, 1)
+    generation_sha256_fields = (
+        "execution_configuration_sha256",
+        "requested_settings_sha256",
+        "effective_settings_sha256",
+        "runtime_identity_sha256",
+        "source_artifact_sha256",
+    )
+    return (
+        authority.get("schema_name") == "frustrampnn_landscape"
+        and isinstance(authority.get("threshold_policy_id"), str)
+        and bool(authority["threshold_policy_id"])
+        and all(
+            _required_sha256(authority.get(field)) is not None
+            for field in generation_sha256_fields
+        )
+    )
+
+
+async def _core_landscape_invocation_authority(
+    session: AsyncSession,
+    parent_job_id: str,
+    invocation_id: str,
+) -> dict[str, Any] | None:
+    result = await session.get(FrustraMPNNResult, (parent_job_id, invocation_id))
+    if result is None or not isinstance(result.summary_json, Mapping):
+        return None
+    artifacts = list(
+        (
+            await session.execute(
+                select(FrustraMPNNArtifact).where(
+                    FrustraMPNNArtifact.parent_job_id == parent_job_id,
+                    FrustraMPNNArtifact.invocation_id == invocation_id,
+                    FrustraMPNNArtifact.role.in_(
+                        ("normalized_input", "structure_map", "raw_csv")
+                    ),
+                )
+            )
+        ).scalars()
+    )
+    artifacts_by_role: dict[str, FrustraMPNNArtifact] = {}
+    for artifact in artifacts:
+        if artifact.role in artifacts_by_role:
+            return None
+        artifacts_by_role[artifact.role] = artifact
+
+    summary = result.summary_json
+    schema_version = summary.get("schema_version")
+    if schema_version not in (1, 2, 3):
+        return None
+    raw_csv = artifacts_by_role.get("raw_csv")
+    if raw_csv is None:
+        return None
+    structure_map_sha256 = _required_sha256(summary.get("structure_map_sha256"))
+    if structure_map_sha256 is None:
+        structure_map = artifacts_by_role.get("structure_map")
+        structure_map_sha256 = (
+            _required_sha256(structure_map.content_sha256)
+            if structure_map is not None
+            else None
+        )
+    normalized_pdb_sha256 = _required_sha256(summary.get("normalized_pdb_sha256"))
+    if normalized_pdb_sha256 is None:
+        normalized_input = artifacts_by_role.get("normalized_input")
+        normalized_pdb_sha256 = (
+            _required_sha256(normalized_input.content_sha256)
+            if normalized_input is not None
+            else None
+        )
+    policy = summary.get("threshold_policy")
+    authority: dict[str, Any] = {
+        "landscape_sha256": _required_sha256(summary.get("landscape_sha256")),
+        "structure_map_sha256": structure_map_sha256,
+        "normalized_pdb_sha256": normalized_pdb_sha256,
+        "raw_csv_sha256": _required_sha256(raw_csv.content_sha256),
+        "threshold_policy": dict(policy) if isinstance(policy, Mapping) else None,
+        "threshold_policy_sha256": _required_sha256(
+            summary.get("threshold_policy_sha256")
+        ),
+    }
+    if any(value is None for value in authority.values()):
+        return None
+    if schema_version in (2, 3):
+        generation_authority: dict[str, Any] = {
+            "schema_name": "frustrampnn_landscape",
+            "schema_version": schema_version,
+            "execution_configuration_sha256": _required_sha256(
+                summary.get("execution_configuration_sha256")
+            ),
+            "requested_settings_sha256": _required_sha256(result.settings_sha256),
+            "effective_settings_sha256": _required_sha256(
+                result.effective_settings_sha256
+            ),
+            "runtime_identity_sha256": _required_sha256(
+                summary.get("runtime_identity_sha256")
+            ),
+            "source_artifact_sha256": _required_sha256(
+                result.source_artifact_sha256
+            ),
+            "threshold_policy_id": summary.get("threshold_policy_id"),
+        }
+        if (
+            any(value is None for value in generation_authority.values())
+            or summary.get("requested_settings_sha256")
+            != generation_authority["requested_settings_sha256"]
+            or summary.get("effective_settings_sha256")
+            != generation_authority["effective_settings_sha256"]
+            or summary.get("source_artifact_sha256")
+            != generation_authority["source_artifact_sha256"]
+        ):
+            return None
+        authority.update(generation_authority)
+    return authority
+
+
 async def landscape_page(
     session: AsyncSession,
     parent_job_id: str,
@@ -1312,14 +1440,11 @@ async def landscape_page(
         "insertion_code", "sequence_index", "wt", "mutation_aa", "score",
         "score_class", "scoreable", "status", "reason", "row_json",
     )
-    source_receipts = receipt.source_receipts_json
     reference = _receipt_reference(receipt)
-    invocation_authority = (
-        source_receipts.get("invocation_authority")
-        if isinstance(source_receipts, Mapping)
-        else None
+    invocation_authority = await _core_landscape_invocation_authority(
+        session, parent_job_id, invocation_id
     )
-    if not isinstance(invocation_authority, Mapping):
+    if invocation_authority is None:
         try:
             legacy_rows = query_rows(
                 reference,
@@ -1334,10 +1459,11 @@ async def landscape_page(
             )
         except (ScientificArtifactError, KeyError, TypeError, ValueError):
             invocation_authority = None
-        if not isinstance(invocation_authority, Mapping):
-            raise FrustraMPNNPersistenceError(
-                "persisted FrustraMPNN landscape invocation authority is missing"
-            )
+    if not _complete_landscape_invocation_authority(invocation_authority):
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape invocation authority is missing"
+        )
+    assert isinstance(invocation_authority, Mapping)
     try:
         total = count_rows(reference, filters=filters, range_filters=range_filters)
         rows = query_rows(
