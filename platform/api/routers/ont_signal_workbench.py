@@ -1153,6 +1153,7 @@ async def create_external_alignment_job(
                 "bam_path": authority["bam_path"],
                 "reference_fasta": authority["reference_fasta"],
                 "bam_force_realign": True,
+                "run_fastq_qc": False,
                 **server_params,
             },
             source_instrument_run_id=server_params["source_instrument_run_id"],
