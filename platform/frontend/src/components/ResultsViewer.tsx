@@ -77,6 +77,13 @@ import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
 import { buildWorkflowModelResults, filterDesignsForResultModel } from './frustrampnn/workflowModelResults';
 import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import {
+    buildFrustraMpnnLaunchParams,
+    CANONICAL_FRUSTRAMPNN_SETTINGS,
+    hydrateFrustraMpnnSettings,
+    type FrustraMpnnRequestedSettings,
+} from './frustrampnn/frustraMpnnSettingsState.js';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -1735,6 +1742,15 @@ export function ResultsViewer() {
         run_frustrampnn: false,
         interactive_gating: true,
     });
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
+        hydrateFrustraMpnnSettings(CANONICAL_FRUSTRAMPNN_SETTINGS)
+    ));
+    const frustrampnnSettingsControl = (
+        <FrustraMpnnSettingsPanel
+            value={frustrampnnSettings}
+            onChange={setFrustrampnnSettings}
+        />
+    );
     const workflowOnlyRefinement = true;
     const [showParamOverrides, setShowParamOverrides] = useState(false);
 
@@ -1837,6 +1853,32 @@ export function ResultsViewer() {
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
     );
+    useEffect(() => {
+        const params = activeJob?.params;
+        if (!params) return;
+        const effectiveSettings = params.frustrampnn_effective_settings;
+        const effectiveSettingsJson = params.effective_settings_json;
+        const persisted = params.frustrampnn_settings
+            ?? (effectiveSettings && typeof effectiveSettings === 'object'
+                ? (effectiveSettings as Record<string, unknown>).requested_settings
+                : undefined)
+            ?? (effectiveSettingsJson && typeof effectiveSettingsJson === 'object'
+                ? (effectiveSettingsJson as Record<string, unknown>).requested_settings
+                : undefined);
+        if (persisted !== undefined) {
+            try {
+                setFrustrampnnSettings(hydrateFrustraMpnnSettings(persisted));
+            } catch {
+                setFrustrampnnSettings(hydrateFrustraMpnnSettings(CANONICAL_FRUSTRAMPNN_SETTINGS));
+            }
+        }
+        if (typeof params.run_frustrampnn === 'boolean') {
+            setPipelineOverrides((current) => ({
+                ...current,
+                run_frustrampnn: params.run_frustrampnn as boolean,
+            }));
+        }
+    }, [activeJob?.id]);
     const frustraMpnnSurfaceAvailable = hasFrustraMpnnResultSurface(activeJob);
     const frustraMpnnExperimentContext = useMemo(
         () => parseFrustraMpnnExperimentContext(location.search),
@@ -4948,10 +4990,12 @@ export function ResultsViewer() {
             action,
             cdrIndelConfig,
             paramOverrides,
+            frustrampnnSettings,
         }: {
             action: AntibodyIterationAction;
             cdrIndelConfig?: AntibodyCdrIndelConfig;
             paramOverrides?: Record<string, unknown>;
+            frustrampnnSettings?: FrustraMpnnRequestedSettings;
         }) => {
             if (!selectedJobId) {
                 throw new Error('Select a job before launching a new round.');
@@ -4966,6 +5010,7 @@ export function ResultsViewer() {
                 action,
                 cdr_indel_config: cdrIndelConfig,
                 param_overrides: paramOverrides,
+                frustrampnn_settings: frustrampnnSettings,
             });
         },
         onSuccess: (response) => {
@@ -5906,14 +5951,20 @@ export function ResultsViewer() {
                                                                     }),
                                                                     lock_target_chains: pipelineOverrides.lock_target_chains,
                                                                     lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
-                                                                    ...(pipelineOverrides.run_frustrampnn && {
-                                                                        run_frustrampnn: true
-                                                                    }),
+                                                                    ...(pipelineOverrides.run_frustrampnn
+                                                                        ? buildFrustraMpnnLaunchParams(true, frustrampnnSettings)
+                                                                        : {}),
                                                                     interactive_gating: pipelineOverrides.interactive_gating
                                                                 };
                                                             }
 
-                                                            launchIterationMutation.mutate({ action, paramOverrides });
+                                                            launchIterationMutation.mutate({
+                                                                action,
+                                                                paramOverrides: action === 'frustrampnn' ? undefined : paramOverrides,
+                                                                frustrampnnSettings: action === 'frustrampnn'
+                                                                    ? frustrampnnSettings
+                                                                    : undefined,
+                                                            });
                                                         }}
                                                         disabled={!canLaunchWorkingSet || launchBusy}
                                                         className="hidden"
@@ -6018,6 +6069,7 @@ export function ResultsViewer() {
                                                     onChange={(checked) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: checked }))}
                                                     fallbackLabel="Frustration analysis"
                                                     integration={frustrampnnIntegrationQuery.data}
+                                                    settingsControl={frustrampnnSettingsControl}
                                                 />
                                             </div>
 

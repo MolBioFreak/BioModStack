@@ -29,6 +29,7 @@ export default defineConfig({
             './tests/vitest/frustraMpnnUploadAnalysis.test.tsx',
             './tests/vitest/frustraMpnnStructureSelector.test.tsx',
             './tests/vitest/frustraMpnnExperimentResults.test.tsx',
+            './tests/vitest/resultsViewerAntibodyContinuation.test.tsx',
             './tests/vitest/conformationalMappingRepairsMounted.test.tsx',
             './tests/vitest/projectManagerApi.test.ts',
             './tests/vitest/projectManagerPage.test.tsx',

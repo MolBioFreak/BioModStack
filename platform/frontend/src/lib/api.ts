@@ -1109,6 +1109,7 @@ export interface LaunchAntibodyIterationRequest {
     action: AntibodyIterationAction;
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
+    frustrampnn_settings?: import('../components/frustrampnn/frustraMpnnSettingsState.js').FrustraMpnnRequestedSettings;
     cdr_indel_config?: AntibodyCdrIndelConfig;
     manual_mutagenesis_config?: ManualMutagenesisConfig;
 }
