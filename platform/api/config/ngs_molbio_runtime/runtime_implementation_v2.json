@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "b550490a654a0ad76dfa795256b32bd2c479a09d77f8f08478d6a5d69774d1c9",
+  "content_sha256": "225d0540b6e825ac322aec59ba40df4a13866c3e2d9c5f038f347a1a035cf274",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -409,8 +409,8 @@
     },
     {
       "path": "platform/api/routers/ont_signal_workbench.py",
-      "sha256": "1a143ea15818050b8902e529e7aeded20907643278fd2c30dc264370b3e5c218",
-      "size_bytes": 48709
+      "sha256": "b1b8c9e5b3623f7b9fef2d8e8dc8230a617038adf40c7fcc3678a1e52b9c1382",
+      "size_bytes": 52156
     },
     {
       "path": "platform/api/routers/payload_ownership_audit.py",
@@ -589,13 +589,18 @@
     },
     {
       "path": "platform/api/services/ont_signal_workbench.py",
-      "sha256": "22c4ef823d88dd8767e62b85f3993be0cb078338a4934000440edc061313c881",
-      "size_bytes": 173601
+      "sha256": "bcea5dce80676b4314cf063bb690c25fe8679ec82e7989af6c8ba7812b072b8b",
+      "size_bytes": 180891
     },
     {
       "path": "platform/api/services/ont_signal_worker.py",
       "sha256": "5a34ddaef31761c4ddcc6fcbf0d67410bd7a1bb6cb4a2ac0844f229ffbec56c4",
       "size_bytes": 150340
+    },
+    {
+      "path": "platform/api/services/ont_submission_trust.py",
+      "sha256": "4f805baca4df85d2ee74bc007d3f38a4429fb4b42b1f48a8ef3451aee0da292d",
+      "size_bytes": 12310
     },
     {
       "path": "platform/api/services/payload_ownership_audit.py",
@@ -634,8 +639,8 @@
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
-      "sha256": "140cbe4a90a442cba762c8457477e93bc44162281780940b77be8a6c3eddfaaa",
-      "size_bytes": 39808
+      "sha256": "dd030c0ee100f3b7d8780ec042b0383d267dc1984e48896fa6fd34fa01c80b5e",
+      "size_bytes": 50983
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison_runtime_contract.py",
@@ -844,8 +849,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-      "sha256": "ceef7e8d4b69a237be569573f4b37b62f19c242265f747106daf6e267abe8bbe",
-      "size_bytes": 10435
+      "sha256": "c7ba16e51eecfcb48b34da6d56363b10965d6a7399afcc8652dfbf1fbc53039f",
+      "size_bytes": 10488
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -979,11 +984,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "238cd4795b5546454dc2188abd479acfac60c8d1b9b34bc46cba76a8b51f071d",
+    "content_sha256": "57d15f64df9af1bd1f00d8abc22b8ddf81ba8a083c022d3aeb2e4678ab9b6a6f",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "de7d3001714d03873af00208bd4ce30046688a00",
-  "successor_source_tree": "fde9274ab47b669c3f8e1494dbc3c07ebdae646d",
+  "successor_source_commit": "eb46c1a26c184b0fdb2f2d2f36a1b23859cad938",
+  "successor_source_tree": "c8613cfab69cf19a876c1e2255bdcf913193bc2d",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

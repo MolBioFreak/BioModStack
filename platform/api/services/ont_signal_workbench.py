@@ -45,7 +45,7 @@ from molbio_ngs_models import (
     MolBioNGSReferenceArtifact,
     MolBioNGSReferenceRevision,
 )
-from paths import get_allowed_roots, get_results_dir
+from paths import get_allowed_roots, get_molbio_ngs_reference_root, get_results_dir
 from services import ngs_alignment_sessions
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -2126,6 +2126,137 @@ async def _resolve_reference_authority(
     return revision, artifact
 
 
+def _resolve_exact_managed_file(
+    value: Any,
+    *,
+    root: Path,
+    expected_sha256: str,
+    expected_size_bytes: int,
+    label: str,
+) -> Path:
+    if not isinstance(value, str) or not value:
+        raise OntSignalError(f"{label} authority is unavailable")
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        raise OntSignalError(f"{label} authority is outside its managed root")
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(resolved_root)
+    except (OSError, ValueError) as exc:
+        raise OntSignalError(f"{label} authority is outside its managed root") from exc
+    if resolved != candidate:
+        raise OntSignalError(f"{label} authority cannot use symbolic links")
+    try:
+        actual_sha256, actual_size = _stable_file_identity(resolved)
+    except OSError as exc:
+        raise OntSignalError(f"{label} authority is unavailable") from exc
+    if actual_sha256 != expected_sha256 or actual_size != expected_size_bytes:
+        raise OntSignalError(f"{label} bytes diverged from retained authority")
+    return resolved
+
+
+async def resolve_external_alignment_launch_authority(
+    session: AsyncSession,
+    domain_session: AsyncSession,
+    *,
+    move_source_id: str,
+    reference_revision_id: str,
+) -> dict[str, Any]:
+    source = await session.get(OntMoveTableSource, move_source_id)
+    if (
+        source is None
+        or source.validation_state != "ready"
+        or source.source_job_id is not None
+        or not isinstance(source.external_registration_receipt_id, str)
+        or not source.external_registration_receipt_id
+        or not isinstance(source.read_inventory_sha256, str)
+        or not HEX64.fullmatch(source.read_inventory_sha256)
+    ):
+        raise OntSignalError("ready external move-source authority is required")
+    receipt = await session.get(
+        OntExternalMoveBamRegistrationReceipt,
+        source.external_registration_receipt_id,
+    )
+    if receipt is None:
+        raise OntSignalError("external move-source registration receipt is unavailable")
+    receipt_body = _external_move_bam_receipt_body(receipt)
+    if (
+        receipt.id != f"ont-external-move-{_digest(receipt_body)}"
+        or receipt.run_id != source.run_id
+        or receipt.observed_generation != source.observed_generation
+        or receipt.raw_representation_id != source.raw_representation_id
+        or receipt.artifact_sha256 != source.artifact_sha256
+        or receipt.artifact_size_bytes != source.artifact_size_bytes
+        or receipt.molecule_type != source.molecule_type
+    ):
+        raise OntSignalError("external move-source registration authority diverged")
+    representation = await session.get(
+        OntRawSignalRepresentation, source.raw_representation_id,
+    )
+    if (
+        representation is None
+        or representation.state != "ready"
+        or representation.run_id != source.run_id
+        or representation.observed_generation != source.observed_generation
+    ):
+        raise OntSignalError("ready raw-signal authority is required")
+    validation_receipt = (
+        source.validation_receipt if isinstance(source.validation_receipt, dict) else {}
+    )
+    managed_outputs = validation_receipt.get("managed_outputs")
+    managed_hashes = validation_receipt.get("managed_output_sha256s")
+    if not isinstance(managed_outputs, dict) or not isinstance(managed_hashes, dict):
+        raise OntSignalError("validated filtered move-BAM authority is unavailable")
+    filtered_sha256 = managed_hashes.get("filtered_move_bam_sha256")
+    filtered_size = managed_hashes.get("filtered_move_bam_size_bytes")
+    if (
+        not isinstance(filtered_sha256, str)
+        or not HEX64.fullmatch(filtered_sha256)
+        or isinstance(filtered_size, bool)
+        or not isinstance(filtered_size, int)
+        or filtered_size <= 0
+    ):
+        raise OntSignalError("validated filtered move-BAM authority is invalid")
+    filtered_bam = _resolve_exact_managed_file(
+        managed_outputs.get("filtered_move_bam"),
+        root=Path(get_results_dir()),
+        expected_sha256=filtered_sha256,
+        expected_size_bytes=filtered_size,
+        label="filtered move-BAM",
+    )
+    revision, reference_artifact = await _resolve_reference_authority(
+        domain_session, reference_revision_id,
+    )
+    reference_fasta = _resolve_exact_managed_file(
+        str(Path(get_molbio_ngs_reference_root()) / reference_artifact.managed_relative_path),
+        root=Path(get_molbio_ngs_reference_root()),
+        expected_sha256=reference_artifact.sha256,
+        expected_size_bytes=reference_artifact.size_bytes,
+        label="managed reference FASTA",
+    )
+    dataset_id = receipt.id
+    return {
+        "dataset_id": dataset_id,
+        "bam_path": str(filtered_bam),
+        "reference_fasta": str(reference_fasta),
+        "params": {
+            "dataset_id": dataset_id,
+            "source_instrument_run_id": source.run_id,
+            "source_instrument_observed_generation": source.observed_generation,
+            "source_raw_representation_id": source.raw_representation_id,
+            "source_move_source_id": source.id,
+            "source_external_move_registration_receipt_id": receipt.id,
+            "source_move_bam_sha256": source.artifact_sha256,
+            "source_filtered_move_bam_sha256": filtered_sha256,
+            "source_read_inventory_sha256": source.read_inventory_sha256,
+            "ngs_reference_revision_id": revision.id,
+            "ngs_reference_artifact_id": reference_artifact.id,
+            "expected_reference_fasta_sha256": reference_artifact.sha256,
+        },
+    }
+
+
 def _alignment_authority(job: Job) -> dict[str, str]:
     params = job.params if isinstance(job.params, dict) else {}
     authority = {
@@ -2154,6 +2285,36 @@ async def _require_exact_alignment_read_set_binding(
     )
     source_params = source_job.params if source_job is not None and isinstance(source_job.params, dict) else {}
     dataset_id = source_params.get("dataset_id")
+    if source_job is None:
+        receipt_id = move_source.external_registration_receipt_id
+        receipt = (
+            await session.get(OntExternalMoveBamRegistrationReceipt, receipt_id)
+            if isinstance(receipt_id, str) and receipt_id
+            else None
+        )
+        receipt_body = _external_move_bam_receipt_body(receipt) if receipt is not None else None
+        if (
+            receipt is None
+            or receipt.id != f"ont-external-move-{_digest(receipt_body)}"
+            or receipt.run_id != run_id
+            or receipt.observed_generation != observed_generation
+            or receipt.raw_representation_id != move_source.raw_representation_id
+            or receipt.artifact_sha256 != move_source.artifact_sha256
+            or receipt.artifact_size_bytes != move_source.artifact_size_bytes
+            or receipt.molecule_type != move_source.molecule_type
+        ):
+            raise OntSignalError("external move-source alignment authority diverged")
+        dataset_id = receipt.id
+        if (
+            alignment_params.get("source_raw_representation_id")
+            != move_source.raw_representation_id
+            or alignment_params.get("source_move_source_id") != move_source.id
+            or alignment_params.get("source_external_move_registration_receipt_id")
+            != receipt.id
+            or alignment_params.get("source_move_bam_sha256")
+            != move_source.artifact_sha256
+        ):
+            raise OntSignalError("external move-source alignment authority diverged")
     alignment_generation = alignment_params.get("source_instrument_observed_generation")
     if (
         not isinstance(dataset_id, str)

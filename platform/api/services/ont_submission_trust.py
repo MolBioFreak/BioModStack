@@ -27,6 +27,9 @@ ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = frozenset(
         "managed_reference_snapshot_sha256",
         "managed_reference_snapshot_size_bytes",
         "reference_sequence_sha256",
+        "dataset_id",
+        "source_external_move_registration_receipt_id",
+        "source_filtered_move_bam_sha256",
         "source_barcode_manifest_sha256",
         "source_barcode_unit",
         "source_ont_job_id",
@@ -47,6 +50,10 @@ ONT_SERVER_CONTROLLED_PROVENANCE_PARAMS = frozenset(
         "ont_instrument_run_binding",
         "source_instrument_artifact_sha256",
         "source_instrument_artifact_bytes",
+        "source_move_bam_sha256",
+        "source_move_source_id",
+        "source_raw_representation_id",
+        "source_read_inventory_sha256",
     }
 )
 

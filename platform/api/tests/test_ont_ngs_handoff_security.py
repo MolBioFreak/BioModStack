@@ -230,3 +230,54 @@ def test_generic_caller_cannot_claim_instrument_snapshot_authority() -> None:
 
     with pytest.raises(ValueError, match="server-controlled"):
         ont_runs._job_create_for_ont_submit("ont_plasmid_qc", request)
+
+
+def test_trusted_external_alignment_authority_survives_canonical_submit_normalization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    bam_path = tmp_path / "filtered.bam"
+    reference_path = tmp_path / "egfp.fasta"
+    bam_path.write_bytes(b"bam")
+    reference_path.write_bytes(b">eGFP\nACGT\n")
+    monkeypatch.setattr(
+        ont_runs, "_confine_submitted_path",
+        lambda value, _key, **_kwargs: str(value),
+    )
+    monkeypatch.setattr(
+        ont_runs, "normalized_fasta_sequence_sha256", lambda _path: "e" * 64,
+    )
+    server_params = {
+        "dataset_id": "receipt-1",
+        "source_instrument_run_id": "run-1",
+        "source_instrument_observed_generation": 7,
+        "source_raw_representation_id": "raw-1",
+        "source_move_source_id": "moves-1",
+        "source_external_move_registration_receipt_id": "receipt-1",
+        "source_move_bam_sha256": "a" * 64,
+        "source_filtered_move_bam_sha256": "c" * 64,
+        "source_read_inventory_sha256": "b" * 64,
+        "ngs_reference_revision_id": "reference-1",
+        "ngs_reference_artifact_id": "reference-artifact-1",
+        "expected_reference_fasta_sha256": "d" * 64,
+    }
+    request = ont_runs.OntNgsSubmitRequest(
+        name="external alignment",
+        params={
+            "bam_path": str(bam_path),
+            "reference_fasta": str(reference_path),
+            **server_params,
+        },
+        source_instrument_run_id="run-1",
+    )
+
+    job = ont_runs._job_create_for_ont_submit(
+        "ont_plasmid_qc",
+        request,
+        trusted_server_params=frozenset(server_params),
+        trusted_result_paths=frozenset({"bam_path"}),
+        trusted_reference_fasta=reference_path,
+    )
+
+    assert job.params["ont_input_mode"] == "bam"
+    assert job.params["reference_sequence_sha256"] == "e" * 64
+    assert {key: job.params[key] for key in server_params} == server_params

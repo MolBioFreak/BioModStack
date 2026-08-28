@@ -1,5 +1,5 @@
 {
-  "content_sha256": "238cd4795b5546454dc2188abd479acfac60c8d1b9b34bc46cba76a8b51f071d",
+  "content_sha256": "57d15f64df9af1bd1f00d8abc22b8ddf81ba8a083c022d3aeb2e4678ab9b6a6f",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -110,6 +110,7 @@
     "platform/api/services/ont_raw_signal_worker.py",
     "platform/api/services/ont_signal_workbench.py",
     "platform/api/services/ont_signal_worker.py",
+    "platform/api/services/ont_submission_trust.py",
     "platform/api/services/payload_ownership_audit.py",
     "platform/api/services/protein_project_capabilities.py",
     "platform/api/services/resource_usage_evidence.py",

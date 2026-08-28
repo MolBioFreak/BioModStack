@@ -7,15 +7,19 @@ import re
 import secrets
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
+from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
+from routers.ont_runs import OntNgsSubmitRequest, _create_pipeline_job, _job_create_for_ont_submit
+from schemas import JobResponse
 from services import ont_signal_workbench as service
 
 router = APIRouter()
@@ -79,6 +83,30 @@ class ExternalMoveBamRegistrationCreate(ClosedModel):
         if not OPAQUE.fullmatch(value):
             raise ValueError("raw representation must be an opaque governed ID")
         return value
+
+
+class ExternalAlignmentCreate(ClosedModel):
+    move_source_id: str
+    reference_revision_id: str
+    name: str = Field(min_length=1, max_length=128)
+
+    @field_validator("move_source_id", "reference_revision_id")
+    @classmethod
+    def opaque_authority_id(cls, value: str) -> str:
+        if not OPAQUE.fullmatch(value):
+            raise ValueError("alignment parents must be opaque governed IDs")
+        return value
+
+
+class ExternalAlignmentJobResponse(ClosedModel):
+    job_id: str
+    name: str
+    status: str
+    dataset_id: str
+    run_id: str
+    observed_generation: int = Field(ge=1)
+    move_source_id: str
+    reference_revision_id: str
 
 
 class MappingProfileCreate(ClosedModel):
@@ -1079,6 +1107,70 @@ async def create_mapping(run_id: str, observed_generation: int, request: Mapping
         await session.commit(); return MappingJobResponse.model_validate(value)
     except (KeyError, service.OntSignalError, service.ngs_alignment_sessions.AlignmentSessionError) as exc:
         await session.rollback(); raise _error(exc) from exc
+
+
+@router.post("/external-alignment-jobs", status_code=201, response_model=ExternalAlignmentJobResponse)
+async def create_external_alignment_job(
+    request: ExternalAlignmentCreate,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> ExternalAlignmentJobResponse:
+    _comparison_principal(http_request)
+    try:
+        authority = await service.resolve_external_alignment_launch_authority(
+            session,
+            domain_session,
+            move_source_id=request.move_source_id,
+            reference_revision_id=request.reference_revision_id,
+        )
+        server_params = dict(authority["params"])
+        submit_request = OntNgsSubmitRequest(
+            name=request.name,
+            params={
+                "bam_path": authority["bam_path"],
+                "reference_fasta": authority["reference_fasta"],
+                **server_params,
+            },
+            source_instrument_run_id=server_params["source_instrument_run_id"],
+        )
+        job = _job_create_for_ont_submit(
+            "ont_plasmid_qc",
+            submit_request,
+            trusted_server_params=frozenset(server_params),
+            trusted_result_paths=frozenset({"bam_path"}),
+            trusted_reference_fasta=Path(str(authority["reference_fasta"])),
+        )
+        created = await _create_pipeline_job(
+            job,
+            background_tasks,
+            session,
+            experiment_session,
+            response,
+            http_request,
+        )
+        created_job = JobResponse.model_validate(created)
+        created_status = (
+            created_job.status.value
+            if hasattr(created_job.status, "value")
+            else str(created_job.status)
+        )
+        return ExternalAlignmentJobResponse(
+            job_id=created_job.id,
+            name=created_job.name,
+            status=created_status,
+            dataset_id=str(authority["dataset_id"]),
+            run_id=str(server_params["source_instrument_run_id"]),
+            observed_generation=int(server_params["source_instrument_observed_generation"]),
+            move_source_id=request.move_source_id,
+            reference_revision_id=request.reference_revision_id,
+        )
+    except (KeyError, ValueError, service.OntSignalError) as exc:
+        await session.rollback()
+        raise _error(exc) from exc
 
 
 @router.get("/mappings/{mapping_job_id}", response_model=MappingJobResponse)
