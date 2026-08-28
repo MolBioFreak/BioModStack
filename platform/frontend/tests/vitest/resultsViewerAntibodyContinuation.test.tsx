@@ -4,8 +4,8 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { FrustraMpnnSettingsPanel } from '../../src/components/frustrampnn/FrustraMpnnSettingsPanel';
+import { buildAntibodyContinuationParamOverrides } from '../../src/components/antibodyContinuationParams';
 import {
-    buildFrustraMpnnLaunchParams,
     CANONICAL_FRUSTRAMPNN_SETTINGS,
     hydrateFrustraMpnnSettings,
     type FrustraMpnnRequestedSettings,
@@ -41,7 +41,12 @@ function ContinuationHarness({
             FrustraMPNN
         </label>
         {enabled ? <FrustraMpnnSettingsPanel value={settings} onChange={setSettings} /> : null}
-        <button type="button" onClick={() => onSubmit(buildFrustraMpnnLaunchParams(enabled, settings))}>Continue</button>
+        <button
+            type="button"
+            onClick={() => onSubmit(buildAntibodyContinuationParamOverrides({}, enabled, settings))}
+        >
+            Continue
+        </button>
     </div>;
 }
 
@@ -54,7 +59,7 @@ describe('ResultsViewer antibody continuation FrustraMPNN contract', () => {
         const resultsViewer = source();
         expect(resultsViewer).toContain("from './frustrampnn/FrustraMpnnSettingsPanel.js'");
         expect(resultsViewer).toContain('hydrateFrustraMpnnSettings');
-        expect(resultsViewer).toContain('buildFrustraMpnnLaunchParams');
+        expect(resultsViewer).toContain('buildAntibodyContinuationParamOverrides');
         expect(resultsViewer).toContain('settingsControl={frustrampnnSettingsControl}');
         expect(resultsViewer).toMatch(/frustrampnn_settings:\s*frustrampnnSettings/);
     });

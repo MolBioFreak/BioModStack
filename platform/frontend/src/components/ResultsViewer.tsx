@@ -79,11 +79,11 @@ import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructur
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import {
-    buildFrustraMpnnLaunchParams,
     CANONICAL_FRUSTRAMPNN_SETTINGS,
     hydrateFrustraMpnnSettings,
     type FrustraMpnnRequestedSettings,
 } from './frustrampnn/frustraMpnnSettingsState.js';
+import { buildAntibodyContinuationParamOverrides } from './antibodyContinuationParams.js';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -5935,7 +5935,7 @@ export function ResultsViewer() {
                                                             let paramOverrides: Record<string, unknown> | undefined = undefined;
 
                                                             if (showParamOverrides) {
-                                                                paramOverrides = {
+                                                                paramOverrides = buildAntibodyContinuationParamOverrides({
                                                                     ...(pipelineOverrides.run_structure_validation && {
                                                                         run_structure_validation: true,
                                                                         structure_validator: pipelineOverrides.structure_validator,
@@ -5951,11 +5951,8 @@ export function ResultsViewer() {
                                                                     }),
                                                                     lock_target_chains: pipelineOverrides.lock_target_chains,
                                                                     lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
-                                                                    ...(pipelineOverrides.run_frustrampnn
-                                                                        ? buildFrustraMpnnLaunchParams(true, frustrampnnSettings)
-                                                                        : {}),
                                                                     interactive_gating: pipelineOverrides.interactive_gating
-                                                                };
+                                                                }, pipelineOverrides.run_frustrampnn, frustrampnnSettings);
                                                             }
 
                                                             launchIterationMutation.mutate({
