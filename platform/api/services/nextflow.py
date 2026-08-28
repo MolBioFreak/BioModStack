@@ -2679,7 +2679,11 @@ async def launch_nextflow_job(
                             is_md_parent = (
                                 job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
-                            from services.ont_ngs_completion import is_ont_fastq_qc_job
+                            from services.ont_ngs_completion import (
+                                is_ont_fastq_qc_job,
+                                is_ont_signal_alignment_job,
+                                validate_and_prepare_ont_signal_alignment_completion,
+                            )
 
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
@@ -2693,6 +2697,21 @@ async def launch_nextflow_job(
                                 )
                                 logger.info(
                                     "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
+                                    job_id,
+                                    integrity["declared_artifact_count"],
+                                )
+                            elif is_ont_signal_alignment_job(job):
+                                if terminal_resource_receipt_factory is None:
+                                    raise RuntimeError(
+                                        "external ONT signal alignment requires producer resource evidence"
+                                    )
+                                integrity = await validate_and_prepare_ont_signal_alignment_completion(
+                                    job,
+                                    resource_usage_receipt=terminal_resource_receipt_factory(),
+                                )
+                                logger.info(
+                                    "Validated external ONT signal-alignment result package for job %s "
+                                    "(%s declared artifacts)",
                                     job_id,
                                     integrity["declared_artifact_count"],
                                 )

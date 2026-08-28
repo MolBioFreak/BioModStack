@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +44,127 @@ def test_production_completion_entry_pins_result_root_across_aba_replacement(
     monkeypatch.setattr(service, "_validate_and_prepare_from_pinned_root", inspect_pinned)
     result = asyncio.run(service.validate_and_prepare_ont_fastq_qc_completion(job))
     assert result == {"authority": "original"}
+
+
+@pytest.mark.asyncio
+async def test_external_signal_alignment_completion_persists_primary_package_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from services import ont_ngs_completion as service
+
+    source_bam = tmp_path / "source.bam"
+    source_bam.write_bytes(b"source-bam")
+    output_root = tmp_path / "result"
+    output_root.mkdir()
+    alignment_root = output_root / "align"
+    alignment_root.mkdir()
+    for name in (
+        "aligned.bam",
+        "aligned.bam.bai",
+        "reference.fasta",
+        "reference.fasta.fai",
+        "align.log",
+    ):
+        (alignment_root / name).write_bytes(name.encode("utf-8"))
+    manifest_path = output_root / "qc_manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    reference_sha256 = "a" * 64
+    job = SimpleNamespace(
+        id="external-alignment-job",
+        model_id="nanopore",
+        output_dir=str(output_root),
+        child_output_dir=None,
+        completed_stages=["dorado_align"],
+        stage_outputs={},
+        params={
+            "ont_workflow_id": "ont_plasmid_qc",
+            "ont_request_workflow_id": "ont_plasmid_qc",
+            "ont_input_mode": "bam",
+            "run_fastq_qc": False,
+            "bam_path": str(source_bam),
+            "bam_source_sha256": hashlib.sha256(source_bam.read_bytes()).hexdigest(),
+            "reference_sequence_sha256": reference_sha256,
+            "source_move_source_id": "ont-moves-1",
+            "source_external_move_registration_receipt_id": "ont-external-move-1",
+        },
+        provenance={
+            "stage_terminal_states": {
+                "dorado_align": {
+                    "status": "complete",
+                    "outputs": [
+                        f"bms_results/{output_root.name}/align/aligned.bam",
+                        f"bms_results/{output_root.name}/align/aligned.bam.bai",
+                        f"bms_results/{output_root.name}/align/reference.fasta",
+                        f"bms_results/{output_root.name}/align/reference.fasta.fai",
+                        f"bms_results/{output_root.name}/align/align.log",
+                        f"bms_results/{output_root.name}/qc_manifest.json",
+                    ],
+                }
+            }
+        },
+    )
+    validator = cast(Any, getattr(service, "validate_and_prepare_ont_signal_alignment_completion", None))
+    assert callable(validator), "external alignment completion validator is missing"
+    monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda _job: output_root)
+    monkeypatch.setattr(
+        service,
+        "_read_manifest",
+        lambda _path: (b"{}", "c" * 64),
+    )
+    monkeypatch.setattr(
+        service,
+        "load_sequence_qc_manifest",
+        lambda *_args, **_kwargs: {
+            "schema": "sequence_qc.manifest.v1",
+            "artifact_schema_version": 2,
+            "workflow_id": "ont_plasmid_qc",
+            "job_id": job.id,
+            "input_mode": "bam",
+            "analysis_status": "completed",
+            "alignment_session": {
+                "mode": "primary",
+                "reference_sequence_sha256": reference_sha256,
+                "source_reference_sequence_sha256": reference_sha256,
+            },
+            "artifacts": [],
+        },
+    )
+    descriptors = [
+        {
+            "source": "sequence_qc",
+            "kind": kind,
+            "state": "present",
+            "sha256": str(index) * 64,
+            "size_bytes": index,
+        }
+        for index, kind in enumerate(
+            ("sequence_qc_manifest", "alignment_bam", "alignment_bai", "reference", "reference_index"),
+            start=1,
+        )
+    ]
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "build_ngs_package_artifacts",
+        lambda *_args, **_kwargs: descriptors,
+    )
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: [{"mode": "primary", "ready": True}],
+    )
+    monkeypatch.setattr(service, "attach_resource_usage_receipt", lambda params, _receipt: dict(params))
+
+    result = await validator(
+        job,
+        resource_usage_receipt={"complete": True, "receipt_sha256": "d" * 64},
+    )
+
+    assert result["artifact_set_sha256"] == job.provenance["result_integrity"]["artifact_set_sha256"]
+    assert result["declared_artifact_count"] == 5
+    assert job.provenance["result_integrity"]["result_kind"] == "ngs_alignment_session"
+    assert job.provenance["result_integrity"]["sequence_qc_manifest_sha256"] == "c" * 64
+    assert job.params["run_fastq_qc"] is False
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(

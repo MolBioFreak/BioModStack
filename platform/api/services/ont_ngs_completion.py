@@ -23,6 +23,16 @@ from services.sequence_qc_manifest import (
 )
 
 _FASTQ_QC_WORKFLOW = "ont_fastq_qc"
+_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW = "ont_plasmid_qc"
+_EXTERNAL_SIGNAL_ALIGNMENT_STAGE = "dorado_align"
+_EXTERNAL_SIGNAL_ALIGNMENT_OUTPUT_SUFFIXES = frozenset({
+    "align/aligned.bam",
+    "align/aligned.bam.bai",
+    "align/reference.fasta",
+    "align/reference.fasta.fai",
+    "align/align.log",
+    "qc_manifest.json",
+})
 _REQUIRED_TERMINAL_STAGES = (
     "fastq_align",
     "dimer_qc",
@@ -79,6 +89,201 @@ def is_ont_fastq_qc_job(job: Job) -> bool:
         and workflow_values == {_FASTQ_QC_WORKFLOW}
         and input_values == {"fastq"}
     )
+
+
+def is_ont_signal_alignment_job(job: Job) -> bool:
+    """Return whether one Job is the bounded external move-BAM alignment lane."""
+
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_values = {
+        str(params[key]).strip()
+        for key in ("ont_workflow_id", "ont_request_workflow_id", "workflow_id")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    input_values = {
+        str(params[key]).strip()
+        for key in ("ont_input_mode", "input_mode")
+        if params.get(key) is not None and str(params[key]).strip()
+    }
+    return (
+        str(job.model_id or "").strip().lower() == "nanopore"
+        and workflow_values == {_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW}
+        and input_values == {"bam"}
+        and params.get("run_fastq_qc") is False
+        and isinstance(params.get("source_move_source_id"), str)
+        and bool(params.get("source_move_source_id"))
+        and isinstance(params.get("source_external_move_registration_receipt_id"), str)
+        and bool(params.get("source_external_move_registration_receipt_id"))
+    )
+
+
+async def validate_and_prepare_ont_signal_alignment_completion(
+    job: Any,
+    *,
+    resource_usage_receipt: Mapping[str, Any] | None = None,
+    pinned_result_root: Path | None = None,
+) -> dict[str, Any]:
+    """Validate and persist authority for one bounded external signal alignment."""
+
+    persisted_result_root = resolve_persisted_job_result_root(job)
+    if pinned_result_root is not None:
+        return await _validate_signal_alignment_from_pinned_root(
+            job,
+            resource_usage_receipt=resource_usage_receipt,
+            pinned_result_root=pinned_result_root,
+            persisted_result_root=persisted_result_root,
+        )
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(persisted_result_root, flags)
+    except OSError as exc:
+        raise OntNgsCompletionError("persisted signal-alignment result root could not be pinned") from exc
+    try:
+        identity = os.fstat(descriptor)
+        if not stat.S_ISDIR(identity.st_mode):
+            raise OntNgsCompletionError("persisted signal-alignment result root is not a directory")
+        return await _validate_signal_alignment_from_pinned_root(
+            job,
+            resource_usage_receipt=resource_usage_receipt,
+            pinned_result_root=Path(f"/proc/self/fd/{descriptor}"),
+            persisted_result_root=persisted_result_root,
+        )
+    finally:
+        os.close(descriptor)
+
+
+async def _validate_signal_alignment_from_pinned_root(
+    job: Any,
+    *,
+    resource_usage_receipt: Mapping[str, Any] | None,
+    pinned_result_root: Path,
+    persisted_result_root: Path,
+) -> dict[str, Any]:
+    if not is_ont_signal_alignment_job(job):
+        raise OntNgsCompletionError("job is not a bounded external signal alignment owner")
+    if not isinstance(resource_usage_receipt, Mapping) or resource_usage_receipt.get("complete") is not True:
+        raise OntNgsCompletionError("complete producer resource evidence is required before signal alignment success")
+    try:
+        job.params = attach_resource_usage_receipt(job.params, resource_usage_receipt)
+    except ResourceUsageEvidenceError as exc:
+        raise OntNgsCompletionError("producer resource evidence is invalid") from exc
+
+    params = job.params if isinstance(job.params, dict) else {}
+    reference_sha256 = params.get("reference_sequence_sha256")
+    source_bam_path = params.get("bam_path")
+    source_bam_sha256 = params.get("bam_source_sha256")
+    if (
+        not isinstance(reference_sha256, str)
+        or len(reference_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in reference_sha256)
+        or not isinstance(source_bam_path, str)
+        or not source_bam_path
+        or not isinstance(source_bam_sha256, str)
+        or len(source_bam_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in source_bam_sha256)
+    ):
+        raise OntNgsCompletionError("signal-alignment source authority is invalid")
+    observed_source_sha256, _observed_source_size = ngs_alignment_sessions._stable_file_identity(
+        source_bam_path,
+        label="persisted external move-BAM input",
+    )
+    if observed_source_sha256 != source_bam_sha256:
+        raise OntNgsCompletionError("signal-alignment source BAM disagrees with persisted authority")
+
+    manifest_path = pinned_result_root / "qc_manifest.json"
+    manifest_raw, manifest_sha256 = _read_manifest(manifest_path)
+    manifest = load_sequence_qc_manifest(
+        manifest_path,
+        raw_bytes=manifest_raw,
+        expected_job_id=str(job.id),
+        expected_workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
+        expected_input_mode="bam",
+        expected_analysis_status="completed",
+    )
+    alignment_session = manifest.get("alignment_session")
+    if (
+        not isinstance(alignment_session, dict)
+        or alignment_session.get("mode") != "primary"
+        or alignment_session.get("reference_sequence_sha256") != reference_sha256
+        or alignment_session.get("source_reference_sequence_sha256") != reference_sha256
+    ):
+        raise OntNgsCompletionError("primary signal-alignment manifest authority is invalid")
+
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    terminal_states = provenance.get("stage_terminal_states")
+    terminal = terminal_states.get(_EXTERNAL_SIGNAL_ALIGNMENT_STAGE) if isinstance(terminal_states, dict) else None
+    outputs = terminal.get("outputs") if isinstance(terminal, dict) else None
+    if terminal is None or terminal.get("status") != "complete" or not isinstance(outputs, list):
+        raise OntNgsCompletionError("signal-alignment terminal stage authority is missing")
+    observed_suffixes: set[str] = set()
+    for value in outputs:
+        if not isinstance(value, str) or not value:
+            raise OntNgsCompletionError("signal-alignment terminal output authority is invalid")
+        _path, suffix = _resolve_terminal_output(
+            value,
+            pinned_result_root,
+            persisted_result_root,
+            stage=_EXTERNAL_SIGNAL_ALIGNMENT_STAGE,
+        )
+        observed_suffixes.add(suffix)
+    if observed_suffixes != _EXTERNAL_SIGNAL_ALIGNMENT_OUTPUT_SUFFIXES or len(outputs) != len(observed_suffixes):
+        raise OntNgsCompletionError("signal-alignment terminal output contract mismatch")
+
+    from starlette.concurrency import run_in_threadpool
+
+    descriptors = await run_in_threadpool(
+        ngs_alignment_sessions.build_ngs_package_artifacts,
+        str(job.id),
+        source_reference_sha256=reference_sha256,
+        workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
+        input_mode="bam",
+        source_input_path=source_bam_path,
+        job_output_dir=pinned_result_root,
+        pinned_root_descriptor=True,
+    )
+    package_authority = canonical_ngs_package_authority(descriptors)
+    if (
+        package_authority["declared_artifact_count"] != 5
+        or package_authority["present_artifact_count"] != 5
+        or package_authority["unavailable_artifact_count"] != 0
+    ):
+        raise OntNgsCompletionError("signal-alignment package artifact denominator is not canonical")
+    sessions = await run_in_threadpool(
+        ngs_alignment_sessions.build_alignment_sessions,
+        str(job.id),
+        source_reference_sha256=reference_sha256,
+        package_artifact_set_sha256=package_authority["artifact_set_sha256"],
+        workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
+        input_mode="bam",
+        job_output_dir=pinned_result_root,
+        pinned_root_descriptor=True,
+    )
+    primary_sessions = [item for item in sessions if item.get("mode") == "primary" and item.get("ready") is True]
+    if len(primary_sessions) != 1:
+        raise OntNgsCompletionError("exactly one ready primary signal-alignment session is required")
+
+    result_integrity = {
+        "state": "validated",
+        "partial": False,
+        "result_kind": "ngs_alignment_session",
+        "workflow_id": _EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
+        "input_mode": "bam",
+        "reference_sequence_sha256": reference_sha256,
+        "source_bam_sha256": source_bam_sha256,
+        "sequence_qc_manifest_sha256": manifest_sha256,
+        "resource_evidence_status": "accepted",
+        "resource_usage_receipt_sha256": resource_usage_receipt.get("receipt_sha256"),
+        **package_authority,
+    }
+    updated_provenance = dict(provenance)
+    updated_provenance["result_integrity"] = result_integrity
+    job.provenance = updated_provenance
+    return result_integrity
 
 
 def _read_manifest(path: Path) -> tuple[bytes, str]:

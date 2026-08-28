@@ -262,6 +262,10 @@ def _public_time(value: datetime | None) -> str | None:
 
 
 _OMIT = object()
+_PUBLIC_MEDIA_TYPE = re.compile(
+    r"^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$",
+    re.IGNORECASE,
+)
 _PUBLIC_PATH_TEXT = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"file://[^\s\"',;\]\[()]+|"
@@ -281,6 +285,13 @@ def _public_clean(value: Any) -> Any:
         for raw_key, nested in value.items():
             key = str(raw_key)
             normalized = key.lower().replace("-", "_")
+            if (
+                normalized in {"media_type", "mime_type"}
+                and isinstance(nested, str)
+                and _PUBLIC_MEDIA_TYPE.fullmatch(nested)
+            ):
+                cleaned[key] = nested
+                continue
             if (
                 _PUBLIC_PATH_TEXT.search(key)
                 or "path" in normalized
@@ -2208,6 +2219,7 @@ async def resolve_external_alignment_launch_authority(
         raise OntSignalError("validated filtered move-BAM authority is unavailable")
     managed_reference: Any | None = None
     filtered_bam: Path | None = None
+    reference_topology: str | None = None
     try:
         expected_result_manifest_schema = await resolve_state_analysis_launch_policy(
             domain_session,
@@ -2215,6 +2227,13 @@ async def resolve_external_alignment_launch_authority(
             state_revision_id=molbio_ngs_state_revision_id,
             canonical_workflow_id="ont_plasmid_qc",
         )
+        reference_revision, _reference_artifact = await _resolve_reference_authority(
+            domain_session,
+            reference_revision_id,
+        )
+        reference_topology = str(reference_revision.topology or "").strip().lower()
+        if reference_topology not in {"linear", "circular"}:
+            raise ValueError("managed reference topology authority is invalid")
         managed_reference = await resolve_managed_reference_for_launch(
             domain_session,
             global_domain_experiment_id=global_domain_experiment_id,
@@ -2293,6 +2312,7 @@ async def resolve_external_alignment_launch_authority(
             "expected_reference_fasta_sha256": managed_reference.expected_reference_fasta_sha256,
             "managed_reference_snapshot_sha256": managed_reference.launch_snapshot_sha256,
             "managed_reference_snapshot_size_bytes": managed_reference.launch_snapshot_size_bytes,
+            "reference_topology": reference_topology,
             "expected_result_manifest_schema": expected_result_manifest_schema,
         },
     }

@@ -1,9 +1,74 @@
 from pathlib import Path
+import hashlib
+import json
 import os
 import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_primary_alignment_stage_reports_after_publication() -> None:
+    workflow = (ROOT / "workflows/ngs/ont_plasmid_qc.nf").read_text(encoding="utf-8")
+    bam_branch = workflow.split("if (has_bam) {", 1)[1].split("// --- FASTQ input", 1)[0]
+
+    assert "DoradoAlign.out.aligned.subscribe" not in bam_branch
+    assert "workflow.onComplete" in workflow
+    assert "terminalOutputs.every { file(it).exists() }" in workflow
+    assert 'reportStage(params, "dorado_align"' in workflow
+
+
+def test_external_signal_alignment_uses_terminal_package_validator() -> None:
+    runner = (ROOT / "platform/api/services/nextflow.py").read_text(encoding="utf-8")
+
+    assert "is_ont_signal_alignment_job" in runner
+    assert "validate_and_prepare_ont_signal_alignment_completion" in runner
+    assert "Validated external ONT signal-alignment result package" in runner
+
+
+def test_primary_alignment_manifest_builder_binds_exact_artifacts(tmp_path: Path) -> None:
+    artifacts = {
+        "aligned.bam": b"bam",
+        "aligned.bam.bai": b"bai",
+        "reference.fasta": b">ref\nACGT\n",
+        "reference.fasta.fai": b"ref\t4\t5\t4\t5\n",
+    }
+    for name, content in artifacts.items():
+        (tmp_path / name).write_bytes(content)
+    reference_sha256 = hashlib.sha256(b"ACGT").hexdigest()
+    script = ROOT / "scripts/build_primary_alignment_session_manifest.sh"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "job-primary-1",
+            reference_sha256,
+            "ont_plasmid_qc",
+            "bam",
+            "qc_manifest.json",
+            "circular",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    manifest = json.loads((tmp_path / "qc_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["summary"]["reference_topology"] == "circular"
+    assert manifest["alignment_session"] == {
+        "mode": "primary",
+        "reference_sequence_sha256": reference_sha256,
+        "source_reference_sequence_sha256": reference_sha256,
+        "binding": "authorized source reference binds exact primary BAM, index, FASTA, and index digests",
+    }
+    declared = {item["kind"]: item for item in manifest["artifacts"]}
+    assert set(declared) == {"alignment_bam", "alignment_bai", "reference", "reference_index"}
+    assert declared["alignment_bam"]["path"] == "align/aligned.bam"
+    assert declared["reference"]["sha256"] == hashlib.sha256(artifacts["reference.fasta"]).hexdigest()
+    assert all(item["required"] is True and item["state"] == "present" for item in declared.values())
 
 
 def test_dorado_image_pins_the_approved_consensus_runtime() -> None:

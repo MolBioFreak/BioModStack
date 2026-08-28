@@ -3975,6 +3975,46 @@ def _assert_public_value_has_no_paths(value: Any) -> None:
         )
 
 
+def test_view_public_projection_preserves_media_type_while_redacting_paths() -> None:
+    now = datetime.now()
+    row = SimpleNamespace(
+        id="view-media-type",
+        mapping_artifact_id="mapping-artifact-1",
+        mode="read",
+        read_id="read-1",
+        reference_contig=None,
+        reference_start=None,
+        reference_end=None,
+        render_params={},
+        request_fingerprint="a" * 64,
+        state="ready",
+        reason_code="bounded_squigualiser_view_ready",
+        output_manifest={
+            "schema": "bms.ont-squigualiser-render.v1",
+            "artifacts": [{
+                "artifact_id": "artifact-1",
+                "media_type": "text/html",
+                "managed_relative_path": "views/private/result.html",
+                "sha256": "b" * 64,
+                "size_bytes": 10,
+            }],
+        },
+        render_receipt={},
+        failure_code=None,
+        failure_message=None,
+        created_at=now,
+        updated_at=now,
+        completed_at=now,
+    )
+
+    projected = service._view_public(cast(Any, row))
+
+    artifact = projected["output_manifest"]["artifacts"][0]
+    assert artifact["media_type"] == "text/html"
+    assert "managed_relative_path" not in artifact
+    assert artifact["url"].endswith("/artifacts/artifact-1")
+
+
 def test_recursive_public_sanitization_redacts_paths_embedded_in_prose() -> None:
     value = service._public_json(
         {

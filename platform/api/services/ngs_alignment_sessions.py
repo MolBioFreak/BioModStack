@@ -1288,13 +1288,17 @@ def _session_records(
             (record.get("source_manifest_sha256") for record in records if record.get("manifest") == "verification/qc_manifest.json"),
             None,
         )
-        complete_manifest_authority = (
-            isinstance(sequence_manifest_sha256, str)
-            and isinstance(verification_manifest_sha256, str)
-        )
         fallback_manifest_sha256 = next(
             (record.get("source_manifest_sha256") for record in records if isinstance(record.get("source_manifest_sha256"), str)),
             None,
+        )
+        complete_manifest_authority = (
+            isinstance(sequence_manifest_sha256 or fallback_manifest_sha256, str)
+            if workflow_id == "ont_plasmid_qc" and input_mode == "bam"
+            else (
+                isinstance(sequence_manifest_sha256, str)
+                and isinstance(verification_manifest_sha256, str)
+            )
         )
         sequence_manifest_sha256 = sequence_manifest_sha256 or fallback_manifest_sha256
         verification_manifest_sha256 = verification_manifest_sha256 or fallback_manifest_sha256

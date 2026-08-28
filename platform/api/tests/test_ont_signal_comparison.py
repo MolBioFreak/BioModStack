@@ -224,6 +224,7 @@ def test_external_alignment_submit_route_uses_only_server_resolved_authority(
         "bam_path": "/managed/inputs/external.bam",
         "reference_fasta": "/managed/inputs/reference.fasta",
         "bam_force_realign": True,
+        "run_fastq_qc": False,
         **server_params,
     }
     assert captured["workflow_id"] == "ont_plasmid_qc"
@@ -494,6 +495,9 @@ async def test_external_move_source_resolves_exact_server_owned_alignment_launch
     async def resolve_policy(*_args, **_kwargs):
         return "bms.ont-fastq-qc-result.v1"
 
+    async def resolve_revision(*_args, **_kwargs):
+        return SimpleNamespace(topology="circular"), SimpleNamespace()
+
     monkeypatch.setattr(service, "get_results_dir", lambda: results_root)
     monkeypatch.setattr(service, "get_inputs_dir", lambda: inputs_root, raising=False)
     monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
@@ -504,6 +508,7 @@ async def test_external_move_source_resolves_exact_server_owned_alignment_launch
     monkeypatch.setattr(
         service, "resolve_state_analysis_launch_policy", resolve_policy,
     )
+    monkeypatch.setattr(service, "_resolve_reference_authority", resolve_revision)
 
     authority = await service.resolve_external_alignment_launch_authority(
         core, domain,
@@ -544,6 +549,7 @@ async def test_external_move_source_resolves_exact_server_owned_alignment_launch
         "expected_reference_fasta_sha256": reference_sha,
         "managed_reference_snapshot_sha256": reference_sha,
         "managed_reference_snapshot_size_bytes": len(reference_bytes),
+        "reference_topology": "circular",
         "expected_result_manifest_schema": "bms.ont-fastq-qc-result.v1",
     }
 

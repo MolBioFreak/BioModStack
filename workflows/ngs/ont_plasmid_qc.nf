@@ -181,13 +181,6 @@ workflow ONT_PLASMID_QC {
         def analysis_bam = null
         if (has_reference && forceBamRealign) {
             DoradoAlign(Channel.of(bam_input), Channel.of(reference_file))
-            DoradoAlign.out.aligned.subscribe { bam, bai ->
-                reportStage(params, "dorado_align", [
-                    "${params.out_dir}/align/aligned.bam",
-                    "${params.out_dir}/align/aligned.bam.bai",
-                    "${params.out_dir}/align/align.log",
-                ])
-            }
             analysis_bam = DoradoAlign.out.aligned
         } else {
             PrepareBamForAnalysis(Channel.of(bam_input))
@@ -316,6 +309,28 @@ workflow ONT_PLASMID_QC {
                 }
             }
         }
+    }
+}
+
+workflow.onComplete {
+    def terminalOutputs = [
+        "${params.out_dir}/align/aligned.bam",
+        "${params.out_dir}/align/aligned.bam.bai",
+        "${params.out_dir}/align/reference.fasta",
+        "${params.out_dir}/align/reference.fasta.fai",
+        "${params.out_dir}/align/align.log",
+        "${params.out_dir}/qc_manifest.json",
+    ]
+    if (
+        workflow.success
+        && params.job_id
+        && params.bam_path
+        && params.bam_force_realign == true
+        && params.run_fastq_qc == false
+        && params.source_external_move_registration_receipt_id
+        && terminalOutputs.every { file(it).exists() }
+    ) {
+        reportStage(params, "dorado_align", terminalOutputs)
     }
 }
 

@@ -1360,6 +1360,41 @@ def test_explicit_primary_mode_rejects_dimer_path_heuristic_conflict(
     assert "contradictory primary session mode" in primary["unavailable_reason"]
 
 
+def test_bam_primary_session_accepts_persisted_sequence_manifest_package_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    output_dir = tmp_path / "job-bam"
+    _write_manifest(output_dir, job_id="job-bam")
+    manifest_path = output_dir / "qc_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["workflow_id"] = "ont_plasmid_qc"
+    payload["input_mode"] = "bam"
+    payload["alignment_session"]["source_reference_sequence_sha256"] = hashlib.sha256(
+        b"ACGTACGT"
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(service, "_validate_alignment_bundle", lambda *_args, **_kwargs: (True, None))
+
+    sessions = service.build_alignment_sessions(
+        "job-bam",
+        source_reference_sha256=hashlib.sha256(b"ACGTACGT").hexdigest(),
+        workflow_id="ont_plasmid_qc",
+        input_mode="bam",
+        package_artifact_set_sha256="d" * 64,
+        results_dir=tmp_path,
+        job_output_dir=output_dir,
+    )
+
+    primary = next(item for item in sessions if item["mode"] == "primary")
+    assert primary["ready"] is True
+    assert primary["sequence_qc_manifest_sha256"]
+    assert primary["verification_manifest_sha256"] == primary["sequence_qc_manifest_sha256"]
+    assert primary["artifact_set_sha256"] == "d" * 64
+
+
 def test_persisted_production_output_directory_resolves_sessions_and_stays_confined(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

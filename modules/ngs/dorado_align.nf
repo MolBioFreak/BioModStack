@@ -3,9 +3,17 @@
  * Process names are preserved to avoid behavior-changing call-site churn.
  */
 
+def shellQuote(value) {
+    String text = value == null ? '' : value.toString()
+    return "'${text.replace("'", "'\"'\"'")}'"
+}
+
 process DoradoAlign {
     label 'dorado_cpu'
-    publishDir "${params.out_dir}/align", mode: 'copy'
+    publishDir "${params.out_dir}/align", mode: 'copy', saveAs: { filename ->
+        filename == 'qc_manifest.json' ? null : filename
+    }
+    publishDir "${params.out_dir}", mode: 'copy', pattern: 'qc_manifest.json'
     tag "align"
 
     input:
@@ -17,6 +25,7 @@ process DoradoAlign {
     path "reference.fasta", emit: reference_copy
     path "reference.fasta.fai", emit: reference_index
     path "align.log", emit: log
+    path "qc_manifest.json", emit: primary_manifest, optional: true
 
     script:
     def rawBamMinMapq = (params.bam_min_mapq ?: '0').toString().trim()
@@ -30,6 +39,17 @@ process DoradoAlign {
     def bamMinMapq = parsedBamMinMapq.toString()
     def declaredSourceSha256 = params.bam_source_sha256?.toString()?.trim()?.toLowerCase() ?: ''
     def declaredReferenceSha256 = params.reference_sequence_sha256?.toString()?.trim()?.toLowerCase() ?: ''
+    def codeRoot = params.code_root ?: projectDir
+    def manifestJobIdArg = shellQuote(params.job_id)
+    def referenceSequenceSha256Arg = shellQuote(declaredReferenceSha256)
+    def workflowIdArg = shellQuote(params.ont_workflow_id ?: params.workflow_id ?: '')
+    def inputModeArg = shellQuote(params.ont_input_mode ?: params.input_mode ?: '')
+    def referenceTopologyArg = shellQuote(params.reference_topology ?: '')
+    def emitPrimaryManifest = (
+        (params.ont_input_mode ?: params.input_mode ?: '').toString().trim() == 'bam'
+        && params.run_fastq_qc == false
+        && params.source_external_move_registration_receipt_id?.toString()?.trim()
+    ) ? 'true' : 'false'
     if (declaredSourceSha256 && !(declaredSourceSha256 ==~ /[0-9a-f]{64}/)) {
         throw new IllegalArgumentException('bam_source_sha256 must be exactly 64 hexadecimal characters')
     }
@@ -121,5 +141,15 @@ process DoradoAlign {
         echo "input_records=\${input_records}"
         echo "output_records=\${output_records}"
     } >> align.log
+
+    if ${emitPrimaryManifest}; then
+        bash "${codeRoot}/scripts/build_primary_alignment_session_manifest.sh" \
+            ${manifestJobIdArg} \
+            ${referenceSequenceSha256Arg} \
+            ${workflowIdArg} \
+            ${inputModeArg} \
+            qc_manifest.json \
+            ${referenceTopologyArg}
+    fi
     """
 }
