@@ -2237,7 +2237,7 @@ async def resolve_external_alignment_launch_authority(
             suffix=".bam",
         )
     except (KeyError, OSError, ValueError, MolBioNGSServiceError) as exc:
-        cleanup_failed = False
+        cleanup_errors: list[BaseException] = []
         if filtered_bam is not None:
             try:
                 discard_unclaimed_launch_snapshot(
@@ -2246,8 +2246,8 @@ async def resolve_external_alignment_launch_authority(
                     expected_sha256=filtered_sha256,
                     expected_size_bytes=filtered_size,
                 )
-            except (OSError, ValueError):
-                cleanup_failed = True
+            except (OSError, ValueError) as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
         if managed_reference is not None:
             try:
                 discard_unclaimed_launch_snapshot(
@@ -2256,12 +2256,13 @@ async def resolve_external_alignment_launch_authority(
                     expected_sha256=managed_reference.launch_snapshot_sha256,
                     expected_size_bytes=managed_reference.launch_snapshot_size_bytes,
                 )
-            except (OSError, ValueError):
-                cleanup_failed = True
-        if cleanup_failed:
-            raise OntSignalError(
-                "unclaimed external-alignment snapshot cleanup failed"
-            ) from exc
+            except (OSError, ValueError) as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
+        for cleanup_exc in cleanup_errors:
+            exc.add_note(
+                "external-alignment snapshot cleanup failure: "
+                f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+            )
         raise OntSignalError(str(exc)) from exc
     dataset_id = receipt.id
     return {

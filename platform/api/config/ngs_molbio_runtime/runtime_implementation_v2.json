@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "6e8bace45813cc2c6e4f36fbf696167bd9f5363493881154de037b62dc4f66ad",
+  "content_sha256": "e23a58208fe6a20dfda54be45531b51f350b498c8d4189b7eb00121b80bcdc58",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -599,8 +599,8 @@
     },
     {
       "path": "platform/api/services/ont_signal_workbench.py",
-      "sha256": "cce72eb33e443bf9f52c1bce7f702f6b363028f23b789fa4b1e794a026c3991d",
-      "size_bytes": 189654
+      "sha256": "020a9120c4a43e6d1a996edba5bb608e7b64466e3c13219c131d0547bba96414",
+      "size_bytes": 189783
     },
     {
       "path": "platform/api/services/ont_signal_worker.py",
@@ -649,8 +649,8 @@
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
-      "sha256": "5864af488182e07d5b9d567cf079829aeb551cbdee30ec7f4e064060a67887e3",
-      "size_bytes": 67531
+      "sha256": "a8b869eaf56168f4b223b20a7ab37e12c567e7c530007e982e8484d7d39991b6",
+      "size_bytes": 68089
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison_runtime_contract.py",
@@ -997,8 +997,8 @@
     "content_sha256": "ca7b67e71a408b3cc51048701a0ef2ac20b3ff503d490d225909908384492297",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "172333b44e1d1e09fb087ff0aa0574a26eb1cbf6",
-  "successor_source_tree": "e41bb7d54b029b9f43630f8bbfcba7f28d72b57a",
+  "successor_source_commit": "367dbf713594fe216c9df7ff060b8c1df22e2780",
+  "successor_source_tree": "1ae9db0a0c4e39232ab883b32f6195a6e31c97ff",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

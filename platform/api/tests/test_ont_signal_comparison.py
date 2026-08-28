@@ -1422,8 +1422,9 @@ def test_migration_42_registers_immutable_comparison_ledgers(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_fails", [False, True])
 async def test_external_alignment_resolver_discards_reference_if_bam_publication_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cleanup_fails: bool,
 ) -> None:
     inputs_root = tmp_path / "inputs"
     results_root = tmp_path / "results"
@@ -1496,8 +1497,15 @@ async def test_external_alignment_resolver_discards_reference_if_bam_publication
     monkeypatch.setattr(service, "resolve_managed_reference_for_launch", resolve_reference)
     monkeypatch.setattr(service, "resolve_state_analysis_launch_policy", resolve_policy)
     monkeypatch.setattr(service, "publish_immutable_launch_snapshot", fail_bam_publication)
+    if cleanup_fails:
+        def fail_cleanup(*_args, **_kwargs):
+            raise ValueError("forced cleanup failure")
 
-    with pytest.raises(service.OntSignalError, match="forced BAM publication failure"):
+        monkeypatch.setattr(service, "discard_unclaimed_launch_snapshot", fail_cleanup)
+
+    with pytest.raises(
+        service.OntSignalError, match="forced BAM publication failure"
+    ) as caught:
         await service.resolve_external_alignment_launch_authority(
             core,
             _LookupSession({}),
@@ -1507,4 +1515,10 @@ async def test_external_alignment_resolver_discards_reference_if_bam_publication
             molbio_ngs_state_revision_id="state-1",
         )
 
-    assert not reference_snapshot.exists()
+    assert reference_snapshot.exists() is cleanup_fails
+    if cleanup_fails:
+        assert caught.value.__cause__ is not None
+        assert any(
+            "ValueError: forced cleanup failure" in note
+            for note in getattr(caught.value.__cause__, "__notes__", [])
+        )
