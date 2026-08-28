@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
 
 from database import Base, Design
@@ -20,6 +21,7 @@ from services.scientific_artifacts import (
     canonical_json_bytes,
     envelope_rows,
     install_parquet_rows,
+    publish_table_rows,
     query_json_envelope_page,
     query_rows,
     reconstruct_envelope,
@@ -29,21 +31,14 @@ from services.scientific_artifacts import (
 )
 from services.scientific_artifacts.writer import (
     ScientificArtifactError,
-    guarded_delete_new_artifact,
 )
 
 
 def _publish_same_artifact(root, barrier, results) -> None:
-    """Force legacy replace publishers across the same race window."""
+    """Start exact publishers together across independent processes."""
     import services.scientific_artifacts.writer as writer
 
-    original_replace = writer.os.replace
-
-    def synchronized_replace(source, destination) -> None:
-        barrier.wait(timeout=10)
-        original_replace(source, destination)
-
-    writer.os.replace = synchronized_replace
+    barrier.wait(timeout=10)
     artifact = writer.install_parquet_rows(
         root=root,
         owner_kind="concurrent-test",
@@ -56,6 +51,23 @@ def _publish_same_artifact(root, barrier, results) -> None:
         schema=pa.schema([("value", pa.int64())]),
     )
     results.put(artifact)
+
+
+def _install_transactional_artifact(root, transaction_id, *, value=1):
+    import services.scientific_artifacts.writer as writer
+
+    return writer.install_parquet_rows(
+        root=root,
+        owner_kind="transaction-test",
+        owner_id="shared-owner",
+        role="rows",
+        schema_id="bms.transaction-test.v1",
+        schema_version=1,
+        source_sha256="f" * 64,
+        rows=[{"value": value}],
+        schema=pa.schema([("value", pa.int64())]),
+        transaction_id=transaction_id,
+    )
 
 
 def test_small_design_scientific_array_is_externalized_before_flush(
@@ -130,19 +142,87 @@ def test_unrelated_design_update_keeps_existing_dense_artifact_receipt(
     assert receipt_count == 1
 
 
-def test_concurrent_publication_has_one_installer_and_rollback_cannot_delete_reuse(
-    tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("installer_commits", "reuser_commits"),
+    [(True, False), (False, True), (False, False)],
+    ids=[
+        "installer-commit-reuser-rollback",
+        "installer-rollback-reuser-commit",
+        "both-rollback",
+    ],
+)
+async def test_transaction_interleavings_preserve_only_receipted_artifact_bytes(
+    tmp_path, monkeypatch, installer_commits, reuser_commits
 ):
-    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(tmp_path))
+    artifact_root = tmp_path / "artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'interleaving.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    installer_session = sessions()
+    reuser_session = sessions()
+    publication = {
+        "owner_kind": "transaction-test",
+        "owner_id": "shared-owner",
+        "role": "rows",
+        "schema_id": "bms.transaction-test.v1",
+        "source_sha256": "f" * 64,
+        "rows": [{"value": 1}],
+        "schema": pa.schema([("value", pa.int64())]),
+    }
+    try:
+        installer = await publish_table_rows(installer_session, **publication)
+        reuser = await publish_table_rows(reuser_session, **publication)
+        if installer_commits:
+            await installer_session.commit()
+        else:
+            await installer_session.rollback()
+        if reuser_commits:
+            await reuser_session.commit()
+        else:
+            await reuser_session.rollback()
+
+        async with sessions() as verification_session:
+            receipt_count = (
+                await verification_session.execute(
+                    text("SELECT COUNT(*) FROM scientific_artifact_receipts")
+                )
+            ).scalar_one()
+        if installer_commits or reuser_commits:
+            assert receipt_count == 1
+            assert verify_artifact(reuser, root=artifact_root).is_file()
+        else:
+            assert receipt_count == 0
+            assert not installer.storage_path.exists()
+        assert not list(artifact_root.rglob("*.reused"))
+        assert not list(artifact_root.rglob(".publication-ownership.json"))
+    finally:
+        await installer_session.close()
+        await reuser_session.close()
+        await engine.dispose()
+
+
+def test_transactional_reuse_rejects_digest_mismatch_without_disarming_cleanup(tmp_path):
+    import services.scientific_artifacts.writer as writer
+
+    installer = _install_transactional_artifact(tmp_path, "installer", value=1)
+    with pytest.raises(ScientificArtifactError, match="immutable artifact conflict"):
+        _install_transactional_artifact(tmp_path, "mismatch", value=2)
+
+    writer.finalize_artifact_publication(installer, committed=False)
+
+    assert not installer.storage_path.exists()
+    assert not list(installer.storage_path.parent.glob(f".{installer.storage_path.name}.*"))
+
+
+def test_concurrent_exact_publication_remains_no_clobber(tmp_path):
     context = multiprocessing.get_context("spawn")
     barrier = context.Barrier(2)
     results = context.Queue()
     processes = [
-        context.Process(
-            target=_publish_same_artifact,
-            args=(tmp_path, barrier, results),
-        )
+        context.Process(target=_publish_same_artifact, args=(tmp_path, barrier, results))
         for _ in range(2)
     ]
     for process in processes:
@@ -156,9 +236,8 @@ def test_concurrent_publication_has_one_installer_and_rollback_cannot_delete_reu
     assert {artifact.content_sha256 for artifact in artifacts} == {
         artifacts[0].content_sha256
     }
-    installer = next(artifact for artifact in artifacts if artifact.newly_installed)
-    assert guarded_delete_new_artifact(installer) is False
     assert verify_artifact(artifacts[0], root=tmp_path).is_file()
+    assert not list(tmp_path.rglob("*.reused"))
 
 
 def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):

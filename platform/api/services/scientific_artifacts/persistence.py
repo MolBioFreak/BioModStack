@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Iterable, Mapping
+import uuid
 
 import pyarrow as pa
 from sqlalchemy import event
@@ -11,29 +12,43 @@ from sqlalchemy.orm import Session
 
 from database import ScientificArtifactReceipt
 from .contracts import canonical_sha256, envelope_rows
-from .writer import artifact_root, guarded_delete_new_artifact, install_parquet_rows
+from .writer import (
+    artifact_root,
+    finalize_artifact_publication,
+    guarded_delete_new_artifact,
+    install_parquet_rows,
+)
 
 
-_ROLLBACK_ARTIFACTS_KEY = "scientific_artifacts_newly_installed"
+_TRANSACTION_ARTIFACTS_KEY = "scientific_artifacts_transaction_publications"
+_TRANSACTION_ID_KEY = "scientific_artifacts_transaction_id"
 
 
 @event.listens_for(Session, "after_commit")
 def _forget_committed_artifacts(session: Session) -> None:
-    session.info.pop(_ROLLBACK_ARTIFACTS_KEY, None)
+    artifacts = session.info.pop(_TRANSACTION_ARTIFACTS_KEY, ())
+    session.info.pop(_TRANSACTION_ID_KEY, None)
+    for artifact in artifacts:
+        finalize_artifact_publication(artifact, committed=True)
 
 
 @event.listens_for(Session, "after_rollback")
 def _cleanup_rolled_back_artifacts(session: Session) -> None:
-    artifacts = session.info.pop(_ROLLBACK_ARTIFACTS_KEY, ())
+    artifacts = session.info.pop(_TRANSACTION_ARTIFACTS_KEY, ())
+    session.info.pop(_TRANSACTION_ID_KEY, None)
     for artifact in reversed(artifacts):
         guarded_delete_new_artifact(artifact)
 
 
 def _track_new_artifact(session: AsyncSession, artifact: Any) -> None:
-    if artifact.newly_installed:
-        session.sync_session.info.setdefault(_ROLLBACK_ARTIFACTS_KEY, []).append(
+    if artifact.transaction_id is not None:
+        session.sync_session.info.setdefault(_TRANSACTION_ARTIFACTS_KEY, []).append(
             artifact
         )
+
+
+def _transaction_id(session: AsyncSession) -> str:
+    return session.sync_session.info.setdefault(_TRANSACTION_ID_KEY, uuid.uuid4().hex)
 
 
 async def publish_json_payload(
@@ -65,6 +80,7 @@ async def publish_json_payload(
         source_sha256=source_sha,
         rows=envelope_rows(payload),
         schema=schema,
+        transaction_id=_transaction_id(session),
     )
     if installed_artifacts is not None:
         installed_artifacts.append(artifact)
@@ -95,6 +111,7 @@ async def publish_table_rows(
         source_sha256=source_sha256,
         rows=rows,
         schema=schema,
+        transaction_id=_transaction_id(session),
     )
     if installed_artifacts is not None:
         installed_artifacts.append(artifact)

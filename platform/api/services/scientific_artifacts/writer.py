@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -45,6 +46,7 @@ class InstalledArtifact:
     column_schema_sha256: str
     newly_installed: bool = False
     media_type: str = "application/vnd.apache.parquet"
+    transaction_id: str | None = None
 
     def reference(self) -> dict[str, Any]:
         return artifact_reference(
@@ -90,11 +92,11 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _lock_path(destination: Path) -> Path:
-    return destination.with_name(f".{destination.name}.lock")
+    return destination.parent / ".publication.lock"
 
 
-def _reuse_marker_path(destination: Path) -> Path:
-    return destination.with_name(f".{destination.name}.reused")
+def _ownership_path(destination: Path) -> Path:
+    return destination.parent / ".publication-ownership.json"
 
 
 @contextmanager
@@ -109,19 +111,41 @@ def _artifact_lock(destination: Path):
         os.close(descriptor)
 
 
-def _retain_reused_artifact(destination: Path) -> None:
-    """Permanently disarm installer rollback after exact-byte reuse."""
-    marker = _reuse_marker_path(destination)
+def _read_ownership(destination: Path) -> dict[str, list[str]]:
+    path = _ownership_path(destination)
+    if not path.exists():
+        return {}
     try:
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ScientificArtifactError("artifact ownership ledger is unreadable") from exc
+    if not isinstance(payload, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(claims, list)
+        or any(not isinstance(claim, str) for claim in claims)
+        for name, claims in payload.items()
+    ):
+        raise ScientificArtifactError("artifact ownership ledger is invalid")
+    return payload
+
+
+def _write_ownership(destination: Path, ownership: dict[str, list[str]]) -> None:
+    path = _ownership_path(destination)
+    if not ownership:
+        if path.exists():
+            path.unlink()
+            _fsync_directory(path.parent)
         return
+    staging = path.with_name(f".{path.name}.staging-{os.getpid()}-{uuid.uuid4().hex}")
     try:
-        os.write(descriptor, b"reused\n")
-        os.fsync(descriptor)
+        with staging.open("x", encoding="utf-8") as handle:
+            json.dump(ownership, handle, separators=(",", ":"), sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staging, path)
+        _fsync_directory(path.parent)
     finally:
-        os.close(descriptor)
-    _fsync_directory(destination.parent)
+        staging.unlink(missing_ok=True)
 
 
 def _artifact_id(owner_kind: str, owner_id: str, role: str, source_sha256: str) -> str:
@@ -140,6 +164,7 @@ def install_parquet_rows(
     source_sha256: str,
     rows: Iterable[Mapping[str, Any]],
     schema: pa.Schema,
+    transaction_id: str | None = None,
 ) -> InstalledArtifact:
     """Write deterministic Parquet bytes and atomically install one artifact."""
     materialized = [dict(row) for row in rows]
@@ -165,7 +190,9 @@ def install_parquet_rows(
         with staging.open("rb") as handle:
             os.fsync(handle.fileno())
         content_sha256, size_bytes = _content_digest(staging)
+        publication_claim: str | None = None
         with _artifact_lock(destination):
+            ownership = _read_ownership(destination)
             try:
                 os.link(staging, destination)
             except FileExistsError:
@@ -174,11 +201,20 @@ def install_parquet_rows(
                     raise ScientificArtifactError(
                         f"immutable artifact conflict: {destination}"
                     )
-                _retain_reused_artifact(destination)
                 newly_installed = False
             else:
                 newly_installed = True
                 _fsync_directory(destination.parent)
+            if transaction_id is not None:
+                claims = ownership.get(destination.name)
+                if newly_installed:
+                    claims = []
+                    ownership[destination.name] = claims
+                if claims is not None:
+                    if transaction_id not in claims:
+                        claims.append(transaction_id)
+                    publication_claim = transaction_id
+                    _write_ownership(destination, ownership)
         metadata = pq.read_metadata(destination)
         if metadata.num_rows != len(materialized):
             raise ScientificArtifactError("installed Parquet row count changed during verification")
@@ -199,31 +235,48 @@ def install_parquet_rows(
             row_count=len(materialized),
             column_schema_sha256=_schema_digest(pq.read_schema(destination)),
             newly_installed=newly_installed,
+            transaction_id=publication_claim,
         )
     finally:
         staging.unlink(missing_ok=True)
 
 
-def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
-    """Delete only bytes installed here and still matching their receipt."""
-    if not artifact.newly_installed:
+def finalize_artifact_publication(
+    artifact: InstalledArtifact, *, committed: bool
+) -> bool:
+    """Resolve one transaction claim and delete only an unowned exact artifact."""
+    if artifact.transaction_id is None:
         return False
     path = artifact.storage_path
-    root = artifact_root()
-    try:
-        path.resolve(strict=False).relative_to(root)
-    except ValueError:
-        return False
     with _artifact_lock(path):
-        if os.path.lexists(_reuse_marker_path(path)):
+        ownership = _read_ownership(path)
+        claims = ownership.get(path.name)
+        if claims is None or artifact.transaction_id not in claims:
             return False
+        claims.remove(artifact.transaction_id)
+        if committed:
+            ownership.pop(path.name, None)
+            _write_ownership(path, ownership)
+            return False
+        if claims:
+            _write_ownership(path, ownership)
+            return False
+        ownership.pop(path.name, None)
         if path.is_symlink() or not path.is_file():
+            _write_ownership(path, ownership)
             return False
         if _content_digest(path) != (artifact.content_sha256, artifact.size_bytes):
+            _write_ownership(path, ownership)
             return False
         path.unlink()
+        _write_ownership(path, ownership)
         _fsync_directory(path.parent)
         return True
+
+
+def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
+    """Backward-compatible rollback finalizer for a publication claim."""
+    return finalize_artifact_publication(artifact, committed=False)
 
 
 def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None) -> Path:
