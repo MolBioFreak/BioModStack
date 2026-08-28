@@ -42,9 +42,10 @@ import {
 } from '../../lib/ngsAlignmentSession';
 import type { AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
 import { GovernedRawSignalWaveform } from './RawReadInspector';
+import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
 const TERMINAL_STATES = new Set(['ready', 'failed', 'cancelled']);
-type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform';
+type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
 
 interface ReadAndSignalWorkbenchProps {
     datasetId: string;
@@ -390,7 +391,7 @@ export function ReadAndSignalWorkbench({
         if (!viewerSession) return;
         setReadId(viewerSession.selected_read_id || '');
         const savedMode = viewerSession.signal_state.mode;
-        if (savedMode === 'raw_waveform' || savedMode === 'read' || savedMode === 'reference' || savedMode === 'pileup') setMode(savedMode);
+        if (savedMode === 'raw_waveform' || savedMode === 'read' || savedMode === 'reference' || savedMode === 'pileup' || savedMode === 'ideal_comparison') setMode(savedMode);
         if (isRenderParams(viewerSession.signal_state.render_params)) {
             setRenderParams({ ...DEFAULT_ONT_SIGNAL_RENDER_PARAMS, ...viewerSession.signal_state.render_params });
         }
@@ -830,7 +831,7 @@ export function ReadAndSignalWorkbench({
     };
 
     const render = async () => {
-        if (mode === 'raw_waveform') return;
+        if (mode === 'raw_waveform' || mode === 'ideal_comparison') return;
         const locusStart = integer(start);
         const locusEnd = integer(end);
         if (!mappingArtifact) {
@@ -1119,6 +1120,7 @@ export function ReadAndSignalWorkbench({
                             { value: 'read', label: 'Single read', disabled: false },
                             { value: 'reference', label: 'Reference', disabled: capabilities?.modes.signal_to_reference.state !== 'ready' },
                             { value: 'pileup', label: 'Pileup', disabled: capabilities?.modes.signal_pileup.state !== 'ready' },
+                            { value: 'ideal_comparison', label: 'Ideal comparison', disabled: !viewerSession || !readId.trim() || !referenceRevisionId },
                         ] as const).map((candidate) => (
                             <button key={candidate.value} type="button" onClick={() => {
                                 setMode(candidate.value);
@@ -1127,7 +1129,7 @@ export function ReadAndSignalWorkbench({
                                 }
                             }} disabled={candidate.disabled} className={`rounded border px-2 py-1 text-[10px] disabled:opacity-40 ${mode === candidate.value ? 'border-[var(--accent-secondary)] text-[var(--accent-secondary)]' : 'border-[var(--border-primary)]'}`}>{candidate.label}</button>
                         ))}
-                        {mode !== 'raw_waveform' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
+                        {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="ml-auto rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">{advancedOpen ? 'Hide' : 'Render settings'}</button>}
                     </div>
                     {mode === 'raw_waveform' && activeRawRepresentationId ? (
                         <GovernedRawSignalWaveform
@@ -1138,7 +1140,21 @@ export function ReadAndSignalWorkbench({
                             readId={readId}
                         />
                     ) : null}
-                    {mode !== 'raw_waveform' && advancedOpen && (
+                    {mode === 'ideal_comparison' && viewerSession ? (
+                        <OntSignalIdealComparison
+                            datasetId={datasetId}
+                            viewerSession={viewerSession}
+                            selectedReadId={readId.trim()}
+                            contig={contig.trim()}
+                            start={integer(start)}
+                            end={integer(end)}
+                            mappingJobId={referenceMapping?.mapping_job_id || persistedReferenceMappingJobId}
+                            mappingArtifactId={referenceMapping?.artifacts.find((item) => item.kind === 'realign_paf')?.mapping_artifact_id || null}
+                            renderParams={renderParams}
+                            onViewerSessionChange={onViewerSessionChange}
+                        />
+                    ) : null}
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && advancedOpen && (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-[10px]">
                             <select value={renderParams.strand} onChange={(event) => setRenderParams((current) => ({ ...current, strand: event.target.value as OntSignalRenderParams['strand'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="forward">forward</option><option value="reverse">reverse</option></select>
                             <select value={renderParams.signal_units} onChange={(event) => setRenderParams((current) => ({ ...current, signal_units: event.target.value as OntSignalRenderParams['signal_units'] }))} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1"><option value="pA">pA</option><option value="raw_adc">raw ADC</option></select>
@@ -1163,13 +1179,13 @@ export function ReadAndSignalWorkbench({
                             {(mode === 'reference' || mode === 'pileup') && <label className="col-span-2">managed BED artifact<input aria-label="Managed BED artifact ID" type="text" value={renderParams.managed_bed_artifact_id || ''} onChange={(event) => setRenderParams((current) => ({ ...current, managed_bed_artifact_id: event.target.value.trim() || null }))} placeholder="Opaque managed artifact ID" className="ml-1 min-w-56 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-1 font-mono" /></label>}
                         </div>
                     )}
-                    {mode !== 'raw_waveform' && <div className="flex items-center gap-2">
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && <div className="flex items-center gap-2">
                         <button type="button" onClick={() => void render()} disabled={busy || !mappingArtifact} className="rounded bg-[var(--accent-secondary)] px-3 py-1.5 text-xs text-white disabled:opacity-40">{busy ? 'Working…' : `Render ${mode}`}</button>
                         {viewJob && <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateBadge(viewJob.state)}`}>{viewJob.state}: {viewJob.reason_code}</span>}
                         {viewJob && !TERMINAL_STATES.has(viewJob.state) && <button type="button" onClick={() => void cancelViewForIdentity(viewJob)} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Cancel render</button>}
                     </div>}
-                    {mode !== 'raw_waveform' && viewJob?.failure_message && <div className="text-[10px] text-rose-200">{viewJob.failure_code}: {viewJob.failure_message}</div>}
-                    {mode !== 'raw_waveform' && (artifactUrl ? (
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && viewJob?.failure_message && <div className="text-[10px] text-rose-200">{viewJob.failure_code}: {viewJob.failure_message}</div>}
+                    {mode !== 'raw_waveform' && mode !== 'ideal_comparison' && (artifactUrl ? (
                         <iframe
                             title="Bounded Squigualiser artifact"
                             src={artifactUrl}

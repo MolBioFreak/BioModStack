@@ -17,9 +17,10 @@ from pathlib import Path
 import rfc8785  # type: ignore[import-not-found]
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
-DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json"
+DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
 DENOMINATOR = ROOT / DENOMINATOR_RELATIVE
+DENOMINATOR_SCHEMA = "bms.ngs-molbio.runtime-source-denominator.v2"
 N0_RECEIPT = ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -130,7 +131,7 @@ def _load_source_denominator() -> dict[str, object]:
         raise RuntimeError("runtime source denominator authority shape is invalid")
     paths = value.get("paths")
     if (
-        value.get("schema") != "bms.ngs-molbio.runtime-source-denominator.v1"
+        value.get("schema") != DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
         or len(paths) > 256

@@ -1414,6 +1414,41 @@ async def test_late_cancellation_fences_failure_publication(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_failure_publication_persists_typed_reason_code(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'failure-reason.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(FenceBase.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    async with factory() as session:
+        session.add(FenceRow(
+            id="job-typed-failure",
+            state="running",
+            reason_code="worker_claimed",
+            claim_token="claim-typed",
+            lease_expires_at=now + timedelta(minutes=5),
+        ))
+        await session.commit()
+
+    worker = OntSignalWorker(factory, factory)
+    await worker._fail(
+        FenceRow,
+        "state",
+        "job-typed-failure",
+        "claim-typed",
+        worker_module.ComparisonRuntimeFailure("malformed_sam", "invalid SAM"),
+    )
+
+    async with factory() as session:
+        row = await session.get(FenceRow, "job-typed-failure")
+        assert row is not None
+        assert row.state == "failed"
+        assert row.reason_code == "malformed_sam"
+        assert row.failure_code == "ComparisonRuntimeFailure"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_expired_cancel_requested_recovery_publishes_terminal_completed_at(
     tmp_path: Path,
 ) -> None:

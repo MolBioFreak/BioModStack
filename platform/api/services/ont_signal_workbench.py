@@ -21,11 +21,16 @@ from database import (
     InputFile,
     Job,
     OntExternalMoveBamRegistrationReceipt,
+    OntInstrumentRun,
     OntInstrumentRunEvent,
     OntMoveTableSource,
     OntRawSignalRepresentation,
     OntSignalCalibrationArtifact,
     OntSignalCalibrationJob,
+    OntSignalComparisonArtifact,
+    OntSignalComparisonEvent,
+    OntSignalComparisonJob,
+    OntSignalManualReview,
     OntSignalMappingArtifact,
     OntSignalMappingEvent,
     OntSignalMappingJob,
@@ -69,6 +74,160 @@ MAX_EXTERNAL_MOVE_BAM_VISITED_ENTRIES = 10_000
 
 class OntSignalError(ValueError):
     pass
+
+
+def _authority_value(source: Mapping[str, Any] | Any, name: str) -> Any:
+    return source.get(name) if isinstance(source, Mapping) else getattr(source, name, None)
+
+
+def _selected_read_span(
+    validation_receipt: Mapping[str, Any], selected_read_id: str, reference_contig: str
+) -> dict[str, Any]:
+    spans = validation_receipt.get("read_spans", {})
+    span = spans.get(selected_read_id) if isinstance(spans, Mapping) else None
+    if not isinstance(span, Mapping):
+        raise OntSignalError("selected read mapping authority is unavailable")
+    normalized = dict(span)
+    start, end = normalized.get("start"), normalized.get("end")
+    if (
+        normalized.get("contig") != reference_contig
+        or normalized.get("strand") not in {"forward", "reverse", "+", "-"}
+        or isinstance(start, bool) or not isinstance(start, int) or start < 1
+        or isinstance(end, bool) or not isinstance(end, int) or end < start
+    ):
+        raise OntSignalError("selected read mapping authority is unavailable")
+    return normalized
+
+
+def _derive_ideal_comparison_compatibility(
+    *, simulated_profile: Mapping[str, Any], mapping_profile: Mapping[str, Any] | Any,
+    move_source: Mapping[str, Any] | Any, raw_header: Mapping[str, Any], run_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    mapping_model = _authority_value(mapping_profile, "basecall_model_id")
+    move_model = _authority_value(move_source, "basecall_model_id")
+    source_runtime = _authority_value(move_source, "source_runtime_identity")
+    if not isinstance(source_runtime, Mapping):
+        source_runtime = {}
+    evidence = {
+        "mapping_profile_molecule_type": _authority_value(mapping_profile, "molecule_type"),
+        "mapping_profile_basecall_model_id": mapping_model,
+        "mapping_profile_kmer_length": _authority_value(mapping_profile, "kmer_length"),
+        "move_source_molecule_type": _authority_value(move_source, "molecule_type"),
+        "move_source_basecall_model_id": move_model,
+        "move_source_runtime_authority": source_runtime.get("authority_state"),
+        "raw_sample_rate": raw_header.get("sample_frequency"),
+        "raw_digitisation": raw_header.get("digitisation"),
+        "raw_range": raw_header.get("range"),
+        "run_flow_cell_generation": run_receipt.get("flow_cell_generation"),
+        "run_device_class": run_receipt.get("device_class"),
+    }
+    missing = [key for key, value in evidence.items() if value in (None, "")]
+    if source_runtime.get("authority_state") != "verified":
+        missing.append("verified_move_source_runtime_authority")
+    mismatches: list[str] = []
+    molecule = simulated_profile.get("molecule_type")
+    for key in ("mapping_profile_molecule_type", "move_source_molecule_type"):
+        if evidence[key] not in (None, "") and evidence[key] != molecule:
+            mismatches.append(key)
+    if mapping_model and move_model and mapping_model != move_model:
+        mismatches.append("basecall_model_identity")
+    model_text = str(move_model or mapping_model or "").lower()
+    generation_token = str(simulated_profile.get("flow_cell_generation", "")).lower()
+    if generation_token and model_text and generation_token not in model_text:
+        mismatches.append("basecall_model_flow_cell_generation")
+    for evidence_key, profile_key in (
+        ("raw_sample_rate", "sample_rate"), ("raw_digitisation", "digitisation"), ("raw_range", "range")
+    ):
+        value = evidence[evidence_key]
+        if value not in (None, ""):
+            try:
+                if abs(float(value) - float(simulated_profile[profile_key])) > 1e-6:
+                    mismatches.append(evidence_key)
+            except (KeyError, TypeError, ValueError):
+                mismatches.append(evidence_key)
+    for evidence_key, profile_key in (
+        ("run_flow_cell_generation", "flow_cell_generation"), ("run_device_class", "device_class")
+    ):
+        if evidence[evidence_key] not in (None, "") and evidence[evidence_key] != simulated_profile.get(profile_key):
+            mismatches.append(evidence_key)
+    if mismatches:
+        disposition = "incompatible"
+    elif missing:
+        disposition = "legacy_unknown"
+    else:
+        disposition = str(simulated_profile.get("compatibility_floor", "matched_profile"))
+    return {"disposition": disposition, "evidence": evidence,
+            "missing_authorities": sorted(set(missing)), "mismatches": sorted(set(mismatches))}
+
+
+_COMPARISON_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "config" / "ont_signal_workbench" / "squigulator_ideal_comparison_schema_v1.json"
+)
+
+
+def _comparison_parameter_contract() -> dict[str, Any]:
+    value = json.loads(_COMPARISON_SCHEMA_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or value.get("schema") != "bms.ont-squigulator-ideal-comparison.v1":
+        raise OntSignalError("ideal comparison parameter authority is unavailable")
+    return value
+
+
+def compile_ideal_comparison_settings(
+    simulation_settings: Mapping[str, Any], render_params: Mapping[str, Any]
+) -> dict[str, Any]:
+    contract = _comparison_parameter_contract()
+    operator = contract["operator_parameters"]
+    simulation_keys = {"profile_id", "seed"}
+    render_keys = set(operator) - simulation_keys
+    if set(simulation_settings) - simulation_keys or set(render_params) - render_keys:
+        raise OntSignalError("unknown ideal-comparison parameter")
+    requested = {
+        **{key: simulation_settings.get(key, operator[key]["default"]) for key in simulation_keys},
+        **{key: render_params.get(key, operator[key]["default"]) for key in render_keys},
+    }
+    for key, definition in operator.items():
+        value = requested[key]
+        if "enum" in definition and value not in definition["enum"]:
+            raise OntSignalError(f"{key} is outside the closed parameter contract")
+        if definition.get("type") == "integer" and (
+            isinstance(value, bool) or not isinstance(value, int)
+        ):
+            raise OntSignalError(f"{key} must be an integer")
+        if "minimum" in definition and value < definition["minimum"]:
+            raise OntSignalError(f"{key} is below its minimum")
+        if "maximum" in definition and value > definition["maximum"]:
+            raise OntSignalError(f"{key} exceeds its maximum")
+    profile_id = str(requested["profile_id"])
+    profile = contract["profiles"][profile_id]
+    workflow_fixed = {**contract["workflow_fixed"], **contract["runtime_owned"]}
+    return {
+        "schema": "bms.ont-squigulator-ideal-comparison-effective.v1",
+        "operator_owned": requested,
+        "profile_id": profile_id,
+        "profile": profile,
+        "workflow_fixed": workflow_fixed,
+        "compatibility_floor": profile["compatibility_floor"],
+        "warnings": [profile["model_quality_warning"]] if profile["model_quality_warning"] else [],
+        "upstream": contract["upstream"],
+    }
+
+
+def _require_comparison_interval_within_base_limit(
+    reference_start: int,
+    reference_end: int,
+    effective: Mapping[str, Any],
+) -> None:
+    operator = effective.get("operator_owned")
+    base_limit = operator.get("base_limit") if isinstance(operator, Mapping) else None
+    if isinstance(base_limit, bool) or not isinstance(base_limit, int) or base_limit < 1:
+        raise OntSignalError("effective base limit authority is invalid")
+    if reference_end - reference_start + 1 > base_limit:
+        raise OntSignalError("comparison interval exceeds effective base limit")
+
+
+def comparison_request_fingerprint(value: Mapping[str, Any]) -> str:
+    return _digest(value)
 
 
 def _now() -> datetime:
@@ -366,7 +525,7 @@ def _derive_source_runtime_identity(source_job: Job, artifact_sha256: str) -> di
         raise OntSignalError("producer runtime/model/emit-moves provenance is inconsistent")
     return {
         "schema": "bms.ont-move-source-producer-runtime.v1",
-        "authority_state": "known",
+        "authority_state": "verified",
         "source_job_id": source_job.id,
         "source_bam_sha256": artifact_sha256,
         "runtime_provenance_sha256": observed_receipt_sha256,
@@ -2966,6 +3125,23 @@ def _validate_viewer_selection_authority(
         raise OntSignalError("viewer selected read authority is invalid")
 
 
+def _require_comparison_settings_authority(
+    comparison: OntSignalComparisonJob, saved_settings: Any
+) -> None:
+    effective = comparison.simulation_settings if isinstance(comparison.simulation_settings, Mapping) else {}
+    operator_value = effective.get("operator_owned")
+    operator = operator_value if isinstance(operator_value, Mapping) else {}
+    expected = {
+        "simulation_settings": {
+            "profile_id": effective.get("profile_id"),
+            "seed": operator.get("seed"),
+        },
+        "render_params": dict(comparison.render_params or {}),
+    }
+    if saved_settings != expected:
+        raise OntSignalError("saved comparison settings diverge from immutable comparison authority")
+
+
 async def _validate_viewer_state_authority(
     session: AsyncSession,
     row: OntSignalViewerSession,
@@ -3033,6 +3209,31 @@ async def _validate_viewer_state_authority(
         or reference_mapping.parent_mapping_job_id != read_mapping.id
     ):
         raise OntSignalError("saved reference mapping chain diverges from the saved read mapping")
+
+    comparison_job_id = signal_state.get("comparison_job_id")
+    comparison_review_id = signal_state.get("comparison_review_id")
+    comparison_preview_digest = signal_state.get("comparison_preview_digest")
+    if comparison_job_id is not None:
+        comparison = await session.get(OntSignalComparisonJob, comparison_job_id)
+        if (
+            comparison is None
+            or comparison.viewer_session_id != row.id
+            or comparison.run_id != row.run_id
+            or comparison.observed_generation != row.observed_generation
+            or comparison.selected_read_id != selected_read_id
+            or comparison.reference_revision_id != row.reference_revision_id
+            or comparison_preview_digest != comparison.preview_digest
+        ):
+            raise OntSignalError("saved comparison diverges from viewer immutable authority")
+        _require_comparison_settings_authority(
+            comparison, signal_state.get("comparison_settings")
+        )
+        if comparison_review_id is not None:
+            review = await session.get(OntSignalManualReview, comparison_review_id)
+            if review is None or review.comparison_job_id != comparison.id:
+                raise OntSignalError("saved comparison review diverges from viewer authority")
+    elif any(value is not None for value in (comparison_review_id, comparison_preview_digest, signal_state.get("comparison_settings"))):
+        raise OntSignalError("saved comparison state is incomplete")
 
     view_job_id = signal_state.get("view_job_id")
     if view_job_id is not None:
@@ -3106,3 +3307,497 @@ async def update_viewer_session(
     if refreshed is None:
         raise KeyError("viewer session not found")
     return _viewer_public(refreshed)
+
+
+COMPARISON_ARTIFACT_KINDS = frozenset({
+    "simulation_input_fasta", "simulation_coordinate_map", "simulated_blow5",
+    "simulated_blow5_index", "simulated_read_fasta", "simulated_read_id_map",
+    "simulated_source_paf", "simulated_normalized_paf", "simulated_source_sam",
+    "simulated_normalized_sam", "comparison_html", "comparison_manifest",
+})
+
+
+def _receipt_authority(value: Any) -> dict[str, Any]:
+    receipt = dict(value) if isinstance(value, Mapping) else {}
+    schema = receipt.get("schema")
+    return {
+        "schema": schema if isinstance(schema, str) else None,
+        "content_sha256": _digest(receipt),
+    }
+
+
+def _comparison_output_manifest_public(value: Any) -> dict[str, Any]:
+    manifest = dict(value) if isinstance(value, Mapping) else {}
+    public: dict[str, Any] = {}
+    for key in ("schema", "parents", "runtime_identities", "stage_receipts"):
+        if manifest.get(key) is not None:
+            public[key] = _public_json(manifest[key])
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, list):
+        public["artifacts"] = [
+            {
+                "kind": item.get("kind"), "media_type": item.get("media_type"),
+                "sha256": item.get("sha256"), "size_bytes": item.get("size_bytes"),
+                "validation_receipt": _receipt_authority(item.get("validation_receipt")),
+            }
+            for item in artifacts if isinstance(item, Mapping)
+        ]
+    for key in ("producer", "renderer"):
+        if manifest.get(key) is not None:
+            public[key] = _receipt_authority(manifest[key])
+    return public
+
+
+def _comparison_artifact_public(row: OntSignalComparisonArtifact) -> dict[str, Any]:
+    return {
+        "artifact_id": row.id, "kind": row.kind, "authority_class": row.authority_class,
+        "media_type": row.media_type, "sha256": row.sha256, "size_bytes": row.size_bytes,
+        "parent_identities": _public_json(row.parent_identities),
+        "squigulator_runtime_identity": _public_json(row.squigulator_runtime_identity),
+        "squigualiser_runtime_identity": _public_json(row.squigualiser_runtime_identity),
+        "validation_receipt": _receipt_authority(row.validation_receipt),
+        "created_at": _public_time(row.created_at),
+    }
+
+
+def _comparison_job_public(
+    row: OntSignalComparisonJob, artifacts: list[OntSignalComparisonArtifact]
+) -> dict[str, Any]:
+    return {
+        "comparison_job_id": row.id, "viewer_session_id": row.viewer_session_id,
+        "viewer_session_revision": row.viewer_session_revision, "run_id": row.run_id,
+        "observed_generation": row.observed_generation,
+        "raw_representation_id": row.raw_representation_id,
+        "mapping_artifact_id": row.mapping_artifact_id,
+        "reference_revision_id": row.reference_revision_id,
+        "selected_read_id": row.selected_read_id, "reference_contig": row.reference_contig,
+        "reference_start": row.reference_start, "reference_end": row.reference_end,
+        "simulation_orientation": row.simulation_orientation,
+        "simulation_settings": _public_json(row.simulation_settings),
+        "sequence_basis": row.sequence_basis, "generated_read_id": row.generated_read_id,
+        "render_params": _public_json(row.render_params), "preview_digest": row.preview_digest,
+        "request_fingerprint": row.request_fingerprint, "attempt_number": row.attempt_number,
+        "predecessor_job_id": row.predecessor_job_id, "state": row.state,
+        "reason_code": row.reason_code, "resource_snapshot": _public_json(row.resource_snapshot),
+        "stage_receipts": _public_json(row.stage_receipts),
+        "output_manifest": _comparison_output_manifest_public(row.output_manifest),
+        "failure_code": row.failure_code, "failure_message": _public_json(row.failure_message),
+        "artifacts": [_comparison_artifact_public(item) for item in artifacts],
+        "created_at": _public_time(row.created_at), "updated_at": _public_time(row.updated_at),
+        "completed_at": _public_time(row.completed_at),
+    }
+
+
+async def _require_comparison_mapping_chain(
+    session: AsyncSession,
+    *,
+    viewer: OntSignalViewerSession,
+    artifact: OntSignalMappingArtifact,
+    mapping: OntSignalMappingJob,
+) -> OntSignalMappingJob:
+    signal_state = viewer.signal_state if isinstance(viewer.signal_state, Mapping) else {}
+    read_mapping_id = signal_state.get("read_mapping_job_id")
+    reference_mapping_id = signal_state.get("reference_mapping_job_id")
+    if reference_mapping_id != mapping.id or artifact.mapping_job_id != reference_mapping_id:
+        raise OntSignalError("comparison artifact diverges from saved reference mapping authority")
+    if (
+        mapping.alignment_job_id != viewer.alignment_job_id
+        or mapping.alignment_session_id != viewer.alignment_session_id
+    ):
+        raise OntSignalError("comparison mapping diverges from viewer alignment authority")
+    if not isinstance(read_mapping_id, str) or not read_mapping_id:
+        raise OntSignalError("comparison saved read mapping authority is required")
+    read_mapping = await session.get(OntSignalMappingJob, read_mapping_id)
+    if (
+        read_mapping is None
+        or read_mapping.state != "ready"
+        or read_mapping.mode != "signal_to_read"
+        or read_mapping.run_id != viewer.run_id
+        or read_mapping.observed_generation != viewer.observed_generation
+        or read_mapping.raw_representation_id != viewer.raw_representation_id
+        or read_mapping.mapping_profile_id != viewer.mapping_profile_id
+        or read_mapping.move_source_id != mapping.move_source_id
+    ):
+        raise OntSignalError("comparison saved read mapping authority is not exactly ready")
+    if mapping.parent_mapping_job_id != read_mapping.id:
+        raise OntSignalError("comparison reference mapping diverges from saved read mapping")
+    return read_mapping
+
+
+async def preview_signal_comparison(
+    session: AsyncSession,
+    domain_session: AsyncSession,
+    *,
+    viewer_session_id: str,
+    expected_viewer_revision: int,
+    mapping_artifact_id: str,
+    selected_read_id: str,
+    reference_contig: str,
+    reference_start: int,
+    reference_end: int,
+    simulation_settings: Mapping[str, Any],
+    render_params: Mapping[str, Any],
+) -> dict[str, Any]:
+    viewer = await session.get(OntSignalViewerSession, viewer_session_id)
+    artifact = await session.get(OntSignalMappingArtifact, mapping_artifact_id)
+    if viewer is None or artifact is None:
+        raise KeyError("comparison parent not found")
+    if viewer.revision != expected_viewer_revision:
+        raise OntSignalError("viewer session revision changed since selection")
+    if viewer.selected_read_id != selected_read_id or viewer.reference_revision_id is None:
+        raise OntSignalError("selected read or reference diverges from viewer authority")
+    if viewer.contig != reference_contig or viewer.locus_start is None or viewer.locus_end is None:
+        raise OntSignalError("comparison interval diverges from viewer locus authority")
+    if not (viewer.locus_start <= reference_start <= reference_end <= viewer.locus_end):
+        raise OntSignalError("comparison interval is outside the saved viewer locus")
+    if reference_end - reference_start + 1 > 1000:
+        raise OntSignalError("comparison interval exceeds 1000 bases")
+    mapping = await session.get(OntSignalMappingJob, artifact.mapping_job_id)
+    if mapping is not None:
+        await _require_comparison_mapping_chain(
+            session, viewer=viewer, artifact=artifact, mapping=mapping
+        )
+    representation = (
+        await session.get(OntRawSignalRepresentation, viewer.raw_representation_id)
+        if viewer.raw_representation_id else None
+    )
+    profile = (
+        await session.get(OntSignalMappingProfile, viewer.mapping_profile_id)
+        if viewer.mapping_profile_id else None
+    )
+    move_source = await session.get(OntMoveTableSource, mapping.move_source_id) if mapping is not None else None
+    run = await session.get(OntInstrumentRun, viewer.run_id)
+    if (
+        mapping is None or mapping.state != "ready" or mapping.mode != "signal_to_reference"
+        or representation is None or representation.state != "ready" or representation.format != "blow5"
+        or profile is None or move_source is None or run is None or mapping.raw_representation_id != representation.id
+        or mapping.mapping_profile_id != profile.id or mapping.reference_revision_id != viewer.reference_revision_id
+        or mapping.run_id != viewer.run_id or mapping.observed_generation != viewer.observed_generation
+    ):
+        raise OntSignalError("exact ready real signal-to-reference authority is required")
+    receipts = representation.validation_receipts if isinstance(representation.validation_receipts, dict) else {}
+    if receipts.get("adjacent_index") is not True:
+        raise OntSignalError("ready indexed BLOW5 authority is required")
+    revision, reference_artifact = await _resolve_reference_authority(
+        domain_session, viewer.reference_revision_id
+    )
+    if reference_artifact.size_bytes > 64 * 1024 * 1024:
+        raise OntSignalError("managed reference exceeds 64 MiB comparison policy")
+    effective = compile_ideal_comparison_settings(simulation_settings, render_params)
+    _require_comparison_interval_within_base_limit(
+        reference_start, reference_end, effective
+    )
+    simulated_profile = effective["profile"]
+    if profile.molecule_type != simulated_profile["molecule_type"]:
+        raise OntSignalError("incompatible Squigulator molecule profile")
+    validation_receipt = artifact.validation_receipt if isinstance(artifact.validation_receipt, dict) else {}
+    span = _selected_read_span(validation_receipt, selected_read_id, reference_contig)
+    strand = span.get("strand")
+    orientation = "reverse" if strand in {"reverse", "-"} else "forward"
+    padding = max(
+        int(profile.kmer_length) - 1 + abs(int(_mapping_profile_base_shift_authority(profile)["effective_value"])),
+        int(simulated_profile["kmer_length"]) - 1,
+    )
+    window_start, window_end = reference_start - padding, reference_end + padding
+    if window_start < 1:
+        raise OntSignalError("insufficient_sequence_context")
+    if window_end - window_start + 1 > 2048:
+        raise OntSignalError("derived simulation window exceeds 2048 bases")
+    if int(span.get("start", 0)) > window_start or int(span.get("end", 0)) < window_end:
+        raise OntSignalError("selected read does not cover the complete padded interval")
+    header_value = receipts.get("header_identity")
+    raw_header: dict[str, Any] = dict(header_value) if isinstance(header_value, Mapping) else {}
+    run_value = run.last_minknow_payload
+    run_receipt: dict[str, Any] = dict(run_value) if isinstance(run_value, Mapping) else {}
+    compatibility_receipt = _derive_ideal_comparison_compatibility(
+        simulated_profile=simulated_profile, mapping_profile=profile, move_source=move_source,
+        raw_header=raw_header, run_receipt=run_receipt,
+    )
+    compatibility = str(compatibility_receipt["disposition"])
+    if compatibility == "incompatible":
+        raise OntSignalError("incompatible Squigulator profile authority")
+    warnings = list(effective["warnings"])
+    if compatibility == "legacy_unknown":
+        warnings.append("Legacy real-signal authority is incomplete; compatibility is unknown.")
+    elif compatibility == "approximate_profile":
+        warnings.append("The selected Squigulator profile is an approximate model.")
+    effective = {**effective, "compatibility_disposition": compatibility,
+                 "compatibility_evidence": compatibility_receipt}
+    authority = {
+        "viewer_session_id": viewer.id, "viewer_session_revision": viewer.revision,
+        "run_id": viewer.run_id, "observed_generation": viewer.observed_generation,
+        "raw_representation_id": representation.id, "raw_manifest_sha256": representation.manifest_sha256,
+        "mapping_artifact_id": artifact.id, "mapping_artifact_sha256": artifact.sha256,
+        "mapping_job_id": mapping.id, "mapping_profile_id": profile.id,
+        "move_source_id": move_source.id, "move_source_artifact_sha256": move_source.artifact_sha256,
+        "reference_revision_id": revision.id, "reference_artifact_id": reference_artifact.id,
+        "reference_fasta_sha256": reference_artifact.sha256, "reference_topology": revision.topology,
+        "coordinate_contract": revision.coordinate_contract, "selected_read_id": selected_read_id,
+        "selected_read_span": span, "simulation_orientation": orientation,
+        "derived_window": {"contig": reference_contig, "start": window_start, "end": window_end},
+    }
+    effective_request = {
+        "authority": authority, "effective_settings": effective,
+        "reference_interval": {"contig": reference_contig, "start": reference_start, "end": reference_end},
+    }
+    preview_digest = _digest(effective_request)
+    return {
+        **authority, "compatibility_disposition": compatibility, "warnings": warnings,
+        "effective_request": effective_request, "preview_digest": preview_digest,
+    }
+
+
+async def create_signal_comparison(
+    session: AsyncSession, domain_session: AsyncSession, *, preview_digest: str, **request: Any
+) -> dict[str, Any]:
+    preview = await preview_signal_comparison(session, domain_session, **request)
+    if not hmac.compare_digest(preview["preview_digest"], preview_digest):
+        raise OntSignalError("preview digest no longer equals current immutable parents")
+    fingerprint = comparison_request_fingerprint(preview["effective_request"])
+    existing = (
+        await session.execute(select(OntSignalComparisonJob).where(
+            OntSignalComparisonJob.request_fingerprint == fingerprint,
+            OntSignalComparisonJob.state.in_(("requested", "running", "ready")),
+        ).order_by(OntSignalComparisonJob.attempt_number.desc()))
+    ).scalars().first()
+    if existing is not None:
+        return await get_signal_comparison(session, existing.id)
+    authority = preview["effective_request"]["authority"]
+    effective = preview["effective_request"]["effective_settings"]
+    now = _now()
+    row_id = _id("ont-comparison")
+    values = dict(
+        id=row_id, viewer_session_id=authority["viewer_session_id"],
+        viewer_session_revision=authority["viewer_session_revision"], run_id=authority["run_id"],
+        observed_generation=authority["observed_generation"], raw_representation_id=authority["raw_representation_id"],
+        mapping_artifact_id=authority["mapping_artifact_id"], reference_revision_id=authority["reference_revision_id"],
+        selected_read_id=authority["selected_read_id"], reference_contig=authority["derived_window"]["contig"],
+        reference_start=request["reference_start"], reference_end=request["reference_end"],
+        simulation_orientation=authority["simulation_orientation"], simulation_settings=effective,
+        sequence_basis="managed_reference", render_params=dict(request["render_params"]),
+        preview_digest=preview_digest, request_fingerprint=fingerprint, attempt_number=1,
+        state="requested", reason_code="comparison_requested", resource_snapshot={}, stage_receipts={},
+        output_manifest={}, created_at=now, updated_at=now,
+    )
+    inserted = await session.execute(
+        sqlite_insert(OntSignalComparisonJob).values(**values).on_conflict_do_nothing(
+            index_elements=["request_fingerprint", "attempt_number"]
+        )
+    )
+    if inserted.rowcount != 1:
+        winner = (await session.execute(select(OntSignalComparisonJob).where(
+            OntSignalComparisonJob.request_fingerprint == fingerprint,
+            OntSignalComparisonJob.attempt_number == 1,
+        ))).scalar_one()
+        return await get_signal_comparison(session, winner.id)
+    session.add(OntSignalComparisonEvent(
+        id=_id("ont-comparison-event"), comparison_job_id=row_id, state="requested",
+        reason_code="comparison_requested", receipt={"preview_digest": preview_digest}, created_at=now,
+    ))
+    await session.flush()
+    row = await session.get(OntSignalComparisonJob, row_id)
+    if row is None:
+        raise OntSignalError("comparison insertion authority was lost")
+    return _comparison_job_public(row, [])
+
+
+async def get_signal_comparison(session: AsyncSession, comparison_job_id: str) -> dict[str, Any]:
+    row = await session.get(OntSignalComparisonJob, comparison_job_id)
+    if row is None:
+        raise KeyError("comparison job not found")
+    artifacts = list((await session.execute(select(OntSignalComparisonArtifact).where(
+        OntSignalComparisonArtifact.comparison_job_id == row.id
+    ).order_by(OntSignalComparisonArtifact.kind))).scalars())
+    return _comparison_job_public(row, artifacts)
+
+
+async def cancel_signal_comparison(session: AsyncSession, comparison_job_id: str) -> dict[str, Any]:
+    row = await session.get(OntSignalComparisonJob, comparison_job_id)
+    if row is None:
+        raise KeyError("comparison job not found")
+    if row.state in {"ready", "failed", "cancelled"}:
+        return await get_signal_comparison(session, row.id)
+    now = _now()
+    if row.state == "requested":
+        result = await session.execute(update(OntSignalComparisonJob).where(
+            OntSignalComparisonJob.id == row.id,
+            OntSignalComparisonJob.state == "requested",
+            OntSignalComparisonJob.cancel_requested_at.is_(None),
+        ).values(
+            state="cancelled", reason_code="cancelled_before_claim",
+            cancel_requested_at=now, completed_at=now, updated_at=now,
+        ).execution_options(synchronize_session=False))
+        if result.rowcount == 1:
+            session.add(OntSignalComparisonEvent(id=_id("ont-comparison-event"), comparison_job_id=row.id,
+                state="cancelled", reason_code="cancelled_before_claim", receipt={}, created_at=now))
+        else:
+            await session.execute(update(OntSignalComparisonJob).where(
+                OntSignalComparisonJob.id == row.id,
+                OntSignalComparisonJob.state == "running",
+                OntSignalComparisonJob.cancel_requested_at.is_(None),
+            ).values(cancel_requested_at=now, updated_at=now).execution_options(synchronize_session=False))
+    else:
+        await session.execute(update(OntSignalComparisonJob).where(
+            OntSignalComparisonJob.id == row.id,
+            OntSignalComparisonJob.state == "running",
+            OntSignalComparisonJob.cancel_requested_at.is_(None),
+        ).values(cancel_requested_at=now, updated_at=now).execution_options(synchronize_session=False))
+    row_id = row.id
+    await session.flush()
+    session.expire_all()
+    return await get_signal_comparison(session, row_id)
+
+
+async def fresh_signal_comparison_attempt(session: AsyncSession, comparison_job_id: str) -> dict[str, Any]:
+    predecessor = await session.get(OntSignalComparisonJob, comparison_job_id)
+    if predecessor is None:
+        raise KeyError("comparison job not found")
+    if predecessor.state not in {"failed", "cancelled"} or predecessor.attempt_number >= 3:
+        raise OntSignalError("fresh attempt requires a failed/cancelled predecessor below attempt cap")
+    existing = (await session.execute(select(OntSignalComparisonJob).where(
+        OntSignalComparisonJob.predecessor_job_id == predecessor.id
+    ))).scalar_one_or_none()
+    if existing is not None:
+        return await get_signal_comparison(session, existing.id)
+    now = _now()
+    values = {column.name: getattr(predecessor, column.name) for column in OntSignalComparisonJob.__table__.columns
+              if column.name in {"viewer_session_id", "viewer_session_revision", "run_id", "observed_generation",
+              "raw_representation_id", "mapping_artifact_id", "reference_revision_id", "selected_read_id",
+              "reference_contig", "reference_start", "reference_end", "simulation_orientation",
+              "simulation_settings", "sequence_basis", "render_params", "preview_digest", "request_fingerprint"}}
+    row_id = _id("ont-comparison")
+    successor_values = dict(id=row_id, **values,
+        attempt_number=predecessor.attempt_number + 1, predecessor_job_id=predecessor.id,
+        state="requested", reason_code="fresh_comparison_attempt_requested", resource_snapshot={},
+        stage_receipts={}, output_manifest={}, created_at=now, updated_at=now)
+    inserted = await session.execute(
+        sqlite_insert(OntSignalComparisonJob).values(**successor_values).on_conflict_do_nothing(
+            index_elements=["predecessor_job_id"]
+        )
+    )
+    if inserted.rowcount != 1:
+        winner = (await session.execute(select(OntSignalComparisonJob).where(
+            OntSignalComparisonJob.predecessor_job_id == predecessor.id
+        ))).scalar_one()
+        return await get_signal_comparison(session, winner.id)
+    session.add(OntSignalComparisonEvent(id=_id("ont-comparison-event"), comparison_job_id=row_id,
+        state="requested", reason_code="fresh_comparison_attempt_requested",
+        receipt={"predecessor_job_id": predecessor.id}, created_at=now))
+    await session.flush()
+    row = await session.get(OntSignalComparisonJob, row_id)
+    if row is None:
+        raise OntSignalError("comparison successor insertion authority was lost")
+    return _comparison_job_public(row, [])
+
+
+async def list_signal_comparison_reviews(session: AsyncSession, comparison_job_id: str) -> list[dict[str, Any]]:
+    if await session.get(OntSignalComparisonJob, comparison_job_id) is None:
+        raise KeyError("comparison job not found")
+    rows = list((await session.execute(select(OntSignalManualReview).where(
+        OntSignalManualReview.comparison_job_id == comparison_job_id
+    ).order_by(OntSignalManualReview.created_at, OntSignalManualReview.id))).scalars())
+    return [{
+        "review_id": row.id, "comparison_job_id": row.comparison_job_id,
+        "predecessor_review_id": row.predecessor_review_id, "review_question": row.review_question,
+        "required_outcome": row.required_outcome, "note": row.note,
+        "reviewed_start": row.reviewed_start, "reviewed_end": row.reviewed_end,
+        "comparison_html_artifact_id": row.comparison_html_artifact_id,
+        "comparison_html_sha256": row.comparison_html_sha256,
+        "comparison_request_fingerprint": row.comparison_request_fingerprint,
+        "reviewer_identity": row.reviewer_identity, "created_at": _public_time(row.created_at),
+    } for row in rows]
+
+
+async def create_signal_comparison_review(
+    session: AsyncSession, comparison_job_id: str, *, reviewer_identity: str, **review: Any
+) -> dict[str, Any]:
+    job = await session.get(OntSignalComparisonJob, comparison_job_id)
+    if job is None:
+        raise KeyError("comparison job not found")
+    if job.state != "ready":
+        raise OntSignalError("manual review requires a ready comparison")
+    html = (await session.execute(select(OntSignalComparisonArtifact).where(
+        OntSignalComparisonArtifact.comparison_job_id == job.id,
+        OntSignalComparisonArtifact.kind == "comparison_html",
+    ))).scalar_one_or_none()
+    if html is None:
+        raise OntSignalError("ready comparison lacks immutable HTML authority")
+    if review.get("reviewed_start") != job.reference_start or review.get("reviewed_end") != job.reference_end:
+        raise OntSignalError("manual review must cover the immutable comparison interval")
+    predecessor_id = review.get("predecessor_review_id")
+    latest = (await session.execute(select(OntSignalManualReview).where(
+        OntSignalManualReview.comparison_job_id == job.id
+    ).order_by(OntSignalManualReview.created_at.desc(), OntSignalManualReview.id.desc()))).scalars().first()
+    if latest is None:
+        if predecessor_id is not None:
+            raise OntSignalError("manual-review predecessor diverges from comparison")
+    elif predecessor_id != latest.id:
+        raise OntSignalError("manual-review predecessor must be the latest review")
+    if predecessor_id is not None:
+        predecessor = await session.get(OntSignalManualReview, predecessor_id)
+        if predecessor is None or predecessor.comparison_job_id != job.id:
+            raise OntSignalError("manual-review predecessor diverges from comparison")
+    row_id = _id("ont-review")
+    inserted = await session.execute(sqlite_insert(OntSignalManualReview).values(
+        id=row_id, comparison_job_id=job.id,
+        comparison_html_artifact_id=html.id, comparison_html_sha256=html.sha256,
+        comparison_request_fingerprint=job.request_fingerprint, reviewer_identity=reviewer_identity,
+        created_at=_now(), **review,
+    ).on_conflict_do_nothing())
+    if inserted.rowcount != 1:
+        raise OntSignalError("manual-review revision raced with a newer review")
+    return (await list_signal_comparison_reviews(session, job.id))[-1]
+
+
+async def resolve_signal_comparison_artifact(
+    session: AsyncSession, comparison_job_id: str, artifact_id: str
+) -> tuple[bytes, dict[str, Any]]:
+    row = await session.get(OntSignalComparisonArtifact, artifact_id)
+    job = await session.get(OntSignalComparisonJob, comparison_job_id)
+    if row is None or job is None or row.comparison_job_id != job.id or job.state != "ready":
+        raise KeyError("comparison artifact not found")
+    relative = Path(row.managed_relative_path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(component in {"", ".", ".."} for component in relative.parts)
+    ):
+        raise OntSignalError("comparison artifact path authority is invalid")
+    root = get_results_dir() / "ont_signal_workbench"
+    parent_fd = _open_absolute_directory_nofollow(root)
+    root_fd = parent_fd
+    descriptor: int | None = None
+    try:
+        for component in relative.parts[:-1]:
+            child_fd = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = child_fd
+        descriptor = os.open(
+            relative.parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent_fd,
+        )
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OntSignalError("comparison artifact must be a retained regular file")
+        raw, digest = _read_bounded_descriptor(
+            descriptor, limit=64 * 1024 * 1024, label="comparison artifact"
+        )
+    except OntSignalError:
+        raise
+    except OSError as exc:
+        raise OntSignalError(
+            "comparison artifact cannot be opened without following symbolic links"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd != root_fd:
+            os.close(parent_fd)
+        os.close(root_fd)
+    if digest != row.sha256 or len(raw) != row.size_bytes:
+        raise OntSignalError("comparison artifact bytes diverged from immutable authority")
+    return raw, _comparison_artifact_public(row)

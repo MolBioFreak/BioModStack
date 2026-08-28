@@ -30,6 +30,9 @@ from database import (
     OntRawSignalRepresentation,
     OntSignalCalibrationArtifact,
     OntSignalCalibrationJob,
+    OntSignalComparisonArtifact,
+    OntSignalComparisonEvent,
+    OntSignalComparisonJob,
     OntSignalMappingArtifact,
     OntSignalMappingEvent,
     OntSignalMappingJob,
@@ -58,18 +61,51 @@ RUNTIME_POLICY_SHA256 = "34d2af958f51539ba6d09e59f354798c0091f6e4d63428d3f5de0ba
 APPROVED_OCI_DIGEST = "sha256:4061ecf65ad8edbe909592e9e922ee089ee67260fbd8384da3321d0313d5e404"
 APPROVED_UPSTREAM_COMMIT = "5a2404f1f43bc3227a85475c59b2b77970078b2e"
 MAX_CONTAINER_LOG_BYTES = 8 * 1024 * 1024
-COMMAND_DEADLINES = {"move": 2 * 60 * 60, "calibration": 2 * 60 * 60, "mapping": 4 * 60 * 60, "view": 15 * 60}
+COMMAND_DEADLINES = {
+    "move": 2 * 60 * 60, "calibration": 2 * 60 * 60, "mapping": 4 * 60 * 60,
+    "view": 15 * 60, "squigulator_producer": 5 * 60,
+    "squigualiser_comparison_renderer": 15 * 60,
+}
+COMMAND_LOG_LIMITS = {
+    "squigulator_producer": 4 * 1024 * 1024,
+    "squigualiser_comparison_renderer": 8 * 1024 * 1024,
+}
 TOTAL_OUTPUT_LIMITS = {
     "move": 2 * 1024 * 1024 * 1024,
     "calibration": 2 * 1024 * 1024 * 1024,
     "mapping": 2 * 1024 * 1024 * 1024,
     "view": 64 * 1024 * 1024,
+    "squigulator_producer": 32 * 1024 * 1024,
+    "squigualiser_comparison_renderer": 64 * 1024 * 1024,
 }
 FILE_SIZE_LIMITS = {
     "move": 1536 * 1024 * 1024,
     "calibration": 1536 * 1024 * 1024,
     "mapping": 1536 * 1024 * 1024,
     "view": 48 * 1024 * 1024,
+    "squigulator_producer": 16 * 1024 * 1024,
+    "squigualiser_comparison_renderer": 48 * 1024 * 1024,
+}
+SQUIGULATOR_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "ont_signal_workbench" / "squigulator_runtime_policy_v1.json"
+COMPARISON_RENDER_POLICY_PATH = Path(__file__).resolve().parents[1] / "config" / "ont_signal_workbench" / "comparison_render_runtime_policy_v1.json"
+COMPARISON_ARTIFACT_AUTHORITY = {
+    "simulation_input_fasta": "comparison_derived", "simulation_coordinate_map": "comparison_derived",
+    "simulated_blow5": "simulated_derived", "simulated_blow5_index": "simulated_derived",
+    "simulated_read_fasta": "simulated_derived", "simulated_read_id_map": "simulated_derived",
+    "simulated_source_paf": "simulated_derived", "simulated_normalized_paf": "comparison_derived",
+    "simulated_source_sam": "simulated_derived", "simulated_normalized_sam": "comparison_derived",
+    "comparison_html": "comparison_derived", "comparison_manifest": "comparison_derived",
+}
+COMPARISON_PRODUCER_FILENAMES = {
+    "simulation_input.fasta": "simulation_input_fasta",
+    "simulation_coordinate_map.json": "simulation_coordinate_map",
+    "simulated.blow5": "simulated_blow5", "simulated.blow5.idx": "simulated_blow5_index",
+    "simulated_reads.fasta": "simulated_read_fasta",
+    "simulated_read_id_map.json": "simulated_read_id_map",
+    "simulated_source.paf": "simulated_source_paf",
+    "simulated_normalized.paf": "simulated_normalized_paf",
+    "simulated_source.sam": "simulated_source_sam",
+    "simulated_normalized.sam": "simulated_normalized_sam",
 }
 
 
@@ -81,8 +117,73 @@ class OutputLimitExceeded(RuntimeError):
     pass
 
 
+class ContainerLogLimitExceeded(RuntimeError):
+    pass
+
+
 class TerminalFenceLost(RuntimeError):
     pass
+
+
+class ParentAuthorityDrift(RuntimeError):
+    pass
+
+
+COMPARISON_FAILURE_REASON_CODES = frozenset({
+    "container_timeout", "log_limit", "output_limit", "malformed_signal",
+    "malformed_sam", "parent_drift", "lease_loss", "cleanup_failure",
+})
+
+
+class ComparisonRuntimeFailure(RuntimeError):
+    def __init__(self, reason_code: str, message: str) -> None:
+        if reason_code not in COMPARISON_FAILURE_REASON_CODES:
+            raise ValueError("comparison runtime failure reason is outside the closed vocabulary")
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _comparison_failure_reason(exc: Exception) -> str:
+    if isinstance(exc, ComparisonRuntimeFailure):
+        return exc.reason_code
+    if isinstance(exc, TimeoutError):
+        return "container_timeout"
+    if isinstance(exc, ContainerLogLimitExceeded):
+        return "log_limit"
+    if isinstance(exc, OutputLimitExceeded):
+        return "output_limit"
+    if isinstance(exc, ParentAuthorityDrift):
+        return "parent_drift"
+    if isinstance(exc, TerminalFenceLost):
+        return "lease_loss"
+    if isinstance(exc, ContainerCleanupError):
+        return "cleanup_failure"
+    return "runtime_validation_failed"
+
+
+def _comparison_container_failure(kind: str, stderr_tail: str) -> RuntimeError:
+    terminal_line = next(
+        (line.strip() for line in reversed(stderr_tail.splitlines()) if line.strip()),
+        "",
+    )
+    reason_code: str | None = None
+    if kind == "squigulator_producer":
+        if terminal_line == "RuntimeError: Squigulator combined log limit exceeded":
+            reason_code = "log_limit"
+        elif terminal_line.startswith("ValueError: Squigulator SAM "):
+            reason_code = "malformed_sam"
+        elif terminal_line.startswith((
+            "ValueError: simulated BLOW5 ",
+            "ValueError: Squigulator PAF dwell truth diverges from signal coordinates",
+        )):
+            reason_code = "malformed_signal"
+    elif kind == "squigualiser_comparison_renderer":
+        if terminal_line == "RuntimeError: comparison renderer command log ceiling exceeded":
+            reason_code = "log_limit"
+        elif terminal_line.startswith("ValueError: comparison BLOW5 "):
+            reason_code = "malformed_signal"
+    message = stderr_tail or "comparison runtime failed"
+    return ComparisonRuntimeFailure(reason_code, message) if reason_code else RuntimeError(message)
 
 
 def _effective_base_shift(params: dict[str, Any]) -> int:
@@ -248,7 +349,7 @@ class RetainedParentSet:
             leased = True
             digest, size, identity = _identity_from_descriptor(descriptor)
             if digest != expected_sha256 or size != expected_size:
-                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+                raise ParentAuthorityDrift("retained parent diverged from immutable hash/size authority")
             parent = RetainedParent(descriptor, alias, digest, size, identity)
             self._parents.append(parent)
             self.assert_unbroken()
@@ -292,7 +393,7 @@ class RetainedParentSet:
             leased = True
             digest, size, identity = await asyncio.to_thread(_identity_from_descriptor, descriptor)
             if digest != expected_sha256 or size != expected_size:
-                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+                raise ParentAuthorityDrift("retained parent diverged from immutable hash/size authority")
             parent = RetainedParent(descriptor, alias, digest, size, identity)
             self._parents.append(parent)
             self.assert_unbroken()
@@ -359,7 +460,7 @@ class RetainedParentSet:
                 _identity_from_descriptor, descriptor
             )
             if digest != expected_sha256 or size != expected_size:
-                raise RuntimeError("retained parent diverged from immutable hash/size authority")
+                raise ParentAuthorityDrift("retained parent diverged from immutable hash/size authority")
             parent = RetainedParent(descriptor, alias, digest, size, identity)
             self._parents.append(parent)
             self.assert_unbroken()
@@ -380,15 +481,15 @@ class RetainedParentSet:
 
     def assert_unbroken(self) -> None:
         if self._closed or lease_break_generation() != self._opened_at_generation:
-            raise RuntimeError("retained-parent read lease was broken")
+            raise ParentAuthorityDrift("retained-parent read lease was broken")
         for parent in self._parents:
             current = os.fstat(parent.fd)
             if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != parent.identity:
-                raise RuntimeError("retained-parent descriptor identity changed")
+                raise ParentAuthorityDrift("retained-parent descriptor identity changed")
         for descriptor, identity in self._root_descriptors:
             current = os.fstat(descriptor)
             if (current.st_dev, current.st_ino, current.st_ctime_ns) != identity:
-                raise RuntimeError("retained-parent root descriptor identity changed")
+                raise ParentAuthorityDrift("retained-parent root descriptor identity changed")
 
     def metadata(self, operation_argv: list[str]) -> dict[str, Any]:
         self.assert_unbroken()
@@ -400,6 +501,9 @@ class RetainedParentSet:
                 for parent in self._parents
             ],
         }
+
+    def subset(self, aliases: set[str]) -> "RetainedParentView":
+        return RetainedParentView(self, aliases)
 
     def close(self) -> None:
         if self._closed:
@@ -425,6 +529,35 @@ class RetainedParentSet:
 
     def __exit__(self, *_args: Any) -> None:
         self.close()
+
+
+class RetainedParentView:
+    """Expose only the retained descriptors needed by one runtime stage."""
+
+    def __init__(self, owner: RetainedParentSet, aliases: set[str]) -> None:
+        owner.assert_unbroken()
+        selected = tuple(parent for parent in owner.parents if parent.alias in aliases)
+        if {parent.alias for parent in selected} != aliases:
+            raise RuntimeError("retained-parent subset is incomplete")
+        self._owner, self._parents = owner, selected
+
+    @property
+    def parents(self) -> tuple[RetainedParent, ...]:
+        return self._parents
+
+    def assert_unbroken(self) -> None:
+        self._owner.assert_unbroken()
+
+    def metadata(self, operation_argv: list[str]) -> dict[str, Any]:
+        self.assert_unbroken()
+        return {
+            "schema": "bms.ont-signal-fd-broker.v1",
+            "operation_argv": operation_argv,
+            "parents": [
+                {"alias": parent.alias, "sha256": parent.sha256, "size_bytes": parent.size_bytes}
+                for parent in self._parents
+            ],
+        }
 
 
 def _append_lease_recovery_receipt(
@@ -620,6 +753,112 @@ class OntSignalWorker:
             "--socket", "/broker/parents.sock", "--timeout-seconds", "30",
         ]
         return command
+
+    @staticmethod
+    def _comparison_runtime_identity(stage: str) -> dict[str, str]:
+        approvals: dict[str, tuple[Path, str, str, str, str, dict[str, Any]]] = {
+            "squigulator_producer": (
+                SQUIGULATOR_POLICY_PATH, "BMS_ONT_SQUIGULATOR_IMAGE",
+                "BMS_ONT_SQUIGULATOR_IMAGE_DIGEST", "scripts/ont_squigulator_runtime.py",
+                "edd60f7d2930674767df43d3f196b2111f899a28feb71c5cf9a59b05815fa871",
+                {"schema": "bms.ont-squigulator-runtime-policy.v1",
+                 "runtime_id": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
+                 "oci_digest": "sha256:10690870e22ae777ada80688060eb30977e63034b56bedb38c160a827604351b",
+                 "upstream": {"name": "Squigulator", "version": "0.5.0", "commit": "c5f0c619a28b9532388877096acb7568c34b9c4b"},
+                 "source_asset": {"name": "squigulator-v0.5.0-release.tar.gz", "sha256": "f8b428655d586427c6e0c939d4a0383fa8569523234e3c21951edcd23372a66a"},
+                 "licenses": {"squigulator": "MIT", "slow5lib": "MIT", "streamvbyte": "Apache-2.0"},
+                 "wrapper": "scripts/ont_squigulator_runtime.py",
+                 "wrapper_sha256": "e5ff983ab508c14424b93aa2787127eedc546bde5f6fbd349b5ff939956338b1",
+                 "network": "none"},
+            ),
+            "squigualiser_comparison_renderer": (
+                COMPARISON_RENDER_POLICY_PATH, "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE",
+                "BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST", "scripts/ont_signal_comparison_runtime.py",
+                "a5a2d25ef8bfc9e49e9244454e48641907ac34d42aa786af5302e2ecfca4a182",
+                {"schema": "bms.ont-squigualiser-comparison-runtime-policy.v1",
+                 "runtime_id": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
+                 "oci_digest": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
+                 "upstream": {"name": "Squigualiser", "version": "0.7.0", "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e"},
+                 "wrapper": "scripts/ont_signal_comparison_runtime.py",
+                 "wrapper_sha256": "80f780ed1a34eb09f6f5a95db826ac13a5684a276575c2a2d867165032889ee7",
+                 "network": "none"},
+            ),
+        }
+        try:
+            policy_path, image_env, digest_env, wrapper_name, approved_policy_sha256, expected_policy = approvals[stage]
+        except KeyError as exc:
+            raise RuntimeError("unknown comparison runtime stage") from exc
+        descriptor = os.open(policy_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            raw = os.read(descriptor, 8193)
+            opened = os.fstat(descriptor)
+            if len(raw) > 8192 or os.read(descriptor, 1) or not stat.S_ISREG(opened.st_mode):
+                raise RuntimeError("approved comparison runtime policy is not a bounded regular file")
+        finally:
+            os.close(descriptor)
+        policy_sha256 = hashlib.sha256(raw).hexdigest()
+        try:
+            policy = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("approved comparison runtime policy is invalid") from exc
+        wrapper_relative = Path(wrapper_name)
+        if wrapper_relative.is_absolute() or wrapper_relative.parts[0] != "scripts" or len(wrapper_relative.parts) != 2:
+            raise RuntimeError("approved comparison wrapper path is invalid")
+        if policy_sha256 != approved_policy_sha256 or policy != expected_policy:
+            raise RuntimeError("approved comparison runtime policy identity diverged")
+        wrapper_path = Path(__file__).resolve().parents[3] / wrapper_relative
+        wrapper_descriptor = os.open(wrapper_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            wrapper_info = os.fstat(wrapper_descriptor)
+            if not stat.S_ISREG(wrapper_info.st_mode) or wrapper_info.st_size <= 0 or wrapper_info.st_size > 1024 * 1024:
+                raise RuntimeError("approved comparison wrapper is not a bounded regular file")
+            wrapper_digest = hashlib.sha256()
+            while chunk := os.read(wrapper_descriptor, 1024 * 1024):
+                wrapper_digest.update(chunk)
+            wrapper_sha256 = wrapper_digest.hexdigest()
+        finally:
+            os.close(wrapper_descriptor)
+        image = os.environ.get(image_env, "").strip()
+        digest = os.environ.get(digest_env, "").strip().lower()
+        if (
+            image != expected_policy["runtime_id"]
+            or digest != str(expected_policy["oci_digest"]).removeprefix("sha256:")
+            or wrapper_sha256 != expected_policy["wrapper_sha256"]
+            or not HEX64.fullmatch(digest)
+        ):
+            raise RuntimeError(f"configured {stage} identity diverges from approved policy")
+        return {"stage": stage, "image": image, "image_digest": digest,
+                "policy_sha256": policy_sha256, "wrapper_sha256": wrapper_sha256}
+
+    def _comparison_container_command(
+        self, stage: str, output_dir: Path, broker_dir: Path
+    ) -> list[str]:
+        identity = self._comparison_runtime_identity(stage)
+        runtime = os.environ.get("BMS_CONTAINER_RUNTIME", "podman").strip()
+        if runtime not in {"podman", "docker"}:
+            raise RuntimeError("unsupported container runtime")
+        self._assert_local_runtime_image(runtime, identity["image"])
+        uid, gid = self._container_user_identity()
+        output = Path(os.path.abspath(output_dir))
+        broker = Path(os.path.abspath(broker_dir))
+        if not output.is_dir() or output.is_symlink() or not broker.is_dir() or broker.is_symlink():
+            raise RuntimeError("comparison output or broker directory is invalid")
+        common = [runtime, "run", "--pull=never", "--network", "none", "--read-only",
+                  "--user", f"{uid}:{gid}", "--cap-drop", "ALL", "--label", WORKER_LABEL,
+                  "--security-opt", "no-new-privileges", "--mount",
+                  f"type=bind,src={output},dst=/output", "--mount",
+                  f"type=bind,src={broker},dst=/broker"]
+        if stage == "squigulator_producer":
+            return [*common, "--pids-limit", "64", "--memory", "1g", "--cpus", "1",
+                    "--ulimit", f"fsize={FILE_SIZE_LIMITS[stage]}:{FILE_SIZE_LIMITS[stage]}",
+                    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m", identity["image"],
+                    "python3", "/opt/bms/ont_squigulator_runtime.py", "broker",
+                    "--socket", "/broker/parents.sock", "--timeout-seconds", "30"]
+        return [*common, "--pids-limit", "128", "--memory", "4g", "--cpus", "4",
+                "--ulimit", f"fsize={FILE_SIZE_LIMITS[stage]}:{FILE_SIZE_LIMITS[stage]}",
+                "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=512m", identity["image"],
+                "python3", "/opt/bms/ont_signal_comparison_runtime.py", "broker",
+                "--socket", "/broker/parents.sock", "--timeout-seconds", "30"]
 
     @staticmethod
     def _stable_file_identity(path: Path) -> tuple[str, int]:
@@ -884,6 +1123,11 @@ class OntSignalWorker:
             "move": common | {"filtered_moves.bam", "read_inventory.txt", "validation.json"},
             "calibration": common | {"sample.bam", "sample.fasta", "sample.blow5", "sample.blow5.idx", "baseline.paf", "calibration.json"},
             "mapping": common | {"reform.paf", "realign.paf.gz", "realign.paf.gz.tbi", "validation.json"},
+            "squigulator_producer": common | set(COMPARISON_PRODUCER_FILENAMES) | {"producer_manifest.json"},
+            "squigualiser_comparison_renderer": common | set(COMPARISON_PRODUCER_FILENAMES) | {
+                "producer_manifest.json", "real_track.html", "simulated_track.html",
+                "comparison.html", "comparison_manifest.json",
+            },
         }
         if kind == "view":
             extras = allowed_extra or set()
@@ -952,13 +1196,13 @@ class OntSignalWorker:
             if len(tail) > MAX_FAILURE:
                 del tail[:-MAX_FAILURE]
             if size > MAX_CONTAINER_LOG_BYTES:
-                raise OutputLimitExceeded(f"container {stream_name} log output limit exceeded")
+                raise ContainerLogLimitExceeded(f"container {stream_name} log output limit exceeded")
         return {"sha256": digest.hexdigest(), "size_bytes": size, "tail": bytes(tail).decode("utf-8", "replace")}
 
     async def _send_fd_request(
         self,
         socket_path: Path,
-        parents: RetainedParentSet,
+        parents: RetainedParentSet | RetainedParentView,
         operation_argv: list[str],
     ) -> None:
         payload = json.dumps(
@@ -997,7 +1241,7 @@ class OntSignalWorker:
 
     async def _invoke(
         self,
-        parents: RetainedParentSet,
+        parents: RetainedParentSet | RetainedParentView,
         operation_argv: list[str],
         kind: str,
         item_id: str,
@@ -1008,7 +1252,11 @@ class OntSignalWorker:
         broker_dir = Path(tempfile.mkdtemp(prefix=f"bms-ont-{kind}-", dir="/tmp"))
         os.chmod(broker_dir, 0o700)
         try:
-            command = self._container_command(output_dir, broker_dir, kind=kind)
+            command = (
+                self._comparison_container_command(kind, output_dir, broker_dir)
+                if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}
+                else self._container_command(output_dir, broker_dir, kind=kind)
+            )
             return await self._execute(
                 command,
                 kind,
@@ -1032,11 +1280,16 @@ class OntSignalWorker:
         output_dir: Path,
         allowed_output_names: set[str] | None = None,
         *,
-        parents: RetainedParentSet,
+        parents: RetainedParentSet | RetainedParentView,
         operation_argv: list[str],
         broker_socket: Path,
     ) -> dict[str, Any]:
-        table = {"move": OntMoveTableSource, "calibration": OntSignalCalibrationJob, "mapping": OntSignalMappingJob, "view": OntSquigualiserViewJob}[kind]
+        table = {
+            "move": OntMoveTableSource, "calibration": OntSignalCalibrationJob,
+            "mapping": OntSignalMappingJob, "view": OntSquigualiserViewJob,
+            "squigulator_producer": OntSignalComparisonJob,
+            "squigualiser_comparison_renderer": OntSignalComparisonJob,
+        }[kind]
         state_field = "validation_state" if kind == "move" else "state"
         async with self._session_factory() as session:
             lease_now = self._now()
@@ -1108,6 +1361,9 @@ class OntSignalWorker:
                         await session.commit()
                     next_lease_check = time.monotonic() + 30
             stream_receipts = await asyncio.gather(*drains)
+            combined_log_size = sum(int(item["size_bytes"]) for item in stream_receipts)
+            if combined_log_size > COMMAND_LOG_LIMITS.get(kind, 2 * MAX_CONTAINER_LOG_BYTES):
+                raise ContainerLogLimitExceeded(f"{kind} combined log ceiling exceeded")
             parents.assert_unbroken()
             self._output_tree_size(output_dir, TOTAL_OUTPUT_LIMITS[kind])
             self._assert_expected_outputs(output_dir, kind, allowed_output_names)
@@ -1123,6 +1379,8 @@ class OntSignalWorker:
                 "container_name_sha256": hashlib.sha256(container_name.encode()).hexdigest(),
             }
             if returncode != 0:
+                if kind in {"squigulator_producer", "squigualiser_comparison_renderer"}:
+                    raise _comparison_container_failure(kind, receipt["stderr_tail"])
                 raise RuntimeError(receipt["stderr_tail"] or "Squigualiser runtime failed")
             return receipt
         finally:
@@ -1148,6 +1406,7 @@ class OntSignalWorker:
                 observed_token = row.claim_token
                 observed_expiry = row.lease_expires_at
                 cancelled = getattr(row, "cancel_requested_at", None) is not None
+                comparison_recovery_receipt: dict[str, Any] | None = None
                 values: dict[str, Any] = {
                     state_field: "cancelled" if cancelled else "requested",
                     "reason_code": "cancelled_after_expired_lease" if cancelled else "expired_lease_recovered",
@@ -1171,6 +1430,29 @@ class OntSignalWorker:
                         max_attempts=SIGNAL_JOB_MAX_ATTEMPTS,
                     )
                     if not cancelled and row.attempt >= SIGNAL_JOB_MAX_ATTEMPTS:
+                        values.update(
+                            {
+                                state_field: "failed",
+                                "reason_code": "expired_lease_retry_exhausted",
+                                "failure_code": "ExpiredLeaseRetryExhausted",
+                                "failure_message": "expired worker lease exhausted bounded attempt policy",
+                                "completed_at": now,
+                            }
+                        )
+                if isinstance(row, OntSignalComparisonJob):
+                    receipts = dict(row.stage_receipts or {})
+                    prior_recoveries = receipts.get("lease_recoveries", [])
+                    if not isinstance(prior_recoveries, list):
+                        raise RuntimeError("comparison lease recovery receipt history is malformed")
+                    expired_execution = len(prior_recoveries) + 1
+                    values["stage_receipts"] = _append_lease_recovery_receipt(
+                        receipts,
+                        expired_attempt=expired_execution,
+                        recovered_at=now,
+                        max_attempts=SIGNAL_JOB_MAX_ATTEMPTS,
+                    )
+                    comparison_recovery_receipt = values["stage_receipts"]["lease_recoveries"][-1]
+                    if not cancelled and expired_execution >= SIGNAL_JOB_MAX_ATTEMPTS:
                         values.update(
                             {
                                 state_field: "failed",
@@ -1221,6 +1503,15 @@ class OntSignalWorker:
                 if result.rowcount not in {0, 1}:
                     await session.rollback()
                     raise RuntimeError("expired lease recovery CAS affected an invalid row count")
+                if result.rowcount == 1 and comparison_recovery_receipt is not None:
+                    session.add(OntSignalComparisonEvent(
+                        id=f"ont-comparison-event-{uuid.uuid4().hex}",
+                        comparison_job_id=row.id,
+                        state=str(values[state_field]),
+                        reason_code=str(values["reason_code"]),
+                        receipt={"lease_recovery": comparison_recovery_receipt},
+                        created_at=now,
+                    ))
             await session.commit()
 
     async def _recover_expired(self) -> None:
@@ -1230,6 +1521,7 @@ class OntSignalWorker:
             (OntSignalCalibrationJob, "state"),
             (OntSignalMappingJob, "state"),
             (OntSquigualiserViewJob, "state"),
+            (OntSignalComparisonJob, "state"),
         ):
             await self._recover_expired_table(table, state_field, now)
 
@@ -1293,8 +1585,9 @@ class OntSignalWorker:
                 await session.rollback()
                 await self._cancel_claim(table, state_field, item_id, token)
                 return
+            failure_reason = _comparison_failure_reason(exc)
             values: dict[str, Any] = {
-                state_field: "failed", "reason_code": "runtime_validation_failed",
+                state_field: "failed", "reason_code": failure_reason,
                 "claim_token": None, "lease_expires_at": None,
             }
             if hasattr(table, "failure_code"): values["failure_code"] = exc.__class__.__name__
@@ -1338,7 +1631,9 @@ class OntSignalWorker:
                 await session.rollback()
                 return
             if isinstance(row, OntSignalMappingJob):
-                session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=row.id, state="failed", reason_code="runtime_validation_failed", receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
+                session.add(OntSignalMappingEvent(id=f"ont-signal-event-{uuid.uuid4().hex}", job_id=row.id, state="failed", reason_code=failure_reason, receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
+            if isinstance(row, OntSignalComparisonJob):
+                session.add(OntSignalComparisonEvent(id=f"ont-comparison-event-{uuid.uuid4().hex}", comparison_job_id=row.id, state="failed", reason_code=failure_reason, receipt={"error_class": exc.__class__.__name__}, created_at=self._now()))
             await session.commit()
 
     @staticmethod
@@ -1510,20 +1805,20 @@ class OntSignalWorker:
                 "emit_moves": "validated_from_bam_tags",
                 "independent_move_validation": True,
             }
-        if state != "known":
+        if state != "verified":
             raise RuntimeError("move-source producer runtime authority state is invalid")
         if identity.get("emit_moves") is not True:
-            raise RuntimeError("known producer emit-moves authority is not true")
+            raise RuntimeError("verified producer emit-moves authority is not true")
         if identity.get("basecall_model_id") != report.get("basecall_model_id"):
-            raise RuntimeError("validated BAM basecall model diverges from known producer authority")
+            raise RuntimeError("validated BAM basecall model diverges from verified producer authority")
         if (
             identity.get("read_count") != record_count
             or identity.get("read_inventory_sha256") != inventory_sha256
             or identity.get("move_tag_counts") != counts
         ):
-            raise RuntimeError("validated BAM move/read-set evidence diverges from known producer authority")
+            raise RuntimeError("validated BAM move/read-set evidence diverges from verified producer authority")
         return {
-            "authority_state": "known",
+            "authority_state": "verified",
             "basecall_model_id": report["basecall_model_id"],
             "emit_moves": True,
             "independent_move_validation": True,
@@ -2137,6 +2432,242 @@ class OntSignalWorker:
             parents.assert_unbroken()
             await session.commit()
 
+    async def _process_comparison(self, item_id: str, token: str) -> None:
+        """Run the descriptor-brokered producer before the comparison renderer."""
+        with RetainedParentSet(self._governed_parent_roots()) as parents:
+            await self._process_comparison_retained(item_id, token, parents)
+
+    async def _process_comparison_retained(
+        self, item_id: str, token: str, parents: RetainedParentSet
+    ) -> None:
+        output = self._output_root() / "comparisons" / item_id
+        self._prepare_output_directory(output, item_id)
+        async with self._session_factory() as session:
+            job = await session.get(OntSignalComparisonJob, item_id)
+            if job is None or job.claim_token != token or job.state != "running":
+                raise TerminalFenceLost("comparison lease was lost before orchestration")
+            if job.cancel_requested_at is not None:
+                raise asyncio.CancelledError()
+            artifact = await session.get(OntSignalMappingArtifact, job.mapping_artifact_id)
+            mapping = None if artifact is None else await session.get(OntSignalMappingJob, artifact.mapping_job_id)
+            viewer = await session.get(ont_signal_workbench.OntSignalViewerSession, job.viewer_session_id)
+            representation = await session.get(OntRawSignalRepresentation, job.raw_representation_id)
+            source = None if mapping is None else await session.get(OntMoveTableSource, mapping.move_source_id)
+            profile = None if mapping is None else await session.get(OntSignalMappingProfile, mapping.mapping_profile_id)
+            if (
+                artifact is None or mapping is None or viewer is None or representation is None or source is None or profile is None
+                or artifact.kind != "realign_paf" or mapping.mode != "signal_to_reference"
+                or mapping.state != "ready" or representation.state != "ready" or representation.format != "blow5"
+                or source.validation_state != "ready" or mapping.raw_representation_id != representation.id
+                or mapping.reference_revision_id != job.reference_revision_id
+                or mapping.run_id != job.run_id or mapping.observed_generation != job.observed_generation
+                or representation.run_id != job.run_id or representation.observed_generation != job.observed_generation
+                or source.raw_representation_id != representation.id or source.molecule_type != profile.molecule_type
+                or job.sequence_basis != "managed_reference"
+            ):
+                raise RuntimeError("comparison real signal/reference authority is not exactly ready")
+            try:
+                await ont_signal_workbench._require_comparison_mapping_chain(
+                    session, viewer=viewer, artifact=artifact, mapping=mapping
+                )
+            except ont_signal_workbench.OntSignalError as exc:
+                raise RuntimeError("comparison viewer mapping chain is not exactly ready") from exc
+            mapping_parents = artifact.parent_identities if isinstance(artifact.parent_identities, dict) else {}
+            self._require_hash_contract("comparison raw manifest snapshot", mapping_parents.get("raw_manifest_sha256"), representation.manifest_sha256)
+            self._require_hash_contract("comparison original move snapshot", mapping_parents.get("move_bam_sha256"), source.artifact_sha256)
+            self._require_hash_contract("comparison move inventory snapshot", mapping_parents.get("move_read_inventory_sha256"), source.read_inventory_sha256)
+            mapping_path = Path(artifact.managed_relative_path)
+            retained_mapping = await self._pin_parent_async(
+                parents, mapping_path, alias="mapping.paf.gz",
+                expected_sha256=artifact.sha256, expected_size=artifact.size_bytes,
+            )
+            mapping_index_path = Path(f"{mapping_path}.tbi")
+            retained_mapping_index = await self._pin_parent_async(
+                parents, mapping_index_path, alias="mapping.paf.gz.tbi",
+                expected_sha256=str(artifact.validation_receipt.get("index_sha256") or ""),
+                expected_size=int(artifact.validation_receipt.get("index_size_bytes") or 0),
+            )
+            selected_raw, raw_resolution = await self._resolve_selected_raw_partitions_async(
+                representation, [job.selected_read_id]
+            )
+            raw_identities = await self._pin_raw_partitions_async(parents, representation, selected_raw)
+            real_blow5_parents = {
+                "routing_sha256": raw_resolution.get("routing_sha256"),
+                "blow5": raw_identities,
+            }
+            source_outputs = source.validation_receipt.get("managed_outputs", {}) if isinstance(source.validation_receipt, dict) else {}
+            source_hashes = source.validation_receipt.get("managed_output_sha256s", {}) if isinstance(source.validation_receipt, dict) else {}
+            retained_moves = await self._pin_parent_async(
+                parents, Path(str(source_outputs.get("filtered_move_bam", ""))), alias="filtered_moves.bam",
+                expected_sha256=str(source_hashes.get("filtered_move_bam_sha256") or ""),
+                expected_size=int(source_hashes.get("filtered_move_bam_size_bytes") or 0),
+            )
+            settings = job.simulation_settings if isinstance(job.simulation_settings, dict) else {}
+            operator = settings.get("operator_owned", {}) if isinstance(settings.get("operator_owned"), dict) else {}
+            simulated_profile = settings.get("profile", {}) if isinstance(settings.get("profile"), dict) else {}
+            profile_id, seed = operator.get("profile_id"), operator.get("seed")
+            simulated_kmer = simulated_profile.get("kmer_length")
+            if (
+                not isinstance(profile_id, str) or isinstance(seed, bool) or not isinstance(seed, int)
+                or isinstance(simulated_kmer, bool) or not isinstance(simulated_kmer, int)
+            ):
+                raise RuntimeError("comparison effective simulation settings are malformed")
+            base_shift = int(ont_signal_workbench._mapping_profile_base_shift_authority(profile)["effective_value"])
+            padding = max(int(profile.kmer_length) - 1 + abs(base_shift), simulated_kmer - 1)
+            window_start, window_end = job.reference_start - padding, job.reference_end + padding
+            spans = artifact.validation_receipt.get("read_spans", {}) if isinstance(artifact.validation_receipt, dict) else {}
+            span = spans.get(job.selected_read_id) if isinstance(spans, dict) else None
+            if (
+                window_start < 1 or window_end - window_start + 1 > 2048 or not isinstance(span, dict)
+                or span.get("contig") != job.reference_contig
+                or int(span.get("start", 0)) > window_start or int(span.get("end", 0)) < window_end
+                or job.simulation_orientation not in {"forward", "reverse"}
+            ):
+                raise RuntimeError("comparison derived reference window authority is invalid")
+            async with self._domain_session_factory() as domain_session:
+                revision = await domain_session.get(MolBioNGSReferenceRevision, job.reference_revision_id)
+                reference_artifact = None if revision is None else await domain_session.get(MolBioNGSReferenceArtifact, revision.artifact_id)
+                if revision is None or reference_artifact is None:
+                    raise RuntimeError("comparison managed reference authority disappeared")
+                reference_path = get_molbio_ngs_reference_root() / reference_artifact.managed_relative_path
+                retained_reference = await self._pin_parent_async(
+                    parents, reference_path, alias="reference.fasta",
+                    expected_sha256=reference_artifact.sha256, expected_size=reference_artifact.size_bytes,
+                )
+            expected_parents = {
+                "reference_fasta_sha256": retained_reference.sha256,
+                "mapping_sha256": retained_mapping.sha256,
+                "mapping_index_sha256": retained_mapping_index.sha256,
+                "real_blow5": real_blow5_parents,
+                "real_moves_sha256": retained_moves.sha256,
+                "raw_manifest_sha256": representation.manifest_sha256,
+                "run_id": job.run_id, "observed_generation": job.observed_generation,
+                "selected_read_id": job.selected_read_id,
+            }
+            producer_args = [
+                "produce", "--reference-fasta", "/parents/reference.fasta",
+                "--reference-sha256", retained_reference.sha256, "--contig", job.reference_contig,
+                "--window-start", str(window_start), "--window-end", str(window_end),
+                "--orientation", job.simulation_orientation, "--profile-id", profile_id,
+                "--seed", str(seed),
+            ]
+        producer_parents = parents.subset({"reference.fasta"})
+        producer_receipt = await self._invoke(
+            producer_parents, producer_args, "squigulator_producer", item_id, token, output
+        )
+        producer_manifest = self._read_json_report(output / "producer_manifest.json")
+        relation = producer_manifest.get("generated_read_id_relation")
+        producer_artifacts = producer_manifest.get("artifacts")
+        if (
+            producer_manifest.get("schema") != "bms.ont-squigulator-producer-manifest.v1"
+            or not isinstance(relation, dict) or not isinstance(relation.get("generated_read_id"), str)
+            or not isinstance(producer_artifacts, list)
+            or producer_manifest.get("parents", {}).get("reference_fasta_sha256") != expected_parents["reference_fasta_sha256"]
+        ):
+            raise RuntimeError("comparison producer manifest is malformed or unbound")
+        generated_read_id = str(relation["generated_read_id"])
+        producer_by_kind: dict[str, dict[str, Any]] = {}
+        for item in producer_artifacts:
+            if not isinstance(item, dict) or item.get("kind") not in set(COMPARISON_PRODUCER_FILENAMES.values()):
+                continue
+            kind = str(item["kind"]); filename = str(item.get("filename", ""))
+            expected_filename = next((name for name, value in COMPARISON_PRODUCER_FILENAMES.items() if value == kind), None)
+            if filename != expected_filename:
+                raise RuntimeError("comparison producer artifact filename is not canonical")
+            path = output / filename
+            actual_sha, actual_size = await self._stable_file_identity_async(path)
+            self._require_hash_contract("comparison producer artifact", {"sha256": item.get("sha256"), "size_bytes": item.get("size_bytes")}, {"sha256": actual_sha, "size_bytes": actual_size})
+            producer_by_kind[kind] = item
+        if set(producer_by_kind) != set(COMPARISON_PRODUCER_FILENAMES.values()):
+            raise RuntimeError("comparison producer artifact set is incomplete")
+        for filename in (
+            "simulated.blow5", "simulated.blow5.idx", "simulated_reads.fasta",
+            "simulated_normalized.paf", "producer_manifest.json",
+        ):
+            path = output / filename
+            digest, size = await self._stable_file_identity_async(path)
+            await self._pin_parent_async(parents, path, alias=filename, expected_sha256=digest, expected_size=size)
+        render_args = [
+            "render", "--real-blow5", "/parents/raw-0.blow5",
+            "--real-mapping", "/parents/mapping.paf.gz", "--real-moves", "/parents/filtered_moves.bam",
+            "--reference-fasta", "/parents/reference.fasta", "--simulated-blow5", "/parents/simulated.blow5",
+            "--simulated-fasta", "/parents/simulated_reads.fasta", "--simulated-mapping", "/parents/simulated_normalized.paf",
+            "--producer-manifest", "/parents/producer_manifest.json",
+            "--real-read-id", job.selected_read_id, "--profile-id", profile_id,
+            "--contig", job.reference_contig, "--start", str(job.reference_start), "--end", str(job.reference_end),
+            "--orientation", job.simulation_orientation, "--molecule-type", source.molecule_type,
+            "--real-kmer-length", str(profile.kmer_length),
+            "--simulated-kmer-length", str(simulated_kmer),
+            "--base-shift", str(base_shift),
+            "--render-params-json", json.dumps(job.render_params, sort_keys=True, separators=(",", ":")),
+        ]
+        renderer_receipt = await self._invoke(
+            parents, render_args, "squigualiser_comparison_renderer", item_id, token, output
+        )
+        manifest_path = output / "comparison_manifest.json"
+        manifest = self._read_json_report(manifest_path)
+        raw_artifacts = manifest.get("artifacts")
+        if manifest.get("schema") != "bms.ont-signal-comparison-manifest.v1" or not isinstance(raw_artifacts, list):
+            raise RuntimeError("comparison manifest artifact inventory is malformed")
+        stage_receipts = {
+            "squigulator_producer": {**producer_receipt, "runtime_identity": self._comparison_runtime_identity("squigulator_producer")},
+            "squigualiser_comparison_renderer": {**renderer_receipt, "runtime_identity": self._comparison_runtime_identity("squigualiser_comparison_renderer")},
+        }
+        manifest = {**manifest, "parents": expected_parents,
+                    "runtime_identities": {key: value["runtime_identity"] for key, value in stage_receipts.items()},
+                    "stage_receipts": stage_receipts}
+        manifest_path.write_bytes(json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n")
+        manifest_sha, manifest_size = await self._stable_file_identity_async(manifest_path)
+        raw_artifacts = [*raw_artifacts, {"kind": "comparison_manifest", "filename": "comparison_manifest.json",
+            "media_type": "application/json", "sha256": manifest_sha, "size_bytes": manifest_size,
+            "validation_receipt": {"schema": manifest["schema"]}}]
+        if {item.get("kind") for item in raw_artifacts if isinstance(item, dict)} != set(COMPARISON_ARTIFACT_AUTHORITY):
+            raise RuntimeError("comparison final artifact set is incomplete or unexpected")
+        artifacts: list[OntSignalComparisonArtifact] = []
+        governed_root = self._output_root().resolve()
+        for item in raw_artifacts:
+            if not isinstance(item, dict) or item.get("kind") not in COMPARISON_ARTIFACT_AUTHORITY:
+                raise RuntimeError("comparison manifest contains an unsupported artifact")
+            kind = str(item["kind"]); relative = Path(str(item.get("filename", "")))
+            if relative.is_absolute() or len(relative.parts) != 1:
+                raise RuntimeError("comparison artifact path is invalid")
+            path = output / relative
+            sha256, size = await self._stable_file_identity_async(path)
+            if sha256 != item.get("sha256") or size != item.get("size_bytes"):
+                raise RuntimeError("comparison artifact diverged from manifest")
+            artifacts.append(OntSignalComparisonArtifact(
+                id=f"ont-comparison-artifact-{uuid.uuid4().hex}", comparison_job_id=item_id,
+                kind=kind, authority_class=COMPARISON_ARTIFACT_AUTHORITY[kind],
+                managed_relative_path=path.resolve().relative_to(governed_root).as_posix(),
+                media_type=str(item.get("media_type")), sha256=sha256, size_bytes=size,
+                parent_identities=expected_parents,
+                squigulator_runtime_identity=stage_receipts["squigulator_producer"]["runtime_identity"] if kind != "comparison_html" else None,
+                squigualiser_runtime_identity=stage_receipts["squigualiser_comparison_renderer"]["runtime_identity"] if kind in {"comparison_html", "comparison_manifest"} else None,
+                validation_receipt=item.get("validation_receipt", {}), created_at=self._now(),
+            ))
+        async with self._session_factory() as session:
+            parents.assert_unbroken()
+            current = await session.get(OntSignalComparisonJob, item_id)
+            if current is None or current.claim_token != token or current.cancel_requested_at is not None:
+                raise asyncio.CancelledError()
+            session.add_all(artifacts)
+            now = self._now()
+            result = await session.execute(update(OntSignalComparisonJob).where(
+                OntSignalComparisonJob.id == item_id, OntSignalComparisonJob.claim_token == token,
+                OntSignalComparisonJob.state == "running", OntSignalComparisonJob.cancel_requested_at.is_(None),
+                OntSignalComparisonJob.lease_expires_at > now,
+            ).values(state="ready", reason_code="ideal_comparison_ready", claim_token=None,
+                lease_expires_at=None, generated_read_id=generated_read_id,
+                resource_snapshot={"parents": expected_parents}, stage_receipts=stage_receipts,
+                output_manifest=manifest, updated_at=now, completed_at=now))
+            if result.rowcount != 1:
+                await session.rollback(); raise TerminalFenceLost("comparison publication fence was lost")
+            session.add(OntSignalComparisonEvent(id=f"ont-comparison-event-{uuid.uuid4().hex}",
+                comparison_job_id=item_id, state="ready", reason_code="ideal_comparison_ready",
+                receipt={"stage_receipts": stage_receipts, "generated_read_id": generated_read_id}, created_at=now))
+            parents.assert_unbroken()
+            await session.commit()
+
     async def _cancel_claim(self, table: Any, state_field: str, item_id: str, token: str) -> None:
         async with self._session_factory() as session:
             now = self._now()
@@ -2158,6 +2689,15 @@ class OntSignalWorker:
             if result.rowcount != 1:
                 await session.rollback()
                 return
+            if table is OntSignalComparisonJob:
+                session.add(OntSignalComparisonEvent(
+                    id=f"ont-comparison-event-{uuid.uuid4().hex}",
+                    comparison_job_id=item_id,
+                    state="cancelled",
+                    reason_code="cancelled",
+                    receipt={"disposition": "cancelled_during_owned_execution"},
+                    created_at=now,
+                ))
             await session.commit()
 
     async def _run(self) -> None:
@@ -2168,6 +2708,7 @@ class OntSignalWorker:
                 (OntSignalCalibrationJob, "state", "calibration", self._process_calibration),
                 (OntSignalMappingJob, "state", "mapping", self._process_mapping),
                 (OntSquigualiserViewJob, "state", "view", self._process_view),
+                (OntSignalComparisonJob, "state", "comparison", self._process_comparison),
             ):
                 claimed = await self._claim(table, field)
                 if claimed is None: continue
@@ -2177,8 +2718,9 @@ class OntSignalWorker:
                 except asyncio.CancelledError:
                     if self._stop.is_set(): raise
                     await self._cancel_claim(table, field, item_id, token)
-                except ContainerCleanupError:
+                except ContainerCleanupError as exc:
                     logger.critical("ONT signal worker stopped after unreconciled container cleanup failure", exc_info=True)
+                    await self._fail(table, field, item_id, token, exc)
                     self._stop.set()
                     return
                 except Exception as exc:

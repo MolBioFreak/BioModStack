@@ -13,13 +13,14 @@ from typing import Any, Iterable
 import rfc8785
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError, validators
 from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT202012
 
 _API_ROOT = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _API_ROOT.parents[1]
 _CONFIG_ROOT = _API_ROOT / "config/ngs_molbio"
 _SCHEMA_ROOT = _REPO_ROOT / "schemas/ngs_molbio"
 _VERIFICATION_RECEIPT = _REPO_ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
-_RUNTIME_RECORD = _API_ROOT / "config/ngs_molbio_runtime/runtime_implementation_v1.json"
+_RUNTIME_RECORD = _API_ROOT / "config/ngs_molbio_runtime/runtime_implementation_v2.json"
 _VERIFICATION_SCHEMA_ID = "bms.ngs-molbio.phase-n0-verification-receipt.v1"
 _SHA256 = frozenset("0123456789abcdef")
 _GATES = frozenset(
@@ -37,7 +38,7 @@ _GATES = frozenset(
     }
 )
 _REGISTRY_FILES = {
-    "schema": "schema_registry_v1.json",
+    "schema": "schema_registry_v2.json",
     "adapter": "adapter_registry_v1.json",
     "event": "event_registry_v1.json",
     "dataset": "dataset_kind_registry_v1.json",
@@ -47,7 +48,7 @@ _REGISTRY_FILES = {
     "payload_ownership": "payload_ownership_manifest_v1.json",
 }
 _REGISTRY_SCHEMA_IDS = {
-    "schema": "bms.ngs-molbio.schema-registry.v1",
+    "schema": "bms.ngs-molbio.schema-registry.v2",
     "adapter": "bms.ngs-molbio.adapter-registry.v1",
     "event": "bms.ngs-molbio.event-registry.v1",
     "dataset": "bms.ngs-molbio.dataset-kind-registry.v1",
@@ -247,7 +248,12 @@ def _registry(schemas: dict[str, dict[str, Any]]) -> Registry:
     registry = Registry()
     try:
         for schema_id, schema in schemas.items():
-            registry = registry.with_resource(schema_id, Resource.from_contents(schema))
+            resource = (
+                Resource.from_contents(schema)
+                if "$schema" in schema
+                else Resource(contents=schema, specification=DRAFT202012)
+            )
+            registry = registry.with_resource(schema_id, resource)
     except Exception as exc:
         raise NgsMolBioCapabilityError("schema registry cannot resolve installed resources") from exc
     return registry
@@ -261,11 +267,18 @@ def _schema_closure(
         path = _path(entry["path"])
         schema, raw = _read(path)
         schema_id = entry["schema_id"]
-        if schema.get("$id") != schema_id:
+        if schema.get("$id", schema.get("schema")) != schema_id:
             raise NgsMolBioCapabilityError(f"schema ID mismatch: {schema_id}")
         if _raw_digest(raw) != entry["schema_sha256"]:
             raise NgsMolBioCapabilityError(f"schema byte digest mismatch: {schema_id}")
-        if hashlib.sha256(rfc8785.dumps(schema)).hexdigest() != entry["schema_canonical_sha256"]:
+        canonical_raw = (
+            rfc8785.dumps(schema)
+            if "$id" in schema
+            else json.dumps(
+                schema, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")
+        )
+        if hashlib.sha256(canonical_raw).hexdigest() != entry["schema_canonical_sha256"]:
             raise NgsMolBioCapabilityError(f"schema canonical digest mismatch: {schema_id}")
         Draft202012Validator.check_schema(schema)
         if schema_id in schemas:
@@ -480,6 +493,14 @@ def _verify_phase_n0_receipt(
         *(str(path.relative_to(_REPO_ROOT)) for path in _SCHEMA_ROOT.glob("*.json")),
     }
     expected_paths.discard(receipt_relative)
+    expected_paths.difference_update(
+        {
+            "platform/api/config/ngs_molbio/capability_inventory_v2.json",
+            "platform/api/config/ngs_molbio/schema_registry_v2.json",
+            "schemas/ngs_molbio/capability-inventory-v2.schema.json",
+            "schemas/ngs_molbio/schema-registry-v2.schema.json",
+        }
+    )
     rows = _unique(receipt["payload_files"], "path", "verification payload path")
     if set(rows) != expected_paths:
         raise NgsMolBioCapabilityError("Phase N0 verification payload manifest is incomplete")
@@ -532,26 +553,22 @@ def _loaded_documents() -> tuple[
             raise NgsMolBioCapabilityError(f"registry schema is absent: {schema_id}")
         _validate(documents[name], schema, f"{name} registry", reference_registry)
 
-    if schema_registry["baseline_source_commit"] != documents["source_pin"]["baseline_commit"]:
-        raise NgsMolBioCapabilityError("schema registry baseline commit disagrees with source pin")
-    if schema_registry["baseline_source_tree"] != documents["source_pin"]["baseline_tree"]:
-        raise NgsMolBioCapabilityError("schema registry baseline tree disagrees with source pin")
     for name in ("adapter", "event", "dataset", "protein_constraint", "branch_closure"):
         if documents[name]["baseline_source_commit"] != documents["source_pin"]["baseline_commit"]:
             raise NgsMolBioCapabilityError(f"{name} registry baseline commit disagrees with source pin")
     _verify_source_pin(documents["source_pin"])
 
-    inventory, inventory_raw = _read(_CONFIG_ROOT / "capability_inventory_v1.json")
-    inventory_schema = schemas.get("bms.ngs-molbio.capability-inventory.v1")
+    inventory, inventory_raw = _read(_CONFIG_ROOT / "capability_inventory_v2.json")
+    inventory_schema = schemas.get("bms.ngs-molbio.capability-inventory.v2")
     if inventory_schema is None:
         raise NgsMolBioCapabilityError("capability inventory schema is absent")
     _validate(inventory, inventory_schema, "capability inventory", reference_registry)
     if inventory["content_sha256"] != _canonical_digest(inventory):
         raise NgsMolBioCapabilityError("capability inventory digest mismatch")
-    if inventory["baseline_source_commit"] != documents["source_pin"]["baseline_commit"]:
-        raise NgsMolBioCapabilityError("capability baseline commit disagrees with source pin")
-    if inventory["baseline_source_tree"] != documents["source_pin"]["baseline_tree"]:
-        raise NgsMolBioCapabilityError("capability baseline tree disagrees with source pin")
+    if inventory["baseline_source_commit"] != schema_registry["baseline_source_commit"]:
+        raise NgsMolBioCapabilityError("capability baseline commit disagrees with schema registry")
+    if inventory["baseline_source_tree"] != schema_registry["baseline_source_tree"]:
+        raise NgsMolBioCapabilityError("capability baseline tree disagrees with schema registry")
     byte_bindings = {
         "source_pin_sha256": "source_pin",
         "schema_registry_sha256": "schema",
@@ -568,8 +585,8 @@ def _loaded_documents() -> tuple[
 
     schema_rows = _unique(schema_registry["entries"], "schema_id", "schema ID")
     capabilities = _unique(inventory["capabilities"], "capability_id", "capability ID")
-    if len(capabilities) != 21:
-        raise NgsMolBioCapabilityError("capability denominator must contain exactly 21 IDs")
+    if len(capabilities) != 22:
+        raise NgsMolBioCapabilityError("capability denominator must contain exactly 22 IDs")
     for capability_id, record in capabilities.items():
         if record["inventory_sha256"] != _canonical_digest(record, "inventory_sha256"):
             raise NgsMolBioCapabilityError(f"capability digest mismatch: {capability_id}")

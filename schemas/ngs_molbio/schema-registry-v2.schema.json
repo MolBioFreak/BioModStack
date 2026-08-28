@@ -1,0 +1,63 @@
+{
+  "$id": "bms.ngs-molbio.schema-registry.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseline_source_commit": {
+      "const": "1d41fb50300a4e574670f6a02a0345e597ac9ed4"
+    },
+    "baseline_source_tree": {
+      "const": "af85061039a5fafdcb828336f09ea6355713d1a9"
+    },
+    "content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_canonical_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "schema_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schema_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_id",
+          "path",
+          "schema_sha256",
+          "schema_canonical_sha256"
+        ],
+        "type": "object"
+      },
+      "maxItems": 256,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema": {
+      "const": "bms.ngs-molbio.schema-registry.v2"
+    }
+  },
+  "required": [
+    "schema",
+    "baseline_source_commit",
+    "baseline_source_tree",
+    "entries",
+    "content_sha256"
+  ],
+  "type": "object"
+}

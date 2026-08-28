@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React, { act, type ComponentProps } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
@@ -666,6 +667,14 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
+    it('discovers and mounts ideal comparison inside the existing workbench', async () => {
+        await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42' }) });
+        await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));
+        await act(async () => { button('Ideal comparison').click(); await Promise.resolve(); });
+        expect(container.textContent).toContain('Profile-fixed values');
+        expect(container.textContent).toContain('Real acquired signal');
+    });
+
     it('registers one path-opaque external move BAM candidate to the exact run tuple', async () => {
         await renderWorkbench({ viewerSession: null });
         await waitUntil(() => expect(container.textContent).toContain('BFX6NB_1_JAN26-EL-Q2-01.bam'));
@@ -1021,7 +1030,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(viewerContract).toContain('signal_state: OntSignalViewerSignalState;');
         expect(viewerContract).toContain('igv_state: OntSignalViewerIgvUpdateState;');
         expect(viewerContract).toContain('signal_state: OntSignalViewerSignalUpdateState;');
-        expect(viewerContract).toContain("mode: OntSignalViewMode | 'raw_waveform';");
+        expect(viewerContract).toContain("mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';");
         expect(viewerContract).toContain('render_params: OntSignalRenderParams;');
         expect(viewerContract).toContain('read_mapping_job_id: string | null;');
         expect(viewerContract).toContain('reference_mapping_job_id: string | null;');

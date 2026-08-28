@@ -668,6 +668,99 @@ class OntSignalViewerSession(Base):
     updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
+class OntSignalComparisonJob(Base):
+    __tablename__ = "ont_signal_comparison_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", "attempt_number", name="uq_ont_signal_comparison_attempt"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_comparison_state"),
+        CheckConstraint("attempt_number BETWEEN 1 AND 3", name="ck_ont_signal_comparison_attempt"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    viewer_session_id = Column(String(96), ForeignKey("ont_signal_viewer_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    viewer_session_revision = Column(Integer, nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False)
+    observed_generation = Column(Integer, nullable=False)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    mapping_artifact_id = Column(String(96), ForeignKey("ont_signal_mapping_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    reference_revision_id = Column(String(128), nullable=False)
+    selected_read_id = Column(String(128), nullable=False)
+    reference_contig = Column(String(255), nullable=False)
+    reference_start = Column(Integer, nullable=False)
+    reference_end = Column(Integer, nullable=False)
+    simulation_orientation = Column(String(16), nullable=False)
+    simulation_settings = Column(JSON, nullable=False)
+    sequence_basis = Column(String(32), nullable=False, default="managed_reference")
+    generated_read_id = Column(String(128), nullable=True)
+    render_params = Column(JSON, nullable=False)
+    preview_digest = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    predecessor_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="comparison_requested")
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    output_manifest = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalComparisonEvent(Base):
+    __tablename__ = "ont_signal_comparison_events"
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalComparisonArtifact(Base):
+    __tablename__ = "ont_signal_comparison_artifacts"
+    __table_args__ = (UniqueConstraint("comparison_job_id", "kind", name="uq_ont_signal_comparison_artifact_kind"),)
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    authority_class = Column(String(32), nullable=False)
+    managed_relative_path = Column(Text, nullable=False, unique=True)
+    media_type = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    parent_identities = Column(JSON, nullable=False)
+    squigulator_runtime_identity = Column(JSON, nullable=True)
+    squigualiser_runtime_identity = Column(JSON, nullable=True)
+    validation_receipt = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalManualReview(Base):
+    __tablename__ = "ont_signal_manual_reviews"
+    __table_args__ = (
+        Index("uq_ont_signal_manual_review_root", "comparison_job_id", unique=True,
+              sqlite_where=text("predecessor_review_id IS NULL")),
+    )
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    predecessor_review_id = Column(String(96), ForeignKey("ont_signal_manual_reviews.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    review_question = Column(Text, nullable=False)
+    required_outcome = Column(String(16), nullable=False)
+    note = Column(Text, nullable=False)
+    reviewed_start = Column(Integer, nullable=False)
+    reviewed_end = Column(Integer, nullable=False)
+    comparison_html_artifact_id = Column(String(96), ForeignKey("ont_signal_comparison_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    comparison_html_sha256 = Column(String(64), nullable=False)
+    comparison_request_fingerprint = Column(String(64), nullable=False)
+    reviewer_identity = Column(String(255), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
 class OntProtocolOptionReceipt(Base):
     """Expiring server-owned receipt for one normalized MinKNOW protocol option."""
 

@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import secrets
+from collections.abc import Mapping
+from enum import Enum
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
@@ -16,6 +20,37 @@ from services import ont_signal_workbench as service
 
 router = APIRouter()
 OPAQUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_TRUSTED_PROXY_HEADER = "x-bms-cm-proxy-secret"
+
+
+def _comparison_principal(request: Request) -> str:
+    principal = getattr(request.state, "authenticated_principal", None)
+    if principal is None:
+        configured = os.getenv("BMS_CM_TRUSTED_PROXY_SECRET", "")
+        supplied = request.headers.get(_TRUSTED_PROXY_HEADER, "")
+        if configured and supplied and secrets.compare_digest(configured, supplied):
+            return "local-application-operator"
+        raise HTTPException(status_code=401, detail={
+            "schema": "bms.ont-signal-comparison.error.v1",
+            "code": "COMPARISON_AUTH_REQUIRED",
+            "message": "Authenticated comparison principal required",
+            "retryable": False,
+        })
+    if isinstance(principal, Mapping):
+        actor = principal.get("id") or principal.get("subject")
+        roles = principal.get("roles") or []
+    else:
+        actor = getattr(principal, "id", None) or getattr(principal, "subject", None)
+        roles = getattr(principal, "roles", [])
+    normalized_roles = {str(role).strip().lower() for role in roles}
+    if not actor or not normalized_roles.intersection({"operator", "scientist", "admin"}):
+        raise HTTPException(status_code=403, detail={
+            "schema": "bms.ont-signal-comparison.error.v1",
+            "code": "COMPARISON_FORBIDDEN",
+            "message": "Comparison scientist/operator role required",
+            "retryable": False,
+        })
+    return str(actor)[:255]
 
 
 class ClosedModel(BaseModel):
@@ -112,6 +147,398 @@ class RenderParams(ClosedModel):
         return value
 
 
+ComparisonProfileId = Literal[
+    "dna-r9-min", "dna-r9-prom", "rna-r9-min", "rna-r9-prom",
+    "dna-r10-min", "dna-r10-prom", "rna004-min", "rna004-prom",
+]
+
+
+class ComparisonSimulationSettings(ClosedModel):
+    profile_id: ComparisonProfileId
+    seed: int = Field(default=1, ge=1, le=2_147_483_647)
+
+
+class ComparisonPointSize(float, Enum):
+    HALF = 0.5
+    ONE = 1
+    TWO = 2
+    THREE = 3
+    FOUR = 4
+    FIVE = 5
+    SIX = 6
+    SEVEN = 7
+    EIGHT = 8
+    NINE = 9
+    TEN = 10
+
+
+class ComparisonRenderParams(ClosedModel):
+    scale: Literal["none", "medmad", "znorm"] = "none"
+    point_size: ComparisonPointSize = ComparisonPointSize.HALF
+    fixed_width: StrictBool = False
+    base_width: int = Field(default=10, ge=1, le=100)
+    base_limit: int = Field(default=1000, ge=1, le=1000)
+    signal_sample_limit: int = Field(default=100_000, ge=1, le=2_000_000)
+    show_samples: StrictBool = True
+    show_base_colours: StrictBool = True
+    remove_signal_outliers: StrictBool = False
+
+
+class ComparisonPreviewCreate(ClosedModel):
+    viewer_session_id: str
+    expected_viewer_revision: int = Field(ge=1)
+    mapping_artifact_id: str
+    selected_read_id: str
+    reference_contig: str
+    reference_start: int = Field(ge=1)
+    reference_end: int = Field(ge=1)
+    simulation_settings: ComparisonSimulationSettings
+    render_params: ComparisonRenderParams
+
+    @model_validator(mode="after")
+    def closed_interval(self):
+        if self.reference_end < self.reference_start:
+            raise ValueError("reference interval must be 1-based closed")
+        if self.reference_end - self.reference_start + 1 > 1000:
+            raise ValueError("comparison interval exceeds 1000 bases")
+        return self
+
+
+class ComparisonCreate(ComparisonPreviewCreate):
+    preview_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ComparisonReviewCreate(ClosedModel):
+    predecessor_review_id: str | None = None
+    review_question: str = Field(min_length=1, max_length=1000)
+    required_outcome: Literal["approve", "reject", "record_only"]
+    note: str = Field(min_length=1, max_length=4000)
+    reviewed_start: int = Field(ge=1)
+    reviewed_end: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def closed_review_interval(self):
+        if self.reviewed_end < self.reviewed_start:
+            raise ValueError("reviewed interval must be 1-based closed")
+        return self
+
+
+class ComparisonReadSpan(ClosedModel):
+    contig: str
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+    strand: Literal["forward", "reverse", "+", "-"]
+
+
+class ComparisonInterval(ClosedModel):
+    contig: str
+    start: int = Field(ge=1)
+    end: int = Field(ge=1)
+
+
+class ComparisonProfileFixed(ClosedModel):
+    molecule_type: Literal["dna", "rna"]
+    flow_cell_generation: str
+    device_class: Literal["MinION", "PromethION"]
+    pore_model_identity: str
+    kmer_length: int = Field(ge=1)
+    digitisation: float
+    sample_rate: float
+    translocation_speed: float
+    range: float
+    offset_mean: float
+    offset_standard_deviation: float
+    median_before_mean: float
+    median_before_standard_deviation: float
+    dwell_mean: float
+    dwell_standard_deviation: float
+    model_quality_warning: str | None
+    compatibility_floor: Literal["matched_profile", "approximate_profile"]
+
+
+class ComparisonOperatorSettings(ComparisonSimulationSettings, ComparisonRenderParams):
+    pass
+
+
+class ComparisonWorkflowFixed(ClosedModel):
+    simulation_mode: Literal["ideal"]
+    full_contigs: Literal[True]
+    amplitude_noise_factor: Literal[0]
+    dwell_noise: Literal[0]
+    prefix: Literal[False]
+    input_sequence_count: Literal[1]
+    simulated_signal_record_count: Literal[1]
+    signal_units: Literal["pA"]
+    real_read_count: Literal[1]
+    reference_hypothesis_count: Literal[1]
+    sequence_basis: Literal["managed_reference"]
+    threads: Literal[1]
+    batch_size: Literal[1]
+
+
+class ComparisonUpstream(ClosedModel):
+    name: Literal["Squigulator"]
+    version: Literal["0.5.0"]
+    commit: str
+    release_source_asset: str
+    release_source_asset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ComparisonCompatibilityEvidence(ClosedModel):
+    mapping_profile_molecule_type: str | None
+    mapping_profile_basecall_model_id: str | None
+    mapping_profile_kmer_length: int | None
+    move_source_molecule_type: str | None
+    move_source_basecall_model_id: str | None
+    move_source_runtime_authority: str | None
+    raw_sample_rate: str | int | float | None
+    raw_digitisation: str | int | float | None
+    raw_range: str | int | float | None
+    run_flow_cell_generation: str | None
+    run_device_class: str | None
+
+
+class ComparisonCompatibilityReceipt(ClosedModel):
+    disposition: Literal["matched_profile", "approximate_profile", "legacy_unknown", "incompatible"]
+    evidence: ComparisonCompatibilityEvidence
+    missing_authorities: list[str]
+    mismatches: list[str]
+
+
+class ComparisonEffectiveSettings(ClosedModel):
+    schema_id: Literal["bms.ont-squigulator-ideal-comparison-effective.v1"] = Field(alias="schema")
+    operator_owned: ComparisonOperatorSettings
+    profile_id: ComparisonProfileId
+    profile: ComparisonProfileFixed
+    workflow_fixed: ComparisonWorkflowFixed
+    compatibility_floor: Literal["matched_profile", "approximate_profile"]
+    warnings: list[str]
+    upstream: ComparisonUpstream
+    compatibility_disposition: Literal["matched_profile", "approximate_profile", "legacy_unknown", "incompatible"]
+    compatibility_evidence: ComparisonCompatibilityReceipt
+
+
+class ComparisonAuthority(ClosedModel):
+    viewer_session_id: str
+    viewer_session_revision: int
+    run_id: str
+    observed_generation: int
+    raw_representation_id: str
+    raw_manifest_sha256: str
+    mapping_artifact_id: str
+    mapping_artifact_sha256: str
+    mapping_job_id: str
+    mapping_profile_id: str
+    move_source_id: str
+    move_source_artifact_sha256: str
+    reference_revision_id: str
+    reference_artifact_id: str
+    reference_fasta_sha256: str
+    reference_topology: str
+    coordinate_contract: str
+    selected_read_id: str
+    selected_read_span: ComparisonReadSpan
+    simulation_orientation: Literal["forward", "reverse"]
+    derived_window: ComparisonInterval
+
+
+class ComparisonEffectiveRequest(ClosedModel):
+    authority: ComparisonAuthority
+    effective_settings: ComparisonEffectiveSettings
+    reference_interval: ComparisonInterval
+
+
+class ComparisonRuntimeIdentityResponse(ClosedModel):
+    stage: Literal["squigulator_producer", "squigualiser_comparison_renderer"]
+    image: str
+    image_digest: str
+    policy_sha256: str
+    wrapper_sha256: str
+
+
+class ComparisonExecutionReceipt(ClosedModel):
+    argv_sha256: str
+    returncode: Literal[0]
+    stdout_sha256: str
+    stdout_size_bytes: int
+    stderr_sha256: str
+    stderr_size_bytes: int
+    stderr_tail: str
+    container_name_sha256: str
+    runtime_identity: ComparisonRuntimeIdentityResponse
+
+
+class ComparisonLeaseRecoveryReceipt(ClosedModel):
+    recovered_at: str
+    expired_attempt: int
+    max_attempts: int
+
+
+class ComparisonStageReceipts(ClosedModel):
+    squigulator_producer: ComparisonExecutionReceipt | None = None
+    squigualiser_comparison_renderer: ComparisonExecutionReceipt | None = None
+    lease_recoveries: list[ComparisonLeaseRecoveryReceipt] | None = None
+
+
+class ComparisonRawPartitionIdentity(ClosedModel):
+    sha256: str
+    index_sha256: str
+
+
+class ComparisonRawSignalParents(ClosedModel):
+    routing_sha256: str | None
+    blow5: list[ComparisonRawPartitionIdentity]
+
+
+class ComparisonParentIdentities(ClosedModel):
+    reference_fasta_sha256: str
+    mapping_sha256: str
+    mapping_index_sha256: str
+    real_blow5: ComparisonRawSignalParents
+    real_moves_sha256: str
+    raw_manifest_sha256: str
+    run_id: str
+    observed_generation: int
+    selected_read_id: str
+
+
+class ComparisonReceiptAuthority(ClosedModel):
+    schema_id: str | None = Field(default=None, alias="schema")
+    content_sha256: str
+
+
+class ComparisonResourceSnapshot(ClosedModel):
+    parents: ComparisonParentIdentities | None = None
+
+
+class ComparisonManifestArtifact(ClosedModel):
+    kind: Literal[
+        "simulation_input_fasta", "simulation_coordinate_map", "simulated_blow5",
+        "simulated_blow5_index", "simulated_read_fasta", "simulated_read_id_map",
+        "simulated_source_paf", "simulated_normalized_paf", "simulated_source_sam",
+        "simulated_normalized_sam", "comparison_html", "comparison_manifest",
+    ]
+    media_type: str
+    sha256: str
+    size_bytes: int
+    validation_receipt: ComparisonReceiptAuthority
+
+
+class ComparisonRuntimeIdentities(ClosedModel):
+    squigulator_producer: ComparisonRuntimeIdentityResponse | None = None
+    squigualiser_comparison_renderer: ComparisonRuntimeIdentityResponse | None = None
+
+
+class ComparisonOutputManifest(ClosedModel):
+    schema_id: Literal["bms.ont-signal-comparison-manifest.v1"] | None = Field(default=None, alias="schema")
+    parents: ComparisonParentIdentities | None = None
+    runtime_identities: ComparisonRuntimeIdentities | None = None
+    stage_receipts: ComparisonStageReceipts | None = None
+    artifacts: list[ComparisonManifestArtifact] | None = None
+    producer: ComparisonReceiptAuthority | None = None
+    renderer: ComparisonReceiptAuthority | None = None
+
+
+class ComparisonViewerSettings(ClosedModel):
+    simulation_settings: ComparisonSimulationSettings
+    render_params: ComparisonRenderParams
+
+
+class ComparisonPreviewResponse(ClosedModel):
+    viewer_session_id: str
+    viewer_session_revision: int
+    run_id: str
+    observed_generation: int
+    raw_representation_id: str
+    raw_manifest_sha256: str
+    mapping_artifact_id: str
+    mapping_artifact_sha256: str
+    mapping_job_id: str
+    mapping_profile_id: str
+    reference_revision_id: str
+    reference_artifact_id: str
+    reference_fasta_sha256: str
+    reference_topology: str
+    coordinate_contract: str
+    selected_read_id: str
+    selected_read_span: ComparisonReadSpan
+    simulation_orientation: Literal["forward", "reverse"]
+    derived_window: ComparisonInterval
+    compatibility_disposition: Literal["matched_profile", "approximate_profile", "legacy_unknown", "incompatible"]
+    warnings: list[str]
+    effective_request: ComparisonEffectiveRequest
+    preview_digest: str
+
+
+class ComparisonArtifactResponse(ClosedModel):
+    artifact_id: str
+    kind: str
+    authority_class: Literal["simulated_derived", "comparison_derived"]
+    media_type: str
+    sha256: str
+    size_bytes: int
+    parent_identities: ComparisonParentIdentities
+    squigulator_runtime_identity: ComparisonRuntimeIdentityResponse | None
+    squigualiser_runtime_identity: ComparisonRuntimeIdentityResponse | None
+    validation_receipt: ComparisonReceiptAuthority
+    created_at: str
+
+
+class ComparisonJobResponse(ClosedModel):
+    comparison_job_id: str
+    viewer_session_id: str
+    viewer_session_revision: int
+    run_id: str
+    observed_generation: int
+    raw_representation_id: str
+    mapping_artifact_id: str
+    reference_revision_id: str
+    selected_read_id: str
+    reference_contig: str
+    reference_start: int
+    reference_end: int
+    simulation_orientation: Literal["forward", "reverse"]
+    simulation_settings: ComparisonEffectiveSettings
+    sequence_basis: Literal["managed_reference"]
+    generated_read_id: str | None
+    render_params: ComparisonRenderParams
+    preview_digest: str
+    request_fingerprint: str
+    attempt_number: int
+    predecessor_job_id: str | None
+    state: Literal["requested", "running", "ready", "failed", "cancelled"]
+    reason_code: str
+    resource_snapshot: ComparisonResourceSnapshot
+    stage_receipts: ComparisonStageReceipts
+    output_manifest: ComparisonOutputManifest
+    failure_code: str | None
+    failure_message: str | None
+    artifacts: list[ComparisonArtifactResponse]
+    created_at: str
+    updated_at: str
+    completed_at: str | None
+
+
+class ComparisonReviewResponse(ClosedModel):
+    review_id: str
+    comparison_job_id: str
+    predecessor_review_id: str | None
+    review_question: str
+    required_outcome: Literal["approve", "reject", "record_only"]
+    note: str
+    reviewed_start: int
+    reviewed_end: int
+    comparison_html_artifact_id: str
+    comparison_html_sha256: str
+    comparison_request_fingerprint: str
+    reviewer_identity: str
+    created_at: str
+
+
+class ComparisonReviewListResponse(ClosedModel):
+    items: list[ComparisonReviewResponse]
+
+
 class ViewCreate(ClosedModel):
     mapping_artifact_id: str
     mode: Literal["read", "reference", "pileup"]
@@ -144,11 +571,15 @@ class ViewerIgvStateUpdate(ClosedModel):
 
 
 class ViewerSignalStateUpdate(ClosedModel):
-    mode: Literal["raw_waveform", "read", "reference", "pileup"]
+    mode: Literal["raw_waveform", "read", "reference", "pileup", "ideal_comparison"]
     render_params: RenderParams
     view_job_id: str | None
     read_mapping_job_id: str | None
     reference_mapping_job_id: str | None
+    comparison_job_id: str | None = None
+    comparison_preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    comparison_settings: ComparisonViewerSettings | None = None
+    comparison_review_id: str | None = None
 
 
 class ViewerSessionCreate(ClosedModel):
@@ -433,13 +864,17 @@ class ViewerIgvStateResponse(ClosedModel):
 
 
 class ViewerSignalStateResponse(ClosedModel):
-    mode: Literal["raw_waveform", "read", "reference", "pileup"] | None = None
+    mode: Literal["raw_waveform", "read", "reference", "pileup", "ideal_comparison"] | None = None
     render_params: RenderParams | None = None
     view_job_id: str | None = None
     read_mapping_job_id: str | None = None
     reference_mapping_job_id: str | None = None
     selected_read_id: str | None = None
     capabilities: WorkbenchModesResponse | None = None
+    comparison_job_id: str | None = None
+    comparison_preview_digest: str | None = None
+    comparison_settings: ComparisonViewerSettings | None = None
+    comparison_review_id: str | None = None
 
 
 class ViewerSessionResponse(ClosedModel):
@@ -705,7 +1140,12 @@ async def get_view_artifact(view_job_id: str, artifact_id: str, session: AsyncSe
 @router.post("/viewer-sessions", status_code=201, response_model=ViewerSessionResponse, response_model_exclude_unset=True)
 async def create_viewer_session(request: ViewerSessionCreate, session: AsyncSession = Depends(get_session)) -> ViewerSessionResponse:
     try:
-        value = await service.create_viewer_session(session, **request.model_dump()); await session.commit(); return ViewerSessionResponse.model_validate(value)
+        payload = request.model_dump()
+        signal_state = payload["signal_state"]
+        for key in ("comparison_job_id", "comparison_review_id", "comparison_preview_digest", "comparison_settings"):
+            if signal_state.get(key) is None:
+                signal_state.pop(key, None)
+        value = await service.create_viewer_session(session, **payload); await session.commit(); return ViewerSessionResponse.model_validate(value)
     except (KeyError, service.OntSignalError) as exc:
         await session.rollback(); raise _error(exc) from exc
 
@@ -719,6 +1159,85 @@ async def get_viewer_session(viewer_session_id: str, session: AsyncSession = Dep
 @router.patch("/viewer-sessions/{viewer_session_id}", response_model=ViewerSessionResponse, response_model_exclude_unset=True)
 async def update_viewer_session(viewer_session_id: str, request: ViewerSessionUpdate, session: AsyncSession = Depends(get_session)) -> ViewerSessionResponse:
     try:
-        value = await service.update_viewer_session(session, viewer_session_id, **request.model_dump()); await session.commit(); return ViewerSessionResponse.model_validate(value)
+        payload = request.model_dump()
+        signal_state = payload["signal_state"]
+        for key in ("comparison_job_id", "comparison_review_id", "comparison_preview_digest", "comparison_settings"):
+            if signal_state.get(key) is None:
+                signal_state.pop(key, None)
+        value = await service.update_viewer_session(session, viewer_session_id, **payload); await session.commit(); return ViewerSessionResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.post("/comparisons/preview", response_model=ComparisonPreviewResponse)
+async def preview_comparison(request: ComparisonPreviewCreate, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session), domain_session: AsyncSession = Depends(get_molbio_ngs_session)) -> ComparisonPreviewResponse:
+    try:
+        value = await service.preview_signal_comparison(session, domain_session, **request.model_dump(exclude={"simulation_settings", "render_params"}), simulation_settings=request.simulation_settings.model_dump(), render_params=request.render_params.model_dump())
+        return ComparisonPreviewResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons", status_code=202, response_model=ComparisonJobResponse)
+async def create_comparison(request: ComparisonCreate, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session), domain_session: AsyncSession = Depends(get_molbio_ngs_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.create_signal_comparison(session, domain_session, **request.model_dump(exclude={"simulation_settings", "render_params"}), simulation_settings=request.simulation_settings.model_dump(), render_params=request.render_params.model_dump())
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}", response_model=ComparisonJobResponse)
+async def get_comparison(comparison_job_id: str, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        return ComparisonJobResponse.model_validate(await service.get_signal_comparison(session, comparison_job_id))
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/cancel", status_code=202, response_model=ComparisonJobResponse)
+async def cancel_comparison(comparison_job_id: str, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.cancel_signal_comparison(session, comparison_job_id)
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/fresh-attempt", status_code=202, response_model=ComparisonJobResponse)
+async def fresh_comparison_attempt(comparison_job_id: str, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> ComparisonJobResponse:
+    try:
+        value = await service.fresh_signal_comparison_attempt(session, comparison_job_id)
+        await session.commit(); return ComparisonJobResponse.model_validate(value)
+    except (KeyError, service.OntSignalError) as exc:
+        await session.rollback(); raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}/artifacts/{artifact_id}", response_class=Response)
+async def get_comparison_artifact(comparison_job_id: str, artifact_id: str, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> Response:
+    try:
+        body, metadata = await service.resolve_signal_comparison_artifact(session, comparison_job_id, artifact_id)
+        return Response(body, media_type=str(metadata["media_type"]), headers={
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+            "Cross-Origin-Resource-Policy": "same-origin", "Referrer-Policy": "no-referrer",
+            "Cache-Control": "private, no-store", "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff",
+        })
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/comparisons/{comparison_job_id}/reviews", response_model=ComparisonReviewListResponse)
+async def comparison_reviews(comparison_job_id: str, _actor: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> ComparisonReviewListResponse:
+    try:
+        return ComparisonReviewListResponse.model_validate({"items": await service.list_signal_comparison_reviews(session, comparison_job_id)})
+    except (KeyError, service.OntSignalError) as exc:
+        raise _error(exc) from exc
+
+
+@router.post("/comparisons/{comparison_job_id}/reviews", status_code=201, response_model=ComparisonReviewResponse)
+async def create_comparison_review(comparison_job_id: str, request: ComparisonReviewCreate, reviewer: str = Depends(_comparison_principal), session: AsyncSession = Depends(get_session)) -> ComparisonReviewResponse:
+    try:
+        value = await service.create_signal_comparison_review(session, comparison_job_id, reviewer_identity=reviewer, **request.model_dump())
+        await session.commit(); return ComparisonReviewResponse.model_validate(value)
     except (KeyError, service.OntSignalError) as exc:
         await session.rollback(); raise _error(exc) from exc

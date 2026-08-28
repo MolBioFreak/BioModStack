@@ -41,6 +41,7 @@ export default defineConfig({
             './tests/vitest/molBioProjectHubMounted.test.tsx',
             './tests/vitest/ngsPayloadMounted.test.tsx',
             './tests/vitest/readAndSignalWorkbench.test.tsx',
+            './tests/vitest/ontSignalIdealComparison.test.tsx',
             './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',
             './tests/vitest/ontFastqQcResultPanel.test.tsx',
             './tests/vitest/domainWorkflowOperatorClosure.test.ts',

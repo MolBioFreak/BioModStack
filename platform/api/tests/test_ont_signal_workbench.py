@@ -653,7 +653,7 @@ async def test_upgraded_database_startup_applies_and_attests_migrations_33_and_3
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39, 40):
+        for version in range(37, max(item.version for item in MIGRATIONS) + 1):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -720,7 +720,7 @@ async def test_upgraded_database_startup_rejects_same_name_altered_migration_33_
     migrate_external_receipt_binding(str(db_path))
     migrate_lookup_terminal_immutability(str(db_path))
     with sqlite3.connect(db_path) as connection:
-        for version in (37, 38, 39, 40):
+        for version in range(37, max(item.version for item in MIGRATIONS) + 1):
             connection.execute(
                 "UPDATE schema_migrations SET content_sha256=? WHERE version=?",
                 (
@@ -3753,7 +3753,7 @@ async def test_move_source_registration_seals_server_runtime_authority_or_explic
 
         assert known["source_runtime_identity"] == {
             "schema": "bms.ont-move-source-producer-runtime.v1",
-            "authority_state": "known",
+            "authority_state": "verified",
             "source_job_id": "known-producer-job",
             "source_bam_sha256": known_sha256,
             "runtime_provenance_sha256": runtime_receipt_sha256,
@@ -3825,7 +3825,7 @@ def test_move_worker_publication_requires_exact_known_producer_authority() -> No
         molecule_type="dna",
         source_runtime_identity={
             "schema": "bms.ont-move-source-producer-runtime.v1",
-            "authority_state": "known",
+            "authority_state": "verified",
             "source_job_id": "known-producer-job",
             "source_bam_sha256": "5" * 64,
             "runtime_provenance_sha256": "6" * 64,
@@ -3841,7 +3841,7 @@ def test_move_worker_publication_requires_exact_known_producer_authority() -> No
         validation_receipt={},
     )
     assert validator(known, report) == {
-        "authority_state": "known",
+        "authority_state": "verified",
         "basecall_model_id": MODEL_ID,
         "emit_moves": True,
         "independent_move_validation": True,
@@ -5083,7 +5083,7 @@ async def test_move_source_publication_fence_retains_registration_authority(
             artifact_sha256="7" * 64,
             artifact_size_bytes=10,
             molecule_type="dna",
-            source_runtime_identity={"authority_state": "known", "source_job_id": "source-job-original"},
+            source_runtime_identity={"authority_state": "verified", "source_job_id": "source-job-original"},
             validation_state="running",
             reason_code="worker_claimed",
             claim_token="publication-token",

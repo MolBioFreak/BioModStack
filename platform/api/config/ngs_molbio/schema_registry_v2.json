@@ -1,0 +1,488 @@
+{
+  "baseline_source_commit": "1d41fb50300a4e574670f6a02a0345e597ac9ed4",
+  "baseline_source_tree": "af85061039a5fafdcb828336f09ea6355713d1a9",
+  "content_sha256": "d7d90ada5f7fdbd0d45ef3da4c6848b83bf4a7c400278d3ac403f1483f7607c1",
+  "entries": [
+    {
+      "path": "schemas/ngs_molbio/domain-experiment-v2.schema.json",
+      "schema_canonical_sha256": "789874ef984ad61caa59ce61718ad10edffca6b82795f7bb39deb091c422f388",
+      "schema_id": "bms.domain-experiment.v2",
+      "schema_sha256": "7ac9eaa68a365a926995490ee3454bb6f4153223c7eab405a7ae65ea51fb9827"
+    },
+    {
+      "path": "schemas/ngs_molbio/domain-experiment-v3.schema.json",
+      "schema_canonical_sha256": "2a745f7a927da6ce2706d88b137fb7adfd7068f47292a59e454b34b3872b5c6d",
+      "schema_id": "bms.domain-experiment.v3",
+      "schema_sha256": "7401fbcf47225f798e9e017eabf6885379f408615cdf3fda8934d5abc11b5eec"
+    },
+    {
+      "path": "schemas/ngs_molbio/domain-experiment-v4.schema.json",
+      "schema_canonical_sha256": "90402820e4894262cf99dda36d55420906c2dcc25f795010d8dbfd20e3758e2f",
+      "schema_id": "bms.domain-experiment.v4",
+      "schema_sha256": "d23b14f740cbdba948d9c8d11f3c251fedd7d2eecb413a729411a38fb540a401"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-native-receipt-v1.schema.json",
+      "schema_canonical_sha256": "5f2037b62f2a9a7552b2a8e1ff974a689c3b6f4b390b0c77e7af439cf0e1b337",
+      "schema_id": "bms.evidence-requirement.native-receipt.v1",
+      "schema_sha256": "4f1ea5545016d8d49739c2d1f1a94bc64f321667d2eb98205d0f727088da5d10"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-operator-observation-v1.schema.json",
+      "schema_canonical_sha256": "5ab9e2dc334d7487d055e1d6e671de4ad87190b9d76c4818190872b4e85366b2",
+      "schema_id": "bms.evidence-requirement.operator-observation.v1",
+      "schema_sha256": "4122ba416790375dc99abbf028a1d494e1f0a9d11967dd138b4b4fde5a03bc06"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-result-artifact-v1.schema.json",
+      "schema_canonical_sha256": "e2f63220ee7499a0f792001dd8019d31b930634f0b62f9756a3be2541898e512",
+      "schema_id": "bms.evidence-requirement.result-artifact.v1",
+      "schema_sha256": "31a54f580d825cb2f0b13b94afd8ccd53d816465b8473bea9164f381f4fb3c7a"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-v1.schema.json",
+      "schema_canonical_sha256": "c1f4604ff86bcd7a809518f37fa51b6e50c7975e349fb9b0f47ea68176aadbbc",
+      "schema_id": "bms.evidence-requirement.v1",
+      "schema_sha256": "554b2e4c5ae550dc679f792afdc3e43e2bff0e03249f2b06be9ecc0092eac232"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-requirement-v2.schema.json",
+      "schema_canonical_sha256": "b22e8dd030388012fcfaf39bdf878149e64c41bab268fa58c25a36e88e44808a",
+      "schema_id": "bms.evidence-requirement.v2",
+      "schema_sha256": "7807803e4010b767ad81ede5638cf37dc12caada2d408daa241169e676bda3ed"
+    },
+    {
+      "path": "schemas/ngs_molbio/binding-acknowledged-v1.schema.json",
+      "schema_canonical_sha256": "b2f2120cb155cb9d5876800774e8d4bb6adaa811b392206974985384a4dd5ee9",
+      "schema_id": "bms.molbio-ngs.binding-acknowledged.v1",
+      "schema_sha256": "a216f6ec79f8ab3e8daff341a88ebff965e0224aa48edf0076d4ccf4dfb6fa5e"
+    },
+    {
+      "path": "schemas/ngs_molbio/binding-health-published-v1.schema.json",
+      "schema_canonical_sha256": "6e3ddef89377473d37ae0a3321167226cd9228a1bbc61f2ef04e47f1aeb4bff3",
+      "schema_id": "bms.molbio-ngs.binding-health-published.v1",
+      "schema_sha256": "d140d43494065c09d0ff034a7f1ebbb2c261ebfcc83d24d3e4d0ee072fc39132"
+    },
+    {
+      "path": "schemas/ngs_molbio/domain-state-initialized-v1.schema.json",
+      "schema_canonical_sha256": "3da0de0fb1c9457318054c17e05e6741b068f9a0ceaa03b7b85aa5b91f0090dc",
+      "schema_id": "bms.molbio-ngs.domain-state-initialized.v1",
+      "schema_sha256": "3bd27870118da30eef5e8912726bee69196dc6f67ea5aebbedc1296f9f097f8f"
+    },
+    {
+      "path": "schemas/ngs_molbio/domain-state-revision-saved-v1.schema.json",
+      "schema_canonical_sha256": "068c8585c82ec25166a77990d5e9d082a42c0d65305df8f979ac2e3b57e1dc9e",
+      "schema_id": "bms.molbio-ngs.domain-state-revision-saved.v1",
+      "schema_sha256": "092a2da70078853a3471b13287fc6512f4e7e018b9e84517eebe0505796b4faa"
+    },
+    {
+      "path": "schemas/ngs_molbio/evidence-assessed-v1.schema.json",
+      "schema_canonical_sha256": "f1905a34fda3244d5c3cf9fa8f22c4a4dc8724d695f88af15be9870aa248f7ce",
+      "schema_id": "bms.molbio-ngs.evidence-assessed.v1",
+      "schema_sha256": "d086718c714cf769d4c8f3e652c3d5a0750add02b9531001d1cecf260b25b52e"
+    },
+    {
+      "path": "schemas/ngs_molbio/instrument-run-evidence-attached-v1.schema.json",
+      "schema_canonical_sha256": "8ef51e367eea373c20f8dc969f8843059742ea91df65f5cc3594999fcc48e1fd",
+      "schema_id": "bms.molbio-ngs.instrument-run-evidence-attached.v1",
+      "schema_sha256": "9739f2389d89ca935e75e29ae4d98d858d0084cbc319d4d0062805e6ba5d4cbb"
+    },
+    {
+      "path": "schemas/ngs_molbio/member-receipt-published-v1.schema.json",
+      "schema_canonical_sha256": "603cf4aabcf5c8b1840d3f54658a6a92c72fd94b2bc4caaa3bd12655232bd9ff",
+      "schema_id": "bms.molbio-ngs.member-receipt-published.v1",
+      "schema_sha256": "fb672e5967ff5ba5085a26f9b346b61463fd680850a5f53aa0f4be6ff98a263b"
+    },
+    {
+      "path": "schemas/ngs_molbio/reference-archived-v1.schema.json",
+      "schema_canonical_sha256": "8a62ad7e12642c6861df23578d8eaf37032824f3bba309f94b295cea1aed5f3b",
+      "schema_id": "bms.molbio-ngs.reference-archived.v1",
+      "schema_sha256": "5b2a15146282beb4bf4d2545e42c30fea7d24124fcefcf6918311b2e6e5441c7"
+    },
+    {
+      "path": "schemas/ngs_molbio/reference-created-v1.schema.json",
+      "schema_canonical_sha256": "ce7ef072782bc32370336f2a8587a670c703dd365d813bd2fcf45934bbacddb7",
+      "schema_id": "bms.molbio-ngs.reference-created.v1",
+      "schema_sha256": "d0095bb4319e4abcd0c5ff8a9b8ea4f15019476b027f1a9110848a2def6c77f0"
+    },
+    {
+      "path": "schemas/ngs_molbio/reference-revision-saved-v1.schema.json",
+      "schema_canonical_sha256": "06cc53672852911a57469b7afc0ffdfe8749ba0871389f02c003b94ead783f13",
+      "schema_id": "bms.molbio-ngs.reference-revision-saved.v1",
+      "schema_sha256": "1a8f13bfbb3779ab08feb14801ad7a7fbb772989d1d6c6a8346a15b31cc5104d"
+    },
+    {
+      "path": "schemas/ngs_molbio/sample-created-v1.schema.json",
+      "schema_canonical_sha256": "0b95410a74d3209e38602f59b93b96c0ee1c593542bbc242b97b67ed1f51fec5",
+      "schema_id": "bms.molbio-ngs.sample-created.v1",
+      "schema_sha256": "419b18b79d6fd294478a9dbca1469f3605f8652092b1e49598bf9092e6b515e4"
+    },
+    {
+      "path": "schemas/ngs_molbio/sample-revision-saved-v1.schema.json",
+      "schema_canonical_sha256": "739fdaf90dbb397acfbdc9d0bd082f9387d3d0af6f9dbd007f2757ace446268d",
+      "schema_id": "bms.molbio-ngs.sample-revision-saved.v1",
+      "schema_sha256": "9c9d57c3d9442b3b413cf9bcd601cb637370e59cafd1371ffeefac88f55cbd0f"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-molbio-experiment-v2.schema.json",
+      "schema_canonical_sha256": "12737231a09e2c1638ed054d908cb3c7483d8bd909e67f6111fe7848c2428679",
+      "schema_id": "bms.ngs-molbio-experiment.v2",
+      "schema_sha256": "2ea3f77497191331e440359a7ba94f64fe435b0904936776cc6d5c3e521a605f"
+    },
+    {
+      "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
+      "schema_canonical_sha256": "3172df0f5d83061c4b6d13e271f396027089fb8db2eca857a5e255fcb2f16386",
+      "schema_id": "bms.ngs-molbio.adapter-registry.v1",
+      "schema_sha256": "38f43d898a7f472a2950fd726caf5d5d0a67acba7d22b1447064b2383ab6f6de"
+    },
+    {
+      "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
+      "schema_canonical_sha256": "9ffa7fa8a2a07c90eab3a94da4302de00fc245d8099c49c4bd1c66cac68de94b",
+      "schema_id": "bms.ngs-molbio.binding-status.v1",
+      "schema_sha256": "cc13a8076ebcb1199f8540d16ef8b88b3eb54397176ef978c078ae3b8a69f6cf"
+    },
+    {
+      "path": "schemas/ngs_molbio/branch-closure-v1.schema.json",
+      "schema_canonical_sha256": "2a1e9850cbc77f8b8825443ff12bde97859a9e69b261de39d236baa975028d93",
+      "schema_id": "bms.ngs-molbio.branch-closure.v1",
+      "schema_sha256": "ece234278e7d91e731d600e2a063512a3624b1450cb2291ef38b2b5de7be3f9e"
+    },
+    {
+      "path": "schemas/ngs_molbio/capability-inventory-v1.schema.json",
+      "schema_canonical_sha256": "0eedb923ef7b56f5c38183ac390f0ccf16c3aa4d8485b418cf08408bc777580b",
+      "schema_id": "bms.ngs-molbio.capability-inventory.v1",
+      "schema_sha256": "dd46d9a7ef8b789f79f2d87db93a5775cba9653a29228eaabbb38aa6bdce8feb"
+    },
+    {
+      "path": "schemas/ngs_molbio/capability-inventory-v2.schema.json",
+      "schema_canonical_sha256": "e477e5c0c52a2a26ad74785a867360b9a5eae9f78be62d3d4b87695e32e456e5",
+      "schema_id": "bms.ngs-molbio.capability-inventory.v2",
+      "schema_sha256": "3a6f1c128a169edf157860876e8d4fb1fb7507e6169e27e8d95979653704057b"
+    },
+    {
+      "path": "schemas/ngs_molbio/connector-acknowledgement-v1.schema.json",
+      "schema_canonical_sha256": "3713d291381651ae2043e59fbb7c903399a026cd28d5361949ec439320990d26",
+      "schema_id": "bms.ngs-molbio.connector-acknowledgement.v1",
+      "schema_sha256": "83afd1ca05ab2c0348cf0912ca2f3590c7e9e3cf47f6530868c628b72b4ba778"
+    },
+    {
+      "path": "schemas/ngs_molbio/connector-command-v1.schema.json",
+      "schema_canonical_sha256": "4ba4e62635e67fe624a7d117917026d8f6b8e0494f9a3c4c6446d53bc6611b2c",
+      "schema_id": "bms.ngs-molbio.connector-command.v1",
+      "schema_sha256": "2c8739925e7f813360ffa32401a6b04277a9f6f531943d9137506825660bb8a0"
+    },
+    {
+      "path": "schemas/ngs_molbio/connector-event-v1.schema.json",
+      "schema_canonical_sha256": "3822d4b6940928723fb4509e7a7f11b0ee3099e38cb29654956ee0b1dcc8ad5b",
+      "schema_id": "bms.ngs-molbio.connector-event.v1",
+      "schema_sha256": "55b5e8b83ea3626570bc0eff513a422e2949679166c62e0bdc8861fc4585924f"
+    },
+    {
+      "path": "schemas/ngs_molbio/dataset-kind-registry-v1.schema.json",
+      "schema_canonical_sha256": "5979953a324d80aff3608322883bd2f0fac9419f576aa93b7cdf13cfe7adacb6",
+      "schema_id": "bms.ngs-molbio.dataset-kind-registry.v1",
+      "schema_sha256": "c2495f26361862ce172867bf8c9a0340760ce3c3d2d8be729710f0d384655b02"
+    },
+    {
+      "path": "schemas/ngs_molbio/deep-link-v1.schema.json",
+      "schema_canonical_sha256": "9f3d322142f21ce7dbebf2a805bfa15be631215f526aed3e1232fe37c7f16880",
+      "schema_id": "bms.ngs-molbio.deep-link.v1",
+      "schema_sha256": "939c757648d4522803f4ff17eaf5577b26717a97a6a98bcd852e45d1eb71fa2a"
+    },
+    {
+      "path": "schemas/ngs_molbio/event-registry-v1.schema.json",
+      "schema_canonical_sha256": "67173b9668d75a800341782bee3e262315073ece23405e0365ed22ff4aa0e835",
+      "schema_id": "bms.ngs-molbio.event-registry.v1",
+      "schema_sha256": "0b935960286dc59f09220ca81c1226703fbbda7129e123a52d5afab9de6f1dd5"
+    },
+    {
+      "path": "schemas/ngs_molbio/global-binding-receipt-v1.schema.json",
+      "schema_canonical_sha256": "546b4da7166453dba83d72171bf0bab254428e61ae07a0dce596946e90af6311",
+      "schema_id": "bms.ngs-molbio.global-binding-receipt.v1",
+      "schema_sha256": "ebd2c7a4909855c3255371f43283cf8d02dadc038dbda62ca12d5bd163200653"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-molbio-group-member-v1.schema.json",
+      "schema_canonical_sha256": "da5832da0dec9c0d7905279c0b84f4acc36f0e3bc19b731da51e08699c6f4dcd",
+      "schema_id": "bms.ngs-molbio.group-member.v1",
+      "schema_sha256": "9ce70711009db7612165a3d18c669745e976c55159d344ea24e1d2c26c761e08"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-molbio-group-v1.schema.json",
+      "schema_canonical_sha256": "16124bcb135bf76d8351951948734f2e3621dffadc840a057fbe46e7a44e33c1",
+      "schema_id": "bms.ngs-molbio.group.v1",
+      "schema_sha256": "112f8b10c3d5e925cbc234474b24b52c8de5a6f465751ed4b852ffdb5f0c772d"
+    },
+    {
+      "path": "schemas/ngs_molbio/phase-n0-verification-receipt-v1.schema.json",
+      "schema_canonical_sha256": "3274cfbee3837ae90cca6e23d84cd7c3a3ecbc531e1cf8a5e312ba01282e3b80",
+      "schema_id": "bms.ngs-molbio.phase-n0-verification-receipt.v1",
+      "schema_sha256": "ccae026b6d9eddac36dafbca12815b66eec74daf1e9aa4091708d9e3c9976439"
+    },
+    {
+      "path": "schemas/ngs_molbio/schema-registry-v1.schema.json",
+      "schema_canonical_sha256": "2730624373d3985bd2691eab34ac778cf3dd77f45e4b75e57bff8aeff1a14f76",
+      "schema_id": "bms.ngs-molbio.schema-registry.v1",
+      "schema_sha256": "409fc91bcf701d1d721a744ade316228fe6428e66bf306286d5d504740b938e7"
+    },
+    {
+      "path": "schemas/ngs_molbio/schema-registry-v2.schema.json",
+      "schema_canonical_sha256": "a3a6f6f5424d4379bc1acece62bc48c5dc16a7a7eb4d97597ddb0a9eff2c7295",
+      "schema_id": "bms.ngs-molbio.schema-registry.v2",
+      "schema_sha256": "6b3582de58b1d1b027817198c09f2a363ce37102d327be1cd569e424963b303e"
+    },
+    {
+      "path": "schemas/ngs_molbio/source-pin-v1.schema.json",
+      "schema_canonical_sha256": "2f4058e1e229286cadee7cf06de3192d9321505adf46b040008c752540198966",
+      "schema_id": "bms.ngs-molbio.source-pin.v1",
+      "schema_sha256": "e6bdc976195c14318328072bb031fd7476a125417695c5d88ca12a0a3e1eb054"
+    },
+    {
+      "path": "platform/api/config/ont_signal_workbench/squigulator_ideal_comparison_schema_v1.json",
+      "schema_canonical_sha256": "1fd016fb724546f5082b21c52e441517649f11d4116db627ca914a9d42a9b86a",
+      "schema_id": "bms.ont-squigulator-ideal-comparison.v1",
+      "schema_sha256": "a703b10b33047871b98dcf96dc43c4ce421c48ae4f6d9f92bfec447ad85580af"
+    },
+    {
+      "path": "schemas/ngs_molbio/opaque-keyset-page-v1.schema.json",
+      "schema_canonical_sha256": "f9b52a9caac3dc9c28e0e90e430b10755917de27cb86232960b51fac169da955",
+      "schema_id": "bms.opaque-keyset-page.v1",
+      "schema_sha256": "6a94a39dd8df6365807cf184e4cb84da4b55dcc51b1ceed8d61ca9b826bc4e09"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-assembly-gibson-v1.schema.json",
+      "schema_canonical_sha256": "b95ce74e9d71c246743d54db247c2a70e371523a1641d9c4bc4c10e6fa63c5a0",
+      "schema_id": "bms.operation-parameters.molbio.assembly.gibson.v1",
+      "schema_sha256": "58ca18495534f4bd3bbe3c98b3999fe62d52da678154868a7fe847f6da9ffdf1"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-assembly-golden_gate-v1.schema.json",
+      "schema_canonical_sha256": "db8258c7e033d371d0da72fbfaa277e2f5f0ad1818a5a5bf4572d93ee2b39526",
+      "schema_id": "bms.operation-parameters.molbio.assembly.golden_gate.v1",
+      "schema_sha256": "fdd0a72f8b7757d0c6f767f3bc5a438299426859deaa2d3482af0b7c5df5dda8"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-assembly-ligation-v1.schema.json",
+      "schema_canonical_sha256": "b1316f3bc5a07acdbcb4300c067b28282d2db7213bf3bca6bbc5dba81ea84f09",
+      "schema_id": "bms.operation-parameters.molbio.assembly.ligation.v1",
+      "schema_sha256": "e2d043a1b4157dbef6afe40f3059689ee3c2211094826475f1ae117ab9703077"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-mutagenesis-v1.schema.json",
+      "schema_canonical_sha256": "109a99c44c7378545df09fb318de2ef4971f4b6cd6d567120b57920a8aad0160",
+      "schema_id": "bms.operation-parameters.molbio.mutagenesis.v1",
+      "schema_sha256": "09e95fed1dfa712f3f0d5a29e80dc4e571254d4fc4d9bf570c51bdb7ec5160cf"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-pcr-v1.schema.json",
+      "schema_canonical_sha256": "3e329d457b15116d9e6da484ee655db4e9b3aa37aed0a780d0c02d2112ee5ba5",
+      "schema_id": "bms.operation-parameters.molbio.pcr.v1",
+      "schema_sha256": "a5eddc81b76955207bc32680a668aec9e84901dbb40d1a8d546bec9f416cc89f"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-primer-design_qc-v1.schema.json",
+      "schema_canonical_sha256": "0fcae5031add1e500d78831674d32fbaac12649b4bdbe9abaebd01409e794f28",
+      "schema_id": "bms.operation-parameters.molbio.primer.design_qc.v1",
+      "schema_sha256": "63209d51387067d3417949fb2517e0f6269c979aa5185246d435c274bb16726e"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-restriction_digest-v1.schema.json",
+      "schema_canonical_sha256": "e635cb513d08639dfc3238331074d2686d76ccdfc5dced7955d6370163a6099c",
+      "schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
+      "schema_sha256": "e797b571d5008e72f0f0833a8ba617a0876b48ef571e7ff636c3496e8217ba29"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-sequence-alignment-v1.schema.json",
+      "schema_canonical_sha256": "d26836c2ec1530f166302b3c72b8b1ab53979f94b6a75e63bdea57288b7843d2",
+      "schema_id": "bms.operation-parameters.molbio.sequence.alignment.v1",
+      "schema_sha256": "e6788fc379087bb8f8540df5b0f11f859d85b9af3307deb1f6d4533e335e83a3"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-sequence-annotation-v1.schema.json",
+      "schema_canonical_sha256": "4c9510913bc9f57705f291bede53e993d744aedb6cde152f0681814f3c4ea3d9",
+      "schema_id": "bms.operation-parameters.molbio.sequence.annotation.v1",
+      "schema_sha256": "b6552a306fc955dd8416450d9f713259a65589e2040ad3f4a07dc2ae06bdb2eb"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-sequence-edit_revision-v1.schema.json",
+      "schema_canonical_sha256": "fb8de6698925115002016adba3c2a317940fb3cc82a9425acd87ba517b49f67c",
+      "schema_id": "bms.operation-parameters.molbio.sequence.edit_revision.v1",
+      "schema_sha256": "a1129a57139b649bf936451e70e4e0da674f63148fef9de9ce5d81e24e933548"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-sequence-import_revision-v1.schema.json",
+      "schema_canonical_sha256": "983e530cb81e536ea6963490597bb572170ac10294c081d6317e960770d52b25",
+      "schema_id": "bms.operation-parameters.molbio.sequence.import_revision.v1",
+      "schema_sha256": "0fe1b045416666e2355dd098049618e24b20c9c6bc9f31a27e36fe8010ce0e64"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-sequence-rna_structure_analysis-v1.schema.json",
+      "schema_canonical_sha256": "855d79747ec2fde365561d23e0959ee7630ac005872355b5bfd947ed22260787",
+      "schema_id": "bms.operation-parameters.molbio.sequence.rna_structure_analysis.v1",
+      "schema_sha256": "7dff9d94b0266d0d0532377aee52b4c78c4e0464616e44a71c8b393f2d7c7dd4"
+    },
+    {
+      "path": "schemas/ngs_molbio/payload-ownership-audit-v1.schema.json",
+      "schema_canonical_sha256": "db41f6a5f802f2e65d0800d4b48d74d2437cb786468b682285787ad68167f308",
+      "schema_id": "bms.payload-ownership-audit.v1",
+      "schema_sha256": "33a2453cc73e3c6c23e129a1dee255eaa04b93e09cd13aace8650cc1347ceb28"
+    },
+    {
+      "path": "schemas/ngs_molbio/payload-ownership-manifest-v1.schema.json",
+      "schema_canonical_sha256": "d0e15640145ca5491c072890b54e51493a02f80bcd6f698f53f045413c267298",
+      "schema_id": "bms.payload-ownership-manifest.v1",
+      "schema_sha256": "117fc287debea258562e3c493b4059df1bb90f642a07f517caf206c374650875"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-comparison-group-v1.schema.json",
+      "schema_canonical_sha256": "b93c64ba08b74c1d38c5c11720022ae47e8caf8a7a1166c02a87f205a0b5dd45",
+      "schema_id": "bms.protein-comparison-group.v1",
+      "schema_sha256": "47f920344e8ac4f89b581405a35ac307b3f3c0ca39efc059eb555ab98fd7202b"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-comparison-member-v1.schema.json",
+      "schema_canonical_sha256": "600ad4dfc8c6a4fcf8c3c2d453effabdd8b3eb235d420546eea28ab284fc992b",
+      "schema_id": "bms.protein-comparison-member.v1",
+      "schema_sha256": "e24b1ff3fdc9488044e089eaeb2de3a0571a378e22df1e4eaf8b93538b01ef5b"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-constraint-v1.schema.json",
+      "schema_canonical_sha256": "d3ade4603c50c848b0b47ad24c68c1ddff6f261ff3194e00f2cd450a1523c10d",
+      "schema_id": "bms.protein-constraint.v1",
+      "schema_sha256": "e0f3bd31286006985225ba38cf8e47cfc269376d739e468fd901647a8bfe1f38"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-dataset-member-ref-v1.schema.json",
+      "schema_canonical_sha256": "39bc43377d441993fe8d4c4fac446046f0e92be5175aca017536c4aa9542d402",
+      "schema_id": "bms.protein-dataset-member-ref.v1",
+      "schema_sha256": "8f9eff2152016a4af19efb3d98a76e841544baccaf907f2a109b1b830eaeda71"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-entity-map-reference-v1.schema.json",
+      "schema_canonical_sha256": "4e2a43bd37ba4eb9c2e34a6aa72b2eaf3e7cc7eb75fe7361d8b2c4d82b620b96",
+      "schema_id": "bms.protein-entity-map-reference.v1",
+      "schema_sha256": "6cd41648654559805df30b6a5803d54edc3d5c708887109adcbe55285626f45d"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-entity-map-v1.schema.json",
+      "schema_canonical_sha256": "cd7caf197771459c15815b14b8e18380aeb56bbca40909250497a08ef3b93f78",
+      "schema_id": "bms.protein-entity-map.v1",
+      "schema_sha256": "4cb4276a5e3e926bf09b8064292fee578c8f0a3c394e8e2d8bd6536a1e87117b"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-in-silico-experiment-v2.schema.json",
+      "schema_canonical_sha256": "de7eec56ed6a72ffc382c54ad6dc45fa4e8840c74f350e01d02b76dbf68cca91",
+      "schema_id": "bms.protein-in-silico-experiment.v2",
+      "schema_sha256": "86513dd19a433a8b6e3c0b27bbe5edd15ac8169140dc7ccf7f049616b9328032"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-in-silico-experiment-v3.schema.json",
+      "schema_canonical_sha256": "69ad18a2b7c2ecd5745c9c579eb0901aaae44649d97642cd348819a392c27b0b",
+      "schema_id": "bms.protein-in-silico-experiment.v3",
+      "schema_sha256": "729887e07857d51b09cef9fa3c0a286f246aa8528c50d32000fdcd591e85cfb8"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-target-v2.schema.json",
+      "schema_canonical_sha256": "6a291ea5f57a710d83d3bb3e743fdf283d85e4272665ebbf2f7a7dd58599ce43",
+      "schema_id": "bms.protein-target.v2",
+      "schema_sha256": "df6a205106b1c24bdcc13737f3bb8c3a2a8f92af95d54e764f4f5632e5c02e58"
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-target-v3.schema.json",
+      "schema_canonical_sha256": "dc3fcd515344ea02eff1bb92230e8b0775cf63a0a650c69891c56623d2ff6576",
+      "schema_id": "bms.protein-target.v3",
+      "schema_sha256": "a3eddcfa89d1c4d30b0dd65c95a8bb76be066d292649aafaa9be9f02e72f6a41"
+    },
+    {
+      "path": "schemas/ngs_molbio/constraint-payload-registry-v1.schema.json",
+      "schema_canonical_sha256": "27577f88d9b268da055916507b7fe0222e37d7d0bad8ea2aa490c6f3258687fb",
+      "schema_id": "bms.protein.constraint-payload-registry.v1",
+      "schema_sha256": "6914bef532b7989d644db90d3f91d2a9c6c150f24f8ee60bb7c009edabbe8e06"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-artifact-presence-v1.schema.json",
+      "schema_canonical_sha256": "a21fa443fa01ccb2ed723cba3a970c9842e872eed7b37a462a1d66c115a81013",
+      "schema_id": "bms.scientific-criterion.artifact-presence.v1",
+      "schema_sha256": "3f03a62f9bc39f61c4bdfa938cca5453da91e68ef16b30effdd0f4195cc2bdc6"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-manual-review-v1.schema.json",
+      "schema_canonical_sha256": "40b7ce60092f6fbb1ae0e73ff92a2f2187d7269729b20b15d3ee258ad3246e79",
+      "schema_id": "bms.scientific-criterion.manual-review.v1",
+      "schema_sha256": "581b25b646a8d581d234eef6948a3cc66e66ece0d00031b68dc8a5792dfc6b1d"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-metric-threshold-v1.schema.json",
+      "schema_canonical_sha256": "a799e6ffd2a77f464346e4ee1a0785f2df2850db30b70ef9dd2989e724b8990c",
+      "schema_id": "bms.scientific-criterion.metric-threshold.v1",
+      "schema_sha256": "35adaaf7935fbf6188bd2df28390ed613d362aa24a2657b2980e9e7f26e0438b"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-v1.schema.json",
+      "schema_canonical_sha256": "4332135475952b09f7283deb8be414070dbe7ff2fee197f93e8cce72eddc9276",
+      "schema_id": "bms.scientific-criterion.v1",
+      "schema_sha256": "bc996f104f87816fc36f6d357081e81540442c201002cead8a182bdab11b2188"
+    },
+    {
+      "path": "schemas/ngs_molbio/scientific-criterion-v2.schema.json",
+      "schema_canonical_sha256": "45c8949cedd9f76f19bc1cc955974f33835576b02716f44c76d75be3f291e40c",
+      "schema_id": "bms.scientific-criterion.v2",
+      "schema_sha256": "3d629379925203ee50568d0f59548473cea4781b927e7a6e2b4054843c981948"
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-oligo_design-rfdpoly-v1.schema.json",
+      "schema_canonical_sha256": "54455abc858a1476282050593039f653e77f98d518f51a8620e1911278000ea3",
+      "schema_id": "bms.workflow-parameters.molbio.oligo_design.rfdpoly.v1",
+      "schema_sha256": "7ae266b060771e4c13b35bb900d606b7e026352c4c65f1d5d54e5d46f30a8ebd"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-basecall_dna-v1.schema.json",
+      "schema_canonical_sha256": "e94bbc832831871a761ca49a29bb296fdbfbc2aad8911fa035f2062fa763bb1c",
+      "schema_id": "bms.workflow-parameters.ngs.ont.basecall_dna.v1",
+      "schema_sha256": "f54d88241fff3eac22312d7d8086702a78f0cc7173b3caa5212bc1bde5816fc5"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-basecall_rna-v1.schema.json",
+      "schema_canonical_sha256": "b47ab5c7d5e72552db5553d4546baacab7ce1cbf927ec01a68a41af98e2ec49b",
+      "schema_id": "bms.workflow-parameters.ngs.ont.basecall_rna.v1",
+      "schema_sha256": "df51eab5c88cdebdbac7e3d6255f70764cbc5fd8bb5e2a9210711350ebb1016f"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-clone_validation-v1.schema.json",
+      "schema_canonical_sha256": "2f7d8ec16f232889b649189f1904b00b1fdded96e514dca665e783cf890f2131",
+      "schema_id": "bms.workflow-parameters.ngs.ont.clone_validation.v1",
+      "schema_sha256": "fab469822940c0663f8d9a2191146378f43c56300159d7cf3442895da3839d9a"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
+      "schema_canonical_sha256": "46c5e4eda584964d3b1ef19c62775cf0f8495ca95aa7a02a329c42b5c32d3a11",
+      "schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
+      "schema_sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-fastq_qc-v1.schema.json",
+      "schema_canonical_sha256": "8d599c216946c628c33d9a574182879181aef38e645ee0dfdc4b4a356201c32c",
+      "schema_id": "bms.workflow-parameters.ngs.ont.fastq_qc.v1",
+      "schema_sha256": "1a5c5c7040b052df5a7693a0f7705e52b4fdd6d10aadbfef9cc543b2e669aed1"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-methylation_analysis-v1.schema.json",
+      "schema_canonical_sha256": "1b0e03c6d634675494d44bb0016a0ac4581ec596f1e0844c9c19bc442186ced9",
+      "schema_id": "bms.workflow-parameters.ngs.ont.methylation_analysis.v1",
+      "schema_sha256": "aac83932c2561db616e1809a4f692af89e5894fd7b0071000ea4b9178303c22e"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-plasmid_qc-v1.schema.json",
+      "schema_canonical_sha256": "88bb6380fd00992c67fe7269163d7402c0e95f1821eb0d043f76763516dd7ab0",
+      "schema_id": "bms.workflow-parameters.ngs.ont.plasmid_qc.v1",
+      "schema_sha256": "f06ddaebea85c76c1a871f244e58166aabe581e9d12e9d2d63e0febaabf8b3fe"
+    },
+    {
+      "path": "schemas/ngs_molbio/ngs-ont-pooled_reference_assignment-v1.schema.json",
+      "schema_canonical_sha256": "04effa7930ad42242289146b7edca6056e027187a6e0405d4289413597f378c4",
+      "schema_id": "bms.workflow-parameters.ngs.ont.pooled_reference_assignment.v1",
+      "schema_sha256": "89724f1e39dbd09c42f8686ae866d0bda058cdda9c1cc0b43185b6ee00daee78"
+    }
+  ],
+  "schema": "bms.ngs-molbio.schema-registry.v2"
+}

@@ -61,7 +61,10 @@
       "additionalProperties": false,
       "properties": {
         "path": {
-          "const": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+          "enum": [
+            "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json",
+            "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
+          ]
         },
         "content_sha256": {
           "type": "string",
