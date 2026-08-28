@@ -2,6 +2,7 @@ import { isAxiosError } from 'axios';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { fetchMolBioNgsDomainState, fetchProjectHub } from '../lib/api';
 import {
     createLaunchContext,
     getDomainRunGroup,
@@ -92,6 +93,86 @@ function domainExperimentForNode(summary: ProjectManagerReadModel, nodeKey: stri
         return selectedParent.slice('domain_experiment:'.length) || null;
     }
     return null;
+}
+
+function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperimentId: string; domainExperimentId: string } | null {
+    const selectedDomainId = domainExperimentForNode(summary, summary.selection.node_key);
+    const domainNodes = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+    const focusedDomains = domainNodes.filter((node) => node.parent_node_key === summary.map.focus_node_key);
+    const domain = selectedDomainId
+        ? domainNodes.find((node) => node.subject_id === selectedDomainId)
+        : focusedDomains.length === 1
+            ? focusedDomains[0]
+            : undefined;
+    if (!domain?.subject_id || !domain.parent_node_key) return null;
+    const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
+    if (!globalExperiment?.subject_id) return null;
+    return { globalExperimentId: globalExperiment.subject_id, domainExperimentId: domain.subject_id };
+}
+
+function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: ProjectManagerReadModel; stateRevisionId: string | null }) {
+    const context = useMemo(() => nativeProjectContext(summary), [summary]);
+    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local';
+    const stateQuery = useQuery({
+        queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
+        queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
+        enabled: isNativeProject && context !== null,
+        retry: false,
+    });
+    const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
+    const projectHubQuery = useQuery({
+        queryKey: ['project-manager', 'native-project-hub', summary.project.id, context?.globalExperimentId ?? null, context?.domainExperimentId ?? null, selectedStateRevisionId],
+        queryFn: ({ signal }) => fetchProjectHub(
+            summary.project.id,
+            context?.globalExperimentId as string,
+            context?.domainExperimentId as string,
+            selectedStateRevisionId as string,
+            signal,
+        ),
+        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null,
+        retry: false,
+    });
+
+    if (!isNativeProject) return null;
+    if (!context) {
+        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">Plasmid workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
+    }
+    if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
+        return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading native plasmid Project data…</section>;
+    }
+    if (stateQuery.isError || projectHubQuery.isError || !projectHubQuery.data) {
+        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Native plasmid Project data could not be loaded.</span> The relationship map below lists external attachments only.</section>;
+    }
+
+    const model = projectHubQuery.data;
+    const workspaceParams = new URLSearchParams({
+        workspace_id: model.identity.workspace_id,
+        global_experiment_id: model.identity.global_experiment_id,
+        domain_experiment_id: model.identity.domain_experiment_id,
+        state_revision_id: model.identity.selected_state_revision_id,
+        section: 'plasmids',
+    });
+
+    return (
+        <section aria-label="Native plasmid Project data" className="border-b border-border-primary bg-surface-secondary px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Project plasmid data</p>
+                    <h2 className="mt-1 text-sm font-semibold text-content">{model.project.plasmid_count} plasmids in {model.project.name}</h2>
+                    <p className="mt-1 text-xs text-content-secondary">These records are stored in the native NGS/MolBio workspace. External attachments appear separately in the relationship map.</p>
+                </div>
+                <Link to={`/designer?${workspaceParams.toString()}`} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open plasmid workspace</Link>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {model.plasmids.map((plasmid) => (
+                    <Link key={`${plasmid.sequence_id}:${plasmid.revision_id}`} to={plasmid.reopen_href} className="rounded-lg border border-border-primary bg-surface px-3 py-2 outline-none hover:border-accent focus:ring-2 focus:ring-accent">
+                        <span className="block truncate text-xs font-semibold text-content">{plasmid.name}</span>
+                        <span className="mt-1 block text-[10px] text-content-muted">{plasmid.length_bp.toLocaleString()} bp · {plasmid.feature_count} features · Revision {plasmid.revision_number}</span>
+                    </Link>
+                ))}
+            </div>
+        </section>
+    );
 }
 
 function ProjectManagerErrorState({ error, onRetry, permission = false }: { error: unknown; onRetry: () => void; permission?: boolean }) {
@@ -858,6 +939,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {treeOpen && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col">
+                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
                     <RelationshipMap
                         summary={summary}
                         selectedNodeKey={summary.selection.node_key}

@@ -112,7 +112,7 @@ export function RelationshipMap({ summary, selectedNodeKey, onSelect, onLoadMore
                                                                 <MapNodeButton key={record.node_key} node={record} selected={selectedNodeKey === record.node_key} onSelect={onSelect} />
                                                             ))}
                                                             {!(evidenceByDomain.get(domain.node_key) ?? []).length && (
-                                                                <p className="rounded-lg border border-dashed border-border-primary px-3 py-4 text-center text-xs text-content-muted">No attached records in this bounded map page.</p>
+                                                                <p className="rounded-lg border border-dashed border-border-primary px-3 py-4 text-center text-xs text-content-muted">No external records are attached to this Domain Experiment. Domain-owned data is separate from this relationship list.</p>
                                                             )}
                                                         </div>
                                                     </section>
