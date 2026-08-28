@@ -37,8 +37,16 @@ async def create_review(client: httpx.AsyncClient) -> dict:
 @pytest_asyncio.fixture
 async def review_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BMS_DATA", str(tmp_path / "bms-data"))
-    landscape_path = tmp_path / "landscape.json"
-    landscape_path.write_bytes(b"{}")
+    artifact_payloads = {
+        "landscape": (tmp_path / "landscape.json", b"{}"),
+        "normalized_input": (tmp_path / "normalized.pdb", b"ATOM\n"),
+        "structure_map": (tmp_path / "structure_map.json", b"{}"),
+        "raw_csv": (tmp_path / "raw_frustrampnn.csv", b"mutation,score\nA,-1.25\nG,0.75\n"),
+    }
+    artifact_sha256 = {}
+    for role, (path, payload) in artifact_payloads.items():
+        path.write_bytes(payload)
+        artifact_sha256[role] = hashlib.sha256(payload).hexdigest()
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'reviews.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -49,15 +57,38 @@ async def review_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             parent_job_id="job-1", invocation_id="inv-1", parent_workflow_id="conformational_mapping",
             candidate_id="candidate-1", requiredness="required", request_sha256="1" * 64,
             source_artifact_sha256="2" * 64, manifest_sha256="3" * 64, manifest_json={},
-            effective_settings_sha256="5" * 64,
-            summary_sha256="4" * 64, summary_json={}, runtime_identity_json={}, assigned_gpu_json={},
-            terminal_result_json={},
+            settings_sha256="9" * 64, effective_settings_sha256="5" * 64,
+            summary_sha256="4" * 64,
+            summary_json={
+                "schema_name": "frustrampnn_landscape",
+                "schema_version": 3,
+                "landscape_sha256": artifact_sha256["landscape"],
+                "structure_map_sha256": artifact_sha256["structure_map"],
+                "normalized_pdb_sha256": artifact_sha256["normalized_input"],
+                "threshold_policy": {"id": "frustrampnn_class_v1"},
+                "threshold_policy_id": "frustrampnn_class_v1",
+                "threshold_policy_sha256": "8" * 64,
+                "execution_configuration_sha256": "a" * 64,
+                "requested_settings_sha256": "9" * 64,
+                "effective_settings_sha256": "5" * 64,
+                "runtime_identity_sha256": "b" * 64,
+                "source_artifact_sha256": "2" * 64,
+            },
+            runtime_identity_json={}, assigned_gpu_json={}, terminal_result_json={},
         ))
-        session.add(FrustraMPNNArtifact(
-            artifact_id="landscape-1", parent_job_id="job-1", invocation_id="inv-1",
-            role="landscape", relative_path="landscape.json", storage_path=str(landscape_path), content_sha256="6" * 64,
-            size_bytes=2, media_type="application/json",
-        ))
+        artifact_specs = {
+            "landscape": ("landscape-1", "landscape.json", "application/json"),
+            "normalized_input": ("normalized-input-1", "normalized.pdb", "chemical/x-pdb"),
+            "structure_map": ("structure-map-1", "structure_map.json", "application/json"),
+            "raw_csv": ("raw-csv-1", "raw_frustrampnn.csv", "text/csv"),
+        }
+        for role, (artifact_id, relative_path, media_type) in artifact_specs.items():
+            storage_path, payload = artifact_payloads[role]
+            session.add(FrustraMPNNArtifact(
+                artifact_id=artifact_id, parent_job_id="job-1", invocation_id="inv-1",
+                role=role, relative_path=relative_path, storage_path=str(storage_path),
+                content_sha256=artifact_sha256[role], size_bytes=len(payload), media_type=media_type,
+            ))
         schema = pa.schema([
             pa.field("id", pa.string(), nullable=False),
             pa.field("target_id", pa.string(), nullable=False),
@@ -74,7 +105,6 @@ async def review_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             pa.field("status", pa.string(), nullable=False),
             pa.field("reason", pa.string()),
             pa.field("row_json", pa.string(), nullable=False),
-            pa.field("provenance_json", pa.string(), nullable=False),
         ])
         rows = [
             {
@@ -85,7 +115,6 @@ async def review_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "score_class": score_class, "scoreable": True, "status": "ok",
                 "reason": None,
                 "row_json": '{"residue":{"auth_asym_id":"A","auth_seq_id":42},"slot":{}}',
-                "provenance_json": '{"source":"fixture"}',
             }
             for mutation, score, score_class in (
                 ("A", -1.25, "high"),
