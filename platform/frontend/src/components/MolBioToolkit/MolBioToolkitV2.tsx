@@ -172,7 +172,7 @@ function SequenceLibrary({
                 data-molbio-scroll-region="construct-shelf"
                 className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
             >
-                <div className="border-b border-slate-700">
+                {(!projectScoped || showAllConstructs) && <div className="border-b border-slate-700">
                     <button
                         onClick={() => setShowDemos(!showDemos)}
                         className="w-full flex items-center justify-between p-2 text-xs text-slate-400 hover:bg-slate-800"
@@ -198,6 +198,10 @@ function SequenceLibrary({
                             ))}
                         </div>
                     )}
+                </div>}
+
+                <div className="border-b border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">
+                    {projectScoped && !showAllConstructs ? `Project constructs (${sequences.length})` : `Recent constructs (${sequences.length})`}
                 </div>
 
                 {sequences.length === 0 ? (

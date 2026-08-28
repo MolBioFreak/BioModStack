@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "159e23c4a0937508ab502288fc3278370240d68cb1de7a132ce35d522041def6",
+  "content_sha256": "172b033ab5064a5ea208a397a875f3e16b913ed630405c63bbdb7acb6f0bffaf",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -514,8 +514,8 @@
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
-      "sha256": "be21044d7d5d34cb56b8c44c2e45a410d84c75b08f3bc8ee544992a43ce14dfc",
-      "size_bytes": 140795
+      "sha256": "02719bf499ca578dd8c90493e1153bd25b42790c13a3e0a83335fd53846fec49",
+      "size_bytes": 141116
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
@@ -742,8 +742,8 @@
     "content_sha256": "4edc8bc6f64b7c4bb51ac707929033b51bb1c2533c115d89f04b5694e5446f34",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
   },
-  "successor_source_commit": "224fb76d135ebe1f466a215479d2f93dc487e946",
-  "successor_source_tree": "3bbb63837a47fe5ce42278e6e45134a31b96c999",
+  "successor_source_commit": "91db01700643ccbfa5ac613faa6717b3774ce326",
+  "successor_source_tree": "5f34ab20b0d63ed140867eaa9b2d92322390374a",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
