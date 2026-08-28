@@ -182,7 +182,7 @@ def _publish_governed_terminal_receipt(
         "record_count": len(records),
         "records": records,
     }
-    receipt["content_sha256"] = hashlib.sha256(canonical_json_bytes(receipt)).hexdigest()
+    receipt["receipt_sha256"] = hashlib.sha256(canonical_json_bytes(receipt)).hexdigest()
     destination_root = root / "frustrampnn" / "batches"
     destination_root.mkdir(parents=True, exist_ok=True)
     destination = destination_root / _TERMINAL_RECEIPT_NAME
@@ -370,7 +370,7 @@ def run_grouped_batch(
             **evidence,
             "governed_terminal_receipt": {
                 "artifact_id": f"frustrampnn-grouped-terminal:{batch['execution_owner_job_id']}",
-                "content_sha256": terminal_receipt["content_sha256"],
+                "content_sha256": hashlib.sha256(terminal_receipt_path.read_bytes()).hexdigest(),
                 "size_bytes": terminal_receipt_path.stat().st_size,
             },
             "bundles": [os.fspath(path) for path in bundles],

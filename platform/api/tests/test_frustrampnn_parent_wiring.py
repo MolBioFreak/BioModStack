@@ -53,8 +53,9 @@ def test_structure_prediction_has_one_canonical_v2_manifest_cutover() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     prediction_module = (REPO_ROOT / "modules" / "structure_prediction.nf").read_text(encoding="utf-8")
 
-    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'" in workflow
-    assert "CanonicalFrustraMPNNV2(" in workflow
+    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'" in workflow
+    assert "SchedulerFrustraMPNNParentFanout(" in workflow
+    assert "CanonicalFrustraMPNNV2(" not in workflow
     assert "FrustrampnnQC" not in workflow
     assert "placeholder.pdb" not in workflow
     assert "structure_prediction_wf.out.canonical_structures" in workflow
@@ -63,7 +64,7 @@ def test_structure_prediction_has_one_canonical_v2_manifest_cutover() -> None:
     assert "PrepareStructurePredictionFrustraMPNNCandidate" in workflow
     assert "frustrampnn_requiredness ?: 'required'" in workflow
     assert "frustrampnn_requiredness must be required" in workflow
-    assert "CanonicalFrustraMPNNV2.out.result" in workflow
+    assert "Channel.value(params.frustrampnn_settings.toString())" in workflow
     assert "workflow_component_request_v3.json" in workflow
     assert "frustrampnn_structure_map_v1.json" in workflow
     assert "workflow_component_request_v1.json" not in workflow
@@ -197,9 +198,8 @@ async def test_not_requested_stage_rejects_non_exact_persisted_state(
 def test_canonical_scheduler_publishes_closed_candidate_bundles_without_legacy_gpu_flags() -> None:
     module = CANONICAL_MODULE.read_text(encoding="utf-8")
 
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "publish_frustrampnn_bundle.py" in workflow
-    assert "${params.out_dir}/frustrampnn/results/${candidateId}" in workflow
+    workflow = (REPO_ROOT / "workflows" / "frustrampnn_analysis.nf").read_text(encoding="utf-8")
+    assert "CanonicalFrustraMPNNV2(" in workflow
     assert "assigned_gpu = params.frustrampnn_physical_gpu_id" in module
     assert "CUDA_VISIBLE_DEVICES='${assigned_gpu}'" in module
     assert "--physical-gpu-id '${assigned_gpu}'" in module
@@ -339,21 +339,28 @@ def test_enabled_frustrampnn_reporters_request_job_root_relative_outputs() -> No
     for path in paths:
         source = path.read_text(encoding="utf-8")
         assert "stage_reporter.py' --job-root-relative" in source, path
+    assert "stage_reporter.py' --job-root-relative" in (
+        REPO_ROOT / "modules" / "frustrampnn_parent_fanout.nf"
+    ).read_text(encoding="utf-8")
 
 
 def test_every_active_workflow_consumer_is_v3_only_for_new_writes() -> None:
-    consumers = {
+    parent_consumers = {
         "structure_prediction": REPO_ROOT / "workflows" / "structure_prediction.nf",
         "protein_design": REPO_ROOT / "workflows" / "protein_design.nf",
         "complex_prediction": REPO_ROOT / "workflows" / "complex_prediction.nf",
         "antibody_denovo": REPO_ROOT / "workflows" / "antibody_denovo.nf",
-        "frustrampnn_analysis": REPO_ROOT / "workflows" / "frustrampnn_analysis.nf",
+        "conformational_mapping": REPO_ROOT / "workflows" / "conformational_mapping.nf",
     }
-    for consumer, path in consumers.items():
+    for consumer, path in parent_consumers.items():
         source = path.read_text(encoding="utf-8")
-        assert "CanonicalFrustraMPNNV2" in source, consumer
+        assert "SchedulerFrustraMPNNParentFanout" in source, consumer
+        assert "CanonicalFrustraMPNNV2(" not in source, consumer
         assert "CanonicalFrustraMPNN(" not in source, consumer
         assert "workflow_component_request_v1.json" not in source, consumer
+
+    analysis = (REPO_ROOT / "workflows" / "frustrampnn_analysis.nf").read_text(encoding="utf-8")
+    assert "CanonicalFrustraMPNNV2(" in analysis
 
     antibody_parent = (
         REPO_ROOT / "modules" / "antibody_frustrampnn_parent.nf"

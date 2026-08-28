@@ -87,7 +87,7 @@ def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
 }
 
 include { complex_prediction_wf } from '../modules/structure_prediction.nf'
-include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 def parseJsonFile(rawPath) {
     return new JsonSlurper().parse(file(rawPath))
@@ -451,13 +451,18 @@ workflow COMPLEX_PREDICTION {
                     }
                     tuple(candidate_metas[preferredIndex], prepared_requests[preferredIndex], prepared_sources[preferredIndex], prepared_structure_maps[preferredIndex])
                 }
-            MaterializeComplexPredictionFrustraMPNNCandidate(deduplicated_candidates)
-            CanonicalFrustraMPNNV2(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)
-            frustrampnn_results = CanonicalFrustraMPNNV2.out.result
-            PublishComplexPredictionFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)
-            ReportComplexPredictionFrustraMPNNComplete(
-                PublishComplexPredictionFrustraMPNNCandidate.out.marker.collect()
+            scheduler_candidates = deduplicated_candidates.map {
+                candidate_meta, prepared_request, prepared_source, prepared_structure_map ->
+                tuple(candidate_meta, prepared_source)
+            }
+            SchedulerFrustraMPNNParentFanout(
+                scheduler_candidates,
+                Channel.value(params.job_id.toString()),
+                Channel.value('complex_prediction'),
+                Channel.value(params.frustrampnn_settings.toString()),
+                Channel.value(settingsValueOrigin),
             )
+            frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
         } else {
             if (!params.job_id) error('FrustraMPNN not-requested reporting requires --job_id')
             ReportComplexPredictionFrustraMPNNNotRequested(Channel.value(true))

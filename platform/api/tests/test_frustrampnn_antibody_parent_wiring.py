@@ -20,7 +20,8 @@ def _canonical_slice() -> str:
 
 def test_antibody_uses_only_public_canonical_frustrampnn() -> None:
     source = _workflow()
-    assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'" in source
+    assert "include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout'" in source
+    assert "CanonicalFrustraMPNNV2(" not in source
     assert "CanonicalFrustraMPNN(" not in source
     assert "from '../modules/antibody_frustrampnn_parent'" in source
     assert source.count("workflow ANTIBODY_DENOVO {") == 1
@@ -36,8 +37,7 @@ def test_antibody_uses_only_public_canonical_frustrampnn() -> None:
         assert FRUSTRAMPNN_PARENT.read_text(encoding="utf-8").count(
             f"process {process_name} {{"
         ) == 1
-    assert "CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)" in source
-    assert "PublishAntibodyFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)" in source
+    assert "SchedulerFrustraMPNNParentFanout(" in source
 
 
 def test_antibody_final_adapter_never_mints_identity_from_path_or_order() -> None:
@@ -54,7 +54,7 @@ def test_antibody_final_adapter_never_mints_identity_from_path_or_order() -> Non
     assert "transformation_lineage" in helper
     assert "arrival" not in helper.lower()
     final_adapter = source.split("typed_terminal_candidates =", 1)[1].split(
-        "PrepareAntibodyFrustraMPNNCandidate", 1
+        "SchedulerFrustraMPNNParentFanout(", 1
     )[0]
     assert ".baseName" not in final_adapter
     assert "structures.size() != 1" in final_adapter
@@ -118,7 +118,7 @@ def test_antibody_iggm_sequence_change_fails_before_canonical_invocation() -> No
     source = _workflow()
     guard = source.index("antibody_denovo:frustrampnn_stale_post_iggm_structure")
     iggm = source.index("IGGM_AFFINITY_MATURATION(maturation_input)")
-    canonical = source.index("CanonicalFrustraMPNNV2(PrepareAntibodyFrustraMPNNCandidate.out.prepared)")
+    canonical = source.index("SchedulerFrustraMPNNParentFanout(")
     assert guard < iggm < canonical
     assert "run_affinity_maturation == true && params.run_frustrampnn == true" in source
 
@@ -141,16 +141,7 @@ def test_antibody_openmm_preserves_task_coupled_producer_metadata() -> None:
 
 def test_antibody_enabled_results_follow_actual_publisher_outputs() -> None:
     source = _workflow()
-    reporter = FRUSTRAMPNN_PARENT.read_text(encoding="utf-8")
-    assert "frustrampnn_results = PublishAntibodyFrustraMPNNCandidate.out.published" in source
-    assert "PublishAntibodyFrustraMPNNCandidate.out.published\n                .map" in source
-    assert "marker['result']" in reporter
-    assert "marker['manifest']" in reporter
-    assert "marker['source']" in reporter
-    assert "Path('${workflow.launchDir}')" in reporter
-    assert "relative_to(job_root)" in reporter
-    assert "parts = raw_value.split('/')" in reporter
-    assert "any(part in {'', '.', '..'} for part in parts)" in reporter
-    assert "or '\\\\\\\\' in raw_value" in reporter
-    assert "cursor.is_symlink()" in reporter
-    assert "result_path = resolve_job_output(marker['result'])" in reporter
+    shared = (REPO_ROOT / "modules" / "frustrampnn_parent_fanout.nf").read_text(encoding="utf-8")
+    assert "frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt" in source
+    assert "run_frustrampnn_parent_fanout.py" in shared
+    assert "stage_reporter.py' --job-root-relative" in shared

@@ -152,7 +152,7 @@ include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { RF3FromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
-include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 def proteinDesignSha256(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
@@ -1208,15 +1208,14 @@ workflow PROTEIN_DESIGN {
         def settingsSha256 = sha256Hex(canonicalJsonBytes(
             requestedFrustraMPNNSettingsHashPayload(rawSettings, settingsValueOrigin)
         ))
-        def typedFrustraMPNNCandidates = terminal_designs.map { candidate_meta, terminal_structure ->
-            tuple(candidate_meta, terminal_structure, settingsBase64, settingsSha256, settingsValueOrigin)
-        }
-        PrepareProteinDesignFrustraMPNNCandidate(typedFrustraMPNNCandidates)
-        CanonicalFrustraMPNNV2(PrepareProteinDesignFrustraMPNNCandidate.out.prepared)
-        frustrampnn_results = CanonicalFrustraMPNNV2.out.result
-        PublishProteinDesignFrustraMPNNCandidate(frustrampnn_results)
-        def published_frustrampnn_markers = PublishProteinDesignFrustraMPNNCandidate.out.marker.collect()
-        ReportProteinDesignFrustraMPNNComplete(published_frustrampnn_markers)
+        SchedulerFrustraMPNNParentFanout(
+            terminal_designs,
+            Channel.value(params.job_id.toString()),
+            Channel.value('protein_design'),
+            Channel.value(params.frustrampnn_settings.toString()),
+            Channel.value(settingsValueOrigin),
+        )
+        frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
     }
     else {
         ReportProteinDesignFrustraMPNNNotRequested(Channel.value('not_requested'))

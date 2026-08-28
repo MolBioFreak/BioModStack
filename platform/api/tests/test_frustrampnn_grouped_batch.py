@@ -188,9 +188,13 @@ def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_te
     }
     assert receipt["records"] == result["records"]
     assert receipt["record_count"] == 2
-    assert receipt["content_sha256"] == hashlib.sha256(
-        _canonical({key: value for key, value in receipt.items() if key != "content_sha256"})
+    assert "content_sha256" not in receipt
+    assert receipt["receipt_sha256"] == hashlib.sha256(
+        _canonical({key: value for key, value in receipt.items() if key != "receipt_sha256"})
     ).hexdigest()
+    installed_sha256 = hashlib.sha256(governed.read_bytes()).hexdigest()
+    assert installed_sha256 != receipt["receipt_sha256"]
+    assert result["governed_terminal_receipt"]["content_sha256"] == installed_sha256
 
 
 def test_grouped_runner_rejects_reordered_or_unbounded_terminal_records() -> None:

@@ -96,6 +96,7 @@ from services.frustrampnn.jobs import (
     discard_uncommitted_child_artifacts,
     handoff_selection,
     upload_selection,
+    workflow_selection,
 )
 from services.structure_dataset_fanout import (
     FANOUT_SCHEMA,
@@ -2012,7 +2013,11 @@ async def _fanout_design_selections(
 ):
     members = [
         StructureDatasetMember(
-            structure_id=str(selection.design_id or _candidate_id),
+            structure_id=str(
+                selection.design_id
+                or selection.producer_coordinates.get("candidate_id")
+                or _candidate_id
+            ),
             lineage={
                 "design_id": selection.design_id,
                 "source_job_id": selection.source_job_id,
@@ -2865,6 +2870,78 @@ async def analyze_uploaded_structure(
         )
         return await _child_job_receipt(session, job)
     except FrustraMPNNChildError as exc:
+        await session.rollback()
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post(
+    "/jobs/{parent_job_id}/workflow-dataset/analyze",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=FrustraMPNNStructureDatasetFanoutResponse,
+)
+async def analyze_parent_workflow_dataset(
+    parent_job_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create ordinary scheduler children from one live parent's terminal dataset."""
+
+    parent = await session.get(Job, parent_job_id)
+    if parent is None:
+        raise HTTPException(404, "source parent Job not found")
+    form = await request.form()
+    if set(form) != {
+        "structure_files", "dataset_manifest", "frustrampnn_settings",
+        "settings_value_origin", "parent_workflow_id",
+    }:
+        raise HTTPException(422, "workflow dataset multipart fields are not exact")
+    workflow_id = form.get("parent_workflow_id")
+    if not isinstance(workflow_id, str) or workflow_id != _frustrampnn_consumer_workflow(parent):
+        raise HTTPException(422, "workflow dataset parent identity is invalid")
+    origin = form.get("settings_value_origin")
+    if origin not in {"bms_default", "operator_request"}:
+        raise HTTPException(422, "workflow dataset settings origin is invalid")
+    raw_manifest = form.get("dataset_manifest")
+    raw_settings = form.get("frustrampnn_settings")
+    try:
+        manifest = json.loads(raw_manifest) if isinstance(raw_manifest, str) else None
+        settings_payload = json.loads(raw_settings) if isinstance(raw_settings, str) else None
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"candidates"}
+            or not isinstance(manifest["candidates"], list)
+            or not manifest["candidates"]
+            or canonical_json_bytes(manifest) != raw_manifest.encode("utf-8")
+        ):
+            raise ValueError("workflow dataset manifest is not canonical")
+        requested_settings = validate_complete_requested_settings(settings_payload).model_copy(
+            update={"settings_value_origin": origin}
+        )
+    except (json.JSONDecodeError, RequestedSettingsPayloadError, ValidationError, TypeError, ValueError) as exc:
+        raise HTTPException(422, f"invalid workflow dataset authority: {exc}") from exc
+    uploads = list(form.getlist("structure_files"))
+    if len(uploads) != len(manifest["candidates"]):
+        raise HTTPException(422, "workflow dataset file cardinality is invalid")
+    try:
+        selections = [
+            workflow_selection(
+                filename=str(getattr(upload, "filename", "") or ""),
+                payload=await _read_bounded_upload(upload),
+                metadata=metadata,
+                parent_job_id=parent_job_id,
+                parent_workflow_id=workflow_id,
+            )
+            for metadata, upload in zip(manifest["candidates"], uploads, strict=True)
+        ]
+        fanout = await _fanout_design_selections(
+            session,
+            parent=parent,
+            selections=selections,
+            requested_settings=requested_settings,
+            trigger="parent_workflow_terminal_dataset",
+        )
+        return await _fanout_receipt(session, fanout)
+    except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc
 

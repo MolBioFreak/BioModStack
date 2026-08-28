@@ -19,7 +19,7 @@ import groovy.json.JsonSlurper
 import java.util.Arrays
 
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
-include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 // Workflow-specific param defaults
 params.sequence_input = null
@@ -339,13 +339,14 @@ workflow STRUCTURE_PREDICTION {
                     producer_identity_sha256: producerIdentity,
                     producer_artifact_sha256: producer_meta.producer_artifact_sha256,
                     source_format: producer_meta.source_format,
-                ], predicted, settingsBase64, settingsSha256, settingsValueOrigin)
+                ], predicted)
             }
-            PrepareStructurePredictionFrustraMPNNCandidate(canonical_candidates)
-            CanonicalFrustraMPNNV2(PrepareStructurePredictionFrustraMPNNCandidate.out.prepared)
-            PublishStructurePredictionFrustraMPNNCandidate(CanonicalFrustraMPNNV2.out.result)
-            ReportStructurePredictionFrustraMPNNComplete(
-                PublishStructurePredictionFrustraMPNNCandidate.out.marker.collect()
+            SchedulerFrustraMPNNParentFanout(
+                canonical_candidates,
+                Channel.value(params.job_id.toString()),
+                Channel.value('structure_prediction'),
+                Channel.value(params.frustrampnn_settings.toString()),
+                Channel.value(settingsValueOrigin),
             )
         } else {
             if (!params.job_id) error('FrustraMPNN not-requested reporting requires --job_id')

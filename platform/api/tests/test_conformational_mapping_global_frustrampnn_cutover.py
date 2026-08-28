@@ -351,7 +351,7 @@ def test_cm_candidate_v2_preparation_binds_snapshot_source_settings_and_invocati
         requested_settings=settings,
     )
 
-    validate_schema("workflow_component_request_v2", request)
+    validate_schema("workflow_component_request_v3", request)
     assert request_path.is_file()
     assert normalized_path.is_file()
     assert structure_map_path.is_file()
@@ -388,7 +388,7 @@ def test_cm_candidate_source_scope_resolves_per_generated_map_and_compiles_zero_
     tmp_path: Path, selection_mode: str,
 ) -> None:
     from services.conformational_mapping.frustrampnn_adapter import prepare_cm_candidate_v2
-    from services.frustrampnn.manifests import validate_v2_input_closure
+    from services.frustrampnn.manifests import validate_v3_input_closure
     from services.frustrampnn.runtime import compile_frustrampnn_command_plan
     from services.frustrampnn.settings import (
         FrustraMPNNEffectiveSettings,
@@ -478,7 +478,7 @@ def test_cm_candidate_source_scope_resolves_per_generated_map_and_compiles_zero_
         "selected_model_number": 1,
         "preferred_altloc": "",
     }
-    validated_map, validated_effective, _ = validate_v2_input_closure(
+    validated_map, validated_effective, _ = validate_v3_input_closure(
         request,
         (tmp_path / "canonical_source.pdb").read_bytes(),
         (tmp_path / "frustrampnn_structure_map_v1.json").read_bytes(),
@@ -580,19 +580,18 @@ def test_cm_external_v2_component_seals_identity_authority_artifact(
     )
 
     assert (output / "authority_artifact_v1.json").read_bytes() == authority_bytes
-    assert manifest["artifact_count"] == 11
+    assert manifest["artifact_count"] == 10
     assert [record["relative_path"] for record in manifest["artifacts"]] == [
-        "workflow_component_request_v2.json",
+        "workflow_component_request_v3.json",
         "authority_artifact_v1.json",
         "normalized_input.pdb",
         "frustrampnn_structure_map_v1.json",
         "raw_frustrampnn.csv",
-        "frustrampnn_landscape_v2.json",
-        "frustrampnn_summary_v2.json",
+        "frustrampnn_landscape_v3.json",
+        "frustrampnn_summary_v3.json",
         "frustrampnn_stdout.log",
         "frustrampnn_stderr.log",
-        "frustrampnn_execution_receipt_v2.json",
-        "frustrampnn_statistics_v1.json",
+        "frustrampnn_execution_receipt_v3.json",
     ]
     assert canonical_json_loads((output / "authority_artifact_v1.json").read_bytes())["schema_name"] == "producer_manifest"
     validate_result_manifest(output, manifest)
@@ -600,7 +599,7 @@ def test_cm_external_v2_component_seals_identity_authority_artifact(
         output,
         expected_parent_job_id="cm-parent-job",
         terminal_envelope=canonical_json_loads(
-            (output / "workflow_component_result_v2.json").read_bytes()
+            (output / "workflow_component_result_v3.json").read_bytes()
         ),
     )
     authority_value = next(
@@ -611,8 +610,8 @@ def test_cm_external_v2_component_seals_identity_authority_artifact(
     assert authority_value["role"] == "identity_authority"
     assert authority_value["media_type"] == "application/json"
 
-    manifest_path = output / "frustrampnn_result_manifest_v2.json"
-    terminal_path = output / "workflow_component_result_v2.json"
+    manifest_path = output / "frustrampnn_result_manifest_v3.json"
+    terminal_path = output / "workflow_component_result_v3.json"
     original_manifest = canonical_json_loads(manifest_path.read_bytes())
     original_terminal = canonical_json_loads(terminal_path.read_bytes())
 
@@ -652,34 +651,6 @@ def test_cm_external_v2_component_seals_identity_authority_artifact(
             tampered_structure,
             forged_bytes,
         )
-
-    legacy_manifest = canonical_json_loads(canonical_json_bytes(original_manifest))
-    legacy_manifest["artifacts"].pop(1)
-    legacy_manifest["artifact_count"] = 10
-    legacy_request = canonical_json_loads(
-        (output / "workflow_component_request_v2.json").read_bytes()
-    )
-    del legacy_request["identity_authority_artifact"]["bytes"]
-    legacy_request_bytes = canonical_json_bytes(legacy_request)
-    (output / "workflow_component_request_v2.json").write_bytes(legacy_request_bytes)
-    legacy_manifest["request_sha256"] = hashlib.sha256(legacy_request_bytes).hexdigest()
-    legacy_request_record = legacy_manifest["artifacts"][0]
-    legacy_request_record["sha256"] = hashlib.sha256(legacy_request_bytes).hexdigest()
-    legacy_request_record["bytes"] = len(legacy_request_bytes)
-    legacy_terminal = canonical_json_loads(canonical_json_bytes(original_terminal))
-    legacy_terminal["request_sha256"] = legacy_manifest["request_sha256"]
-    legacy_terminal["result_manifest"]["sha256"] = canonical_sha256(legacy_manifest)
-    (output / "authority_artifact_v1.json").unlink()
-    manifest_path.write_bytes(canonical_json_bytes(legacy_manifest))
-    terminal_path.write_bytes(canonical_json_bytes(legacy_terminal))
-    with pytest.raises(ManifestValidationError):
-        validate_result_manifest(output, legacy_manifest)
-    validate_result_manifest(
-        output,
-        legacy_manifest,
-        allow_legacy_v2_external_authority=True,
-    )
-
 
 def test_self_authoritative_v2_rejects_external_authority_artifact(
     tmp_path: Path,
@@ -860,7 +831,7 @@ def test_cm_preparer_fans_in_every_producer_with_exact_candidate_identity_and_ca
     ]
     assert [
         json.loads(
-            (prepared / item["candidate_id"] / "workflow_component_request_v2.json").read_text()
+            (prepared / item["candidate_id"] / "workflow_component_request_v3.json").read_text()
         )["candidate_id"]
         for item in manifest["candidates"]
     ] == ["candidate-0", "candidate-1"]
@@ -869,7 +840,7 @@ def test_cm_preparer_fans_in_every_producer_with_exact_candidate_identity_and_ca
         assert sorted(path.name for path in candidate_root.iterdir()) == [
             "canonical_source.pdb",
             "frustrampnn_structure_map_v1.json",
-            "workflow_component_request_v2.json",
+            "workflow_component_request_v3.json",
         ]
 
 
@@ -1174,13 +1145,16 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "CONFORMATIONAL_MAPPING_CONFORNETS" in workflow
     assert "CONFORMATIONAL_MAPPING_IMPORT" in workflow
     assert "PrepareConformationalMappingFrustraMPNNV2" in workflow
-    assert "CanonicalFrustraMPNNV2" in workflow
-    assert "StageConformationalMappingFrustraMPNNResult" in workflow
+    assert "SchedulerFrustraMPNNParentFanout" in workflow
+    assert "CanonicalFrustraMPNNV2(" not in workflow
+    assert "SchedulerFrustraMPNNParentFanout.out.result_bundles" in workflow
     assert "CanonicalConformationalAnalysisPlaneV2" in workflow
     assert "flatMap" in workflow
-    assert "workflow_component_request_v2.json" in workflow
+    assert "workflow_component_request_v3.json" in workflow
     assert "canonical_source.pdb" in workflow
-    assert "frustrampnn_structure_map_v1.json" in workflow
+    assert "frustrampnn_structure_map_v1.json" in (
+        root / "scripts" / "prepare_conformational_mapping_frustrampnn_v2.py"
+    ).read_text(encoding="utf-8")
     assert "errorStrategy 'terminate'" in module
     assert "postprocess_conformational_mapping_frustrampnn_v2.py" in module
     assert "run_conformational_mapping_analysis_plane.py" not in module
@@ -1200,7 +1174,7 @@ def test_cm_persistence_reuses_global_result_rows_without_legacy_projection() ->
     assert "canonical_count is not None and not is_conformational_mapping" in ingester
     assert "canonical_count != len(ensemble" not in ingester
     assert "frustrampnn_result_references" in ingester
-    assert "frustrampnn_landscape_v2.json" in ingester
+    assert 'f"frustrampnn_landscape_v{generation}.json"' in ingester
     assert "FrustraMPNNResult" in persistence
     assert "FrustraMPNNLandscapeRow" in persistence
     assert "canonical_global_mode" in persistence
