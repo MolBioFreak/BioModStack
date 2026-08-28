@@ -166,9 +166,13 @@ def test_early_sequence_branches_schedule_shared_terminal_publication(
     assert "PROTEIN_DESIGN:ProjectProteinDesignMetadata" in dag
     assert "PROTEIN_DESIGN:PublishResults" in dag
     if enabled:
-        assert "PROTEIN_DESIGN:CanonicalFrustraMPNNV2:CanonicalFrustraMPNNV2Task" in dag
+        assert "PROTEIN_DESIGN:SchedulerFrustraMPNNParentFanout:StageFrustraMPNNParentCandidate" in dag
+        assert "PROTEIN_DESIGN:SchedulerFrustraMPNNParentFanout:SpawnWaitFrustraMPNNParentChildren" in dag
+        assert "PROTEIN_DESIGN:SchedulerFrustraMPNNParentFanout:ReportFrustraMPNNParentChildrenComplete" in dag
+        assert "PROTEIN_DESIGN:CanonicalFrustraMPNNV2:CanonicalFrustraMPNNV2Task" not in dag
         assert "PROTEIN_DESIGN:ReportProteinDesignFrustraMPNNNotRequested" not in dag
     else:
+        assert "PROTEIN_DESIGN:SchedulerFrustraMPNNParentFanout" not in dag
         assert "PROTEIN_DESIGN:CanonicalFrustraMPNNV2:CanonicalFrustraMPNNV2Task" not in dag
         assert "PROTEIN_DESIGN:ReportProteinDesignFrustraMPNNNotRequested" in dag
     assert "Process 'CanonicalFrustraMPNNV2Task' has been already used" not in output
