@@ -279,7 +279,10 @@ def run_grouped_batch(
     output_root = Path.cwd() / "grouped_results"
     if output_root.exists() or output_root.is_symlink():
         raise GroupedBatchError("grouped result output already exists")
-    output_root.mkdir(mode=0o700)
+    staging_output_root = Path.cwd() / f".grouped_results.{os.getpid()}.tmp"
+    if staging_output_root.exists() or staging_output_root.is_symlink():
+        raise GroupedBatchError("grouped result staging output already exists")
+    staging_output_root.mkdir(mode=0o700)
     work_root = Path(tempfile.mkdtemp(prefix="frustrampnn-grouped-", dir=Path.cwd()))
     runtime_output = output_root.parent / "runtime-output"
     runtime_output.mkdir(mode=0o700)
@@ -351,21 +354,30 @@ def run_grouped_batch(
             or (completed.returncode == 2 and any(status != "failed" for status in statuses))
         ):
             raise GroupedBatchError("predict_batch exit status contradicts terminal evidence")
+        staged_bundles = []
+        for candidate, terminal in zip(prepared, ordered_terminals, strict=True):
+            bundle = finalize_candidate(
+                candidate, terminal, output_root=staging_output_root,
+                batch_invocation=invocation, batch_stdout=stdout_log,
+                batch_stderr=stderr_log, physical_gpu_id=physical_gpu_id,
+            )
+            expected_bundle = staging_output_root / str(candidate.record["candidate_id"])
+            if Path(bundle) != expected_bundle or expected_bundle.is_symlink() or not expected_bundle.is_dir():
+                raise GroupedBatchError("finalized candidate bundle is unavailable")
+            staged_bundles.append(expected_bundle)
+        os.replace(staging_output_root, output_root)
+        directory_fd = os.open(output_root.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        bundles = [output_root / path.name for path in staged_bundles]
         terminal_receipt_path, terminal_receipt = _publish_governed_terminal_receipt(
             root=root,
             manifest_path=manifest_path,
             batch=batch,
             records=ordered_terminals,
         )
-        bundles = []
-        for candidate, terminal in zip(prepared, ordered_terminals, strict=True):
-            bundles.append(
-                finalize_candidate(
-                    candidate, terminal, output_root=output_root,
-                    batch_invocation=invocation, batch_stdout=stdout_log,
-                    batch_stderr=stderr_log, physical_gpu_id=physical_gpu_id,
-                )
-            )
         return {
             **evidence,
             "governed_terminal_receipt": {
@@ -378,6 +390,9 @@ def run_grouped_batch(
     finally:
         if owned_pin is not None:
             owned_pin.close()
+        shutil.rmtree(staging_output_root, ignore_errors=True)
+        if not output_root.exists():
+            shutil.rmtree(runtime_output, ignore_errors=True)
         shutil.rmtree(work_root, ignore_errors=True)
 
 

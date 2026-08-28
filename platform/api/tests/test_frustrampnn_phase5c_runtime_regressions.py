@@ -79,6 +79,14 @@ if script == 'publish_frustrampnn_bundle.py':
 if script == 'run_frustrampnn_parent_fanout.py':
     parent_job_id=args[args.index('--parent-job-id')+1]
     parent_workflow_id=args[args.index('--parent-workflow-id')+1]
+    if '--settings-json-file' in args:
+        settings_json=pathlib.Path(args[args.index('--settings-json-file')+1]).read_text()
+        forwarded=pathlib.Path('/run/forwarded-settings.json')
+        forwarded.write_text(settings_json)
+        args[args.index('--settings-json-file')+1]=str(forwarded)
+    else:
+        settings_json=args[args.index('--settings-json')+1]
+    pathlib.Path('/run/settings-received.json').write_text(settings_json)
     candidate_dirs=[pathlib.Path(args[index+1]) for index, value in enumerate(args) if value == '--candidate-dir']
     candidates=[]
     for candidate_dir in candidate_dirs:
@@ -226,7 +234,9 @@ pathlib.Path(args[args.index('--output')+1]).write_text('{}\\n')
     )
 
 
-def _run_full_path(root: Path, *, enabled: bool) -> dict[str, object]:
+def _run_full_path(
+    root: Path, *, enabled: bool, settings_json_override: str | None = None
+) -> dict[str, object]:
     run = root / ("enabled" if enabled else "disabled")
     for directory in ("out", "work", "launch"):
         (run / directory).mkdir(parents=True)
@@ -248,6 +258,11 @@ env.PYTHONPATH='/probe/fakepy'
 """,
         encoding="utf-8",
     )
+    if settings_json_override is not None:
+        (run / "params.json").write_text(json.dumps({
+            "frustrampnn_settings": settings_json_override,
+            "frustrampnn_settings_value_origin": "bms_default",
+        }), encoding="utf-8")
     command = [
             "docker", "run", "--rm", "--network", "none",
             "-e", "NXF_OFFLINE=true", "-e", "NXF_DISABLE_CHECK_LATEST=true",
@@ -263,22 +278,25 @@ env.PYTHONPATH='/probe/fakepy'
             "--sequence_batch_json_path", "/run/batch.json",
             "--run_frustrampnn", str(enabled).lower(),
         ]
+    if settings_json_override is not None:
+        command.extend(["-params-file", "/run/params.json"])
     if enabled:
-        settings_json = canonical_json_bytes(
+        settings_json = settings_json_override or canonical_json_bytes(
             default_settings().model_dump(
                 mode="json",
                 exclude_none=False,
                 exclude={"settings_value_origin"},
             )
         ).decode("utf-8")
-        command.extend(
-            [
-                "--frustrampnn_settings",
-                settings_json,
-                "--frustrampnn_settings_value_origin",
-                "bms_default",
-            ]
-        )
+        if settings_json_override is None:
+            command.extend(
+                [
+                    "--frustrampnn_settings",
+                    settings_json,
+                    "--frustrampnn_settings_value_origin",
+                    "bms_default",
+                ]
+            )
     completed = subprocess.run(
         command,
         text=True,
@@ -342,3 +360,30 @@ def test_full_path_equal_byte_boltz_candidates_survive_bind_project_and_publish(
         assert result["scheduler_spawn_tasks"] == 0
         assert result["scheduler_report_tasks"] == 0
         assert result["canonical_tasks"] == 0
+
+
+@pytest.mark.runtime_integration
+def test_parent_fanout_transports_hostile_canonical_settings_as_data(tmp_path: Path) -> None:
+    if not _runtime_ready():
+        pytest.skip("pinned Nextflow image or managed API test runtime is unavailable")
+    _prepare_full_path_runtime(tmp_path)
+    hostile = default_settings().model_dump(
+        mode="json", exclude_none=False, exclude={"settings_value_origin"},
+    )
+    hostile["protein_selection"] = {
+        "mode": "selected_entities",
+        "entities": [{
+            "entity_instance_id": "entity'$(touch /run/settings-injected)' ; $HOME & | < >",
+            "source_entity_id": None,
+            "label_asym_id": None,
+            "auth_asym_id": None,
+        }],
+        "regions": [],
+        "residues": [],
+    }
+    settings_json = canonical_json_bytes(hostile).decode("utf-8")
+
+    _run_full_path(tmp_path, enabled=True, settings_json_override=settings_json)
+
+    assert not (tmp_path / "enabled" / "settings-injected").exists()
+    assert (tmp_path / "enabled" / "settings-received.json").read_text() == settings_json

@@ -237,7 +237,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent-job-id", required=True)
     parser.add_argument("--parent-workflow-id", required=True)
-    parser.add_argument("--settings-json", required=True)
+    settings_source = parser.add_mutually_exclusive_group(required=True)
+    settings_source.add_argument("--settings-json")
+    settings_source.add_argument("--settings-json-file", type=Path)
     parser.add_argument("--settings-value-origin", required=True)
     parser.add_argument("--candidate-dir", action="append", type=Path, required=True)
     parser.add_argument("--output-receipt", type=Path, default=Path("frustrampnn_parent_terminal_v1.json"))
@@ -246,10 +248,15 @@ def main() -> None:
     parser.add_argument("--poll-interval", type=int, default=10)
     parser.add_argument("--timeout", type=int, default=0)
     args = parser.parse_args()
+    settings_json = (
+        args.settings_json
+        if args.settings_json is not None
+        else args.settings_json_file.read_text(encoding="utf-8")
+    )
     execute_parent_fanout(
         parent_job_id=args.parent_job_id,
         parent_workflow_id=args.parent_workflow_id,
-        settings_json=args.settings_json,
+        settings_json=settings_json,
         settings_value_origin=args.settings_value_origin,
         candidate_dirs=args.candidate_dir,
         output_receipt=args.output_receipt,

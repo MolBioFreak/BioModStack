@@ -42,13 +42,15 @@ process SpawnWaitFrustraMPNNParentChildren {
     path 'frustrampnn_child_bundles', emit: bundles
 
     script:
-    def candidateArgs = candidate_dirs.collect { candidate -> "--candidate-dir '${candidate}'" }.join(' \\\n      ')
+    def candidateArgs = candidate_dirs.collect { candidate -> "--candidate-dir '${candidate}'" }.join(' \\\n       ')
+    def settingsBase64 = settings_json.getBytes('UTF-8').encodeBase64().toString()
     """
     set -euo pipefail
+    printf '%s' '${settingsBase64}' | base64 --decode > frustrampnn_settings_v2.json
     '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_parent_fanout.py' \
       --parent-job-id '${parent_job_id}' \
       --parent-workflow-id '${parent_workflow_id}' \
-      --settings-json '${settings_json}' \
+      --settings-json-file frustrampnn_settings_v2.json \
       --settings-value-origin '${settings_value_origin}' \
       ${candidateArgs} \
       --output-receipt frustrampnn_parent_terminal_v1.json \

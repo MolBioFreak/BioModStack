@@ -26,12 +26,16 @@ def _canonical(value: dict[str, object]) -> bytes:
     return canonical_json_bytes(value)
 
 
-@pytest.mark.parametrize(("adapter_returncode", "fail_all"), [(1, False), (2, True)])
+@pytest.mark.parametrize(
+    ("adapter_returncode", "fail_all", "late_finalize_failure"),
+    [(1, False, False), (2, True, False), (1, False, True)],
+)
 def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_terminal_record(
     tmp_path: Path,
     monkeypatch,
     adapter_returncode: int,
     fail_all: bool,
+    late_finalize_failure: bool,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     grouped = _load_grouped_batch()
@@ -146,33 +150,49 @@ def test_grouped_runner_executes_one_predict_batch_command_and_finalizes_each_te
         (output / "frustrampnn_batch_terminal_evidence_v1.json").write_bytes(_canonical(evidence))
         return SimpleNamespace(returncode=adapter_returncode)
 
-    def finalize(candidate, terminal, **_kwargs):
+    fail_late = {"enabled": late_finalize_failure}
+
+    def finalize(candidate, terminal, **kwargs):
         finalized.append((candidate.record["candidate_id"], terminal["status"]))
-        return tmp_path / f"bundle-{candidate.record['candidate_id']}"
+        if fail_late["enabled"] and candidate.record["candidate_id"] == "beta":
+            raise RuntimeError("late candidate finalization failed")
+        bundle = kwargs["output_root"] / candidate.record["candidate_id"]
+        bundle.mkdir()
+        return bundle
 
     job_root = tmp_path / "job-1"
     job_root.mkdir()
-    result = grouped.run_grouped_batch(
-        batch_manifest_path=manifest_path,
-        job_root=job_root,
-        container=tmp_path / "frustrampnn.sif",
-        physical_gpu_id=4,
-        apptainer="apptainer",
-        prepare_record=prepare_record,
-        build_command=build_command,
-        execute=execute,
-        finalize_candidate=finalize,
-        pinned_container=SimpleNamespace(proc_path=tmp_path / "frustrampnn.sif"),
-    )
+    run_kwargs = {
+        "batch_manifest_path": manifest_path,
+        "job_root": job_root,
+        "container": tmp_path / "frustrampnn.sif",
+        "physical_gpu_id": 4,
+        "apptainer": "apptainer",
+        "prepare_record": prepare_record,
+        "build_command": build_command,
+        "execute": execute,
+        "finalize_candidate": finalize,
+        "pinned_container": SimpleNamespace(proc_path=tmp_path / "frustrampnn.sif"),
+    }
+    governed = job_root / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
+    if late_finalize_failure:
+        with pytest.raises(RuntimeError, match="late candidate finalization failed"):
+            grouped.run_grouped_batch(**run_kwargs)
+        assert not governed.exists()
+        assert not (tmp_path / "grouped_results").exists()
+        fail_late["enabled"] = False
+        finalized.clear()
+    result = grouped.run_grouped_batch(**run_kwargs)
 
-    assert execute_calls == [("apptainer", "predict_batch")]
+    assert execute_calls == [("apptainer", "predict_batch")] * (
+        2 if late_finalize_failure else 1
+    )
     assert finalized == (
         [("alpha", "failed"), ("beta", "failed")]
         if fail_all else [("alpha", "succeeded"), ("beta", "failed")]
     )
     assert result["record_count"] == 2
     assert result["model_load_count"] == 1
-    governed = job_root / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
     assert governed.is_file()
     receipt = json.loads(governed.read_bytes())
     assert receipt["schema_name"] == "bms.frustrampnn.grouped-batch-terminal.v1"
