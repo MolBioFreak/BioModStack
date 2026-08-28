@@ -9,12 +9,16 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: tr
 afterEach(() => document.body.replaceChildren());
 
 const item = (state: FrustraMpnnExperimentScopeItem['state'], analysisState: FrustraMpnnExperimentScopeItem['statistics_analysis']['state'], index: number): FrustraMpnnExperimentScopeItem => ({
-    result_receipt_id: `receipt-${index}`, parent_job_id: `job-${index}`, invocation_id: `invocation-${index}`,
+    result_receipt_id: `receipt-${index}`,
+    parent_job_id: state === 'missing' || state === 'skipped' ? null : `job-${index}`,
+    invocation_id: state === 'missing' || state === 'skipped' ? null : `invocation-${index}`,
     candidate_id: `candidate-${index}`, operator_label: `Structure ${index}`,
     source_identity: { design_id: `design-${index}`, artifact_id: `artifact-${index}`, artifact_sha256: 'a'.repeat(64), candidate_id: `candidate-${index}` },
     state, diagnostic: state === 'failed' ? 'inference failed' : null,
     statistics_analysis: { state: analysisState, diagnostic: analysisState === 'failed' ? 'analysis failed' : null },
-    manifest_sha256: 'b'.repeat(64), content_digest: 'c'.repeat(64), reopen_uri: `/designs/job-${index}`,
+    manifest_sha256: state === 'completed' ? 'b'.repeat(64) : null,
+    content_digest: 'c'.repeat(64),
+    reopen_uri: state === 'missing' || state === 'skipped' ? null : `/designs/job-${index}`,
 });
 
 describe('whole-experiment FrustraMPNN projection', () => {
@@ -27,7 +31,10 @@ describe('whole-experiment FrustraMPNN projection', () => {
             item('skipped', 'not_started', 4), item('completed', 'failed', 5),
         ];
         await act(async () => root.render(<FrustraMpnnExperimentResults
-            items={items.map((entry) => ({ item: entry, href: `${entry.reopen_uri}?result_model=frustrampnn` }))}
+            items={items.map((entry) => ({
+                item: entry,
+                href: entry.reopen_uri ? `${entry.reopen_uri}?result_model=frustrampnn` : null,
+            }))}
             globalRevisionId="global-rev-4"
             domainRevisionId="domain-rev-7"
         />));
@@ -37,7 +44,9 @@ describe('whole-experiment FrustraMPNN projection', () => {
         expect(container.textContent).toContain('inference failed');
         expect(container.textContent).toContain('Statistics analysis: failed');
         expect(container.textContent).toContain('Analysis: analysis failed');
-        expect(container.querySelectorAll('a')).toHaveLength(5);
+        expect(container.textContent).toContain('Job not started');
+        expect(container.textContent).toContain('Manifest not published');
+        expect(container.querySelectorAll('a')).toHaveLength(3);
         await act(async () => root.unmount());
     });
 });

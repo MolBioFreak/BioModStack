@@ -871,8 +871,8 @@ export interface ResearchRecordRequest {
 
 export interface FrustraMpnnExperimentScopeItem {
     result_receipt_id: string;
-    parent_job_id: string;
-    invocation_id: string;
+    parent_job_id: string | null;
+    invocation_id: string | null;
     candidate_id: string;
     operator_label: string;
     source_identity: {
@@ -887,9 +887,9 @@ export interface FrustraMpnnExperimentScopeItem {
         state: 'not_started' | 'queued' | 'running' | 'completed' | 'failed';
         diagnostic: string | null;
     };
-    manifest_sha256: string;
+    manifest_sha256: string | null;
     content_digest: string;
-    reopen_uri: string;
+    reopen_uri: string | null;
 }
 
 export interface FrustraMpnnExperimentScope {
@@ -1428,10 +1428,24 @@ function parseFrustraMpnnExperimentScopeItem(value: unknown, label: string): Fru
         'design_id', 'artifact_id', 'artifact_sha256', 'candidate_id',
     ]);
     const statisticsAnalysis = exactRecord(record.statistics_analysis, `${label}.statistics_analysis`, ['state', 'diagnostic']);
+    const state = requireLiteral(record.state, `${label}.state`, ['completed', 'failed', 'missing', 'skipped']);
+    const parentJobId = requireNullableString(record.parent_job_id, `${label}.parent_job_id`);
+    const invocationId = requireNullableString(record.invocation_id, `${label}.invocation_id`);
+    const reopenUri = requireNullableString(record.reopen_uri, `${label}.reopen_uri`);
+    const manifestSha256 = record.manifest_sha256 === null
+        ? null
+        : requireSha256(record.manifest_sha256, `${label}.manifest_sha256`);
+    const hasExecution = parentJobId !== null || invocationId !== null || reopenUri !== null;
+    if (hasExecution && (parentJobId === null || invocationId === null || reopenUri === null)) {
+        throw new Error(`${label} execution identity and reopen URI must be supplied together.`);
+    }
+    if ((state === 'completed') !== (manifestSha256 !== null)) {
+        throw new Error(`${label}.manifest_sha256 must exist only for a completed core result.`);
+    }
     return {
         result_receipt_id: requireString(record.result_receipt_id, `${label}.result_receipt_id`),
-        parent_job_id: requireString(record.parent_job_id, `${label}.parent_job_id`),
-        invocation_id: requireString(record.invocation_id, `${label}.invocation_id`),
+        parent_job_id: parentJobId,
+        invocation_id: invocationId,
         candidate_id: requireString(record.candidate_id, `${label}.candidate_id`),
         operator_label: requireString(record.operator_label, `${label}.operator_label`),
         source_identity: {
@@ -1440,15 +1454,15 @@ function parseFrustraMpnnExperimentScopeItem(value: unknown, label: string): Fru
             artifact_sha256: requireSha256(sourceIdentity.artifact_sha256, `${label}.source_identity.artifact_sha256`),
             candidate_id: requireString(sourceIdentity.candidate_id, `${label}.source_identity.candidate_id`),
         },
-        state: requireLiteral(record.state, `${label}.state`, ['completed', 'failed', 'missing', 'skipped']),
+        state,
         diagnostic: requireNullableString(record.diagnostic, `${label}.diagnostic`),
         statistics_analysis: {
             state: requireLiteral(statisticsAnalysis.state, `${label}.statistics_analysis.state`, ['not_started', 'queued', 'running', 'completed', 'failed']),
             diagnostic: requireNullableString(statisticsAnalysis.diagnostic, `${label}.statistics_analysis.diagnostic`),
         },
-        manifest_sha256: requireSha256(record.manifest_sha256, `${label}.manifest_sha256`),
+        manifest_sha256: manifestSha256,
         content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
-        reopen_uri: requireString(record.reopen_uri, `${label}.reopen_uri`),
+        reopen_uri: reopenUri,
     };
 }
 

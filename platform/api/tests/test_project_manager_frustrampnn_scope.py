@@ -195,6 +195,79 @@ async def _add_selected_design_membership(
 
 
 @pytest.mark.asyncio
+async def test_frustrampnn_scope_keeps_selected_design_when_no_child_execution_exists(
+    read_model_store,
+    core_store,
+) -> None:
+    experiment_factory = read_model_store
+    async with experiment_factory() as session:
+        project, experiment, domain = await _hierarchy(session)
+        await _add_selected_design_membership(
+            session,
+            project_id=project.id,
+            domain_revision_id=domain.current_revision_id,
+            ordinal=6,
+        )
+        await session.commit()
+
+    async with core_store() as session:
+        session.add_all([
+            Job(
+                id="source-job-6",
+                name="Source 6",
+                status="completed",
+                queue_status="completed",
+                model_id="boltz2",
+                mode="structure_prediction",
+                params={},
+            ),
+            Design(
+                id="selected-design-6",
+                job_id="source-job-6",
+                name="Structure 6",
+                pdb_path="/fixture/selected-design-6.pdb",
+            ),
+        ])
+        await session.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_cross_store_app(experiment_factory, core_store)),
+        base_url="http://test",
+    ) as client:
+        response = await _request_scope(
+            client,
+            project=project,
+            experiment=experiment,
+            domain=domain,
+            global_experiment_revision_id=experiment.current_revision_id,
+            domain_revision_id=domain.current_revision_id,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["items"] == [{
+        "result_receipt_id": "selected-design-receipt-6",
+        "parent_job_id": None,
+        "invocation_id": None,
+        "candidate_id": "selected-design-6",
+        "operator_label": "Structure 6",
+        "source_identity": {
+            "design_id": "selected-design-6",
+            "artifact_id": "selected-design-6",
+            "artifact_sha256": f"{46:064x}",
+            "candidate_id": "selected-design-6",
+        },
+        "state": "missing",
+        "diagnostic": "No FrustraMPNN execution exists for this selected Design.",
+        "statistics_analysis": {"state": "not_started", "diagnostic": None},
+        "manifest_sha256": None,
+        "content_digest": f"{46:064x}",
+        "reopen_uri": None,
+    }]
+
+
+@pytest.mark.asyncio
 async def test_frustrampnn_scope_requires_exact_revisions_and_uses_only_selected_domain_revision_edges(
     read_model_store,
     core_store,
@@ -414,7 +487,7 @@ async def test_frustrampnn_scope_projects_all_selected_revision_terminal_and_ana
                     queue_status="completed",
                     model_id="boltz2",
                     mode="structure_prediction",
-                    params={},
+                    params={"run_frustrampnn": False} if ordinal == 3 else {},
                 ),
                 Design(
                     id=design_id,
@@ -527,8 +600,11 @@ async def test_frustrampnn_scope_projects_all_selected_revision_terminal_and_ana
     assert payload["items"][0]["operator_label"] == "Structure 0"
     assert payload["items"][1]["diagnostic"] == "inference failed"
     assert payload["items"][2]["diagnostic"] == "expected persisted result absent"
-    assert payload["items"][3]["diagnostic"] == "policy skipped"
+    assert payload["items"][3]["diagnostic"] == "FrustraMPNN was explicitly disabled for this source workflow."
     assert payload["items"][4]["statistics_analysis"]["diagnostic"] == "bounded analysis failure"
     assert payload["items"][0]["result_receipt_id"] == "selected-design-receipt-0"
     assert payload["items"][0]["manifest_sha256"]
-    assert payload["items"][1]["manifest_sha256"] == ""
+    assert [item["manifest_sha256"] for item in payload["items"][1:4]] == [None, None, None]
+    assert [item["content_digest"] for item in payload["items"]] == [
+        f"{ordinal + 40:064x}" for ordinal in range(5)
+    ]
