@@ -1176,6 +1176,18 @@ async def list_domain_frustrampnn_results(
             candidate_id = str(member["candidate_id"])
             identity = (str(child.id), invocation_id)
             result = results_by_identity.get(identity)
+            if result is not None and (
+                str(result.design_id or "") != design_id
+                or str(result.candidate_id) != candidate_id
+                or str(result.source_artifact_sha256) != str(member["sha256"])
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_result_authority_conflict",
+                        "message": "Persisted FrustraMPNN result does not match the selected Design authority",
+                    },
+                )
             analysis = analysis_by_identity.get(identity)
             source_job = source_jobs_by_id[str(designs_by_id[design_id].job_id)]
             explicitly_disabled = (source_job.params or {}).get("run_frustrampnn") is False

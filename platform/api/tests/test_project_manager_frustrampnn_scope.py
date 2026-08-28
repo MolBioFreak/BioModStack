@@ -514,6 +514,125 @@ async def test_frustrampnn_scope_does_not_complete_a_foreign_scheduler_member(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["design_id", "candidate_id", "source_digest"])
+async def test_frustrampnn_scope_rejects_persisted_result_for_another_selected_member(
+    read_model_store,
+    core_store,
+    mismatch: str,
+) -> None:
+    ordinal = {"design_id": 9, "candidate_id": 10, "source_digest": 11}[mismatch]
+    design_id = f"selected-design-{ordinal}"
+    source_job_id = f"source-job-{ordinal}"
+    child_id = f"frustra-child-{ordinal}"
+    invocation_id = f"frustrampnn:{child_id}:1"
+    candidate_id = f"candidate-{ordinal}"
+    source_digest = f"{ordinal + 40:064x}"
+
+    experiment_factory = read_model_store
+    async with experiment_factory() as session:
+        project, experiment, domain = await _hierarchy(session)
+        await _add_selected_design_membership(
+            session,
+            project_id=project.id,
+            domain_revision_id=domain.current_revision_id,
+            ordinal=ordinal,
+        )
+        await session.commit()
+
+    result_design_id = "selected-design-foreign" if mismatch == "design_id" else design_id
+    result_candidate_id = "candidate-foreign" if mismatch == "candidate_id" else candidate_id
+    result_source_digest = "f" * 64 if mismatch == "source_digest" else source_digest
+    async with core_store() as session:
+        session.add_all([
+            Job(
+                id=source_job_id,
+                name=f"Source {ordinal}",
+                status="completed",
+                queue_status="completed",
+                model_id="boltz2",
+                mode="structure_prediction",
+                params={},
+            ),
+            Design(
+                id=design_id,
+                job_id=source_job_id,
+                name=f"Structure {ordinal}",
+                pdb_path=f"/fixture/{design_id}.pdb",
+            ),
+            Job(
+                id=child_id,
+                name=f"FrustraMPNN {ordinal}",
+                status="completed",
+                queue_status="completed",
+                model_id="frustrampnn",
+                mode="analyze",
+                params={"_frustrampnn_child_v1": {
+                    "schema_name": "bms.frustrampnn.scheduler-child.v1",
+                    "schema_version": 1,
+                    "execution_owner_job_id": child_id,
+                    "selection": [{
+                        "selection_ordinal": 0,
+                        "design_id": design_id,
+                        "source_job_id": source_job_id,
+                        "candidate_id": candidate_id,
+                        "invocation_id": invocation_id,
+                        "sha256": source_digest,
+                    }],
+                    "component_invocation_ids": [invocation_id],
+                }},
+                child_stage="frustrampnn",
+                parent_job_id=source_job_id,
+            ),
+        ])
+        manifest = {
+            "schema_name": "frustrampnn_result_manifest",
+            "parent_job_id": child_id,
+            "invocation_id": invocation_id,
+            "candidate_id": result_candidate_id,
+            "request_sha256": f"{ordinal + 70:064x}",
+            "source_sha256": result_source_digest,
+        }
+        summary = {"schema_name": "frustrampnn_summary", "candidate_id": result_candidate_id}
+        session.add(FrustraMPNNResult(
+            parent_job_id=child_id,
+            invocation_id=invocation_id,
+            parent_workflow_id="frustrampnn_analysis",
+            candidate_id=result_candidate_id,
+            design_id=result_design_id,
+            requiredness="required",
+            request_sha256=f"{ordinal + 70:064x}",
+            source_artifact_id=result_design_id,
+            source_artifact_sha256=result_source_digest,
+            manifest_sha256=hashlib.sha256(canonical_json_bytes(manifest)).hexdigest(),
+            manifest_json=manifest,
+            summary_sha256=hashlib.sha256(canonical_json_bytes(summary)).hexdigest(),
+            summary_json=summary,
+            runtime_identity_json={},
+            assigned_gpu_json={},
+            terminal_result_json={"status": "completed"},
+        ))
+        await session.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(
+            app=_cross_store_app(experiment_factory, core_store)
+        ),
+        base_url="http://test",
+    ) as client:
+        response = await _request_scope(
+            client,
+            project=project,
+            experiment=experiment,
+            domain=domain,
+            global_experiment_revision_id=experiment.current_revision_id,
+            domain_revision_id=domain.current_revision_id,
+        )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "frustrampnn_scope_result_authority_conflict"
+
+
+@pytest.mark.asyncio
 async def test_frustrampnn_scope_requires_exact_revisions_and_uses_only_selected_domain_revision_edges(
     read_model_store,
     core_store,
