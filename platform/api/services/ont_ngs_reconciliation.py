@@ -542,9 +542,16 @@ def validate_persisted_reconciliation_receipt(
         expected_receipt_free[_HIERARCHY_KEY] = copy.deepcopy(hierarchy)
     elif preimage_hierarchy != hierarchy:
         raise OntFastqQcReconciliationError("reconciliation hierarchy preimage is inconsistent")
-    mutable_rotation_keys = {"alignment_access_rotation_count", "alignment_access_token_sha256"}
-    current_stable = {key: value for key, value in current_receipt_free.items() if key not in mutable_rotation_keys}
-    expected_stable = {key: value for key, value in expected_receipt_free.items() if key not in mutable_rotation_keys}
+    mutable_access_keys = {
+        "alignment_access_rotation_count",
+        "alignment_access_token_sha256",
+        "alignment_access_scheme",
+        "alignment_access_revoked",
+        _HIERARCHY_KEY,
+        "ont_fastq_qc_hierarchy_v1",
+    }
+    current_stable = {key: value for key, value in current_receipt_free.items() if key not in mutable_access_keys}
+    expected_stable = {key: value for key, value in expected_receipt_free.items() if key not in mutable_access_keys}
 
     identity_fields = {
         "project_id": (hierarchy_document.get("project") or {}).get("id"),
@@ -575,11 +582,26 @@ def validate_persisted_reconciliation_receipt(
     }
     rotation_count = current_receipt_free.get("alignment_access_rotation_count")
     rotation_digest = current_receipt_free.get("alignment_access_token_sha256")
+    access_scheme = current_receipt_free.get("alignment_access_scheme")
+    access_revoked = current_receipt_free.get("alignment_access_revoked")
     rotation_valid = (
-        (rotation_count is None and rotation_digest is None)
+        (
+            rotation_count is None
+            and rotation_digest is None
+            and access_scheme is None
+            and access_revoked is None
+        )
         or (
             type(rotation_count) is int and rotation_count >= 0
-            and isinstance(rotation_digest, str) and _SHA256_RE.fullmatch(rotation_digest) is not None
+            and access_scheme == "opaque_job_capability_v1"
+            and (
+                (
+                    isinstance(rotation_digest, str)
+                    and _SHA256_RE.fullmatch(rotation_digest) is not None
+                    and access_revoked is None
+                )
+                or (rotation_digest is None and access_revoked is True)
+            )
         )
     )
     preimage_valid = True

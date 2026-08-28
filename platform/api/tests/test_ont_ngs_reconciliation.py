@@ -499,6 +499,10 @@ async def test_reconciliation_apply_updates_only_mirrors_and_receipt(tmp_path: P
         async with sessions() as session:
             loaded = await session.get(Job, JOB_ID)
             assert loaded is not None
+            loaded.provenance = {
+                **loaded.provenance,
+                "ont_fastq_qc_hierarchy_v1": _hierarchy_record(),
+            }
             original_params = loaded.params
             original_provenance = json.loads(json.dumps(loaded.provenance))
             original_current_stage = loaded.current_stage
@@ -532,6 +536,21 @@ async def test_reconciliation_apply_updates_only_mirrors_and_receipt(tmp_path: P
                 "resource_evidence_status", "sequence_qc_manifest_sha256", "verification_manifest_sha256",
                 "artifact_set_sha256", "declared_artifact_count", "present_artifact_count",
                 "unavailable_artifact_count", "result_root_identity_sha256",
+            }
+            service.validate_persisted_reconciliation_receipt(
+                receipt,
+                job=persisted,
+                expected_package={key: receipt[key] for key in package_keys},
+                provenance_preimage=original_provenance,
+            )
+            persisted.provenance = {
+                key: value
+                for key, value in persisted.provenance.items()
+                if key not in {"ont_fastq_qc_hierarchy_v1", "alignment_access_token_sha256"}
+            } | {
+                "alignment_access_scheme": "opaque_job_capability_v1",
+                "alignment_access_rotation_count": 20,
+                "alignment_access_revoked": True,
             }
             service.validate_persisted_reconciliation_receipt(
                 receipt,
