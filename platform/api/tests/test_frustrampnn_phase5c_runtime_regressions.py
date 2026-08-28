@@ -129,7 +129,12 @@ if script == 'run_frustrampnn_parent_fanout.py':
         def do_POST(self):
             expected=f'/api/frustrampnn/jobs/{{parent_job_id}}/workflow-dataset/analyze'
             body=self.rfile.read(int(self.headers.get('Content-Length','0')))
-            if self.path != expected or parent_workflow_id.encode() not in body or any(value.encode() not in body for value in candidates):
+            if (
+                self.path != expected
+                or self.headers.get('Authorization') != 'Bearer phase5c-stage-token'
+                or parent_workflow_id.encode() not in body
+                or any(value.encode() not in body for value in candidates)
+            ):
                 self.send_error(400)
                 return
             self.send_json({{
@@ -266,6 +271,7 @@ env.PYTHONPATH='/probe/fakepy'
     command = [
             "docker", "run", "--rm", "--network", "none",
             "-e", "NXF_OFFLINE=true", "-e", "NXF_DISABLE_CHECK_LATEST=true",
+            "-e", "BMS_STAGE_REPORT_TOKEN=phase5c-stage-token",
             "-v", f"{REPO_ROOT}:/workspace:ro", "-v", f"{root}:/probe:rw",
             "-v", f"{HOST_RUNTIME}:{HOST_RUNTIME}:ro", "-v", f"{run}:/run:rw",
             "-v", f"{root / 'scripts'}:/scripts:ro", "-w", "/run/launch",
