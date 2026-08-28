@@ -758,6 +758,22 @@ async def list_domain_frustrampnn_results(
             raise NotFound("Global Experiment revision not found in Global Experiment")
         if domain_revision is None or domain_revision.subject_id != domain_id:
             raise NotFound("Domain revision not found in Domain Experiment")
+        bound_global_revision_id = await session.scalar(
+            select(ExperimentRevision.resource_id)
+            .where(
+                ExperimentRevision.subject_id == experiment_id,
+                ExperimentRevision.created_at <= domain_revision.created_at,
+            )
+            .order_by(
+                ExperimentRevision.created_at.desc(),
+                ExperimentRevision.revision_number.desc(),
+            )
+            .limit(1)
+        )
+        if bound_global_revision_id != global_experiment_revision_id:
+            raise NotFound(
+                "Domain revision not found for the selected Global Experiment revision"
+            )
     except ExperimentServiceError as exc:
         raise _service_error(exc) from exc
 
@@ -1008,6 +1024,10 @@ async def list_domain_frustrampnn_results(
                 },
             )
         authority_by_design: dict[str, tuple[Job, dict[str, Any]]] = {}
+        memberships_by_design = {
+            design_id: membership
+            for membership, _ordinal, design_id in selected_design_memberships
+        }
         for child in child_jobs:
             envelope = (child.params or {}).get("_frustrampnn_child_v1")
             if not isinstance(envelope, dict):
@@ -1032,10 +1052,18 @@ async def list_domain_frustrampnn_results(
                 )
             for member in selection:
                 design_id = member.get("design_id") if isinstance(member, dict) else None
+                source_job_id = member.get("source_job_id") if isinstance(member, dict) else None
                 invocation_id = member.get("invocation_id") if isinstance(member, dict) else None
                 candidate_id = member.get("candidate_id") if isinstance(member, dict) else None
                 source_sha = member.get("sha256") if isinstance(member, dict) else None
                 if design_id not in designs_by_id:
+                    continue
+                design = designs_by_id[str(design_id)]
+                membership = memberships_by_design[str(design_id)]
+                if (
+                    source_job_id != str(design.job_id)
+                    or source_sha != membership.content_digest
+                ):
                     continue
                 if (
                     not isinstance(invocation_id, str)
