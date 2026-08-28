@@ -8,31 +8,37 @@ test('workflow result model and scope are URL-owned with workflow-primary defaul
 
     assert.deepEqual(
         module.parseWorkflowResultViewState('', {
-            frustraMpnnAvailable: true,
-            directFrustraMpnnJob: false,
+            availableModelIds: ['structure_prediction', 'frustrampnn'],
+            primaryModelId: 'structure_prediction',
         }),
-        { model: 'workflow', scope: 'this-job' },
+        { model: 'structure_prediction', scope: 'this-job' },
     );
     assert.deepEqual(
         module.parseWorkflowResultViewState('', {
-            frustraMpnnAvailable: true,
-            directFrustraMpnnJob: true,
+            availableModelIds: ['frustrampnn'],
+            primaryModelId: 'frustrampnn',
         }),
         { model: 'frustrampnn', scope: 'this-job' },
     );
     assert.deepEqual(
         module.parseWorkflowResultViewState(
             '?result_model=frustrampnn&frustrampnn_scope=whole-experiment',
-            { frustraMpnnAvailable: true, directFrustraMpnnJob: false },
+            {
+                availableModelIds: ['structure_prediction', 'frustrampnn'],
+                primaryModelId: 'structure_prediction',
+            },
         ),
         { model: 'frustrampnn', scope: 'whole-experiment' },
     );
     assert.deepEqual(
         module.parseWorkflowResultViewState(
             '?result_model=frustrampnn&frustrampnn_scope=whole-experiment',
-            { frustraMpnnAvailable: false, directFrustraMpnnJob: false },
+            {
+                availableModelIds: ['structure_prediction'],
+                primaryModelId: 'structure_prediction',
+            },
         ),
-        { model: 'workflow', scope: 'this-job' },
+        { model: 'structure_prediction', scope: 'this-job' },
     );
 
     const next = module.updateWorkflowResultViewSearch(
@@ -51,12 +57,14 @@ test('workflow result model and scope are URL-owned with workflow-primary defaul
     );
     assert.deepEqual(
         module.parseFrustraMpnnExperimentContext(
-            '?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1',
+            '?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&global_experiment_revision_id=global-rev-4&domain_revision_id=domain-rev-7',
         ),
         {
             projectId: 'project-1',
             globalExperimentId: 'experiment-1',
             domainExperimentId: 'domain-1',
+            globalExperimentRevisionId: 'global-rev-4',
+            domainRevisionId: 'domain-rev-7',
         },
     );
 });
