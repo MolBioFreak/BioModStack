@@ -1633,6 +1633,7 @@ async def _save_revision(
         )
     workspace_id = await _resource_workspace(session, aggregate_id)
     hierarchy_bindings: list[dict[str, str | int]] = []
+    parent_global_revision: ExperimentRevision | None = None
     previous_status: str | None = None
     if aggregate_kind == "workflow":
         plan_authority = await load_workflow_plan_authority(
@@ -1705,6 +1706,34 @@ async def _save_revision(
             parent_id=head.parent_id,
             payload=payload,
         )
+        if aggregate_kind == "domain_experiment":
+            parent_head = await _head(session, str(head.parent_id), "experiment")
+            if (
+                parent_head.workspace_id != workspace_id
+                or parent_head.current_revision_id is None
+            ):
+                raise ValidationFailure(
+                    "Domain Experiment parent has no current Global Experiment revision"
+                )
+            parent_global_revision = await session.get(
+                ExperimentRevision, parent_head.current_revision_id
+            )
+            parent_global_resource = await session.get(
+                ExperimentResource, parent_head.current_revision_id
+            )
+            if (
+                parent_global_revision is None
+                or parent_global_revision.subject_id != parent_head.aggregate_id
+                or parent_global_resource is None
+                or parent_global_resource.kind != "revision"
+                or parent_global_resource.workspace_id != workspace_id
+                or parent_global_resource.lifecycle_owner_id != parent_head.aggregate_id
+                or sha256_text(parent_global_revision.canonical_payload)
+                != parent_global_revision.payload_sha256
+            ):
+                raise ValidationFailure(
+                    "Domain Experiment parent Global revision authority is invalid"
+                )
     payload_json = canonical_json(payload)
     graph_json = canonical_json(
         {
@@ -1755,6 +1784,17 @@ async def _save_revision(
                         role=str(binding["role"]),
                         ordinal=int(binding["ordinal"]),
                         expected_sha256=str(binding["expected_sha256"]),
+                        metadata_json=canonical_json({"authority": "server_resolved"}),
+                    )
+                )
+            if parent_global_revision is not None:
+                session.add(
+                    ExperimentRevisionEdge(
+                        revision_id=revision.resource_id,
+                        target_resource_id=parent_global_revision.resource_id,
+                        role="parent_global_revision",
+                        ordinal=0,
+                        expected_sha256=parent_global_revision.payload_sha256,
                         metadata_json=canonical_json({"authority": "server_resolved"}),
                     )
                 )

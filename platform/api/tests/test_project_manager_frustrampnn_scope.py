@@ -7,6 +7,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import (
@@ -297,6 +298,40 @@ async def test_frustrampnn_scope_accepts_the_global_revision_bound_to_the_domain
 
 
 @pytest.mark.asyncio
+async def test_domain_revision_persists_exact_parent_global_revision_authority(
+    read_model_store,
+) -> None:
+    async with read_model_store() as session:
+        project, experiment, domain = await _hierarchy(session)
+        global_revision = await session.get(ExperimentRevision, experiment.current_revision_id)
+        domain_revision = await session.get(ExperimentRevision, domain.current_revision_id)
+        edge = await session.scalar(
+            select(ExperimentRevisionEdge).where(
+                ExperimentRevisionEdge.revision_id == domain.current_revision_id,
+                ExperimentRevisionEdge.role == "parent_global_revision",
+            )
+        )
+        domain_resource = await session.get(ExperimentResource, domain.current_revision_id)
+        global_resource = await session.get(ExperimentResource, experiment.current_revision_id)
+
+    assert domain_revision is not None
+    assert global_revision is not None
+    assert domain_resource is not None
+    assert global_resource is not None
+    assert domain_resource.kind == "revision"
+    assert domain_resource.workspace_id == project.id
+    assert domain_resource.lifecycle_owner_id == domain.id
+    assert global_resource.kind == "revision"
+    assert global_resource.workspace_id == project.id
+    assert global_resource.lifecycle_owner_id == experiment.id
+    assert edge is not None
+    assert edge.target_resource_id == global_revision.resource_id
+    assert edge.ordinal == 0
+    assert edge.expected_sha256 == global_revision.payload_sha256
+    assert json.loads(edge.metadata_json) == {"authority": "server_resolved"}
+
+
+@pytest.mark.asyncio
 async def test_frustrampnn_scope_rejects_individually_valid_but_unrelated_revisions(
     read_model_store,
     core_store,
@@ -330,6 +365,67 @@ async def test_frustrampnn_scope_rejects_individually_valid_but_unrelated_revisi
             domain=domain,
             global_experiment_revision_id=unrelated_global_revision.resource_id,
             domain_revision_id=domain_revision_id,
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corruption", ["missing", "conflicting", "digest_mismatch"])
+async def test_frustrampnn_scope_rejects_invalid_parent_global_revision_edge(
+    read_model_store,
+    core_store,
+    corruption: str,
+) -> None:
+    factory = read_model_store
+    async with factory() as session:
+        project, experiment, domain = await _hierarchy(session)
+        edge = await session.scalar(
+            select(ExperimentRevisionEdge).where(
+                ExperimentRevisionEdge.revision_id == domain.current_revision_id,
+                ExperimentRevisionEdge.role == "parent_global_revision",
+            )
+        )
+        assert edge is not None
+        if corruption == "missing":
+            await session.delete(edge)
+        elif corruption == "digest_mismatch":
+            edge.expected_sha256 = "f" * 64
+        else:
+            global_revision = await session.get(ExperimentRevision, experiment.current_revision_id)
+            assert global_revision is not None
+            payload = json.loads(global_revision.canonical_payload)
+            payload["change_summary"] = "second valid Global revision"
+            second = await save_hierarchy_revision(
+                session,
+                experiment.id,
+                "experiment",
+                payload,
+                expected_head_generation=experiment.head_generation,
+            )
+            session.add(
+                ExperimentRevisionEdge(
+                    revision_id=domain.current_revision_id,
+                    target_resource_id=second.resource_id,
+                    role="parent_global_revision",
+                    ordinal=1,
+                    expected_sha256=second.payload_sha256,
+                    metadata_json=canonical_json({"authority": "server_resolved"}),
+                )
+            )
+        await session.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_cross_store_app(factory, core_store)),
+        base_url="http://test",
+    ) as client:
+        response = await _request_scope(
+            client,
+            project=project,
+            experiment=experiment,
+            domain=domain,
+            global_experiment_revision_id=experiment.current_revision_id,
+            domain_revision_id=domain.current_revision_id,
         )
 
     assert response.status_code == 404

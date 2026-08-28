@@ -758,19 +758,38 @@ async def list_domain_frustrampnn_results(
             raise NotFound("Global Experiment revision not found in Global Experiment")
         if domain_revision is None or domain_revision.subject_id != domain_id:
             raise NotFound("Domain revision not found in Domain Experiment")
-        bound_global_revision_id = await session.scalar(
-            select(ExperimentRevision.resource_id)
+        parent_edges = list((await session.scalars(
+            select(ExperimentRevisionEdge)
             .where(
-                ExperimentRevision.subject_id == experiment_id,
-                ExperimentRevision.created_at <= domain_revision.created_at,
+                ExperimentRevisionEdge.revision_id == domain_revision_id,
+                ExperimentRevisionEdge.role == "parent_global_revision",
             )
-            .order_by(
-                ExperimentRevision.created_at.desc(),
-                ExperimentRevision.revision_number.desc(),
-            )
-            .limit(1)
+            .limit(2)
+        )).all())
+        global_revision_resource = await session.get(
+            ExperimentResource, global_experiment_revision_id
         )
-        if bound_global_revision_id != global_experiment_revision_id:
+        domain_revision_resource = await session.get(
+            ExperimentResource, domain_revision_id
+        )
+        if (
+            len(parent_edges) != 1
+            or parent_edges[0].target_resource_id != global_experiment_revision_id
+            or parent_edges[0].ordinal != 0
+            or parent_edges[0].metadata_json
+            != canonical_json({"authority": "server_resolved"})
+            or parent_edges[0].expected_sha256 != global_revision.payload_sha256
+            or hashlib.sha256(global_revision.canonical_payload.encode("utf-8")).hexdigest()
+            != global_revision.payload_sha256
+            or global_revision_resource is None
+            or global_revision_resource.kind != "revision"
+            or global_revision_resource.workspace_id != project_id
+            or global_revision_resource.lifecycle_owner_id != experiment_id
+            or domain_revision_resource is None
+            or domain_revision_resource.kind != "revision"
+            or domain_revision_resource.workspace_id != project_id
+            or domain_revision_resource.lifecycle_owner_id != domain_id
+        ):
             raise NotFound(
                 "Domain revision not found for the selected Global Experiment revision"
             )
