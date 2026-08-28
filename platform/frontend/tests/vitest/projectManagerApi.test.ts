@@ -46,7 +46,7 @@ const minimalSummary = {
         map: { ...emptyPage, repeated_context_node_keys: [] }, runs: emptyPage, results: emptyPage,
         lineage: emptyPage, notes: emptyPage, decisions: emptyPage, datasets: emptyPage, activity: emptyPage,
     },
-    project: { id: 'project-1', name: 'Project', objective: '', lifecycle_state: 'active', head_generation: 1, current_revision_id: null, updated_at: '2026-08-11T00:00:00Z' },
+    project: { id: 'project-1', project_scope: 'global', name: 'Project', objective: '', lifecycle_state: 'active', head_generation: 1, current_revision_id: null, updated_at: '2026-08-11T00:00:00Z' },
     tree: { nodes: [] },
     map: { focus_node_key: 'project:project-1', nodes: [], edges: [], truncated: false, next_cursor: null },
     selection: {
