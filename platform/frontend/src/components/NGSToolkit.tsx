@@ -8,6 +8,7 @@ import type { IGV as IgvLibrary } from 'igv';
 import { api, createOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchOntSignalViewerSession, fetchPooledAssignmentManifest, type Job, type JobLogs, type OntSignalViewerAlignmentColorBy, type OntSignalViewerAlignmentDisplayMode, type OntSignalViewerAlignmentGroupBy, type OntSignalViewerSession } from '../lib/api';
 import {
     awaitCurrentGeneration,
+    alignmentTrackAutoLoadDisposition,
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     ownsIgvLoadTerminalState,
@@ -2789,6 +2790,9 @@ export function NGSToolkit() {
     }, [selectedAlignmentSession?.session_id]);
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
     const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
+    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(
+        selectedAlignmentSession?.artifacts.alignment?.size_bytes,
+    );
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
     const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
@@ -4218,6 +4222,7 @@ export function NGSToolkit() {
     useEffect(() => {
         if (!igvModalOpen) return;
         if (!igvReady || igvLoading) return;
+        if (!igvAlignmentLoadDisposition.autoLoad) return;
         if (igvReadsTrackLoading || igvReadsTrackLoaded) return;
         if (igvAutoLoadAttempted) return;
         if (!igvBrowserRef.current) return;
@@ -4227,6 +4232,7 @@ export function NGSToolkit() {
         igvModalOpen,
         igvReady,
         igvLoading,
+        igvAlignmentLoadDisposition.autoLoad,
         igvReadsTrackLoading,
         igvReadsTrackLoaded,
         igvAutoLoadAttempted,
@@ -5536,10 +5542,12 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvReadsTrack()}
-                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl}
+                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl || !igvAlignmentLoadDisposition.autoLoad}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
+                                {igvAlignmentLoadDisposition.autoLoad
+                                    ? igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'
+                                    : 'Alignment too large for browser'}
                             </button>
                             <button
                                 type="button"
@@ -5598,7 +5606,7 @@ export function NGSToolkit() {
                                 )}
                                 {!igvLoading && !igvError && !igvReadsTrackLoaded && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
-                                        Reference loaded; tracks autoload or use Load tracks.
+                                        {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
                                 {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (

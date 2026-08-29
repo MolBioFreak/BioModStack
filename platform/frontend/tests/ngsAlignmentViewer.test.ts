@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
-import { resolveAlignmentViewerArtifacts } from '../src/lib/ngsAlignmentViewer.js';
+import { alignmentTrackAutoLoadDisposition, resolveAlignmentViewerArtifacts } from '../src/lib/ngsAlignmentViewer.js';
 
 const files = [
     { path: 'fastq_qc/aligned.bam' },
@@ -24,6 +24,14 @@ test('primary alignment session cannot silently select dimer evidence', () => {
     assert.equal(result.bai?.path, 'fastq_qc/aligned.bam.bai');
     assert.equal(result.fasta?.path, 'fastq_qc/reference.normalized.fasta');
     assert.equal(result.fai?.path, 'fastq_qc/reference.normalized.fasta.fai');
+});
+
+test('large governed BAM avoids unsafe automatic browser allocation', () => {
+    assert.deepEqual(alignmentTrackAutoLoadDisposition(818_274_983), {
+        autoLoad: false,
+        reason: 'Alignment is 780.4 MiB; browser track loading is disabled. Use Inspect reads instead.',
+    });
+    assert.deepEqual(alignmentTrackAutoLoadDisposition(65_536), { autoLoad: true, reason: null });
 });
 
 test('dimer candidate session is opt-in and remains independently bound', () => {

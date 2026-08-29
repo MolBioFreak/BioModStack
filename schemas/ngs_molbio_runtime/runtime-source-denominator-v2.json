@@ -1,5 +1,5 @@
 {
-  "content_sha256": "d9f2c43b3f915f2a2ffbf967e3599d000e7425219724b002aa3dc03943da455c",
+  "content_sha256": "3b46809d917db27b982e9b17f741cdb08b531f0a3ec781944c6d8c3dc4f7b26e",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -158,9 +158,11 @@
     "platform/frontend/src/lib/api.ts",
     "platform/frontend/src/lib/nanoporeCloneState.ts",
     "platform/frontend/src/lib/nanoporeLaunchPayload.ts",
+    "platform/frontend/src/lib/ngsAlignmentViewer.ts",
     "platform/frontend/src/lib/ngsResultRouting.ts",
     "platform/frontend/src/lib/projectManager.ts",
     "platform/frontend/src/pages/ProjectManager.tsx",
+    "platform/frontend/tests/ngsAlignmentViewer.test.ts",
     "platform/frontend/tests/ngsFullscreenOwner.test.ts",
     "platform/frontend/tests/vitest/ontSignalIdealComparison.test.tsx",
     "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",

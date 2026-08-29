@@ -180,6 +180,21 @@ export interface LocalIgvConfigInput {
     auxiliaryTracks: Array<Record<string, unknown>>;
 }
 
+const MAX_BROWSER_ALIGNMENT_BYTES = 536_870_912;
+
+export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | undefined): {
+    autoLoad: boolean;
+    reason: string | null;
+} {
+    if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= MAX_BROWSER_ALIGNMENT_BYTES) {
+        return { autoLoad: true, reason: null };
+    }
+    return {
+        autoLoad: false,
+        reason: `Alignment is ${(sizeBytes / 1_048_576).toFixed(1)} MiB; browser track loading is disabled. Use Inspect reads instead.`,
+    };
+}
+
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
     const alignmentTracks = input.bamUrl && input.baiUrl
         ? [{
