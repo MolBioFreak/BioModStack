@@ -778,6 +778,8 @@ def test_comparison_authority_response_fields_use_closed_typed_models() -> None:
     })
     typed = ComparisonEffectiveSettings.model_validate(compiled)
     assert typed.operator_owned.seed == 7
+    assert ComparisonPreviewResponse.model_fields["move_source_id"].annotation is str
+    assert ComparisonPreviewResponse.model_fields["move_source_artifact_sha256"].annotation is str
     for model, fields in (
         (ComparisonPreviewResponse, ("selected_read_span", "derived_window", "effective_request")),
         (ComparisonJobResponse, ("simulation_settings", "render_params", "resource_snapshot",

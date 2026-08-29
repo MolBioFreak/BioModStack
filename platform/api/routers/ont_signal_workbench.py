@@ -498,6 +498,8 @@ class ComparisonPreviewResponse(ClosedModel):
     mapping_artifact_sha256: str
     mapping_job_id: str
     mapping_profile_id: str
+    move_source_id: str
+    move_source_artifact_sha256: str
     reference_revision_id: str
     reference_artifact_id: str
     reference_fasta_sha256: str
