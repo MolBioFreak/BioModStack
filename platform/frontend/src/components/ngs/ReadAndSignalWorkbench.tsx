@@ -55,7 +55,7 @@ function clampSignalWorkbenchWidth(width: number, viewportWidth = window.innerWi
 }
 
 function initialSignalWorkbenchWidth(): number {
-    return clampSignalWorkbenchWidth(Math.min(560, window.innerWidth * 0.38));
+    return clampSignalWorkbenchWidth(Math.min(760, window.innerWidth * 0.56));
 }
 
 interface ReadAndSignalWorkbenchProps {
@@ -181,6 +181,7 @@ export function ReadAndSignalWorkbench({
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [panelWidth, setPanelWidth] = useState(initialSignalWorkbenchWidth);
+    const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
     const panelWidthRef = useRef(panelWidth);
     const resizeCleanupRef = useRef<(() => void) | null>(null);
 
@@ -212,7 +213,17 @@ export function ReadAndSignalWorkbench({
         updatePanelWidth(panelWidthRef.current + (event.key === 'ArrowLeft' ? 32 : -32));
     }, [updatePanelWidth]);
 
-    useEffect(() => () => resizeCleanupRef.current?.(), []);
+    useEffect(() => {
+        const handleViewportResize = () => {
+            setViewportWidth(window.innerWidth);
+            updatePanelWidth(panelWidthRef.current);
+        };
+        window.addEventListener('resize', handleViewportResize);
+        return () => {
+            window.removeEventListener('resize', handleViewportResize);
+            resizeCleanupRef.current?.();
+        };
+    }, [updatePanelWidth]);
 
     const persistedReadMappingJobId = typeof viewerSession?.signal_state.read_mapping_job_id === 'string'
         ? viewerSession.signal_state.read_mapping_job_id
@@ -1025,7 +1036,7 @@ export function ReadAndSignalWorkbench({
                 aria-label="Resize Read and Signal Workbench"
                 aria-orientation="vertical"
                 aria-valuemin={MIN_SIGNAL_WORKBENCH_WIDTH}
-                aria-valuemax={Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, window.innerWidth - MIN_IGV_WORKSPACE_WIDTH)}
+                aria-valuemax={Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH)}
                 aria-valuenow={Math.round(panelWidth)}
                 tabIndex={0}
                 onPointerDown={beginPanelResize}

@@ -33,6 +33,9 @@ const apiMocks = vi.hoisted(() => ({
     fetchRawSignalCapabilities: vi.fn(),
     fetchViewerSession: vi.fn(),
     fetchPooledAssignment: vi.fn(),
+    fetchComparison: vi.fn(),
+    fetchComparisonArtifact: vi.fn(),
+    fetchComparisonReviews: vi.fn(),
     apiGet: vi.fn(),
     requestRawWaveform: vi.fn(),
     registerExternalMoveBamCandidate: vi.fn(),
@@ -97,6 +100,9 @@ vi.mock('../../src/lib/api', () => ({
     fetchOntRawSignalCapabilities: apiMocks.fetchRawSignalCapabilities,
     fetchOntSignalViewerSession: apiMocks.fetchViewerSession,
     fetchPooledAssignmentManifest: apiMocks.fetchPooledAssignment,
+    fetchOntSignalIdealComparison: apiMocks.fetchComparison,
+    fetchOntSignalComparisonArtifact: apiMocks.fetchComparisonArtifact,
+    fetchOntSignalComparisonReviews: apiMocks.fetchComparisonReviews,
     requestOntRawSignalWaveform: apiMocks.requestRawWaveform,
     registerOntExternalMoveBamCandidate: apiMocks.registerExternalMoveBamCandidate,
     updateOntSignalViewerSession: apiMocks.updateViewerSession,
@@ -511,6 +517,7 @@ let root: Root;
 let onViewerSessionChange: ComponentProps<typeof ReadAndSignalWorkbench>['onViewerSessionChange'];
 let onNavigateIgv: ComponentProps<typeof ReadAndSignalWorkbench>['onNavigateIgv'];
 const originalFetch = globalThis.fetch;
+const originalInnerWidth = window.innerWidth;
 
 function baseProps(): ComponentProps<typeof ReadAndSignalWorkbench> {
     return {
@@ -664,10 +671,12 @@ afterEach(async () => {
     await act(async () => root.unmount());
     document.body.replaceChildren();
     globalThis.fetch = originalFetch;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth });
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
     it('provides a draggable and keyboard-accessible vertical resize separator', async () => {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
         await renderWorkbench({ viewerSession: null });
         await settlePromises();
 
@@ -690,6 +699,64 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
         const keyboardWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
         expect(keyboardWidth).toBeLessThan(draggedWidth);
+
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+        await act(async () => { window.dispatchEvent(new Event('resize')); });
+        const viewportBoundWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(viewportBoundWidth).toBe(704);
+        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
+        expect(separator?.getAttribute('aria-valuemax')).toBe('704');
+
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
+        await act(async () => { window.dispatchEvent(new Event('resize')); });
+        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
+        expect(separator?.getAttribute('aria-valuemax')).toBe('1046');
+    });
+
+    it('gives the ready comparison artifact its own fullscreen presentation', async () => {
+        let fullscreenElement: Element | null = null;
+        Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true });
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement });
+        Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: vi.fn(async () => {
+            fullscreenElement = null;
+            document.dispatchEvent(new Event('fullscreenchange'));
+        }) });
+        apiMocks.fetchComparison.mockResolvedValue({
+            comparison_job_id: 'comparison-ready-1', state: 'ready', reason_code: 'ideal_comparison_ready',
+            simulation_settings: { profile_id: 'dna-r10-prom', operator_owned: {
+                seed: 1, scale: 'none', point_size: 0.5, fixed_width: false, base_width: 10,
+                base_limit: 200, signal_sample_limit: 100000, show_samples: true,
+                show_base_colours: true, remove_signal_outliers: false,
+            } },
+            render_params: { scale: 'none', point_size: 0.5, fixed_width: false, base_width: 10,
+                base_limit: 200, signal_sample_limit: 100000, show_samples: true,
+                show_base_colours: true, remove_signal_outliers: false },
+            artifacts: [{ artifact_id: 'comparison-html-1', kind: 'comparison_html' }],
+        });
+        apiMocks.fetchComparisonReviews.mockResolvedValue([]);
+        apiMocks.fetchComparisonArtifact.mockResolvedValue(new Blob([
+            '<html><body>REAL · INSTRUMENT ACQUIRED · trace SIMULATED IDEAL · SQUIGULATOR 0.5.0 · trace</body></html>',
+        ], { type: 'text/html' }));
+        const persisted = viewerSession({
+            selected_read_id: 'read-42',
+            signal_state: { comparison_job_id: 'comparison-ready-1' },
+        });
+
+        await renderWorkbench({ viewerSession: persisted });
+        await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));
+        await act(async () => { button('Ideal comparison').click(); await Promise.resolve(); });
+        await waitUntil(() => expect(container.querySelector('iframe[title="Real acquired signal and ideal simulated reference"]')).not.toBeNull());
+
+        const comparison = container.querySelector('[data-comparison-fullscreen-owner]') as HTMLElement | null;
+        expect(comparison).not.toBeNull();
+        Object.defineProperty(comparison, 'requestFullscreen', { configurable: true, value: vi.fn(async () => {
+            fullscreenElement = comparison;
+            document.dispatchEvent(new Event('fullscreenchange'));
+        }) });
+        await act(async () => { button('View comparison fullscreen').click(); await Promise.resolve(); });
+        expect(fullscreenElement).toBe(comparison);
+        expect(button('Exit comparison fullscreen')).toBeDefined();
+        expect(comparison?.querySelector('iframe')?.className).toContain('h-full');
     });
 
     it('discovers and mounts ideal comparison inside the existing workbench', async () => {

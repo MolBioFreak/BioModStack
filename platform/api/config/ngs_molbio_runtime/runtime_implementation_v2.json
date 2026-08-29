@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "cdb8e089893cb0db71af3303731cfd47534f9370a1cebc3f0facdfc5ce77e2e7",
+  "content_sha256": "4a984d192a146bf7a2a94185c005146254a8b8b1f946e2161ce5094698e3b3e1",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -789,8 +789,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/OntSignalIdealComparison.tsx",
-      "sha256": "2556dbe1508f8df332b4fb0a0f53aae716a397f7305e2edb9c1b44d329362674",
-      "size_bytes": 25450
+      "sha256": "3a4a81f9675203110e085055f161ff07eff0b0aa6536b567020431519888fce2",
+      "size_bytes": 27318
     },
     {
       "path": "platform/frontend/src/components/ngs/RawReadInspector.tsx",
@@ -799,8 +799,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
-      "sha256": "cc825aa97c7e58cfaf82a4b01f9df6341574b2e53a375b4d71afa95877d542c2",
-      "size_bytes": 80596
+      "sha256": "c91bde900fd1bdfcd91767ac6792a1bb72dc87adc614afe7e3696bd7c0f1d458",
+      "size_bytes": 81033
     },
     {
       "path": "platform/frontend/src/components/ngs/ngsFullscreenOwner.ts",
@@ -874,8 +874,8 @@
     },
     {
       "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
-      "sha256": "21d3479b8d5a939c3a43442e39b8948dca12bec6584a5a75fabee6f72d9ece82",
-      "size_bytes": 132526
+      "sha256": "0302adc311e8579666c70ec4f44c6fb4c8685951c3bb2f14d259976d1233cf9c",
+      "size_bytes": 136877
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -1067,8 +1067,8 @@
     "content_sha256": "3b46809d917db27b982e9b17f741cdb08b531f0a3ec781944c6d8c3dc4f7b26e",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "5f903751b1a38307084e7748aa58165721aae7f9",
-  "successor_source_tree": "e8ef711d293519804daeb82162c100be5c7415c8",
+  "successor_source_commit": "1564cf2af8850ffe31fafcf4f729b20c587bf3bb",
+  "successor_source_tree": "b73157b7b38640cfb515997cd14fb570280501c5",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
