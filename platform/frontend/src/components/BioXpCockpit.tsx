@@ -70,7 +70,7 @@ const AXES: readonly AxisControls[] = [
         label: 'Z Axis',
         controls: [
             { label: 'Move −', operation: 'move-negative' },
-            { label: 'OEM Z Home', operation: 'home' },
+            { label: 'Home', operation: 'home' },
             { label: 'Move +', operation: 'move-positive' },
         ],
     },

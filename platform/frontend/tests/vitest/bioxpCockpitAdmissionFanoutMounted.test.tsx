@@ -832,7 +832,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const xHome = xButtons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const zArticle = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const zButtons = [...zArticle.querySelectorAll('button')] as HTMLButtonElement[];
-        const zHome = zButtons.find((button) => button.textContent === 'OEM Z Home') as HTMLButtonElement;
+        const zHome = zButtons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
 
         expect(xMovePositive.disabled).toBe(false);
         expect(xHome.disabled).toBe(false);
@@ -1115,7 +1115,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const article = [...container.querySelectorAll('article')].find((node) => node.textContent?.includes('Z Axis')) as HTMLElement;
         const buttons = [...article.querySelectorAll('button')] as HTMLButtonElement[];
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const home = buttons.find((button) => button.textContent === 'OEM Z Home') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'Home') as HTMLButtonElement;
         const absolute = buttons.find((button) => button.textContent === 'Go absolute') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(home.disabled).toBe(true);
