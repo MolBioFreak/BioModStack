@@ -45,6 +45,12 @@ export default defineConfig({
             './tests/vitest/ngsAlignmentAccessLifetimeMounted.test.tsx',
             './tests/vitest/ontFastqQcResultPanel.test.tsx',
             './tests/vitest/domainWorkflowOperatorClosure.test.ts',
+            './tests/vitest/molBioMobileToolbar.test.tsx',
+            './tests/vitest/molBioDigestMobile.test.tsx',
+            './tests/vitest/molBioMobileWorkspace.test.tsx',
+            './tests/vitest/molBioBodyScrollLock.test.tsx',
+            './tests/vitest/molBioMobileConstructs.test.tsx',
+            './tests/vitest/molBioSequenceSelectionRace.test.tsx',
         ],
     },
 });

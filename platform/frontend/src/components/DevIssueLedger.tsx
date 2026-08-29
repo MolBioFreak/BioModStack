@@ -5,12 +5,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { buildIdentity } from '../lib/buildIdentity';
 
 type DevIssueStatus = 'open' | 'in_progress' | 'cleared';
+type DevIssueLane = 'general' | 'mobile';
+type DevIssueView = 'current' | 'mobile' | 'all';
 
 type DevIssue = {
     id: number;
     issue_key: string;
     body: string;
     status: DevIssueStatus;
+    lane: DevIssueLane;
     scope_kind: string;
     scope_key: string;
     page_label: string;
@@ -85,9 +88,15 @@ function resolveIssueScope(pathname: string, search: string): IssueScope {
     return { kind: 'route', key: `route:${pathname}`, label: pathname };
 }
 
-async function fetchIssues(scopeKey: string, allOpen: boolean): Promise<DevIssueList> {
-    const params = new URLSearchParams({ status: allOpen ? 'active' : 'all', limit: '100' });
-    if (!allOpen) params.set('scope_key', scopeKey);
+function readIssueLane(): DevIssueLane {
+    if (typeof document === 'undefined') return 'general';
+    return document.documentElement.classList.contains('bms-cordova-compact') ? 'mobile' : 'general';
+}
+
+async function fetchIssues(scopeKey: string, view: DevIssueView, issueLane: DevIssueLane): Promise<DevIssueList> {
+    const params = new URLSearchParams({ status: view === 'current' ? 'all' : 'active', limit: '100' });
+    if (view === 'current') params.set('scope_key', scopeKey);
+    if (view === 'mobile' || (view === 'current' && issueLane === 'mobile')) params.set('lane', 'mobile');
     const response = await fetch(`/api/dev/issues?${params.toString()}`, { cache: 'no-store' });
     if (response.status === 404) return { items: [], active_count: 0, available: false };
     if (!response.ok) throw new Error(`Issues unavailable (${response.status})`);
@@ -97,6 +106,7 @@ async function fetchIssues(scopeKey: string, allOpen: boolean): Promise<DevIssue
 
 async function createIssue(payload: {
     body: string;
+    lane: DevIssueLane;
     scope_kind: string;
     scope_key: string;
     page_label: string;
@@ -148,7 +158,11 @@ export function DevIssueLedger() {
     const location = useLocation();
     const queryClient = useQueryClient();
     const [isOpen, setIsOpen] = useState(false);
-    const [allOpen, setAllOpen] = useState(false);
+    const [view, setView] = useState<DevIssueView>('current');
+    const [issueLane, setIssueLane] = useState<DevIssueLane>(() => readIssueLane());
+    const [cordovaSettingsAvailable, setCordovaSettingsAvailable] = useState(() => (
+        typeof document !== 'undefined' && Boolean(document.getElementById('bms-cordova-preflight-toggle'))
+    ));
     const [body, setBody] = useState('');
     const [componentHint, setComponentHint] = useState('');
     const [screenshot, setScreenshot] = useState<File | null>(null);
@@ -170,9 +184,26 @@ export function DevIssueLedger() {
         return () => URL.revokeObjectURL(previewUrl);
     }, [screenshot]);
 
+    useEffect(() => {
+        if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return undefined;
+        const update = () => {
+            setIssueLane(readIssueLane());
+            setCordovaSettingsAvailable(Boolean(document.getElementById('bms-cordova-preflight-toggle')));
+        };
+        const classObserver = new MutationObserver(update);
+        const bodyObserver = new MutationObserver(update);
+        classObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+        bodyObserver.observe(document.body, { childList: true, subtree: true });
+        update();
+        return () => {
+            classObserver.disconnect();
+            bodyObserver.disconnect();
+        };
+    }, []);
+
     const issuesQuery = useQuery({
-        queryKey: ['dev-issues', scope.key, allOpen],
-        queryFn: () => fetchIssues(scope.key, allOpen),
+        queryKey: ['dev-issues', scope.key, view, issueLane],
+        queryFn: () => fetchIssues(scope.key, view, issueLane),
         retry: false,
         refetchOnWindowFocus: true,
     });
@@ -184,6 +215,7 @@ export function DevIssueLedger() {
     const createMutation = useMutation({
         mutationFn: () => createIssue({
             body: body.trim(),
+            lane: issueLane,
             scope_kind: scope.kind,
             scope_key: scope.key,
             page_label: scope.label,
@@ -204,12 +236,23 @@ export function DevIssueLedger() {
         onSuccess: refreshIssues,
     });
 
-    if (issuesQuery.data?.available === false) return null;
+    const issuesAvailable = issuesQuery.data?.available !== false;
+    if (!issuesAvailable && issueLane !== 'mobile') return null;
+    if (!issuesAvailable && !cordovaSettingsAvailable) return null;
 
     const items = issuesQuery.data?.items ?? [];
-    const currentOpenCount = allOpen
-        ? items.filter((issue) => issue.scope_key === scope.key && issue.status !== 'cleared').length
+    const currentOpenCount = view !== 'current'
+        ? items.filter((issue) => issue.scope_key === scope.key && issue.lane === issueLane && issue.status !== 'cleared').length
         : issuesQuery.data?.active_count ?? 0;
+
+    const openIssues = () => {
+        setView('current');
+        setIsOpen(true);
+    };
+
+    const openSettings = () => {
+        document.getElementById('bms-cordova-preflight-toggle')?.click();
+    };
 
     const save = () => {
         if (!body.trim() || createMutation.isPending) return;
@@ -236,21 +279,48 @@ export function DevIssueLedger() {
 
     return (
         <>
-            <button
-                type="button"
-                onClick={() => {
-                    setAllOpen(false);
-                    setIsOpen(true);
-                }}
-                className="fixed bottom-4 right-4 z-[70] flex items-center gap-2 rounded-full border border-amber-400/50 bg-slate-950/95 px-4 py-2 text-sm font-semibold text-amber-200 shadow-xl backdrop-blur hover:border-amber-300 hover:text-amber-100"
-                data-bms-dev-issues-trigger="true"
-                aria-label="Open development issues"
-            >
-                Issues
-                {currentOpenCount > 0 && <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs text-slate-950">{currentOpenCount}</span>}
-            </button>
+            {issueLane === 'mobile' ? (
+                <div
+                    className="bms-mobile-operations-dock fixed z-[90] flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/95 p-2 shadow-2xl backdrop-blur"
+                    data-bms-mobile-operations-dock="true"
+                    role="group"
+                    aria-label="Mobile operations"
+                >
+                    {issuesAvailable && (
+                        <button
+                            type="button"
+                            onClick={openIssues}
+                            className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-amber-400/50 px-4 text-sm font-semibold text-amber-200"
+                            data-bms-dev-issues-trigger="true"
+                            aria-label="Open mobile issues"
+                        >
+                            Mobile Issues
+                            {currentOpenCount > 0 && <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs text-slate-950">{currentOpenCount}</span>}
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={openSettings}
+                        disabled={!cordovaSettingsAvailable}
+                        className="min-h-12 rounded-xl border border-cyan-400/45 px-4 text-sm font-semibold text-cyan-100 disabled:opacity-40"
+                    >
+                        Settings
+                    </button>
+                </div>
+            ) : (
+                <button
+                    type="button"
+                    onClick={openIssues}
+                    className="fixed bottom-4 right-4 z-[70] flex items-center gap-2 rounded-full border border-amber-400/50 bg-slate-950/95 px-4 py-2 text-sm font-semibold text-amber-200 shadow-xl backdrop-blur hover:border-amber-300 hover:text-amber-100"
+                    data-bms-dev-issues-trigger="true"
+                    aria-label="Open development issues"
+                >
+                    Issues
+                    {currentOpenCount > 0 && <span className="rounded-full bg-amber-400 px-2 py-0.5 text-xs text-slate-950">{currentOpenCount}</span>}
+                </button>
+            )}
 
-            {isOpen && (
+            {issuesAvailable && isOpen && (
                 <>
                     <button
                         type="button"
@@ -266,14 +336,15 @@ export function DevIssueLedger() {
                         <header className="border-b border-slate-800 p-4">
                             <div className="flex items-start justify-between gap-3">
                                 <div>
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">Development issues</p>
+                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-300">{issueLane === 'mobile' ? 'Mobile issues' : 'Development issues'}</p>
                                     <p className="mt-1 break-all text-sm text-slate-300">{scope.label}</p>
                                 </div>
                                 <button type="button" onClick={() => setIsOpen(false)} className="rounded px-2 py-1 text-sm text-slate-400 hover:bg-slate-800 hover:text-white">Close</button>
                             </div>
-                            <div className="mt-3 flex gap-2">
-                                <button type="button" onClick={() => setAllOpen(false)} className={`rounded px-3 py-1.5 text-xs font-medium ${!allOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>Current scope</button>
-                                <button type="button" onClick={() => setAllOpen(true)} className={`rounded px-3 py-1.5 text-xs font-medium ${allOpen ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>All active</button>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <button type="button" onClick={() => setView('current')} className={`rounded px-3 py-1.5 text-xs font-medium ${view === 'current' ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>Current page</button>
+                                <button type="button" onClick={() => setView('mobile')} className={`rounded px-3 py-1.5 text-xs font-medium ${view === 'mobile' ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>Mobile</button>
+                                <button type="button" onClick={() => setView('all')} className={`rounded px-3 py-1.5 text-xs font-medium ${view === 'all' ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'}`}>All active</button>
                             </div>
                         </header>
 
@@ -345,7 +416,7 @@ export function DevIssueLedger() {
                                             />
                                         )}
                                         {issue.component_hint && <p className="mt-2 text-xs text-slate-400"><span className="text-slate-500">Component:</span> {issue.component_hint}</p>}
-                                        {allOpen && <p className="mt-2 text-xs text-slate-500">{issue.page_label}</p>}
+                                        {view !== 'current' && <p className="mt-2 text-xs text-slate-500">{issue.page_label}</p>}
                                         <p className="mt-2 text-[11px] text-slate-600">{formatDate(issue.created_at)}</p>
                                         <div className="mt-3 flex justify-end gap-2">
                                             {issue.status === 'open' && (

@@ -216,7 +216,7 @@ function PanelFrame({
     compact?: boolean;
 }) {
     return (
-        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/88 shadow-2xl shadow-black/10 ${compact ? 'p-3' : 'p-4'}`}>
+        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] shadow-[var(--shadow-card)] ${compact ? 'p-3' : 'p-4'}`}>
             <div className={compact ? 'mb-2' : 'mb-4'}>
                 <h2 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-base' : 'text-lg'}`}>{title}</h2>
                 {subtitle ? <p className="mt-1 text-sm text-[var(--text-muted)]">{subtitle}</p> : null}
@@ -226,10 +226,10 @@ function PanelFrame({
     );
 }
 
-const PLOT_GRID = 'rgba(51, 65, 85, 0.42)';
-const PLOT_FONT = '#cbd5e1';
-const PLOT_TICK = '#94a3b8';
-const PLOT_PANEL_BG = 'rgba(15, 23, 42, 0.22)';
+const PLOT_GRID = 'var(--chart-grid, var(--border-primary))';
+const PLOT_FONT = 'var(--chart-legend, var(--text-secondary))';
+const PLOT_TICK = 'var(--chart-axis, var(--text-muted))';
+const PLOT_PANEL_BG = 'var(--surface-plot, var(--bg-secondary))';
 
 const UI_ACCENT = 'var(--accent-primary)';
 const UI_SUCCESS = 'var(--success)';
@@ -263,7 +263,7 @@ function TotalPowerBar({
         : `GPU cap ${totalGpuPowerCap.toFixed(0)}W`;
 
     return (
-        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/88 shadow-2xl shadow-black/10 ${compact ? 'p-3' : 'p-4'}`}>
+        <section className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-card,var(--bg-secondary))] shadow-[var(--shadow-card)] ${compact ? 'p-3' : 'p-4'}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
                 <div>
                     <h2 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-sm' : 'text-base'}`}>Total Power Draw</h2>
@@ -280,7 +280,7 @@ function TotalPowerBar({
                     </div>
                 </div>
             </div>
-            <div className={`overflow-hidden rounded-full border border-[var(--border-primary)] bg-[var(--bg-primary)] ${compact ? 'h-2.5' : 'h-3'}`}>
+            <div className={`overflow-hidden rounded-full border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] ${compact ? 'h-2.5' : 'h-3'}`}>
                 <div
                     className="h-full rounded-full transition-all duration-300"
                     style={{
@@ -314,7 +314,7 @@ function SegmentedControl<T extends string | number>({
             >
                 {label}
             </div>
-            <div className={`inline-flex border border-[var(--border-primary)] bg-[var(--bg-primary)] ${compact ? 'rounded-lg p-0.5' : 'rounded-xl p-1'}`}>
+            <div className={`inline-flex border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] ${compact ? 'rounded-lg p-0.5' : 'rounded-xl p-1'}`}>
                 {options.map((option) => {
                     const active = option.value === value;
                     return (
@@ -327,7 +327,7 @@ function SegmentedControl<T extends string | number>({
                             } ${
                                 active
                                     ? 'text-[var(--accent-primary)]'
-                                    : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
+                                    : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-control-strong,var(--bg-tertiary))] hover:text-[var(--text-primary)]'
                             }`}
                             style={active ? {
                                 backgroundColor: 'color-mix(in srgb, var(--accent-primary) 14%, var(--bg-tertiary))',
@@ -428,7 +428,7 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
 
     if (processes.length === 0) {
         return compact ? null : (
-            <div className="mb-4 rounded-xl border border-dashed border-[var(--border-primary)] bg-[var(--bg-secondary)]/55 px-3 py-3 text-sm text-[var(--text-muted)]">
+            <div className="mb-4 rounded-xl border border-dashed border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] px-3 py-3 text-sm text-[var(--text-muted)]">
                 No active GPU processes.
             </div>
         );
@@ -436,14 +436,14 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
 
     if (compact) {
         return (
-            <div className="mb-2.5 flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 px-2.5 py-2">
+            <div className="mb-2.5 flex flex-wrap items-center gap-1.5 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] px-2.5 py-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                     Processes
                 </span>
                 {processes.map((process) => (
                     <div
                         key={`${process.pid}-${process.name}`}
-                        className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/70 px-2 py-1"
+                        className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))]/70 px-2 py-1"
                     >
                         <span className="max-w-[170px] truncate text-[11px] font-medium text-[var(--text-primary)]">
                             {process.name}
@@ -471,7 +471,7 @@ function GpuProcessList({ gpu, compact = false }: { gpu: GPUStatus; compact?: bo
                 {processes.map((process) => (
                     <div
                         key={`${process.pid}-${process.name}`}
-                        className={`flex-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 ${compact ? 'min-w-[135px] px-2.5 py-2' : 'min-w-[180px] px-3 py-3'}`}
+                        className={`flex-1 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] ${compact ? 'min-w-[135px] px-2.5 py-2' : 'min-w-[180px] px-3 py-3'}`}
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -502,7 +502,7 @@ function GpuCompactProcessChips({ gpu }: { gpu: GPUStatus }) {
             {visibleProcesses.map((process) => (
                 <div
                     key={`${process.pid}-${process.name}`}
-                    className="inline-flex min-w-0 max-w-[132px] items-center gap-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/65 px-2 py-1"
+                    className="inline-flex min-w-0 max-w-[132px] items-center gap-1.5 rounded-lg border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))]/65 px-2 py-1"
                 >
                     <span className="truncate text-[10px] font-medium text-[var(--text-primary)]">
                         {process.name}
@@ -520,7 +520,7 @@ function GpuCompactProcessChips({ gpu }: { gpu: GPUStatus }) {
                 </div>
             ))}
             {hiddenCount > 0 ? (
-                <div className="inline-flex min-w-[2.1rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
+                <div className="inline-flex min-w-[2.1rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-[10px] font-medium text-[var(--text-secondary)]">
                     +{hiddenCount}
                 </div>
             ) : null}
@@ -614,9 +614,9 @@ function GpuInlinePowerControl({
 
     if (compact) {
         return (
-            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 px-2 py-1.5">
+            <div className="mb-1 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] px-2 py-1.5">
                 <div className="flex min-w-[16rem] flex-[1.25] items-center gap-2">
-                    <span className="inline-flex min-w-[3.2rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
+                    <span className="inline-flex min-w-[3.2rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
                         {gpu.power_draw_w.toFixed(1)}W
                     </span>
                     <input
@@ -641,7 +641,7 @@ function GpuInlinePowerControl({
 
                 {fan ? (
                     <div className="flex min-w-[18rem] flex-[1.4] items-center gap-1.5">
-                        <span className="inline-flex min-w-[3.9rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
+                        <span className="inline-flex min-w-[3.9rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center text-[10px] font-medium text-[var(--text-secondary)]">
                             Fan {fan.current_percent != null ? `${fan.current_percent}%` : 'n/a'}
                         </span>
                         <button
@@ -651,7 +651,7 @@ function GpuInlinePowerControl({
                             className={`rounded border px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-50 ${
                                 fanMode === 'auto'
                                     ? 'border-emerald-500/40 bg-emerald-500/12 text-emerald-300'
-                                    : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                    : 'border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
                             }`}
                         >
                             Auto
@@ -663,7 +663,7 @@ function GpuInlinePowerControl({
                             className={`rounded border px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-50 ${
                                 fanMode === 'manual'
                                     ? 'border-amber-500/40 bg-amber-500/12 text-amber-300'
-                                    : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                    : 'border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
                             }`}
                         >
                             Manual
@@ -709,14 +709,14 @@ function GpuInlinePowerControl({
     }
 
     return (
-        <div className={`flex flex-wrap items-center rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 ${compact ? 'mb-1 gap-1.5 px-2 py-1' : 'mb-2.5 gap-1.5 px-2.5 py-2'}`}>
-            <span className={`inline-flex min-w-[3.4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+        <div className={`flex flex-wrap items-center rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] ${compact ? 'mb-1 gap-1.5 px-2 py-1' : 'mb-2.5 gap-1.5 px-2.5 py-2'}`}>
+            <span className={`inline-flex min-w-[3.4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
                 {gpu.power_draw_w.toFixed(1)}W
             </span>
             <button
                 type="button"
                 onClick={() => stepValue(-5)}
-                className={`rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
+                className={`rounded border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
             >
                 −
             </button>
@@ -726,14 +726,14 @@ function GpuInlinePowerControl({
                 pattern="[0-9]*"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value.replace(/[^0-9]/g, ''))}
-                className={`rounded border bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[var(--text-primary)] ${compact ? 'w-12 text-[10px]' : 'w-[3.25rem] text-[11px]'} ${
+                className={`rounded border bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center text-[var(--text-primary)] ${compact ? 'w-12 text-[10px]' : 'w-[3.25rem] text-[11px]'} ${
                     isOutOfRange ? 'border-red-500' : isDirty ? 'border-yellow-500' : 'border-[var(--border-primary)]'
                 }`}
             />
             <button
                 type="button"
                 onClick={() => stepValue(5)}
-                className={`rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
+                className={`rounded border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
             >
                 +
             </button>
@@ -754,7 +754,7 @@ function GpuInlinePowerControl({
             ) : null}
             {fan ? (
                 <>
-                    <span className={`inline-flex min-w-[4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
+                    <span className={`inline-flex min-w-[4rem] items-center justify-center rounded-md border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center font-medium text-[var(--text-secondary)] ${compact ? 'text-[10px]' : 'text-[11px]'}`}>
                         Fan {fan.current_percent != null ? `${fan.current_percent}%` : 'n/a'}
                     </span>
                     <button
@@ -764,7 +764,7 @@ function GpuInlinePowerControl({
                         className={`rounded border px-2 py-1 font-medium transition-colors disabled:opacity-50 ${compact ? 'text-[10px]' : 'text-[11px]'} ${
                             fanMode === 'auto'
                                 ? 'border-emerald-500/40 bg-emerald-500/12 text-emerald-300'
-                                : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                : 'border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
                         }`}
                     >
                         Auto
@@ -776,7 +776,7 @@ function GpuInlinePowerControl({
                         className={`rounded border px-2 py-1 font-medium transition-colors disabled:opacity-50 ${compact ? 'text-[10px]' : 'text-[11px]'} ${
                             fanMode === 'manual'
                                 ? 'border-amber-500/40 bg-amber-500/12 text-amber-300'
-                                : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                : 'border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
                         }`}
                     >
                         Manual
@@ -785,7 +785,7 @@ function GpuInlinePowerControl({
                         type="button"
                         onClick={() => stepFanValue(-5)}
                         disabled={isPending || !fan.writable}
-                        className={`rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] disabled:opacity-50 ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
+                        className={`rounded border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] disabled:opacity-50 ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
                     >
                         −
                     </button>
@@ -796,7 +796,7 @@ function GpuInlinePowerControl({
                         value={fanInputValue}
                         onChange={(e) => setFanInputValue(e.target.value.replace(/[^0-9]/g, ''))}
                         disabled={isPending || !fan.writable}
-                        className={`rounded border bg-[var(--bg-tertiary)] px-2 py-1 text-center text-[var(--text-primary)] disabled:opacity-50 ${compact ? 'w-10 text-[10px]' : 'w-[3rem] text-[11px]'} ${
+                        className={`rounded border bg-[var(--surface-control-strong,var(--bg-tertiary))] px-2 py-1 text-center text-[var(--text-primary)] disabled:opacity-50 ${compact ? 'w-10 text-[10px]' : 'w-[3rem] text-[11px]'} ${
                             fanIsOutOfRange ? 'border-red-500' : fanIsDirty ? 'border-yellow-500' : 'border-[var(--border-primary)]'
                         }`}
                     />
@@ -804,7 +804,7 @@ function GpuInlinePowerControl({
                         type="button"
                         onClick={() => stepFanValue(5)}
                         disabled={isPending || !fan.writable}
-                        className={`rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] disabled:opacity-50 ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
+                        className={`rounded border border-[var(--border-primary)] bg-[var(--surface-control-strong,var(--bg-tertiary))] text-[var(--text-secondary)] hover:bg-[var(--card-hover)] disabled:opacity-50 ${compact ? 'h-[1.375rem] w-[1.375rem] text-[10px]' : 'h-6 w-6 text-[11px]'}`}
                     >
                         +
                     </button>
@@ -911,14 +911,16 @@ function TimeSeriesPlot({
 
     return (
         <div
-            className="relative w-full overflow-hidden rounded-lg"
+            className="relative w-full overflow-hidden rounded-lg border border-[var(--border-primary)]"
             style={{ height, background: PLOT_PANEL_BG }}
             role="img"
             aria-label={`${yAxis.title} telemetry history`}
+            data-bms-telemetry-plot="true"
         >
             <div
                 className={`absolute left-11 right-2 top-1 z-10 flex min-w-0 items-center overflow-hidden whitespace-nowrap ${compact ? 'gap-2 text-[9px]' : 'gap-3 text-[10px]'}`}
                 style={{ color: PLOT_FONT }}
+                data-bms-telemetry-legend="true"
             >
                 {series.map((line, index) => (
                     <span key={`${line.name ?? 'series'}:${index}`} className="inline-flex min-w-0 items-center gap-1">
@@ -931,10 +933,12 @@ function TimeSeriesPlot({
                 ))}
             </div>
 
+            <div className="absolute inset-0 min-h-0" data-bms-telemetry-canvas="true">
             <div
                 className="absolute bottom-1 left-1 top-6 flex w-9 flex-col justify-between text-right text-[9px] tabular-nums"
                 style={{ color: PLOT_TICK }}
                 aria-hidden="true"
+                data-bms-telemetry-axis="true"
             >
                 <span>{formatAxisValue(yMax, yAxis)}</span>
                 <span>{formatAxisValue(middleY, yAxis)}</span>
@@ -944,6 +948,7 @@ function TimeSeriesPlot({
             <div
                 className="absolute left-11 right-2"
                 style={{ top: legendHeight, bottom: xLabelHeight }}
+                data-bms-telemetry-lines="true"
             >
                 <svg
                     className="h-full w-full"
@@ -1003,6 +1008,7 @@ function TimeSeriesPlot({
                     <span>{samples[samples.length - 1]?.clock ?? '--:--:--'}</span>
                 </div>
             ) : null}
+            </div>
         </div>
     );
 }
@@ -1676,7 +1682,7 @@ export function InfraLiveTelemetry({
 
     return (
         <section className={variant === 'infra'
-            ? 'mb-6 rounded-3xl border border-[var(--border-primary)] bg-[var(--bg-primary)]/96 p-5 shadow-2xl shadow-black/10'
+            ? 'mb-6 rounded-3xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))]/96 p-5 shadow-2xl shadow-black/10'
             : dashboardSizing.outerSpacingClass
         }>
             <div className={variant === 'infra'
@@ -1728,7 +1734,7 @@ export function InfraLiveTelemetry({
                             type="button"
                             onClick={() => discoverMutation.mutate()}
                             disabled={discoverMutation.isPending}
-                            className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                            className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
                             title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
                         >
                             {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
@@ -1744,7 +1750,7 @@ export function InfraLiveTelemetry({
             )}
 
             {!payload && liveStatusQuery.isPending && historyPoints.length === 0 && (
-                <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
+                <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-5 text-sm text-[var(--text-secondary)]">
                     Loading live telemetry...
                 </div>
             )}

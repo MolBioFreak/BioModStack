@@ -157,28 +157,24 @@ export const RESTRICTION_ENZYME_GROUPS: Record<RestrictionEnzymeCategory, Restri
         {
             name: 'Nt.BbvCI',
             site: 'CCTCAGC',
-            viewerSupported: false,
             nickingStrand: 'top',
             tags: ['nicking'],
         },
         {
             name: 'Nb.BbvCI',
             site: 'CCTCAGC',
-            viewerSupported: false,
             nickingStrand: 'bottom',
             tags: ['nicking'],
         },
         {
             name: 'Nt.BspQI',
             site: 'GCTCTTC',
-            viewerSupported: false,
             nickingStrand: 'top',
             tags: ['nicking', 'type_iis'],
         },
         {
             name: 'Nb.BssSI',
             site: 'CACGAG',
-            viewerSupported: false,
             nickingStrand: 'bottom',
             tags: ['nicking'],
         },
@@ -210,14 +206,29 @@ function baseMatches(sequenceBase: string, patternBase: string): boolean {
     return allowed.includes(sequenceBase);
 }
 
-export function findRestrictionSites(sequence: string, site: string, circular: boolean): number[] {
+export interface RestrictionSiteMatch {
+    position: number;
+    orientation: 1 | -1;
+}
+
+export function findRestrictionSiteMatches(
+    sequence: string,
+    site: string,
+    circular: boolean,
+): RestrictionSiteMatch[] {
     const upperSeq = sequence.toUpperCase().replace(/U/g, 'T');
     const pattern = site.toUpperCase().replace(/U/g, 'T');
     if (!upperSeq || !pattern || pattern.length > upperSeq.length) {
         return [];
     }
 
-    const patterns = Array.from(new Set([pattern, reverseComplementSite(pattern)]));
+    const reversePattern = reverseComplementSite(pattern);
+    const patterns: Array<{ pattern: string; orientation: 1 | -1 }> = reversePattern === pattern
+        ? [{ pattern, orientation: 1 }]
+        : [
+            { pattern, orientation: 1 },
+            { pattern: reversePattern, orientation: -1 },
+        ];
     const searchSpace = circular
         ? upperSeq + upperSeq.slice(0, pattern.length - 1)
         : upperSeq;
@@ -225,21 +236,29 @@ export function findRestrictionSites(sequence: string, site: string, circular: b
         ? upperSeq.length
         : upperSeq.length - pattern.length + 1;
 
-    const positions = new Set<number>();
+    const matches: RestrictionSiteMatch[] = [];
     for (const candidate of patterns) {
         for (let start = 0; start < searchLimit; start += 1) {
-            let matches = true;
-            for (let offset = 0; offset < candidate.length; offset += 1) {
-                if (!baseMatches(searchSpace[start + offset], candidate[offset])) {
-                    matches = false;
+            let candidateMatches = true;
+            for (let offset = 0; offset < candidate.pattern.length; offset += 1) {
+                if (!baseMatches(searchSpace[start + offset], candidate.pattern[offset])) {
+                    candidateMatches = false;
                     break;
                 }
             }
-            if (matches) {
-                positions.add(start);
+            if (candidateMatches) {
+                matches.push({ position: start, orientation: candidate.orientation });
             }
         }
     }
 
-    return Array.from(positions).sort((a, b) => a - b);
+    return matches.sort((left, right) => (
+        left.position - right.position || right.orientation - left.orientation
+    ));
+}
+
+export function findRestrictionSites(sequence: string, site: string, circular: boolean): number[] {
+    return Array.from(new Set(
+        findRestrictionSiteMatches(sequence, site, circular).map((match) => match.position),
+    )).sort((left, right) => left - right);
 }
