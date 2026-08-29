@@ -276,6 +276,10 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).toContain('Validation PCR');
         expect(container.textContent).not.toContain('Transient alignment');
         expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('PL2190');
+        expect(container.textContent).toContain('Syenex New Plasmids');
+        expect(container.textContent).toContain('2 DNA sequences');
+        expect(container.textContent).toContain('+ Add DNA sequence');
+        expect(container.textContent).toContain('DNA sequences');
         expect(container.textContent).toContain('1 saved');
         expect(container.textContent).toContain('0 saved');
 

@@ -168,8 +168,8 @@ function SequenceLibrary({
         >
             <div className="flex items-center justify-between p-3 border-b border-slate-700">
                 <div>
-                    <h3 className="font-semibold text-slate-200">Construct Shelf</h3>
-                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'Constructs in this Project' : 'All recent constructs'}</p>
+                    <h3 className="font-semibold text-slate-200">DNA Sequence Shelf</h3>
+                    <p className="text-xs text-slate-500">{projectScoped && !showAllConstructs ? 'DNA sequences in this Project' : 'All recent DNA sequences'}</p>
                 </div>
                 <button
                     onClick={onRefresh}
@@ -182,7 +182,7 @@ function SequenceLibrary({
                     </svg>
                 </button>
             </div>
-            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project constructs' : 'All constructs'}</button>}
+            {projectScoped && <button type="button" onClick={onToggleAllConstructs} className="border-b border-slate-700 px-3 py-2 text-left text-xs font-semibold text-cyan-300 hover:bg-slate-800">{showAllConstructs ? 'Show Project DNA sequences' : 'All DNA sequences'}</button>}
 
             <div
                 data-molbio-scroll-region="construct-shelf"
@@ -217,7 +217,7 @@ function SequenceLibrary({
                 </div>}
 
                 <div className="border-b border-slate-700 px-3 py-2 text-xs font-semibold text-slate-400">
-                    {projectScoped && !showAllConstructs ? `Project constructs (${sequences.length})` : `Recent constructs (${sequences.length})`}
+                    {projectScoped && !showAllConstructs ? `Project DNA sequences (${sequences.length})` : `Recent DNA sequences (${sequences.length})`}
                 </div>
 
                 {sequences.length === 0 ? (
