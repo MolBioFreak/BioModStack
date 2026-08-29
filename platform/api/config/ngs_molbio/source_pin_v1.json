@@ -6,7 +6,7 @@
     },
     {
       "path": "docs/Model_Configuration_Operator_Control_and_Agent_Parity.md",
-      "sha256": "650549716e7f2dc41c8f033a95d6083f8bc28b38d698f8d48dd4f7bc3e2e9d14"
+      "sha256": "5fc522b3a2a2b92cf9e66bfc58f5d3395e7140754f0f1490e4a594e36789941a"
     },
     {
       "path": "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
@@ -175,6 +175,6 @@
   ],
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "be512a579b610067bb5beed8c4d4209c296b068d1efa0e94e4500512d9e1bcff",
+  "content_sha256": "3a02123c559ee11e05b6c44479dff273805f0cb632422792560cfe19ecc51fc4",
   "schema": "bms.ngs-molbio.source-pin.v1"
 }

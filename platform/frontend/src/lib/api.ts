@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
 import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
 
@@ -77,6 +78,7 @@ export interface Job {
     decision_history?: Array<Record<string, UntypedApiValue>> | null;
     frustrampnn_result_count?: number;
     frustrampnn_reopen_destination?: Record<string, UntypedApiValue> | null;
+    conformational_mapping_request_id?: string | null;
     selected_cdr_loops?: string[] | null;
 }
 
@@ -149,6 +151,72 @@ export interface RFD3LocalRedesignReadModel {
         metadata: Record<string, UntypedApiValue>;
     }>;
 }
+export interface ProteinLocalRedesignResultSurface {
+    schema: 'bms.workflow.protein-local-redesign.results.v1';
+    job: {
+        id: string;
+        name: string;
+        status: string;
+        model_id: string;
+        mode: string;
+        request_sha256: string | null;
+    };
+    source: { artifacts: ProteinLocalRedesignResultArtifact[] };
+    receipt: Record<string, UntypedApiValue> | null;
+    tabs: Array<{
+        id: 'rfd3' | 'fampnn' | 'esmfold2' | 'protenix_v2';
+        label: string;
+        role: string;
+        status: 'complete' | 'partial';
+        count: number;
+        candidate_count: number;
+        expected_candidate_count: number;
+        items: ProteinLocalRedesignResultItem[];
+    }>;
+    artifacts: ProteinLocalRedesignResultArtifact[];
+    capabilities: {
+        model_native_tabs: string[];
+        structure_viewer: boolean;
+        sequence_viewer: boolean;
+        volume_viewer: boolean;
+    };
+    counts: {
+        persisted_design_rows: number;
+        source_artifacts: number;
+        tabs: Record<string, number>;
+    };
+    composition: { algorithm: string; sha256: string };
+}
+
+export interface ProteinLocalRedesignResultArtifact {
+    artifact_id: string;
+    kind: string;
+    label: string;
+    relative_path: string;
+    sha256: string;
+    bytes: number;
+    media_type: string;
+    content_url: string;
+}
+
+export interface ProteinLocalRedesignResultItem {
+    item_id: string;
+    design_id: string | null;
+    candidate_id: string;
+    candidate_label: string;
+    sample_index: number | null;
+    name: string;
+    structure: ProteinLocalRedesignResultArtifact;
+    metrics: Record<string, UntypedApiValue>;
+    metadata: Record<string, UntypedApiValue>;
+    sequence?: string;
+    metrics_artifact?: string;
+    confidence_artifact?: string;
+    msa_artifact?: string;
+    native_metadata_artifact?: string;
+    msa?: Record<string, UntypedApiValue>;
+}
+
 export interface MDSummary {
     schema: 'bms.md.summary.v1';
     job_id: string;
@@ -465,8 +533,23 @@ export const fetchTelemetryHistory = (startMs: number, endMs: number, resolution
         params: { start_ms: startMs, end_ms: endMs, resolution, limit },
         timeout: 10_000,
     });
+export const fetchTelemetryChartHistory = (
+    startMs: number,
+    endMs: number,
+    bucketMs: number,
+    sinceMs: number | null,
+) => api.get<TelemetryChartHistoryResponse>('/api/telemetry/chart-history', {
+    params: {
+        start_ms: startMs,
+        end_ms: endMs,
+        bucket_ms: bucketMs,
+        ...(sinceMs == null ? {} : { since_ms: sinceMs }),
+    },
+    timeout: 10_000,
+});
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
+export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
     bundle_path: string;
@@ -551,6 +634,23 @@ export const uploadFile = async (path: string, file: File) => {
     formData.append('path', path);
     formData.append('file', file);
     return api.post<FileUploadResponse>('/api/files/upload', formData, {
+        headers: {
+            'Content-Type': 'multipart/form-data',
+        },
+    });
+};
+
+export interface ImmutableFileUploadResponse extends FileUploadResponse {
+    sha256: string;
+    existing: boolean;
+}
+
+export const uploadImmutableFile = async (path: string, file: File, sha256: string) => {
+    const formData = new FormData();
+    formData.append('path', path);
+    formData.append('sha256', sha256);
+    formData.append('file', file);
+    return api.post<ImmutableFileUploadResponse>('/api/files/upload-immutable-structure', formData, {
         headers: {
             'Content-Type': 'multipart/form-data',
         },
@@ -1009,6 +1109,7 @@ export interface LaunchAntibodyIterationRequest {
     action: AntibodyIterationAction;
     name_suffix?: string;
     param_overrides?: Record<string, unknown>;
+    frustrampnn_settings?: import('../components/frustrampnn/frustraMpnnSettingsState.js').FrustraMpnnRequestedSettings;
     cdr_indel_config?: AntibodyCdrIndelConfig;
     manual_mutagenesis_config?: ManualMutagenesisConfig;
 }
@@ -1021,6 +1122,8 @@ export interface LaunchAntibodyIterationResponse {
     selection_dir: string;
     selected_design_count: number;
     launched_job: Job;
+    launched_jobs: Job[];
+    fanout_id?: string | null;
 }
 
 export const launchAntibodyIteration = (request: LaunchAntibodyIterationRequest) =>
@@ -2136,6 +2239,9 @@ export interface UserSequenceCreate {
 export const fetchUserSequences = (search?: string) =>
     api.get<UserSequence[]>('/api/user-sequences', { params: { search } });
 
+export const fetchUserSequence = (id: string) =>
+    api.get<UserSequence>(`/api/user-sequences/${encodeURIComponent(id)}`);
+
 export const createUserSequence = (data: UserSequenceCreate) =>
     api.post<UserSequence>('/api/user-sequences', data);
 
@@ -2438,6 +2544,8 @@ export interface NucleotideSequence {
 
 export interface NucleotideSequenceListItem {
     id: string;
+    revision_id?: string;
+    reopen_href?: string;
     name: string;
     description: string | null;
     sequence_type: 'dna' | 'rna';
@@ -2747,6 +2855,9 @@ export interface MolBioSequenceImportPayload {
     topology_default: 'circular' | 'linear';
     topology_overrides?: Record<number, 'circular' | 'linear'>;
     idempotency_key: string;
+    origin_surface?: 'molbio' | 'ngs';
+    source_provider?: 'upload' | 'paste' | 'ncbi' | 'library';
+    source_id?: string;
 }
 
 export interface MolBioSequenceImportPreviewRecord {
@@ -2778,8 +2889,24 @@ export interface MolBioSequenceImportCommitResponse {
         sequence_id: string;
         name: string;
         revision_id?: string;
+        reused_existing_revision?: boolean;
     }>;
 }
+
+export interface MolBioAnnotationSourceArtifact {
+    content: string;
+    file_name: string;
+    media_type: string;
+    source: {
+        provider: 'ncbi' | 'addgene';
+        source_id: string;
+        source_url: string;
+        artifact_sha256: string;
+    };
+}
+
+export const fetchNcbiSequenceArtifact = (accession: string) =>
+    api.get<MolBioAnnotationSourceArtifact>(`/api/molbio/annotation-sources/ncbi/${encodeURIComponent(accession)}`);
 
 export const previewMolBioSequenceImport = (payload: MolBioSequenceImportPayload) =>
     api.post<MolBioSequenceImportPreviewResponse>('/api/molbio/sequences/import/preview', payload);
@@ -4713,3 +4840,877 @@ export const requestOntBlow5Preparation = (
 
 export const fetchFullJob = (jobId: string) =>
     apiData(api.get<Job>(`/api/jobs/${encodeURIComponent(jobId)}`));
+
+export type OntSignalCapabilityState = 'ready' | 'preparable' | 'unavailable' | 'independent';
+export type OntSignalMappingMode = 'signal_to_read' | 'signal_to_reference';
+export type OntSignalViewMode = 'read' | 'reference' | 'pileup';
+export type OntSignalJobState = 'requested' | 'running' | 'ready' | 'failed' | 'cancelled' | string;
+
+export interface OntSignalCapabilityMode {
+    state: OntSignalCapabilityState;
+    reason_code: string;
+}
+
+// ============================================================
+// ONT SIGNAL WORKBENCH API
+// ============================================================
+export interface OntSignalWorkbenchCapabilities {
+    run_id: string;
+    observed_generation: number;
+    resolved: {
+        raw_representation_id: string | null;
+        move_source_id: string | null;
+        mapping_profile_id: string | null;
+        calibration_job_id: string | null;
+        calibration_artifact_id: string | null;
+        signal_to_read_mapping_job_id: string | null;
+        signal_to_reference_mapping_job_id: string | null;
+    };
+    modes: Record<'igv' | 'raw_waveform' | 'signal_to_read' | 'signal_to_reference' | 'signal_pileup', OntSignalCapabilityMode>;
+}
+
+export interface OntSignalCapabilityAuthority {
+    alignment_job_id: string;
+    alignment_session_id: string;
+    reference_revision_id: string;
+}
+
+export interface OntExternalMoveBamCandidate {
+    candidate_id: string;
+    display_name: string;
+    size_bytes: number;
+    modified_at_ns: number;
+}
+
+export interface OntMoveTableSource {
+    move_source_id: string;
+    attempt_number: number;
+    predecessor_move_source_id: string | null;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    artifact_id: string;
+    artifact_sha256: string;
+    artifact_size_bytes: number;
+    bam_header_sha256: string | null;
+    record_count: number | null;
+    unique_read_count: number | null;
+    tag_counts: { mv: number | null; ts: number | null; ns: number | null };
+    basecall_model_id: string | null;
+    molecule_type: 'dna' | 'rna';
+    source_job_id: string | null;
+    external_registration_receipt_id: string | null;
+    source_runtime_identity: Record<string, unknown>;
+    read_inventory_sha256: string | null;
+    state: OntSignalJobState;
+    reason_code: string;
+    validation_receipt: Record<string, unknown>;
+    created_at: string;
+    validated_at: string | null;
+}
+
+export interface OntSignalCalibrationArtifact {
+    calibration_artifact_id: string;
+    raw_representation_id: string;
+    move_source_id: string;
+    basecall_model_id: string;
+    sample_selection: { method: string; requested_count: number; selected_count: number; intersection_count: number; read_ids: string[]; selection_sha256: string };
+    recommended_kmer_length: number;
+    recommended_signal_move_offset: number;
+    score_evidence: Array<Record<string, unknown>>;
+    runtime_identity: Record<string, unknown>;
+    parent_sha256s: Record<string, unknown>;
+    artifact_sha256: string;
+    created_at: string;
+}
+
+export interface OntSignalCalibrationJob {
+    calibration_job_id: string;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    move_source_id: string;
+    sample_count: number;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    attempt: number;
+    resource_snapshot: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    artifact: OntSignalCalibrationArtifact | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalMappingProfile {
+    mapping_profile_id: string;
+    name: string;
+    molecule_type: 'dna' | 'rna';
+    basecall_model_id: string;
+    kmer_length: number;
+    signal_move_offset: number;
+    base_shift_value: number;
+    parameter_source: 'approved_calibration';
+    calibration_artifact_id: string;
+    primary_alignment_policy: 'primary_only';
+    minimum_mapq: 0;
+    include_supplementary: false;
+    read_set_selection: 'immutable_full_set';
+    approval_receipt: Record<string, unknown>;
+    approved_at: string;
+    approved_by: string | null;
+}
+
+export interface OntSignalMappingArtifact {
+    mapping_artifact_id: string;
+    mapping_job_id: string;
+    kind: 'reform_paf' | 'realign_paf';
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    parent_identities: Record<string, unknown>;
+    runtime_identity: Record<string, unknown>;
+    validation_receipt: Record<string, unknown>;
+    created_at: string;
+}
+
+export interface OntSignalMappingJob {
+    mapping_job_id: string;
+    mode: OntSignalMappingMode;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    reference_revision_id: string | null;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    parent_mapping_job_id: string | null;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    attempt: number;
+    resource_snapshot: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    artifacts: OntSignalMappingArtifact[];
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalViewArtifact {
+    artifact_id: string;
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    url?: string | null;
+}
+
+export interface OntSignalViewJob {
+    view_job_id: string;
+    mapping_artifact_id: string;
+    mode: OntSignalViewMode;
+    read_id: string | null;
+    reference_region: { contig: string; start: number; end: number } | null;
+    render_params: OntSignalRenderParamsResponse;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    output_manifest: {
+        schema?: string | null;
+        artifacts: OntSignalViewArtifact[];
+        command?: Record<string, unknown> | null;
+        network?: string | null;
+    };
+    render_receipt: Record<string, unknown>;
+    failure_code: string | null;
+    failure_message: string | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalRenderParams {
+    strand: 'forward' | 'reverse';
+    signal_units: 'pA' | 'raw_adc';
+    scale: 'none' | 'medmad' | 'znorm' | 'scaledpA';
+    base_shift_source: 'profile' | 'explicit';
+    base_shift_value: number;
+    fixed_width: boolean;
+    base_width: number;
+    point_size: number;
+    base_limit: number;
+    signal_sample_limit: number;
+    pileup_read_limit: number;
+    loose_bound: boolean;
+    show_samples: boolean;
+    show_base_colours: boolean;
+    remove_signal_outliers: boolean;
+    managed_bed_artifact_id: string | null;
+}
+
+export const DEFAULT_ONT_SIGNAL_RENDER_PARAMS: OntSignalRenderParams = {
+    strand: 'forward',
+    signal_units: 'pA',
+    scale: 'none',
+    base_shift_source: 'profile',
+    base_shift_value: 0,
+    fixed_width: false,
+    base_width: 10,
+    point_size: 0.5,
+    base_limit: 1000,
+    signal_sample_limit: 100_000,
+    pileup_read_limit: 20,
+    loose_bound: false,
+    show_samples: true,
+    show_base_colours: true,
+    remove_signal_outliers: false,
+    managed_bed_artifact_id: null,
+};
+
+export interface OntSignalRenderParamsResponse extends OntSignalRenderParams {
+    managed_bed_source_job_id?: string | null;
+    managed_bed_sha256?: string | null;
+    managed_bed_size_bytes?: number | null;
+}
+
+export type OntSignalViewerAlignmentDisplayMode = 'EXPANDED' | 'SQUISHED' | 'FULL';
+export type OntSignalViewerAlignmentColorBy = 'none' | 'strand' | 'firstOfPairStrand' | 'pairOrientation' | 'tlen' | 'unexpectedPair' | 'basemod' | 'basemod2';
+export type OntSignalViewerAlignmentGroupBy = 'none' | 'strand' | 'firstOfPairStrand' | 'pairOrientation' | 'mateChr' | 'chimeric' | 'supplementary' | 'readOrder';
+
+export interface OntSignalViewerIgvUpdateState {
+    alignment_display_mode: OntSignalViewerAlignmentDisplayMode;
+    alignment_color_by: OntSignalViewerAlignmentColorBy;
+    alignment_group_by: OntSignalViewerAlignmentGroupBy;
+    reads_track_loaded: boolean;
+}
+
+export type OntSignalComparisonProfileId = 'dna-r9-min' | 'dna-r9-prom' | 'rna-r9-min' | 'rna-r9-prom' | 'dna-r10-min' | 'dna-r10-prom' | 'rna004-min' | 'rna004-prom';
+export type OntSignalComparisonCompatibility = 'matched_profile' | 'approximate_profile' | 'legacy_unknown' | 'incompatible';
+
+export interface OntSignalComparisonSimulationSettings {
+    profile_id: OntSignalComparisonProfileId;
+    seed: number;
+}
+
+export interface OntSignalComparisonProfileFixed {
+    molecule_type: 'dna' | 'rna';
+    flow_cell_generation: string;
+    device_class: 'MinION' | 'PromethION';
+    pore_model_identity: string;
+    kmer_length: number;
+    digitisation: number;
+    sample_rate: number;
+    translocation_speed: number;
+    range: number;
+    offset_mean: number;
+    offset_standard_deviation: number;
+    median_before_mean: number;
+    median_before_standard_deviation: number;
+    dwell_mean: number;
+    dwell_standard_deviation: number;
+    model_quality_warning: string | null;
+    compatibility_floor: Exclude<OntSignalComparisonCompatibility, 'legacy_unknown' | 'incompatible'>;
+}
+
+export interface OntSignalComparisonWorkflowFixed {
+    simulation_mode: 'ideal'; full_contigs: true; amplitude_noise_factor: 0; dwell_noise: 0;
+    prefix: false; input_sequence_count: 1; simulated_signal_record_count: 1;
+    signal_units: 'pA'; real_read_count: 1; reference_hypothesis_count: 1;
+    sequence_basis: 'managed_reference'; threads: 1; batch_size: 1;
+}
+export interface OntSignalComparisonCompatibilityEvidence {
+    mapping_profile_molecule_type: string | null; mapping_profile_basecall_model_id: string | null;
+    mapping_profile_kmer_length: number | null; move_source_molecule_type: string | null;
+    move_source_basecall_model_id: string | null; move_source_runtime_authority: string | null;
+    raw_sample_rate: string | number | null; raw_digitisation: string | number | null;
+    raw_range: string | number | null; run_flow_cell_generation: string | null; run_device_class: string | null;
+}
+export interface OntSignalComparisonCompatibilityReceipt {
+    disposition: OntSignalComparisonCompatibility; evidence: OntSignalComparisonCompatibilityEvidence;
+    missing_authorities: string[]; mismatches: string[];
+}
+export interface OntSignalComparisonEffectiveSettings {
+    schema: 'bms.ont-squigulator-ideal-comparison-effective.v1';
+    operator_owned: OntSignalComparisonSimulationSettings & OntSignalComparisonRenderParams;
+    profile_id: OntSignalComparisonProfileId;
+    profile: OntSignalComparisonProfileFixed;
+    workflow_fixed: OntSignalComparisonWorkflowFixed;
+    compatibility_floor: Exclude<OntSignalComparisonCompatibility, 'legacy_unknown' | 'incompatible'>;
+    warnings: string[];
+    upstream: { name: string; version: string; commit: string; release_source_asset: string; release_source_asset_sha256: string };
+    compatibility_disposition: OntSignalComparisonCompatibility;
+    compatibility_evidence: OntSignalComparisonCompatibilityReceipt;
+}
+
+export type OntSignalComparisonPointSize = 0.5 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+
+export interface OntSignalComparisonRenderParams {
+    scale: 'none' | 'medmad' | 'znorm';
+    point_size: OntSignalComparisonPointSize;
+    fixed_width: boolean;
+    base_width: number;
+    base_limit: number;
+    signal_sample_limit: number;
+    show_samples: boolean;
+    show_base_colours: boolean;
+    remove_signal_outliers: boolean;
+}
+
+export interface OntSignalComparisonRequest {
+    viewer_session_id: string;
+    expected_viewer_revision: number;
+    mapping_artifact_id: string;
+    selected_read_id: string;
+    reference_contig: string;
+    reference_start: number;
+    reference_end: number;
+    simulation_settings: OntSignalComparisonSimulationSettings;
+    render_params: OntSignalComparisonRenderParams;
+}
+export interface OntSignalComparisonCreateRequest extends OntSignalComparisonRequest { preview_digest: string }
+
+export interface OntSignalComparisonPreview {
+    viewer_session_id: string;
+    viewer_session_revision: number;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    raw_manifest_sha256: string;
+    mapping_artifact_id: string;
+    mapping_artifact_sha256: string;
+    mapping_job_id: string;
+    mapping_profile_id: string;
+    reference_revision_id: string;
+    reference_artifact_id: string;
+    reference_fasta_sha256: string;
+    reference_topology: string;
+    coordinate_contract: string;
+    selected_read_id: string;
+    selected_read_span: { contig: string; start: number; end: number; strand: 'forward' | 'reverse' | '+' | '-' };
+    simulation_orientation: 'forward' | 'reverse';
+    derived_window: { contig: string; start: number; end: number };
+    compatibility_disposition: OntSignalComparisonCompatibility;
+    warnings: string[];
+    effective_request: {
+        authority: {
+            viewer_session_id: string; viewer_session_revision: number; run_id: string; observed_generation: number;
+            raw_representation_id: string; raw_manifest_sha256: string; mapping_artifact_id: string;
+            mapping_artifact_sha256: string; mapping_job_id: string; mapping_profile_id: string;
+            move_source_id: string; move_source_artifact_sha256: string; reference_revision_id: string;
+            reference_artifact_id: string; reference_fasta_sha256: string; reference_topology: string;
+            coordinate_contract: string; selected_read_id: string;
+            selected_read_span: OntSignalComparisonPreview['selected_read_span'];
+            simulation_orientation: 'forward' | 'reverse'; derived_window: { contig: string; start: number; end: number };
+        };
+        effective_settings: OntSignalComparisonEffectiveSettings;
+        reference_interval: { contig: string; start: number; end: number };
+    };
+    preview_digest: string;
+}
+
+export interface OntSignalComparisonRawParentIdentity {
+    sha256: string;
+    index_sha256: string;
+}
+export interface OntSignalComparisonParentIdentities {
+    reference_fasta_sha256: string;
+    mapping_sha256: string;
+    mapping_index_sha256: string;
+    real_blow5: {
+        routing_sha256: string | null;
+        blow5: OntSignalComparisonRawParentIdentity[];
+    };
+    real_moves_sha256: string;
+    raw_manifest_sha256: string;
+    run_id: string;
+    observed_generation: number;
+    selected_read_id: string;
+}
+export interface OntSignalComparisonReceiptAuthority {
+    schema: string | null;
+    content_sha256: string;
+}
+
+export interface OntSignalComparisonArtifact {
+    artifact_id: string;
+    kind: 'simulation_input_fasta' | 'simulation_coordinate_map' | 'simulated_blow5'
+        | 'simulated_blow5_index' | 'simulated_read_fasta' | 'simulated_read_id_map'
+        | 'simulated_source_paf' | 'simulated_normalized_paf' | 'simulated_source_sam'
+        | 'simulated_normalized_sam' | 'comparison_html' | 'comparison_manifest';
+    authority_class: 'simulated_derived' | 'comparison_derived';
+    sha256: string;
+    size_bytes: number;
+    media_type: string;
+    parent_identities: OntSignalComparisonParentIdentities;
+    squigulator_runtime_identity: OntSignalComparisonRuntimeIdentity | null;
+    squigualiser_runtime_identity: OntSignalComparisonRuntimeIdentity | null;
+    validation_receipt: OntSignalComparisonReceiptAuthority;
+    created_at: string;
+}
+export interface OntSignalComparisonRuntimeIdentity {
+    stage: 'squigulator_producer' | 'squigualiser_comparison_renderer';
+    image: string; image_digest: string; policy_sha256: string; wrapper_sha256: string;
+}
+export interface OntSignalComparisonExecutionReceipt {
+    argv_sha256: string; returncode: 0; stdout_sha256: string; stdout_size_bytes: number;
+    stderr_sha256: string; stderr_size_bytes: number; stderr_tail: string;
+    container_name_sha256: string; runtime_identity: OntSignalComparisonRuntimeIdentity;
+}
+export interface OntSignalComparisonStageReceipts {
+    squigulator_producer?: OntSignalComparisonExecutionReceipt | null;
+    squigualiser_comparison_renderer?: OntSignalComparisonExecutionReceipt | null;
+    lease_recoveries?: Array<{ recovered_at: string; expired_attempt: number; max_attempts: number }> | null;
+}
+export interface OntSignalComparisonManifestArtifact {
+    kind: OntSignalComparisonArtifact['kind'];
+    media_type: string;
+    sha256: string;
+    size_bytes: number;
+    validation_receipt: OntSignalComparisonReceiptAuthority;
+}
+export interface OntSignalComparisonRuntimeIdentities {
+    squigulator_producer?: OntSignalComparisonRuntimeIdentity;
+    squigualiser_comparison_renderer?: OntSignalComparisonRuntimeIdentity;
+}
+export interface OntSignalComparisonOutputManifest {
+    schema?: 'bms.ont-signal-comparison-manifest.v1' | null;
+    parents?: OntSignalComparisonParentIdentities | null;
+    runtime_identities?: OntSignalComparisonRuntimeIdentities | null;
+    stage_receipts?: OntSignalComparisonStageReceipts | null;
+    artifacts?: OntSignalComparisonManifestArtifact[] | null;
+    producer?: OntSignalComparisonReceiptAuthority | null;
+    renderer?: OntSignalComparisonReceiptAuthority | null;
+}
+export interface OntSignalComparisonResourceSnapshot {
+    parents?: OntSignalComparisonParentIdentities | null;
+}
+export interface OntSignalComparisonReview {
+    review_id: string;
+    comparison_job_id: string;
+    predecessor_review_id: string | null;
+    review_question: string;
+    required_outcome: 'approve' | 'reject' | 'record_only';
+    note: string;
+    reviewed_start: number;
+    reviewed_end: number;
+    comparison_html_artifact_id: string;
+    comparison_html_sha256: string;
+    comparison_request_fingerprint: string;
+    reviewer_identity: string;
+    created_at: string;
+}
+export interface OntSignalComparisonJob {
+    comparison_job_id: string;
+    predecessor_job_id: string | null;
+    attempt_number: number;
+    viewer_session_id: string;
+    viewer_session_revision: number;
+    run_id: string;
+    observed_generation: number;
+    raw_representation_id: string;
+    mapping_artifact_id: string;
+    reference_revision_id: string;
+    selected_read_id: string;
+    reference_contig: string;
+    reference_start: number;
+    reference_end: number;
+    simulation_orientation: 'forward' | 'reverse';
+    simulation_settings: OntSignalComparisonEffectiveSettings;
+    sequence_basis: 'managed_reference';
+    generated_read_id: string | null;
+    render_params: OntSignalComparisonRenderParams;
+    preview_digest: string;
+    request_fingerprint: string;
+    state: OntSignalJobState;
+    reason_code: string;
+    resource_snapshot: OntSignalComparisonResourceSnapshot;
+    stage_receipts: OntSignalComparisonStageReceipts;
+    output_manifest: OntSignalComparisonOutputManifest;
+    failure_code: string | null;
+    failure_message: string | null;
+    artifacts: OntSignalComparisonArtifact[];
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+}
+
+export interface OntSignalComparisonViewerSettings {
+    simulation_settings: OntSignalComparisonSimulationSettings;
+    render_params: OntSignalComparisonRenderParams;
+}
+
+export interface OntSignalViewerSignalUpdateState {
+    mode: OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
+    render_params: OntSignalRenderParams;
+    view_job_id: string | null;
+    read_mapping_job_id: string | null;
+    reference_mapping_job_id: string | null;
+    comparison_job_id?: string | null;
+    comparison_preview_digest?: string | null;
+    comparison_settings?: OntSignalComparisonViewerSettings | null;
+    comparison_review_id?: string | null;
+}
+
+export interface OntSignalViewerIgvState extends Partial<OntSignalViewerIgvUpdateState> {
+    alignment_job_id?: string | null;
+    alignment_session_id?: string | null;
+    reference_revision_id?: string | null;
+    locus?: string | null;
+}
+
+export interface OntSignalViewerSignalState extends Partial<OntSignalViewerSignalUpdateState> {
+    selected_read_id?: string | null;
+    capabilities?: OntSignalWorkbenchCapabilities['modes'];
+}
+
+export interface OntSignalViewerSession {
+    viewer_session_id: string;
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    reference_revision_id: string | null;
+    raw_representation_id: string | null;
+    move_source_id: string | null;
+    mapping_profile_id: string | null;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvState;
+    signal_state: OntSignalViewerSignalState;
+    revision: number;
+    created_at: string;
+    updated_at: string;
+    reopen_url: string;
+}
+
+export interface OntSignalViewerSessionCreate {
+    dataset_id: string;
+    run_id: string;
+    observed_generation: number;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+    reference_revision_id: string | null;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState;
+}
+
+export interface OntSignalViewerSessionUpdate {
+    expected_revision: number;
+    contig: string | null;
+    locus_start: number | null;
+    locus_end: number | null;
+    selected_read_id: string | null;
+    igv_state: OntSignalViewerIgvUpdateState;
+    signal_state: OntSignalViewerSignalUpdateState;
+}
+
+const signalWorkbenchRoot = '/api/ont/signal-workbench';
+export const fetchOntSignalWorkbenchCapabilities = (
+    runId: string,
+    observedGeneration: number,
+    authority: OntSignalCapabilityAuthority | null,
+) => apiData(api.get<OntSignalWorkbenchCapabilities>(
+    `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/capabilities`,
+    { params: authority || undefined },
+));
+export const fetchOntMoveSources = (runId: string, observedGeneration: number, signal?: AbortSignal) =>
+    apiData(api.get<{ items: OntMoveTableSource[] }>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, { signal }));
+export const fetchOntExternalMoveBamCandidates = () =>
+    apiData(api.get<{ items: OntExternalMoveBamCandidate[] }>(`${signalWorkbenchRoot}/external-move-bam-candidates`));
+export const registerOntExternalMoveBamCandidate = (
+    runId: string,
+    observedGeneration: number,
+    request: {
+        candidate_id: string;
+        raw_representation_id: string;
+        molecule_type: 'dna' | 'rna';
+    },
+) => apiData(api.post<OntMoveTableSource>(
+    `${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/external-move-bam-candidates/register`,
+    request,
+));
+export const registerOntMoveSource = (runId: string, observedGeneration: number, request: {
+    raw_representation_id: string;
+    input_file_id: string;
+    molecule_type: 'dna' | 'rna';
+    source_job_id: string;
+}) => apiData(api.post<OntMoveTableSource>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/move-sources`, request));
+export const createOntFreshMoveSourceAttempt = (predecessorMoveSourceId: string) =>
+    apiData(api.post<OntMoveTableSource>(
+        `${signalWorkbenchRoot}/move-sources/${encodeURIComponent(predecessorMoveSourceId)}/fresh-attempt`,
+        {},
+    ));
+export const fetchOntSignalMappingProfiles = () =>
+    apiData(api.get<{ items: OntSignalMappingProfile[] }>(`${signalWorkbenchRoot}/mapping-profiles`));
+export const createOntSignalMappingProfile = (request: {
+    name: string;
+    molecule_type: 'dna' | 'rna';
+    basecall_model_id: string;
+    kmer_length: number;
+    signal_move_offset: number;
+    base_shift_value: number;
+    parameter_source: 'approved_calibration';
+    calibration_artifact_id: string;
+    primary_alignment_policy: 'primary_only';
+    minimum_mapq: 0;
+    include_supplementary: false;
+    read_set_selection: 'immutable_full_set';
+    approval_receipt: Record<string, unknown>;
+    approved_by: string | null;
+}) => apiData(api.post<OntSignalMappingProfile>(`${signalWorkbenchRoot}/mapping-profiles`, request));
+export const createOntSignalCalibration = (runId: string, observedGeneration: number, request: {
+    raw_representation_id: string;
+    move_source_id: string;
+    sample_count: number;
+}) => apiData(api.post<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/calibrations`, request));
+export const fetchOntSignalCalibration = (calibrationJobId: string) =>
+    apiData(api.get<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/calibrations/${encodeURIComponent(calibrationJobId)}`));
+export const cancelOntSignalCalibration = (calibrationJobId: string) =>
+    apiData(api.post<OntSignalCalibrationJob>(`${signalWorkbenchRoot}/calibrations/${encodeURIComponent(calibrationJobId)}/cancel`));
+export const createOntSignalMapping = (runId: string, observedGeneration: number, request: {
+    mode: OntSignalMappingMode;
+    raw_representation_id: string;
+    move_source_id: string;
+    mapping_profile_id: string;
+    reference_revision_id: string | null;
+    alignment_job_id: string | null;
+    alignment_session_id: string | null;
+}) => apiData(api.post<OntSignalMappingJob>(`${signalWorkbenchRoot}/runs/${encodeURIComponent(runId)}/generations/${observedGeneration}/mappings`, request));
+export const fetchOntSignalMapping = (mappingJobId: string) =>
+    apiData(api.get<OntSignalMappingJob>(`${signalWorkbenchRoot}/mappings/${encodeURIComponent(mappingJobId)}`));
+export const cancelOntSignalMapping = (mappingJobId: string) =>
+    apiData(api.post<OntSignalMappingJob>(`${signalWorkbenchRoot}/mappings/${encodeURIComponent(mappingJobId)}/cancel`));
+export const createOntSignalView = (request: {
+    mapping_artifact_id: string;
+    mode: OntSignalViewMode;
+    read_id: string | null;
+    reference_contig: string | null;
+    reference_start: number | null;
+    reference_end: number | null;
+    render_params: OntSignalRenderParams;
+}) => apiData(api.post<OntSignalViewJob>(`${signalWorkbenchRoot}/views`, request));
+export const fetchOntSignalView = (viewJobId: string) =>
+    apiData(api.get<OntSignalViewJob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}`));
+export const cancelOntSignalView = (viewJobId: string) =>
+    apiData(api.post<OntSignalViewJob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}/cancel`));
+export const fetchOntSignalViewArtifact = (viewJobId: string, artifactId: string) =>
+    apiData(api.get<Blob>(`${signalWorkbenchRoot}/views/${encodeURIComponent(viewJobId)}/artifacts/${encodeURIComponent(artifactId)}`, {
+        responseType: 'blob',
+        withCredentials: false,
+    }));
+export const previewOntSignalIdealComparison = (request: OntSignalComparisonRequest) =>
+    apiData(api.post<OntSignalComparisonPreview>(`${signalWorkbenchRoot}/comparisons/preview`, request));
+export const createOntSignalIdealComparison = (request: OntSignalComparisonCreateRequest) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons`, request));
+export const fetchOntSignalIdealComparison = (comparisonJobId: string, signal?: AbortSignal) =>
+    apiData(api.get<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}`, { signal }));
+export const cancelOntSignalIdealComparison = (comparisonJobId: string) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/cancel`));
+export const createFreshOntSignalIdealComparisonAttempt = (comparisonJobId: string) =>
+    apiData(api.post<OntSignalComparisonJob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/fresh-attempt`));
+export const fetchOntSignalComparisonArtifact = (comparisonJobId: string, artifactId: string) =>
+    apiData(api.get<Blob>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/artifacts/${encodeURIComponent(artifactId)}`, {
+        responseType: 'blob', withCredentials: false,
+    }));
+export const createOntSignalComparisonReview = (comparisonJobId: string, request: {
+    predecessor_review_id: string | null; review_question: string;
+    required_outcome: OntSignalComparisonReview['required_outcome']; note: string;
+    reviewed_start: number; reviewed_end: number;
+}) => apiData(api.post<OntSignalComparisonReview>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/reviews`, request));
+export const fetchOntSignalComparisonReviews = (comparisonJobId: string) =>
+    apiData(api.get<{ items: OntSignalComparisonReview[] }>(`${signalWorkbenchRoot}/comparisons/${encodeURIComponent(comparisonJobId)}/reviews`))
+        .then((response) => response.items);
+
+export const createOntSignalViewerSession = (request: OntSignalViewerSessionCreate) =>
+    apiData(api.post<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions`, request));
+export const fetchOntSignalViewerSession = (viewerSessionId: string) =>
+    apiData(api.get<OntSignalViewerSession>(`${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`));
+export const updateOntSignalViewerSession = (
+    viewerSessionId: string,
+    request: OntSignalViewerSessionUpdate,
+    signal?: AbortSignal,
+) => apiData(api.patch<OntSignalViewerSession>(
+    `${signalWorkbenchRoot}/viewer-sessions/${encodeURIComponent(viewerSessionId)}`,
+    request,
+    { signal },
+));
+
+export type ProjectHubSection = 'overview' | 'plasmids' | 'sequence-data' | 'experiments' | 'results' | 'activity';
+export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change';
+export type ProjectHubMapTone = 'accent' | 'success' | 'info' | 'warning' | 'secondary';
+
+export interface ProjectHubMapSegment {
+    start: number;
+    end: number;
+    tone: ProjectHubMapTone;
+    label: string;
+    feature_type: string;
+    strand: 'forward' | 'reverse' | 'unknown';
+}
+
+export interface ProjectHubPlasmidSummary {
+    sequence_id: string;
+    revision_id: string;
+    receipt_id: string;
+    receipt_sha256: string;
+    content_digest: string;
+    source_store_id: string;
+    schema_name: string;
+    revision_number: number;
+    name: string;
+    description: string;
+    availability: string;
+    unavailable_reason: string | null;
+    length_bp: number;
+    gc_percent: number | null;
+    feature_count: number;
+    feature_labels: string[];
+    cmv_promoter: boolean | null;
+    neor_kanr: boolean | null;
+    replication_origin_count: number | null;
+    saved_experiment_count: number;
+    molecule_type?: string;
+    topology?: string;
+    organism_host_context: string | null;
+    project_tags: string[];
+    project_notes: string;
+    reopen_href: string;
+    map_segments: ProjectHubMapSegment[];
+}
+
+export interface ProjectHubSequenceDataItem {
+    id: string;
+    plasmid_sequence_id: string;
+    plasmid_name: string;
+    kind: 'run' | 'read_set' | 'alignment' | 'clone_assessment' | 'viewer_evidence';
+    title: string;
+    summary: string;
+    status: string;
+    created_at: string;
+    reopen_href: string;
+}
+
+export interface ProjectHubExperimentSummary {
+    id: string;
+    persistence: 'saved' | 'unsaved';
+    kind: ProjectHubExperimentKind;
+    plasmid_sequence_id: string;
+    plasmid_sequence_ids: string[];
+    plasmid_name: string;
+    title: string;
+    status: string;
+    created_at: string;
+    reopen_href: string | null;
+}
+
+export interface ProjectHubResultSummary {
+    id: string;
+    plasmid_name: string;
+    type: string;
+    status: string;
+    owner: string;
+    created_at: string;
+    summary: string | null;
+    reopen_href: string;
+}
+
+export interface ProjectHubActivitySummary {
+    id: string;
+    summary: string;
+    occurred_at: string;
+    technical_event_type: string;
+    receipt_id: string;
+    envelope_sha256: string;
+}
+
+export interface ProjectHubReadModel {
+    schema: 'bms.project-hub.v1';
+    project: {
+        id: string;
+        name: string;
+        objective: string;
+        lifecycle_state: string;
+        created_at: string;
+        plasmid_count: number;
+        settings_href: string;
+        add_plasmid_href: string;
+    };
+    identity: {
+        workspace_id: string;
+        global_experiment_id: string;
+        domain_experiment_id: string;
+        selected_state_revision_id: string;
+        current_state_revision_id: string;
+        state_head_generation: number;
+        global_domain_revision_id: string;
+        membership_graph_sha256: string;
+        binding_status: string;
+        adapter_status: string;
+    };
+    plasmids: ProjectHubPlasmidSummary[];
+    sequence_data: {
+        items: ProjectHubSequenceDataItem[];
+        import_href: string;
+        launcher_href: string;
+    };
+    experiments: ProjectHubExperimentSummary[];
+    results: ProjectHubResultSummary[];
+    activity: ProjectHubActivitySummary[];
+}
+
+export interface ProjectHubPlasmidInfoDraft {
+    name: string;
+    molecule_type: string;
+    topology: string;
+    description: string;
+    organism_host_context: string | null;
+    project_tags: string[];
+    project_notes: string;
+}
+
+export interface UpdateProjectHubPlasmidInfoRequest {
+    expected_molecular_revision_id: string;
+    expected_state_revision_id: string;
+    expected_state_head_generation: number;
+    idempotency_key: string;
+    molecular_fields: Pick<ProjectHubPlasmidInfoDraft, 'name' | 'molecule_type' | 'topology' | 'description' | 'organism_host_context'>;
+    project_metadata: Pick<ProjectHubPlasmidInfoDraft, 'project_tags' | 'project_notes'>;
+}
+
+const projectHubRoot = (projectId: string, experimentId: string, domainId: string) =>
+    `/api/projects/${encodeURIComponent(projectId)}/experiments/${encodeURIComponent(experimentId)}/domains/${encodeURIComponent(domainId)}/project-hub`;
+
+export const fetchProjectHub = (
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    stateRevisionId: string,
+    signal?: AbortSignal,
+) => apiData(api.get<ProjectHubReadModel>(projectHubRoot(projectId, experimentId, domainId), {
+    params: { state_revision_id: stateRevisionId },
+    signal,
+}));
+
+export const updateProjectHubPlasmidInfo = (
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    sequenceId: string,
+    request: UpdateProjectHubPlasmidInfoRequest,
+) => apiData(api.post<ProjectHubReadModel>(
+    `${projectHubRoot(projectId, experimentId, domainId)}/plasmids/${encodeURIComponent(sequenceId)}/info`,
+    request,
+));

@@ -6,22 +6,35 @@ import {
     fetchPowerControl,
     fetchSchedulerConfig,
     fetchSystemStatus,
-    fetchTelemetryHistory,
+    fetchTelemetryChartHistory,
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
+import {
+    isRenderableTelemetryChartPoint,
+    mergeTelemetryChartHistory,
+    resolveTelemetryChartCursor,
+} from '../lib/telemetryChart';
+import type {
+    TelemetryChartHistoryResponse,
+    TelemetryChartPoint,
+} from '../lib/telemetryChart';
 import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
+    isTelemetryHistoryFresh,
     isValidPollPreset,
     loadPersistedTelemetryPreferences,
     parseTelemetryTimestampMs,
     persistTelemetryPreferences,
-    resampleTelemetrySamples,
     resolveTelemetryBucketIntervalMs,
     resolveTelemetryDisplayIntervalMs,
+    resolveTelemetryFreshnessObservedAtMs,
     resolveTelemetryGapBreakMs,
+    resolveTelemetryNominalDomain,
+    resolveTelemetryPlotDomain,
+    resolveTelemetryStaleAfterMs,
     resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
 import type {
@@ -1303,34 +1316,129 @@ function GpuPanel({
     );
 }
 
-function buildSample(payload: SystemStatus, pollIntervalMs: PollPreset, authoritativeTimestampMs?: number): LiveSample {
+function buildChartSample(point: TelemetryChartPoint, pollIntervalMs: PollPreset): LiveSample {
     const gpu: LiveSample['gpu'] = {};
-    const timestampMs = authoritativeTimestampMs ?? parseTelemetryTimestampMs(payload.timestamp);
-    payload.gpus.forEach((item) => {
+    point.gpus.forEach((item) => {
         gpu[item.index] = {
-            util: item.utilization,
-            vram: Number(((item.memory_used_mb + item.reserved_memory_mb) / 1024).toFixed(3)),
-            power: item.power_draw_w,
-            temp: item.temperature,
+            util: item.utilization!,
+            vram: item.vram_gb!,
+            power: item.power_draw_w!,
+            temp: item.temperature!,
         };
     });
-
+    const timestamp = new Date(point.timestamp_ms).toISOString();
     return {
-        timestamp: new Date(timestampMs).toISOString(),
-        timestampMs,
+        timestamp,
+        timestampMs: point.timestamp_ms,
         pollIntervalMs,
-        clock: formatClock(new Date(timestampMs).toISOString()),
-        cpuUtil: payload.cpu.utilization,
-        cpuFreqMhz: payload.cpu.frequency_current_mhz,
-        cpuPower: payload.cpu.power_watts,
-        cpuTemp: payload.cpu.temperature,
-        ramUsed: payload.ram.used_gb,
-        ramFree: payload.ram.available_gb,
-        ramUtil: payload.ram.utilization,
-        ramSwap: payload.ram.swap_percent,
+        clock: formatClock(timestamp),
+        cpuUtil: point.cpu_utilization!,
+        cpuFreqMhz: point.cpu_frequency_current_mhz!,
+        cpuPower: point.cpu_power_watts,
+        cpuTemp: point.cpu_temperature,
+        ramUsed: point.ram_used_gb!,
+        ramFree: point.ram_available_gb!,
+        ramUtil: point.ram_utilization!,
+        ramSwap: point.ram_swap_percent!,
         gpu,
     };
 }
+
+function HistoricalTelemetryFallback({
+    samples,
+    showXAxisLabels,
+    compact,
+    traceType,
+    gapBreakMs,
+    redrawKey,
+    xDomain,
+}: {
+    samples: LiveSample[];
+    showXAxisLabels: boolean;
+    compact: boolean;
+    traceType: 'scatter' | 'scattergl';
+    gapBreakMs: number;
+    redrawKey: string | number;
+    xDomain: [number, number];
+}) {
+    const cpuTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
+    const ramTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.ramUtil);
+    const gpuIndexes = [...new Set(
+        samples.flatMap((sample) => Object.keys(sample.gpu).map(Number)),
+    )].sort((left, right) => left - right);
+    const gpuColors = [UI_SUCCESS, UI_LINK, UI_WARNING, UI_ACCENT, '#f472b6', '#a78bfa'];
+
+    return (
+        <div className={compact ? 'space-y-2' : 'space-y-6'}>
+            <PanelFrame title="Historical CPU and RAM Utilization" compact={compact}>
+                <TimeSeriesPlot
+                    height={compact ? 168 : 256}
+                    samples={samples}
+                    yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
+                    compact={compact}
+                    redrawKey={`${redrawKey}:historical-host`}
+                    xDomain={xDomain}
+                    series={[
+                        {
+                            x: cpuTrace.x,
+                            y: cpuTrace.y,
+                            mode: 'lines',
+                            name: 'CPU',
+                            line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
+                            hovertemplate: 'CPU %{y:.1f}%<extra></extra>',
+                        },
+                        {
+                            x: ramTrace.x,
+                            y: ramTrace.y,
+                            mode: 'lines',
+                            name: 'RAM',
+                            line: { color: UI_LINK, width: 1.4, shape: 'linear', simplify: false },
+                            hovertemplate: 'RAM %{y:.1f}%<extra></extra>',
+                        },
+                    ]}
+                    showXAxisLabels={showXAxisLabels}
+                    traceType={traceType}
+                />
+            </PanelFrame>
+
+            {gpuIndexes.length > 0 ? (
+                <PanelFrame title="Historical GPU Utilization" compact={compact}>
+                    <TimeSeriesPlot
+                        height={compact ? 168 : 256}
+                        samples={samples}
+                        yAxis={{ title: 'Utilization', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
+                        compact={compact}
+                        redrawKey={`${redrawKey}:historical-gpu`}
+                        xDomain={xDomain}
+                        series={gpuIndexes.map((gpuIndex, position) => {
+                            const trace = buildGapAwareTraceData(
+                                samples,
+                                gapBreakMs,
+                                (sample) => sample.gpu[gpuIndex]?.util ?? null,
+                            );
+                            return {
+                                x: trace.x,
+                                y: trace.y,
+                                mode: 'lines',
+                                name: `GPU ${gpuIndex}`,
+                                line: {
+                                    color: gpuColors[position % gpuColors.length],
+                                    width: 1.45,
+                                    shape: 'linear',
+                                    simplify: false,
+                                },
+                                hovertemplate: `GPU ${gpuIndex} %{y:.1f}%<extra></extra>`,
+                            };
+                        })}
+                        showXAxisLabels={showXAxisLabels}
+                        traceType={traceType}
+                    />
+                </PanelFrame>
+            ) : null}
+        </div>
+    );
+}
+
 
 export function InfraControlStateCollector() {
     useQuery({
@@ -1381,25 +1489,41 @@ export function InfraLiveTelemetry({
     const usesRangeAwareDisplay = windowMinutes >= 10;
     const displayIntervalMs = resolveTelemetryDisplayIntervalMs(windowMinutes, pollIntervalMs);
     const bucketIntervalMs = resolveTelemetryBucketIntervalMs(windowMinutes);
+    const historyQueryKey = [
+        'compact-telemetry-chart-history',
+        windowMinutes,
+        displayIntervalMs,
+        bucketIntervalMs,
+    ] as const;
     const historyQuery = useQuery({
-        queryKey: ['immutable-telemetry-history', windowMinutes, displayIntervalMs, bucketIntervalMs],
+        queryKey: historyQueryKey,
         queryFn: async () => {
             const nowMs = Date.now();
-            const requestEndMs = nowMs + 1_000;
             const [stableStartMs, stableEndMs] = resolveTelemetryWindowBounds(
                 nowMs,
                 windowMinutes,
                 displayIntervalMs,
             );
-            const rawHistory = await fetchTelemetryHistory(stableStartMs, requestEndMs, 'raw', 4000);
-            return {
-                ...rawHistory,
-                data: {
-                    ...rawHistory.data,
-                    start_ms: stableStartMs,
-                    end_ms: stableEndMs,
-                },
-            };
+            const requestEndMs = stableEndMs;
+            const previous = queryClient.getQueryData<TelemetryChartHistoryResponse>(historyQueryKey);
+            const cursor = resolveTelemetryChartCursor(
+                previous,
+                stableStartMs,
+                requestEndMs,
+                bucketIntervalMs,
+            );
+            const chartHistory = await fetchTelemetryChartHistory(
+                stableStartMs,
+                requestEndMs,
+                bucketIntervalMs,
+                cursor,
+            );
+            return mergeTelemetryChartHistory(
+                cursor == null ? undefined : previous,
+                chartHistory.data,
+                stableStartMs,
+                stableEndMs,
+            );
         },
         placeholderData: (previousData) => {
             if (!previousData) return undefined;
@@ -1408,14 +1532,12 @@ export function InfraLiveTelemetry({
                 windowMinutes,
                 displayIntervalMs,
             );
-            return {
-                ...previousData,
-                data: {
-                    ...previousData.data,
-                    start_ms: stableStartMs,
-                    end_ms: stableEndMs,
-                },
-            };
+            return mergeTelemetryChartHistory(
+                undefined,
+                previousData,
+                stableStartMs,
+                stableEndMs,
+            );
         },
         refetchInterval: displayIntervalMs,
         refetchIntervalInBackground: false,
@@ -1428,19 +1550,42 @@ export function InfraLiveTelemetry({
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
-    const historyPoints = historyQuery.data?.data.points ?? [];
-    const rawSamples = historyPoints.map((point) => buildSample(point.payload, 1000, point.timestamp_ms));
-    const samples = resampleTelemetrySamples(rawSamples, bucketIntervalMs);
+    const historyPoints = historyQuery.data?.points ?? [];
+    const samples = historyPoints
+        .filter(isRenderableTelemetryChartPoint)
+        .map((point) => buildChartSample(point, 1000));
     const latestPoint = historyPoints.at(-1);
-    const payload = liveStatusQuery.data?.data ?? latestPoint?.payload;
-    const staleAfterMs = Math.max(10_000, pollIntervalMs * 5);
-    const historyIsStale = Boolean(
-        latestPoint && (historyQuery.data?.data.generated_at_ms ?? Date.now()) - latestPoint.timestamp_ms > staleAfterMs,
+    const payload = liveStatusQuery.isError ? undefined : liveStatusQuery.data?.data;
+    const latestTimestampMs = historyQuery.data?.next_cursor_ms ?? latestPoint?.timestamp_ms ?? null;
+    const staleAfterMs = resolveTelemetryStaleAfterMs(pollIntervalMs);
+    const freshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
+        historyQuery.data?.generated_at_ms ?? historyQuery.dataUpdatedAt,
+        liveStatusQuery.data?.data.timestamp
+            ? parseTelemetryTimestampMs(liveStatusQuery.data.data.timestamp)
+            : Number.NaN,
+        historyQuery.isError ? historyQuery.errorUpdatedAt : Number.NaN,
+        liveStatusQuery.isError ? liveStatusQuery.errorUpdatedAt : Number.NaN,
     );
-    const xDomain: [number, number] = [
-        historyQuery.data?.data.start_ms ?? Date.now() - windowMinutes * 60_000,
-        historyQuery.data?.data.end_ms ?? Date.now(),
-    ];
+    const historyIsFresh = isTelemetryHistoryFresh(
+        latestTimestampMs ?? undefined,
+        freshnessObservedAtMs,
+        staleAfterMs,
+        historyQuery.isError || liveStatusQuery.isError,
+    );
+    const historyIsStale = Boolean(latestPoint) && !historyIsFresh;
+    const nominalXDomain = resolveTelemetryNominalDomain(
+        historyQuery.data?.start_ms,
+        historyQuery.data?.end_ms,
+        freshnessObservedAtMs,
+        windowMinutes,
+        displayIntervalMs,
+        historyQuery.isError || historyIsStale,
+    );
+    const xDomain = resolveTelemetryPlotDomain(
+        nominalXDomain,
+        samples.at(-1)?.timestampMs,
+        historyIsFresh,
+    );
 
     const { data: powerControlData } = useQuery({
         queryKey: SHARED_POWER_CONTROL_QUERY_KEY,
@@ -1518,11 +1663,11 @@ export function InfraLiveTelemetry({
         return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
-    const latestTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
+    const latestVisibleTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
     const visibleSamples =
-        Number.isNaN(latestTimestampMs)
+        Number.isNaN(latestVisibleTimestampMs)
             ? samples
-            : samples.filter((sample) => sample.timestampMs >= latestTimestampMs - windowMinutes * 60 * 1000);
+            : samples.filter((sample) => sample.timestampMs >= latestVisibleTimestampMs - windowMinutes * 60 * 1000);
     const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
     const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
@@ -1598,7 +1743,7 @@ export function InfraLiveTelemetry({
                 </div>
             )}
 
-            {!payload && historyQuery.isPending && (
+            {!payload && liveStatusQuery.isPending && historyPoints.length === 0 && (
                 <div className="rounded-2xl border border-[var(--border-primary)] bg-[var(--bg-secondary)]/70 p-5 text-sm text-[var(--text-secondary)]">
                     Loading live telemetry...
                 </div>
@@ -1610,10 +1755,28 @@ export function InfraLiveTelemetry({
                 </div>
             )}
 
-            {!historyQuery.isPending && !historyQuery.isError && !payload && (
+            {!historyQuery.isPending && !historyQuery.isError && !payload && historyPoints.length === 0 && (
                 <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5 text-sm text-amber-100">
                     No telemetry samples are available for this window.
                 </div>
+            )}
+
+            {liveStatusQuery.isError && historyPoints.length > 0 && (
+                <div className="mb-3 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    Live status unavailable. Historical charts remain available.
+                </div>
+            )}
+
+            {!payload && historyPoints.length > 0 && (
+                <HistoricalTelemetryFallback
+                    samples={visibleSamples}
+                    showXAxisLabels={showXAxisLabels}
+                    compact={compact && dashboardSizing.compactFrame}
+                    traceType={traceType}
+                    gapBreakMs={gapBreakMs}
+                    redrawKey={plotRedrawKey}
+                    xDomain={xDomain}
+                />
             )}
 
             {historyIsStale && (

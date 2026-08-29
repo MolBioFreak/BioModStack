@@ -595,7 +595,7 @@ export function AnalyticsDashboard({ designs, jobName, jobId, preferredAnalysisL
                             ? 'boltzgen'
                             : contractId === 'sequence_design_v1'
                                 ? 'fampnn'
-                                : contractId === 'structure_prediction_v1'
+                                : contractId === 'structure_prediction_v1' || contractId === 'protein_local_redesign_validation_v1'
                                     ? 'validation'
                                     : null;
                 return [design.id, lens] as const;

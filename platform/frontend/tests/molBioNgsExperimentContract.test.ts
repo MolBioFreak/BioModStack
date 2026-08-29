@@ -126,7 +126,7 @@ test('Nanopore launch uses immutable managed reference identity and full job det
     assert.match(ontRouter, /resolve_managed_reference_for_launch/);
 
     assert.match(ngs, /fetchFullJob\(selectedJobId as string\)/);
-    assert.match(ngs, /const selectedJob = fullJobQuery\.data \?\? null/);
+    assert.match(ngs, /const selectedJob = fullJobQuery\.data && isNgsJob\(fullJobQuery\.data\) \? fullJobQuery\.data : null/);
     assert.match(ngs, /disabled=\{!fullJobQuery\.isSuccess/);
     assert.match(ngs, /updateQueryParams\(\{ job_id:/);
 });
@@ -141,7 +141,7 @@ test('history, PCR, runs, and evidence remain immutable and typed', () => {
 
     assert.match(history, /Server immutable revision history/);
     assert.match(history, /Local edit\/undo history/);
-    assert.match(toolkit, /Open current editable projection/);
+    assert.match(toolkit, /Open latest editable version/);
     assert.match(toolkit, /isExactMolecularAuthority/);
 
     assert.match(pcr, /Persist immutable PCR revision/);

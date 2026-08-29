@@ -128,6 +128,7 @@ class OntWorkflowSpec:
     input_modes: tuple[str, ...]
     artifact_kinds: tuple[str, ...]
     lifecycle: str
+    artifact_conditions: tuple[tuple[str, tuple[str, ...]], ...] = ()
     family_id: str = ONT_NGS_FAMILY_ID
     analysis_owner: str = ANALYSIS_OWNER
     device_control_owner: str = DEVICE_CONTROL_OWNER
@@ -195,7 +196,7 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
     "ont_construct_screening": OntWorkflowSpec(
         workflow_id="ont_construct_screening",
         display_name="ONT Construct Screening",
-        description="Construct screening via CloneValidation over ONT POD5/BAM/FASTQ reads with truthful consensus/variant evidence contracts.",
+        description="Construct screening aligns ONT POD5/BAM/FASTQ reads and always exposes alignment evidence; optional run_assembly=true adds CloneValidation assembly/report artifacts, while FASTQ run_fastq_qc controls plasmid QC evidence.",
         input_modes=("pod5", "bam", "fastq"),
         artifact_kinds=(
             "raw_reads",
@@ -210,6 +211,9 @@ CANONICAL_ONT_WORKFLOWS: dict[str, OntWorkflowSpec] = {
             "clone_validation_report",
             "construct_screening_summary",
             "plasmid_qc_summary",
+        ),
+        artifact_conditions=(
+            ("run_assembly=true", ("clone_validation_assembly", "clone_validation_report")),
         ),
         lifecycle="seed",
     ),
@@ -318,6 +322,24 @@ ONT_WORKFLOW_ALIASES = {
 }
 
 
+WF_CLONE_DEFAULTS: dict[str, Any] = {
+    "wf_clone_assembly_tool": "flye",
+    "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
+    "wf_clone_large_construct": False,
+    "wf_clone_approx_size": 7000,
+    "wf_clone_assm_coverage": 60,
+    "wf_clone_trim_length": 0,
+    "wf_clone_min_quality": 9,
+    "wf_clone_flye_quality": "nano-hq",
+    "wf_clone_non_uniform_coverage": False,
+    "wf_clone_canu_fast": False,
+    "wf_clone_cutsite_mismatch": 1,
+    "wf_clone_primer_mismatch": 2,
+    "wf_clone_expected_coverage": 95.0,
+    "wf_clone_expected_identity": 99.0,
+}
+
+
 WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
     "ont_basecall_dna": {
         "ont_molecule_type": "dna",
@@ -342,6 +364,7 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
         "ont_molecule_type": "dna",
         "run_modkit": False,
         "run_fastq_qc": True,
+        "run_assembly": False,
         "fastq_minimap2_preset": "map-ont",
         "modified_bases": "none",
     },
@@ -363,10 +386,9 @@ WORKFLOW_DEFAULTS: dict[str, dict[str, Any]] = {
         "ont_molecule_type": "dna",
         "run_modkit": False,
         "run_fastq_qc": True,
+        "run_assembly": True,
         "modified_bases": "none",
-        "wf_clone_assembly_tool": "flye",
-        "wf_clone_basecaller_model": "dna_r10.4.1_e8.2_400bps_hac@v5.0.0",
-        "wf_clone_min_quality": 9,
+        **WF_CLONE_DEFAULTS,
     },
 }
 
@@ -386,12 +408,121 @@ def get_ont_workflow_spec(workflow_id: str) -> OntWorkflowSpec:
         raise KeyError(f"unknown ONT/NGS workflow: {workflow_id!r}") from exc
 
 
+def _normalize_wf_clone_controls(normalized: dict[str, Any]) -> None:
+    """Normalize the one shared bounded wf-clone operator contract in place."""
+    for key, default in WF_CLONE_DEFAULTS.items():
+        normalized.setdefault(key, default)
+    normalized.pop("wf_clone_analyse_unclassified", None)
+
+    assembly_tool = str(normalized.get("wf_clone_assembly_tool") or "").strip()
+    if assembly_tool not in {"flye", "canu"}:
+        raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
+    model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
+    accepted_model = str(WF_CLONE_DEFAULTS["wf_clone_basecaller_model"])
+    if model_id != accepted_model:
+        raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
+    normalized["wf_clone_assembly_tool"] = assembly_tool
+    normalized["wf_clone_basecaller_model"] = model_id
+
+    def clone_bool(name: str) -> bool:
+        value = normalized.get(name, WF_CLONE_DEFAULTS[name])
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be boolean")
+        return value
+
+    def clone_int(name: str, minimum: int, maximum: int | None = None) -> int:
+        value = normalized.get(name, WF_CLONE_DEFAULTS[name])
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < minimum
+            or (maximum is not None and value > maximum)
+        ):
+            if maximum is None:
+                raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
+            raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+        return value
+
+    def clone_number(name: str, minimum: float, maximum: float) -> float:
+        value = normalized.get(name, WF_CLONE_DEFAULTS[name])
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be a number from {minimum:g} through {maximum:g}")
+        return float(value)
+
+    flye_quality = str(normalized.get("wf_clone_flye_quality") or "").strip()
+    if flye_quality not in {"nano-hq", "nano-corr", "nano-raw"}:
+        raise ValueError("wf_clone_flye_quality must be nano-hq, nano-corr, or nano-raw")
+    normalized["wf_clone_flye_quality"] = flye_quality
+    normalized["wf_clone_large_construct"] = clone_bool("wf_clone_large_construct")
+    normalized["wf_clone_non_uniform_coverage"] = clone_bool("wf_clone_non_uniform_coverage")
+    normalized["wf_clone_canu_fast"] = clone_bool("wf_clone_canu_fast")
+    normalized["wf_clone_approx_size"] = clone_int("wf_clone_approx_size", 1)
+    normalized["wf_clone_assm_coverage"] = clone_int("wf_clone_assm_coverage", 1)
+    normalized["wf_clone_trim_length"] = clone_int("wf_clone_trim_length", 0)
+    normalized["wf_clone_min_quality"] = clone_int("wf_clone_min_quality", 0, 60)
+    normalized["wf_clone_cutsite_mismatch"] = clone_int("wf_clone_cutsite_mismatch", 0, 10)
+    normalized["wf_clone_primer_mismatch"] = clone_int("wf_clone_primer_mismatch", 0, 10)
+    normalized["wf_clone_expected_coverage"] = clone_number("wf_clone_expected_coverage", 0, 100)
+    normalized["wf_clone_expected_identity"] = clone_number("wf_clone_expected_identity", 0, 100)
+
+    primers = str(normalized.get("wf_clone_primers") or "").strip()
+    insert_reference = str(normalized.get("wf_clone_insert_reference") or "").strip()
+    host_reference = str(normalized.get("wf_clone_host_reference") or "").strip()
+    regions_bedfile = str(normalized.get("wf_clone_regions_bedfile") or "").strip()
+    if insert_reference and not primers:
+        raise ValueError("wf_clone_insert_reference requires wf_clone_primers")
+    if regions_bedfile and not host_reference:
+        raise ValueError("wf_clone_regions_bedfile requires wf_clone_host_reference")
+    for key, value in (
+        ("wf_clone_primers", primers),
+        ("wf_clone_insert_reference", insert_reference),
+        ("wf_clone_host_reference", host_reference),
+        ("wf_clone_regions_bedfile", regions_bedfile),
+    ):
+        if value:
+            normalized[key] = value
+        else:
+            normalized.pop(key, None)
+
+
 def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | None) -> dict[str, Any]:
     """Apply canonical ONT product/quality defaults without mutating caller params."""
     canonical_id = resolve_ont_workflow_alias(workflow_id)
     spec = get_ont_workflow_spec(canonical_id)
     normalized: dict[str, Any] = dict(WORKFLOW_DEFAULTS.get(canonical_id, {}))
     normalized.update(dict(params or {}))
+
+    if canonical_id == "ont_fastq_qc":
+        def fastq_bool(name: str, default: bool) -> bool:
+            value = normalized.get(name, default)
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be boolean")
+            return value
+
+        def fastq_int(name: str, default: int, minimum: int, maximum: int) -> int:
+            value = normalized.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
+            return value
+
+        normalized["ont_workflow_id"] = spec.workflow_id
+        normalized["enable_rotating_reference_frames"] = fastq_bool("enable_rotating_reference_frames", True)
+        normalized["rotation_scan_step_bp"] = fastq_int("rotation_scan_step_bp", 1, 1, 10_000)
+        normalized["single_ref_split_min_mapq"] = fastq_int("single_ref_split_min_mapq", 20, 0, 60)
+        normalized["single_ref_split_min_segment_bp"] = fastq_int("single_ref_split_min_segment_bp", 250, 1, 1_000_000)
+        normalized["single_ref_split_max_query_gap_bp"] = fastq_int("single_ref_split_max_query_gap_bp", 500, 0, 1_000_000)
+        normalized["manifest_contract"] = MANIFEST_SCHEMA
+        for key in list(normalized):
+            if (
+                key.startswith(("dorado_", "gpu_", "msa_", "anarcii_"))
+                or key in {
+                    "basecalling_mode", "barcode_kit", "sample_sheet", "duplex_pairs",
+                    "modified_bases", "min_qscore", "pinned_gpu", "pinned_gpus",
+                    "cuda_visible_devices", "cpus_per_gpu",
+                }
+            ):
+                normalized.pop(key, None)
+        return normalized
 
     lock_bytes = DORADO_LOCK_PATH.read_bytes()
     lock = json.loads(lock_bytes)
@@ -503,66 +634,23 @@ def normalize_ont_launch_params(workflow_id: str, params: Mapping[str, Any] | No
     normalized["dorado_lock_sha256"] = current_lock_sha256
     normalized["dorado_device"] = ONT_QUALITY_MODE_CONTRACT["default_device"]
     normalized["manifest_contract"] = MANIFEST_SCHEMA
+    raw_emit_moves = normalized.get("emit_moves", basecall_mode == "simplex")
+    if not isinstance(raw_emit_moves, bool):
+        raise ValueError("emit_moves must be boolean")
+    if basecall_mode == "duplex" and raw_emit_moves:
+        raise ValueError("emit_moves is unavailable for duplex until move-tag semantics are qualified")
+    normalized["emit_moves"] = raw_emit_moves
 
-    if canonical_id == "wf_clone_validation":
-        normalized.pop("wf_clone_analyse_unclassified", None)
-        assembly_tool = str(normalized.get("wf_clone_assembly_tool") or "").strip()
-        if assembly_tool not in {"flye", "canu"}:
-            raise ValueError("wf_clone_assembly_tool must preserve an exact supported value: flye or canu")
-        model_id = str(normalized.get("wf_clone_basecaller_model") or "").strip()
-        accepted_model = "dna_r10.4.1_e8.2_400bps_hac@v5.0.0"
-        if model_id != accepted_model:
-            raise ValueError(f"wf_clone_basecaller_model must equal the locked exact identity {accepted_model}")
-        normalized["wf_clone_assembly_tool"] = assembly_tool
-        normalized["wf_clone_basecaller_model"] = model_id
-
-        def clone_bool(name: str, default: bool = False) -> bool:
-            value = normalized.get(name, default)
-            if not isinstance(value, bool):
-                raise ValueError(f"{name} must be boolean")
-            return value
-
-        def clone_int(name: str, default: int, minimum: int, maximum: int) -> int:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be an integer from {minimum} through {maximum}")
-            return value
-
-        def clone_number(name: str, default: float, minimum: float, maximum: float) -> float:
-            value = normalized.get(name, default)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not minimum <= value <= maximum:
-                raise ValueError(f"{name} must be a number from {minimum:g} through {maximum:g}")
-            return float(value)
-
-        flye_quality = str(normalized.get("wf_clone_flye_quality") or "nano-hq").strip()
-        if flye_quality not in {"nano-hq", "nano-corr", "nano-raw"}:
-            raise ValueError("wf_clone_flye_quality must be nano-hq, nano-corr, or nano-raw")
-        normalized["wf_clone_flye_quality"] = flye_quality
-        normalized["wf_clone_non_uniform_coverage"] = clone_bool("wf_clone_non_uniform_coverage")
-        normalized["wf_clone_canu_fast"] = clone_bool("wf_clone_canu_fast")
-        normalized["wf_clone_min_quality"] = clone_int("wf_clone_min_quality", 9, 0, 60)
-        normalized["wf_clone_cutsite_mismatch"] = clone_int("wf_clone_cutsite_mismatch", 1, 0, 10)
-        normalized["wf_clone_primer_mismatch"] = clone_int("wf_clone_primer_mismatch", 2, 0, 10)
-        normalized["wf_clone_expected_coverage"] = clone_number("wf_clone_expected_coverage", 95, 0, 100)
-        normalized["wf_clone_expected_identity"] = clone_number("wf_clone_expected_identity", 99, 0, 100)
-        primers = str(normalized.get("wf_clone_primers") or "").strip()
-        insert_reference = str(normalized.get("wf_clone_insert_reference") or "").strip()
-        host_reference = str(normalized.get("wf_clone_host_reference") or "").strip()
-        regions_bedfile = str(normalized.get("wf_clone_regions_bedfile") or "").strip()
-        if insert_reference and not primers:
-            raise ValueError("wf_clone_insert_reference requires wf_clone_primers")
-        if regions_bedfile and not host_reference:
-            raise ValueError("wf_clone_regions_bedfile requires wf_clone_host_reference")
-        for key, value in (
-            ("wf_clone_primers", primers),
-            ("wf_clone_insert_reference", insert_reference),
-            ("wf_clone_host_reference", host_reference),
-            ("wf_clone_regions_bedfile", regions_bedfile),
-        ):
-            if value:
-                normalized[key] = value
-            else:
-                normalized.pop(key, None)
+    if canonical_id == "ont_construct_screening":
+        run_assembly = normalized.get("run_assembly", False)
+        if not isinstance(run_assembly, bool):
+            raise ValueError("run_assembly must be boolean")
+        normalized["run_assembly"] = run_assembly
+        if run_assembly:
+            _normalize_wf_clone_controls(normalized)
+    elif canonical_id == "wf_clone_validation":
+        normalized["run_assembly"] = True
+        _normalize_wf_clone_controls(normalized)
 
     dimer_workflows = {"ont_plasmid_qc", "ont_construct_screening", "ont_fastq_qc", "wf_clone_validation"}
     if canonical_id in dimer_workflows:

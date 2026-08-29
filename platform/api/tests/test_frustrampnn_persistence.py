@@ -11,17 +11,21 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+import pyarrow.parquet as pq
 import rfc8785
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import (
     Base,
+    ConformationalMappingRequest,
     Design,
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     Job,
+    ScientificArtifactReceipt,
 )
 from services.frustrampnn.analysis import summarize_landscape
 from services.frustrampnn.contracts import (
@@ -29,6 +33,7 @@ from services.frustrampnn.contracts import (
     canonical_json_loads,
 )
 from services.frustrampnn.manifests import MANIFEST_PATH, build_result_manifest
+from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
 
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -115,6 +120,23 @@ def test_nonstatistics_persistence_keeps_existing_canonical_profile() -> None:
         )
 
 
+def test_landscape_invocation_authority_requires_complete_provenance() -> None:
+    persistence = _persistence()
+    complete = {
+        "landscape_sha256": "1" * 64,
+        "structure_map_sha256": "2" * 64,
+        "normalized_pdb_sha256": "3" * 64,
+        "raw_csv_sha256": "4" * 64,
+        "threshold_policy": {"id": "frustrampnn_class_v1"},
+        "threshold_policy_sha256": "5" * 64,
+    }
+
+    assert persistence._complete_landscape_invocation_authority(complete)
+    assert not persistence._complete_landscape_invocation_authority(
+        {key: value for key, value in complete.items() if key != "raw_csv_sha256"}
+    )
+
+
 def _load_json(root: Path, relative: str) -> dict:
     return canonical_json_loads((root / relative).read_bytes())
 
@@ -189,6 +211,33 @@ def _v2_bundle(
     )
     terminal = _load_json(root, "workflow_component_result_v2.json")
     return manifest, terminal
+
+
+def _v3_bundle(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict, dict]:
+    component = importlib.import_module("scripts.run_frustrampnn_component")
+    inputs = root.parent / f"{root.name}-inputs"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = COMPONENT_FIXTURE._v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+        request_generation=3,
+    )
+    request["schema_version"] = 3
+    request["component_contract_version"] = "3.0"
+    COMPONENT_FIXTURE._mock_v2_runtime(component, monkeypatch, inputs)
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=root,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    return manifest, _load_json(root, "workflow_component_result_v3.json")
 
 
 def _republish(root: Path) -> tuple[dict, dict]:
@@ -277,6 +326,68 @@ async def _seed_job(
         await session.commit()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_status", ["queued", "completed"])
+async def test_exact_source_link_accepts_typed_cm_candidate_without_design(
+    db, request_status: str,
+) -> None:
+    persistence = _persistence()
+    request_id = "cm-request"
+    job_id = "cm-retry-job"
+    coordinate = {
+        "backend": "confornets",
+        "target_id": "target-a",
+        "task": "diversity",
+        "test_case_id": "case-a",
+        "run_index": 0,
+        "sample_index": 0,
+        "saved_step": 0,
+        "confornet_index": 0,
+        "reference_id": None,
+    }
+    candidate_id = cm_candidate_id(coordinate)
+    async with db() as session:
+        job = Job(
+            id=job_id,
+            name="CM retry",
+            status="running",
+            queue_status="running",
+            model_id="conformational_mapping",
+            mode="map",
+            params={},
+            lineage_root_job_id=request_id,
+            stage_family="conformational_mapping",
+        )
+        request = ConformationalMappingRequest(
+            request_id=request_id,
+            job_id=job_id,
+            principal_id="alice",
+            backend="confornets",
+            status=request_status,
+            request_sha256="1" * 64,
+            coordinate_plan_sha256="2" * 64,
+            resume_key="3" * 64,
+            result_contract_id="conformational_mapping_confornets_v1",
+            request_json={},
+            coordinate_plan_json={"coordinates": [coordinate], "expected_cardinality": 1},
+            progress_json={"phase": "queued"},
+        )
+        session.add(job)
+        await session.flush()
+        session.add(request)
+        await session.commit()
+
+        assert await persistence._exact_design_link(
+            session,
+            source_artifact_id=candidate_id,
+            source_artifact_sha256="4" * 64,
+            normalized_source_sha256="5" * 64,
+            parent_job_id=job_id,
+            parent_workflow_id="conformational_mapping",
+            candidate_id=candidate_id,
+        ) is None
+
+
 async def _seed_v2_child_job(sessions: async_sessionmaker, root: Path) -> None:
     request = _load_json(root, "workflow_component_request_v2.json")
     async with sessions() as session:
@@ -306,6 +417,35 @@ async def _seed_v2_child_job(sessions: async_sessionmaker, root: Path) -> None:
         await session.commit()
 
 
+async def _seed_v3_child_job(sessions: async_sessionmaker, root: Path) -> None:
+    request = _load_json(root, "workflow_component_request_v3.json")
+    async with sessions() as session:
+        session.add(
+            Job(
+                id=request["parent_job_id"],
+                name=request["parent_job_id"],
+                status="completed",
+                model_id="frustrampnn",
+                mode="component",
+                output_dir=str(root.parent),
+                params={
+                    "_frustrampnn_child_v1": {
+                        "selection": [
+                            {
+                                "design_id": None,
+                                "source_job_id": None,
+                                "normalized_source_sha256": request[
+                                    "normalized_pdb_sha256"
+                                ],
+                            }
+                        ]
+                    }
+                },
+            )
+        )
+        await session.commit()
+
+
 async def _counts(session) -> tuple[int, int, int]:
     counts: list[int] = []
     for model in (FrustraMPNNResult, FrustraMPNNArtifact, FrustraMPNNLandscapeRow):
@@ -314,6 +454,307 @@ async def _counts(session) -> tuple[int, int, int]:
         ).scalar_one()
         counts.append(int(value))
     return counts[0], counts[1], counts[2]
+
+
+@pytest.mark.asyncio
+async def test_v3_core_ingestion_queues_statistics_child_in_same_transaction(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    root = tmp_path / "v3-core"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        children = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis))
+        ).scalars().all()
+        assert len(children) == 1
+        child = children[0]
+        assert child.state == "queued"
+        assert child.parent_job_id == result.parent_job_id
+        assert child.invocation_id == result.invocation_id
+        assert child.core_manifest_sha256 == result.manifest_sha256
+        assert child.core_landscape_sha256 == result.summary_json["landscape_sha256"]
+        assert child.core_bundle_relative_path == "v3-core"
+        artifact_receipt = await session.get(
+            ScientificArtifactReceipt,
+            child.core_artifact_id,
+        )
+        assert artifact_receipt is not None
+        assert artifact_receipt.role == "landscape"
+        assert artifact_receipt.owner_id == f"{result.parent_job_id}:{result.invocation_id}"
+
+
+@pytest.mark.asyncio
+async def test_statistics_worker_publishes_derived_artifact_without_rewriting_core(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    statistics_jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    root = tmp_path / "v3-statistics-worker"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        child = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis))
+        ).scalar_one()
+        core_authority = (
+            result.request_sha256,
+            result.manifest_sha256,
+            copy.deepcopy(result.manifest_json),
+            copy.deepcopy(result.terminal_result_json),
+        )
+        claimed = await statistics_jobs.claim_statistics_child(
+            session,
+            analysis_id=child.analysis_id,
+            claim_owner="persistence-test-worker",
+        )
+        await session.commit()
+        statistics = await statistics_jobs.run_statistics_child_once(
+            session,
+            analysis_id=child.analysis_id,
+            claim_token=claimed.claim_token,
+        )
+        await session.commit()
+
+        assert statistics["schema_version"] == 2
+        router = importlib.import_module("routers.frustrampnn")
+        assert (
+            router.FrustraMPNNStatisticsDocument.model_validate(statistics).root
+            == statistics
+        )
+        assert statistics["analysis_receipt"]["analysis_id"] == child.analysis_id
+        assert statistics["landscape_sha256"] == child.core_landscape_sha256
+        assert child.state == "completed"
+        assert child.statistics_sha256 == statistics["statistics_sha256"]
+        assert child.artifact_sha256 == result.statistics_json["content_sha256"]
+        statistics_receipt = await session.get(
+            ScientificArtifactReceipt,
+            result.statistics_json["artifact_id"],
+        )
+        assert statistics_receipt is not None
+        assert statistics_receipt.owner_kind == "frustrampnn_statistics_analysis"
+        assert statistics_receipt.owner_id == child.analysis_id
+        assert result.statistics_sha256 == statistics["statistics_sha256"]
+        assert result.comparison_compatibility_id == statistics[
+            "comparison_compatibility_id"
+        ]
+        assert (
+            result.request_sha256,
+            result.manifest_sha256,
+            result.manifest_json,
+            result.terminal_result_json,
+        ) == core_authority
+
+
+@pytest.mark.asyncio
+async def test_statistics_worker_adapter_claims_one_pending_child(
+    tmp_path: Path,
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persistence = _persistence()
+    statistics_jobs = importlib.import_module("services.frustrampnn.statistics_jobs")
+    root = tmp_path / "v3-statistics-adapter"
+    _, terminal = _v3_bundle(root, monkeypatch)
+    await _seed_v3_child_job(db, root)
+    async with db() as session:
+        result = await persistence.ingest_result_bundle(
+            session,
+            root,
+            parent_job_id="job-v2",
+            terminal_envelope=terminal,
+        )
+        analysis_id = (
+            await session.execute(select(FrustraMPNNStatisticsAnalysis.analysis_id))
+        ).scalar_one()
+        expected_statistics_hash = result.statistics_sha256
+
+    worker = statistics_jobs.FrustraMPNNStatisticsWorker(db)
+    processed = await worker.run_pending_once()
+    assert processed == analysis_id
+
+    async with db() as session:
+        child = await session.get(FrustraMPNNStatisticsAnalysis, analysis_id)
+        result = await session.get(FrustraMPNNResult, ("job-v2", "invoke-v2"))
+        assert child is not None and child.state == "completed"
+        assert result is not None and result.statistics_sha256 is not None
+        assert result.statistics_sha256 != expected_statistics_hash
+
+
+@pytest.mark.asyncio
+async def test_core_publication_flushes_parent_before_bounded_mapping_inserts(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _persistence()
+    _, terminal = _bundle(tmp_path / "parent-first-bundle")
+    await _seed_job(db)
+    statements: list[tuple[str, bool]] = []
+    engine = db.kw["bind"]
+    original_publish_table_rows = module.publish_table_rows
+
+    async def assert_parent_is_flushed(session, **kwargs):
+        parent = await session.get(FrustraMPNNResult, ("job-1", "invoke-1"))
+        assert parent is not None
+        return await original_publish_table_rows(session, **kwargs)
+
+    monkeypatch.setattr(module, "publish_table_rows", assert_parent_is_flushed)
+
+    def capture_statement(
+        _connection, _cursor, statement, _parameters, context, executemany
+    ) -> None:
+        normalized = " ".join(statement.lower().split())
+        if normalized.startswith("insert into"):
+            statements.append((normalized, bool(executemany)))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", capture_statement)
+    try:
+        async with db() as session:
+            await module.ingest_result_bundle(
+                session,
+                tmp_path / "parent-first-bundle",
+                parent_job_id="job-1",
+                terminal_envelope=terminal,
+                commit=False,
+            )
+            result_count = int(
+                (await session.execute(select(func.count()).select_from(FrustraMPNNResult))).scalar_one()
+            )
+            artifact_count = int(
+                (await session.execute(select(func.count()).select_from(FrustraMPNNArtifact))).scalar_one()
+            )
+            receipt_count = int(
+                (
+                    await session.execute(
+                        select(func.count()).select_from(ScientificArtifactReceipt).where(
+                            ScientificArtifactReceipt.owner_id == "job-1:invoke-1"
+                        )
+                    )
+                ).scalar_one()
+            )
+            assert (result_count, artifact_count, receipt_count) == (1, 10, 1)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", capture_statement)
+
+    result_insert = next(
+        index for index, (statement, _many) in enumerate(statements)
+        if statement.startswith("insert into frustrampnn_results")
+    )
+    receipt_insert = next(
+        index for index, (statement, _many) in enumerate(statements)
+        if statement.startswith("insert into scientific_artifact_receipts")
+    )
+    artifact_insert = next(
+        (index, many) for index, (statement, many) in enumerate(statements)
+        if statement.startswith("insert into frustrampnn_artifacts")
+    )
+    assert result_insert < artifact_insert[0]
+    assert result_insert < receipt_insert
+    assert artifact_insert[1] is True
+
+
+@pytest.mark.asyncio
+async def test_dense_parquet_stores_row_identity_without_repeated_invocation_provenance(
+    tmp_path: Path, db
+) -> None:
+    module = _persistence()
+    _, terminal = _bundle(tmp_path / "compact-provenance-bundle")
+    await _seed_job(db)
+
+    async with db() as session:
+        result = await module.ingest_result_bundle(
+            session,
+            tmp_path / "compact-provenance-bundle",
+            parent_job_id="job-1",
+            terminal_envelope=terminal,
+            commit=False,
+        )
+        receipt = await module._landscape_receipt(
+            session, result.parent_job_id, result.invocation_id
+        )
+        source_receipts = dict(receipt.source_receipts_json)
+        artifact_path = (
+            importlib.import_module("services.scientific_artifacts.writer").artifact_root()
+            / receipt.relative_path
+        )
+        schema_names = set(pq.read_schema(artifact_path).names)
+        page = await module.landscape_page(
+            session, result.parent_job_id, result.invocation_id, limit=1
+        )
+        raw_csv = (
+            await session.execute(
+                select(FrustraMPNNArtifact).where(
+                    FrustraMPNNArtifact.parent_job_id == result.parent_job_id,
+                    FrustraMPNNArtifact.invocation_id == result.invocation_id,
+                    FrustraMPNNArtifact.role == "raw_csv",
+                )
+            )
+        ).scalar_one()
+
+    assert "provenance_json" not in schema_names
+    assert {
+        "id",
+        "target_id",
+        "entity_instance_id",
+        "auth_asym_id",
+        "auth_seq_id",
+        "sequence_index",
+        "mutation_aa",
+    } <= schema_names
+    assert "invocation_authority" not in source_receipts
+    authority = page["items"][0]["provenance"]
+    assert authority["landscape_sha256"] == result.summary_json["landscape_sha256"]
+    assert authority["structure_map_sha256"]
+    assert authority["normalized_pdb_sha256"]
+    assert authority["raw_csv_sha256"] == raw_csv.content_sha256
+
+
+@pytest.mark.asyncio
+async def test_sql_rollback_removes_only_newly_installed_governed_artifacts(
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _persistence()
+    artifact_root = tmp_path / "governed-artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
+    _, terminal = _bundle(tmp_path / "rollback-artifact-bundle")
+    await _seed_job(db)
+
+    async def fail_after_publication(*_args, **_kwargs) -> None:
+        raise module.FrustraMPNNPersistenceError("injected publication count mismatch")
+
+    monkeypatch.setattr(module, "_verify_publication_counts", fail_after_publication)
+    async with db() as session:
+        with pytest.raises(
+            module.FrustraMPNNPersistenceError,
+            match="injected publication count mismatch",
+        ):
+            await module.ingest_result_bundle(
+                session,
+                tmp_path / "rollback-artifact-bundle",
+                parent_job_id="job-1",
+                terminal_envelope=terminal,
+                commit=False,
+            )
+
+    assert not list(artifact_root.rglob("*.parquet"))
 
 
 @pytest.mark.asyncio
@@ -339,13 +780,12 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
                 .order_by(FrustraMPNNArtifact.relative_path)
             )
         ).scalars().all()
-        rows = (
-            await session.execute(
-                select(FrustraMPNNLandscapeRow)
-                .where(FrustraMPNNLandscapeRow.invocation_id == result.invocation_id)
-                .order_by(FrustraMPNNLandscapeRow.mutation_aa)
-            )
-        ).scalars().all()
+        rows = await module.paged_landscape(
+            session,
+            "job-1",
+            result.invocation_id,
+            limit=20,
+        )
 
     request = _load_json(tmp_path / "bundle", "workflow_component_request_v1.json")
     receipt = _load_json(tmp_path / "bundle", "frustrampnn_execution_receipt_v1.json")
@@ -365,9 +805,9 @@ async def test_complete_manifest_bundle_persists_exact_authority_and_rows(
     assert len(artifacts) == 10
     assert len(rows) == 20
     assert all(Path(artifact.storage_path).is_file() for artifact in artifacts)
-    assert {row.mutation_aa for row in rows} == set("ACDEFGHIKLMNPQRSTVWY")
-    assert all(row.row_json["residue"]["auth_seq_id"] == 1 for row in rows)
-    assert all(row.provenance_json["landscape_sha256"] == summary["landscape_sha256"] for row in rows)
+    assert {row["mutation_aa"] for row in rows} == set("ACDEFGHIKLMNPQRSTVWY")
+    assert all(row["row"]["residue"]["auth_seq_id"] == 1 for row in rows)
+    assert all(row["provenance"]["landscape_sha256"] == summary["landscape_sha256"] for row in rows)
     assert (
         result.settings_sha256,
         result.effective_settings_sha256,
@@ -413,13 +853,12 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
                 .order_by(FrustraMPNNArtifact.relative_path)
             )
         ).scalars().all()
-        rows = (
-            await session.execute(
-                select(FrustraMPNNLandscapeRow).where(
-                    FrustraMPNNLandscapeRow.invocation_id == "invoke-v2"
-                )
-            )
-        ).scalars().all()
+        rows = await module.paged_landscape(
+            session,
+            "job-v2",
+            "invoke-v2",
+            limit=40,
+        )
         created_at = result.created_at
         counts = await _counts(session)
         replay = await module.ingest_result_bundle(
@@ -474,7 +913,7 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
             "text/plain",
         }
     assert len(rows) == 2 * 20
-    assert len({row.id for row in rows}) == 2 * 20
+    assert len({row["id"] for row in rows}) == 2 * 20
     expected_row_json = {
         canonical_json_bytes(
             {
@@ -487,7 +926,7 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
         for residue in landscape["residues"]
         for slot in residue["slots"]
     }
-    assert {canonical_json_bytes(row.row_json) for row in rows} == expected_row_json
+    assert {canonical_json_bytes(row["row"]) for row in rows} == expected_row_json
     assert all(
         {
             "source_entity_id",
@@ -495,12 +934,12 @@ async def test_v2_persists_exact_authority_statistics_artifacts_rows_and_replays
             "pdb_residue_id",
             "pdb_insertion_code",
             "residue_name",
-        }.issubset(row.row_json["residue"])
+        }.issubset(row["row"]["residue"])
         for row in rows
     )
     assert replay.created_at == created_at
     async with db() as session:
-        assert await _counts(session) == counts == (1, 10, 40)
+        assert await _counts(session) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
@@ -553,13 +992,18 @@ async def test_v2_replay_conflicts_on_each_new_authority_field_without_repair(
         assert canonical_json_bytes(getattr(persisted, field)) == canonical_json_bytes(
             contradiction
         )
-        assert await _counts(verification) == counts == (1, 10, 20)
+        assert await _counts(verification) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "authority",
-    ["artifact_storage_path", "artifact_metadata", "landscape_score", "landscape_row"],
+    [
+        "artifact_storage_path",
+        "artifact_metadata",
+        "landscape_source_hash",
+        "landscape_row_count",
+    ],
 )
 async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
     tmp_path: Path,
@@ -596,17 +1040,21 @@ async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
         else:
             persisted = (
                 await session.execute(
-                    select(FrustraMPNNLandscapeRow).where(
-                        FrustraMPNNLandscapeRow.parent_job_id == "job-v2",
-                        FrustraMPNNLandscapeRow.invocation_id == "invoke-v2",
+                    select(ScientificArtifactReceipt).where(
+                        ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                        ScientificArtifactReceipt.owner_id == "job-v2:invoke-v2",
+                        ScientificArtifactReceipt.role == "landscape",
                     )
                 )
-            ).scalars().first()
+            ).scalar_one_or_none()
             assert persisted is not None
-            if authority == "landscape_score":
-                persisted.score = 123.0
+            if authority == "landscape_source_hash":
+                persisted.source_receipts_json = {
+                    **persisted.source_receipts_json,
+                    "source_sha256": "0" * 64,
+                }
             else:
-                persisted.row_json = {"contradiction": "landscape row"}
+                persisted.row_count += 1
         await session.commit()
         counts = await _counts(session)
 
@@ -617,7 +1065,7 @@ async def test_v2_replay_conflicts_on_artifact_and_landscape_contradictions(
                 parent_job_id="job-v2",
                 terminal_envelope=terminal,
             )
-        assert await _counts(session) == counts == (1, 10, 20)
+        assert await _counts(session) == counts == (1, 10, 0)
 
 
 @pytest.mark.asyncio
@@ -659,7 +1107,7 @@ async def test_v2_insert_failure_rolls_back_result_artifacts_and_rows(
     def fail_landscape_insert(*_args, **_kwargs):
         raise RuntimeError("injected v2 landscape insert failure")
 
-    event.listen(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+    event.listen(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
     try:
         async with db() as session:
             with pytest.raises(module.FrustraMPNNPersistenceError, match="injected v2"):
@@ -671,7 +1119,7 @@ async def test_v2_insert_failure_rolls_back_result_artifacts_and_rows(
                 )
             assert await _counts(session) == (0, 0, 0)
     finally:
-        event.remove(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+        event.remove(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
 
 
 @pytest.mark.asyncio
@@ -742,7 +1190,7 @@ async def test_identical_replay_returns_existing_and_preserves_historical_design
         await session.refresh(design)
         assert replay.invocation_id == first.invocation_id
         assert replay.created_at == created_at
-        assert await _counts(session) == counts == (1, 10, 20)
+        assert await _counts(session) == counts == (1, 10, 0)
         assert design.frustration_high_count == 99
         assert design.frustration_min_count is None
         assert design.frustration_pct_high is None
@@ -808,16 +1256,15 @@ async def test_same_local_invocation_id_is_isolated_by_parent_job(
                     )
                 ).scalars()
             )
-            row_ids_by_job[job_id] = set(
-                (
-                    await session.execute(
-                        select(FrustraMPNNLandscapeRow.id).where(
-                            FrustraMPNNLandscapeRow.parent_job_id == job_id,
-                            FrustraMPNNLandscapeRow.invocation_id == "invoke-1",
-                        )
-                    )
-                ).scalars()
-            )
+            row_ids_by_job[job_id] = {
+                row["id"]
+                for row in await module.paged_landscape(
+                    session,
+                    job_id,
+                    "invoke-1",
+                    limit=20,
+                )
+            }
         assert len(artifact_ids_by_job["job-1"]) == len(artifact_ids_by_job["job-2"]) == 10
         assert len(row_ids_by_job["job-1"]) == len(row_ids_by_job["job-2"]) == 20
         assert artifact_ids_by_job["job-1"].isdisjoint(artifact_ids_by_job["job-2"])
@@ -836,7 +1283,7 @@ async def test_same_local_invocation_id_is_isolated_by_parent_job(
         )
         assert replay_one.parent_job_id == "job-1"
         assert replay_two.parent_job_id == "job-2"
-        assert await _counts(session) == (2, 20, 40)
+        assert await _counts(session) == (2, 20, 0)
 
 
 @pytest.mark.asyncio
@@ -1153,7 +1600,7 @@ async def test_insert_failure_rolls_back_result_artifacts_rows_and_legacy_projec
     def fail_landscape_insert(*_args, **_kwargs):
         raise RuntimeError("injected landscape insert failure")
 
-    event.listen(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+    event.listen(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
     try:
         async with db() as session:
             with pytest.raises(module.FrustraMPNNPersistenceError, match="injected"):
@@ -1168,14 +1615,16 @@ async def test_insert_failure_rolls_back_result_artifacts_rows_and_legacy_projec
             assert design.frustration_high_count is None
             assert design.frustration_csv_path is None
     finally:
-        event.remove(FrustraMPNNLandscapeRow, "before_insert", fail_landscape_insert)
+        event.remove(ScientificArtifactReceipt, "before_insert", fail_landscape_insert)
 
 
 @pytest.mark.asyncio
 async def test_commit_false_flushes_for_caller_owned_transaction_without_committing(
-    tmp_path: Path, db
+    tmp_path: Path, db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _persistence()
+    artifact_root = tmp_path / "caller-owned-artifacts"
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(artifact_root))
     _, terminal = _bundle(tmp_path / "bundle")
     await _seed_job(db)
 
@@ -1188,8 +1637,10 @@ async def test_commit_false_flushes_for_caller_owned_transaction_without_committ
             commit=False,
         )
         assert result.invocation_id == "invoke-1"
-        assert await _counts(session) == (1, 10, 20)
+        assert await _counts(session) == (1, 10, 0)
+        assert list(artifact_root.rglob("*.parquet"))
         await session.rollback()
+        assert not list(artifact_root.rglob("*.parquet"))
 
     async with db() as session:
         assert await _counts(session) == (0, 0, 0)
@@ -1211,7 +1662,15 @@ async def test_read_projections_are_ordered_and_never_expose_storage_paths(
         rows = await module.paged_landscape(
             session, "job-1", "invoke-1", limit=5, offset=0
         )
+        duplicated_sql_rows = int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(FrustraMPNNLandscapeRow)
+                )
+            ).scalar_one()
+        )
 
+    assert duplicated_sql_rows == 0
     assert projection["invocation_id"] == "invoke-1"
     assert projection["manifest_sha256"]
     assert all("storage_path" not in artifact for artifact in artifacts)

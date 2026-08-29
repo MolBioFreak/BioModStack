@@ -32,6 +32,7 @@ import {
 } from '../runtime/tailnetEnvironment';
 import { ThemeSelector } from './ThemeSelector';
 import { ProjectReturnBanner } from './project-manager/ProjectReturnBanner';
+import { DevIssueLedger } from './DevIssueLedger';
 import { buildIdentity } from '../lib/buildIdentity';
 
 import { InfraControlStateCollector } from './InfraLiveTelemetry';
@@ -711,6 +712,7 @@ export function Layout({ children }: LayoutProps) {
                 <ProjectReturnBanner />
                 {children}
             </main>
+            <DevIssueLedger />
         </div>
     );
 }

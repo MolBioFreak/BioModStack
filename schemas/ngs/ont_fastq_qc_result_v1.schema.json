@@ -1,0 +1,4262 @@
+{
+  "$defs": {
+    "alignmentSession": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "ready": {
+                  "const": true
+                },
+                "reference_contig": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "unavailable_reason": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "ready": {
+                  "const": false
+                },
+                "reference_contig": {
+                  "type": "null"
+                },
+                "unavailable_reason": {
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "primary",
+            "dimer_candidates"
+          ]
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reference_contig": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "pattern": "^[0-9a-f]{24}$",
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "maxLength": 2048,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session_id",
+        "mode",
+        "reference_contig",
+        "ready",
+        "unavailable_reason"
+      ],
+      "type": "object"
+    },
+    "alignmentSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "consensus_length": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "consensus_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "consensus_status": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "coverage_positions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "covered_fraction_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "covered_positions": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dimer_like_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimated_copy_number_mean": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "expected_plasmid_size": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "fastq_minimap2_allow_secondary": {
+          "type": "boolean"
+        },
+        "fastq_minimap2_preset": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "igv_report_cli_available": {
+          "enum": [
+            0,
+            1
+          ],
+          "type": "integer"
+        },
+        "igv_report_flanking_bp": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "igv_report_max_sites": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "igv_report_status": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "igv_track_window_bp": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "logical_read_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapped_alignment_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapped_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapping_rate_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "mean_coverage_depth": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "mean_read_length_bp": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "median_coverage_depth": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "median_read_length_bp": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "min_fastq_read_length": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "n50_read_length_bp": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "primary_mapped_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "primary_mapping_rate_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "reads_passing_length_filter": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reference_length": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reference_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "secondary_alignments": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "supplementary_alignments": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_alignment_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_bases": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "trimer_plus_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unmapped_alignment_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unmapped_reads": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reference_name",
+        "reference_length",
+        "expected_plasmid_size",
+        "min_fastq_read_length",
+        "fastq_minimap2_preset",
+        "fastq_minimap2_allow_secondary",
+        "total_reads",
+        "reads_passing_length_filter",
+        "total_bases",
+        "mean_read_length_bp",
+        "median_read_length_bp",
+        "n50_read_length_bp",
+        "estimated_copy_number_mean",
+        "dimer_like_reads",
+        "trimer_plus_reads",
+        "mapped_reads",
+        "unmapped_reads",
+        "logical_read_records",
+        "mapped_alignment_records",
+        "unmapped_alignment_records",
+        "total_alignment_records",
+        "mapping_rate_pct",
+        "primary_mapped_reads",
+        "primary_mapping_rate_pct",
+        "secondary_alignments",
+        "supplementary_alignments",
+        "coverage_positions",
+        "covered_positions",
+        "covered_fraction_pct",
+        "mean_coverage_depth",
+        "median_coverage_depth",
+        "consensus_status",
+        "consensus_name",
+        "consensus_length",
+        "igv_track_window_bp",
+        "igv_report_max_sites",
+        "igv_report_flanking_bp",
+        "igv_report_cli_available",
+        "igv_report_status"
+      ],
+      "type": "object"
+    },
+    "artifact": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "content_disposition": {
+              "enum": [
+                "inline",
+                "attachment"
+              ]
+            },
+            "display_order": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "filename_extension": {
+              "enum": [
+                "bai",
+                "bam",
+                "bed",
+                "bedgraph",
+                "fai",
+                "fasta",
+                "fastq.gz",
+                "html",
+                "json",
+                "log",
+                "tsv",
+                "vcf"
+              ],
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "alignment_bai",
+                "alignment_bam",
+                "alignment_stats",
+                "consensus",
+                "consensus_index",
+                "consensus_log",
+                "construct_verification_manifest",
+                "coverage",
+                "human_evidence_report",
+                "igv_coverage_depth",
+                "igv_gc_content",
+                "igv_gc_zscore",
+                "igv_junction_hotspots",
+                "igv_position_gradient",
+                "igv_report",
+                "igv_report_sites_bed",
+                "igv_report_sites_tsv",
+                "igv_softclip_density",
+                "igv_split_read_density",
+                "igv_track_config",
+                "log",
+                "modified_bases",
+                "normalized_variants",
+                "observed_consensus",
+                "per_base_metrics",
+                "per_base_support",
+                "read_lengths",
+                "reference",
+                "reference_index",
+                "sequence_qc_manifest",
+                "signal_data",
+                "source_read_provenance",
+                "source_reads_fastq",
+                "summary",
+                "verification_summary"
+              ],
+              "type": "string"
+            },
+            "mime_type": {
+              "enum": [
+                "application/json",
+                "application/octet-stream",
+                "application/vnd.realvnc.bed",
+                "text/html",
+                "text/tab-separated-values",
+                "text/x-vcf"
+              ],
+              "type": "string"
+            },
+            "owner_scope": {
+              "enum": [
+                "result_root",
+                "managed_input_snapshot"
+              ]
+            },
+            "range_capable": {
+              "const": true
+            },
+            "scientific_role": {
+              "enum": [
+                "alignment",
+                "audit_log",
+                "authority",
+                "consensus",
+                "optional_evidence",
+                "qc_metrics",
+                "reference",
+                "report",
+                "source_input",
+                "verification",
+                "viewer_auxiliary"
+              ],
+              "type": "string"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "size_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "enum": [
+                "sequence_qc",
+                "construct_verification",
+                "construct_verification_input",
+                "input_mode"
+              ]
+            },
+            "state": {
+              "const": "present"
+            },
+            "unavailable_reason": {
+              "type": "null"
+            },
+            "url": {
+              "pattern": "^/api/jobs/[A-Za-z0-9_.~-]+/ngs-artifacts/[a-f0-9]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "state",
+            "sha256",
+            "size_bytes",
+            "mime_type",
+            "url",
+            "range_capable",
+            "unavailable_reason",
+            "scientific_role",
+            "display_order",
+            "content_disposition",
+            "filename_extension",
+            "artifact_id",
+            "owner_scope"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "artifact_id": {
+              "type": "null"
+            },
+            "content_disposition": {
+              "const": "none"
+            },
+            "display_order": {
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "filename_extension": {
+              "type": "null"
+            },
+            "kind": {
+              "enum": [
+                "alignment_bai",
+                "alignment_bam",
+                "alignment_stats",
+                "consensus",
+                "consensus_index",
+                "consensus_log",
+                "construct_verification_manifest",
+                "coverage",
+                "human_evidence_report",
+                "igv_coverage_depth",
+                "igv_gc_content",
+                "igv_gc_zscore",
+                "igv_junction_hotspots",
+                "igv_position_gradient",
+                "igv_report",
+                "igv_report_sites_bed",
+                "igv_report_sites_tsv",
+                "igv_softclip_density",
+                "igv_split_read_density",
+                "igv_track_config",
+                "log",
+                "modified_bases",
+                "normalized_variants",
+                "observed_consensus",
+                "per_base_metrics",
+                "per_base_support",
+                "read_lengths",
+                "reference",
+                "reference_index",
+                "sequence_qc_manifest",
+                "signal_data",
+                "source_read_provenance",
+                "source_reads_fastq",
+                "summary",
+                "verification_summary"
+              ],
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "null"
+            },
+            "owner_scope": {
+              "enum": [
+                "result_root",
+                "managed_input_snapshot"
+              ]
+            },
+            "range_capable": {
+              "const": false
+            },
+            "scientific_role": {
+              "enum": [
+                "alignment",
+                "audit_log",
+                "authority",
+                "consensus",
+                "optional_evidence",
+                "qc_metrics",
+                "reference",
+                "report",
+                "source_input",
+                "verification",
+                "viewer_auxiliary"
+              ],
+              "type": "string"
+            },
+            "sha256": {
+              "type": "null"
+            },
+            "size_bytes": {
+              "type": "null"
+            },
+            "source": {
+              "enum": [
+                "sequence_qc",
+                "construct_verification",
+                "construct_verification_input",
+                "input_mode"
+              ]
+            },
+            "state": {
+              "enum": [
+                "missing_required",
+                "missing_optional",
+                "not_applicable",
+                "not_produced",
+                "not_applicable_to_input_mode",
+                "unavailable"
+              ]
+            },
+            "unavailable_reason": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            },
+            "url": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "state",
+            "sha256",
+            "size_bytes",
+            "mime_type",
+            "url",
+            "range_capable",
+            "unavailable_reason",
+            "scientific_role",
+            "display_order",
+            "content_disposition",
+            "filename_extension",
+            "artifact_id",
+            "owner_scope"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "checkEnvelope": {
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "object"
+        },
+        "purpose": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "reason_codes": {
+          "$ref": "#/$defs/reasonCodes"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "review",
+            "not_evaluated"
+          ]
+        },
+        "units": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "status",
+        "purpose",
+        "reason_codes",
+        "metrics",
+        "units"
+      ],
+      "type": "object"
+    },
+    "consensusSupportValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "valid",
+            "invalid",
+            "unavailable",
+            "not_applicable"
+          ]
+        },
+        "validator": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "status",
+        "validator"
+      ],
+      "type": "object"
+    },
+    "constructVerificationStage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stageBase"
+        },
+        {
+          "properties": {
+            "output_count": {
+              "const": 6
+            },
+            "stage": {
+              "const": "construct_verification"
+            },
+            "status": {
+              "const": "complete"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "coverageCheck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/checkEnvelope"
+        },
+        {
+          "properties": {
+            "metrics": {
+              "additionalProperties": false,
+              "properties": {
+                "coverage_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "low_depth_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "low_depth_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "minimum_depth": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mixed_allele_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "row_count": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "strand_imbalanced_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "row_count",
+                "coverage_fraction",
+                "low_depth_fraction",
+                "low_depth_positions",
+                "minimum_depth",
+                "mixed_allele_positions",
+                "strand_imbalanced_positions"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "Coverage completeness and low-depth exclusion across the bound reference."
+            },
+            "units": {
+              "const": {
+                "coverage_fraction": "fraction",
+                "low_depth_fraction": "fraction",
+                "low_depth_positions": "reference_positions",
+                "minimum_depth": "alignment_observations",
+                "mixed_allele_positions": "reference_positions",
+                "row_count": "reference_positions",
+                "strand_imbalanced_positions": "reference_positions"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dimerQcStage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stageBase"
+        },
+        {
+          "properties": {
+            "output_count": {
+              "const": 6
+            },
+            "stage": {
+              "const": "dimer_qc"
+            },
+            "status": {
+              "const": "complete"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "expectedReferenceScreenCheck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/checkEnvelope"
+        },
+        {
+          "properties": {
+            "metrics": {
+              "additionalProperties": false,
+              "properties": {
+                "mapped_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "organism_identity_claimed": {
+                  "const": false
+                },
+                "screen_basis": {
+                  "const": "expected_reference_mapping_only"
+                },
+                "total_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "unmapped_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "unmapped_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "screen_basis",
+                "organism_identity_claimed",
+                "total_reads",
+                "mapped_reads",
+                "unmapped_reads",
+                "unmapped_fraction"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "Expected-reference mapping and unmapped-fraction screen only."
+            },
+            "units": {
+              "const": {
+                "mapped_reads": "reads",
+                "organism_identity_claimed": "boolean",
+                "screen_basis": "categorical",
+                "total_reads": "reads",
+                "unmapped_fraction": "fraction",
+                "unmapped_reads": "reads"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "fastqAlignStage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stageBase"
+        },
+        {
+          "properties": {
+            "output_count": {
+              "const": 5
+            },
+            "stage": {
+              "const": "fastq_align"
+            },
+            "status": {
+              "const": "complete"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "fastqQcStage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/stageBase"
+        },
+        {
+          "properties": {
+            "output_count": {
+              "const": 8
+            },
+            "stage": {
+              "const": "fastq_qc"
+            },
+            "status": {
+              "const": "complete"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "nullableDateTime": {
+      "oneOf": [
+        {
+          "format": "date-time",
+          "pattern": "Z$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "readSupportCheck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/checkEnvelope"
+        },
+        {
+          "properties": {
+            "metrics": {
+              "additionalProperties": false,
+              "properties": {
+                "coverage_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "low_depth_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "low_depth_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "minimum_depth": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mixed_allele_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "row_count": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "strand_imbalanced_positions": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "row_count",
+                "coverage_fraction",
+                "low_depth_fraction",
+                "low_depth_positions",
+                "minimum_depth",
+                "mixed_allele_positions",
+                "strand_imbalanced_positions"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "Per-position depth, allele-mixture, and strand-balance evidence."
+            },
+            "units": {
+              "const": {
+                "coverage_fraction": "fraction",
+                "low_depth_fraction": "fraction",
+                "low_depth_positions": "reference_positions",
+                "minimum_depth": "alignment_observations",
+                "mixed_allele_positions": "reference_positions",
+                "row_count": "reference_positions",
+                "strand_imbalanced_positions": "reference_positions"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reasonCodes": {
+      "items": {
+        "pattern": "^[A-Z][A-Z0-9_]+$",
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "sequenceIdentityCheck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/checkEnvelope"
+        },
+        {
+          "properties": {
+            "metrics": {
+              "additionalProperties": false,
+              "properties": {
+                "canonicalization": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "consensus_support_validation": {
+                  "$ref": "#/$defs/consensusSupportValidation"
+                },
+                "edit_cost": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "identity_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "observed_length": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "orientation": {
+                  "enum": [
+                    "forward",
+                    "reverse_complement"
+                  ]
+                },
+                "reference_length": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "rotation_offset": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "canonicalization",
+                "consensus_support_validation",
+                "edit_cost",
+                "identity_fraction",
+                "observed_length",
+                "orientation",
+                "reference_length",
+                "rotation_offset"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "Observed consensus identity and edit evidence against the bound reference."
+            },
+            "units": {
+              "const": {
+                "canonicalization": "categorical",
+                "consensus_support_validation": "evidence",
+                "edit_cost": "edits",
+                "identity_fraction": "fraction",
+                "observed_length": "base_pairs",
+                "orientation": "categorical",
+                "reference_length": "base_pairs",
+                "rotation_offset": "base_pairs"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sequenceQcSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "consensus_length": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "consensus_status": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "covered_fraction_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "dimer_like_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimated_copy_number_mean": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "fastq_minimap2_allow_secondary": {
+          "type": "boolean"
+        },
+        "fastq_minimap2_preset": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "igv_report_status": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "mapped_reads": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mapping_rate_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "number"
+        },
+        "mean_coverage_depth": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "mean_read_length_bp": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "n50_read_length_bp": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reads_considered": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reference_length": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reference_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "trimer_plus_reads": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reference_name",
+        "reference_length",
+        "reads_considered",
+        "mapped_reads",
+        "mapping_rate_pct",
+        "fastq_minimap2_preset",
+        "fastq_minimap2_allow_secondary",
+        "mean_read_length_bp",
+        "n50_read_length_bp",
+        "estimated_copy_number_mean",
+        "dimer_like_reads",
+        "trimer_plus_reads",
+        "mean_coverage_depth",
+        "covered_fraction_pct",
+        "consensus_status",
+        "consensus_length",
+        "igv_report_status"
+      ],
+      "type": "object"
+    },
+    "sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "stageBase": {
+      "additionalProperties": false,
+      "properties": {
+        "output_count": {
+          "maximum": 256,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "missing"
+          ]
+        }
+      },
+      "required": [
+        "stage",
+        "status",
+        "output_count"
+      ],
+      "type": "object"
+    },
+    "thresholdProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "calibration_status": {
+          "enum": [
+            "experimental",
+            "calibrated"
+          ]
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "public_accuracy_validated": {
+          "type": "boolean"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "values": {
+          "additionalProperties": false,
+          "properties": {
+            "automatic_pass_eligible": {
+              "type": "boolean"
+            },
+            "calibration_status": {
+              "enum": [
+                "experimental",
+                "calibrated"
+              ]
+            },
+            "description": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "expected_topology": {
+              "enum": [
+                "linear",
+                "circular"
+              ]
+            },
+            "max_ambiguous_base_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "max_low_depth_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "max_secondary_anomaly_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "max_strand_dominance_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "max_unmapped_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "min_coverage_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "min_depth": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_major_allele_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "min_origin_spanning_reads": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "min_variant_support_fraction": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "public_accuracy_validated": {
+              "type": "boolean"
+            },
+            "require_zero_variants_for_pass": {
+              "type": "boolean"
+            },
+            "version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "automatic_pass_eligible",
+            "calibration_status",
+            "description",
+            "expected_topology",
+            "max_ambiguous_base_fraction",
+            "max_low_depth_fraction",
+            "max_secondary_anomaly_fraction",
+            "max_strand_dominance_fraction",
+            "max_unmapped_fraction",
+            "min_coverage_fraction",
+            "min_depth",
+            "min_major_allele_fraction",
+            "min_origin_spanning_reads",
+            "min_variant_support_fraction",
+            "public_accuracy_validated",
+            "require_zero_variants_for_pass",
+            "version"
+          ],
+          "type": "object"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "calibration_status",
+        "public_accuracy_validated",
+        "values"
+      ],
+      "type": "object"
+    },
+    "topologyCheck": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/checkEnvelope"
+        },
+        {
+          "properties": {
+            "metrics": {
+              "additionalProperties": false,
+              "properties": {
+                "aligned_dimer_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "alignment_records": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "contradictory_breakpoint_evidence": {
+                  "type": "boolean"
+                },
+                "edge_window_bp": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "evidence_basis": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "evidence_sha256": {
+                  "$ref": "#/$defs/topologyEvidenceSha256"
+                },
+                "expected_topology": {
+                  "enum": [
+                    "linear",
+                    "circular"
+                  ]
+                },
+                "mapped_unique_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "non_boundary_split_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "origin_spanning_reads": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "samtools_returncode": {
+                  "type": "integer"
+                },
+                "schema": {
+                  "const": "biomodstack.construct_topology_evidence.v1"
+                },
+                "secondary_anomaly_fraction": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "state": {
+                  "enum": [
+                    "present",
+                    "absent",
+                    "unavailable",
+                    "not_applicable"
+                  ]
+                }
+              },
+              "required": [
+                "aligned_dimer_reads",
+                "alignment_records",
+                "contradictory_breakpoint_evidence",
+                "edge_window_bp",
+                "evidence_basis",
+                "expected_topology",
+                "mapped_unique_reads",
+                "non_boundary_split_reads",
+                "origin_spanning_reads",
+                "evidence_sha256",
+                "reason",
+                "schema",
+                "secondary_anomaly_fraction",
+                "samtools_returncode",
+                "state"
+              ],
+              "type": "object"
+            },
+            "purpose": {
+              "const": "Circular-boundary support and contradictory breakpoint evidence."
+            },
+            "units": {
+              "const": {
+                "aligned_dimer_reads": "reads",
+                "alignment_records": "alignment_records",
+                "contradictory_breakpoint_evidence": "boolean",
+                "edge_window_bp": "base_pairs",
+                "evidence_basis": "categorical",
+                "evidence_sha256": "sha256_digests",
+                "expected_topology": "categorical",
+                "mapped_unique_reads": "reads",
+                "non_boundary_split_reads": "reads",
+                "origin_spanning_reads": "reads",
+                "reason": "categorical_or_null",
+                "samtools_returncode": "exit_code",
+                "schema": "schema_id",
+                "secondary_anomaly_fraction": "fraction",
+                "state": "categorical"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "topologyEvidenceSha256": {
+      "additionalProperties": false,
+      "properties": {
+        "alignment_bam": {
+          "$ref": "#/$defs/sha256"
+        },
+        "breakpoint_call": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reference": {
+          "$ref": "#/$defs/sha256"
+        },
+        "secondary_summary": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "alignment_bam",
+        "breakpoint_call",
+        "reference",
+        "secondary_summary"
+      ],
+      "type": "object"
+    },
+    "variant": {
+      "additionalProperties": false,
+      "properties": {
+        "affected_end_1based": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "affected_interval_kind": {
+          "enum": [
+            "reference_bases",
+            "between_bases"
+          ]
+        },
+        "affected_start_1based": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "alt": {
+          "maxLength": 100000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "circular_event_id": {
+          "maxLength": 256,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "depth": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "SNV",
+            "INS",
+            "DEL",
+            "MNV",
+            "COMPLEX"
+          ]
+        },
+        "normalization": {
+          "const": "vcf_left_anchored_v1"
+        },
+        "record_end_1based": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "record_start_1based": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "ref": {
+          "maxLength": 100000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "support_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "support_status": {
+          "enum": [
+            "supported",
+            "ambiguous",
+            "unsupported",
+            "not_evaluated"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "normalization",
+        "record_start_1based",
+        "record_end_1based",
+        "affected_interval_kind",
+        "affected_start_1based",
+        "affected_end_1based",
+        "ref",
+        "alt",
+        "support_status",
+        "depth",
+        "support_fraction",
+        "circular_event_id"
+      ],
+      "type": "object"
+    },
+    "verificationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "observed_length": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reference_length": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "reference_name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "reference_topology": {
+          "enum": [
+            "linear",
+            "circular"
+          ]
+        },
+        "sequence_identity_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "unmapped_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "variant_count": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "coverage_fraction",
+        "observed_length",
+        "reference_length",
+        "reference_name",
+        "reference_topology",
+        "sequence_identity_fraction",
+        "unmapped_fraction",
+        "variant_count"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://biomodstack.local/schemas/ngs/ont_fastq_qc_result_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "alignment": {
+      "$ref": "#/$defs/alignmentSummary"
+    },
+    "alignment_sessions": {
+      "items": false,
+      "maxItems": 2,
+      "minItems": 1,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/alignmentSession"
+            },
+            {
+              "properties": {
+                "mode": {
+                  "const": "primary"
+                },
+                "ready": {
+                  "const": true
+                },
+                "unavailable_reason": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "mode",
+                "ready",
+                "unavailable_reason"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/alignmentSession"
+            },
+            {
+              "properties": {
+                "mode": {
+                  "const": "dimer_candidates"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            }
+          ]
+        }
+      ],
+      "type": "array"
+    },
+    "artifacts": {
+      "items": false,
+      "maxItems": 36,
+      "minItems": 36,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 1
+                },
+                "filename_extension": {
+                  "const": "json"
+                },
+                "kind": {
+                  "const": "sequence_qc_manifest"
+                },
+                "mime_type": {
+                  "const": "application/json"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "authority"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 2
+                },
+                "filename_extension": {
+                  "const": "fasta"
+                },
+                "kind": {
+                  "const": "reference"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "reference"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "none"
+                },
+                "display_order": {
+                  "const": 3
+                },
+                "filename_extension": {
+                  "const": null
+                },
+                "kind": {
+                  "const": "modified_bases"
+                },
+                "mime_type": {
+                  "const": null
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": false
+                },
+                "scientific_role": {
+                  "const": "optional_evidence"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "not_applicable_to_input_mode"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 4
+                },
+                "filename_extension": {
+                  "const": "fai"
+                },
+                "kind": {
+                  "const": "reference_index"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "reference"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 5
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "summary"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "qc_metrics"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 6
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "read_lengths"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "qc_metrics"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 7
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "alignment_stats"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "qc_metrics"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 8
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "coverage"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "qc_metrics"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 9
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "per_base_support"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "qc_metrics"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 10
+                },
+                "filename_extension": {
+                  "const": "fasta"
+                },
+                "kind": {
+                  "const": "consensus"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "consensus"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 11
+                },
+                "filename_extension": {
+                  "const": "fai"
+                },
+                "kind": {
+                  "const": "consensus_index"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "consensus"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 12
+                },
+                "filename_extension": {
+                  "const": "log"
+                },
+                "kind": {
+                  "const": "consensus_log"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "audit_log"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 13
+                },
+                "filename_extension": {
+                  "const": "bam"
+                },
+                "kind": {
+                  "const": "alignment_bam"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "alignment"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 14
+                },
+                "filename_extension": {
+                  "const": "bai"
+                },
+                "kind": {
+                  "const": "alignment_bai"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "alignment"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 15
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_coverage_depth"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 16
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_position_gradient"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 17
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_gc_content"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 18
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_gc_zscore"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 19
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_split_read_density"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 20
+                },
+                "filename_extension": {
+                  "const": "bedgraph"
+                },
+                "kind": {
+                  "const": "igv_softclip_density"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 21
+                },
+                "filename_extension": {
+                  "const": "bed"
+                },
+                "kind": {
+                  "const": "igv_junction_hotspots"
+                },
+                "mime_type": {
+                  "const": "application/vnd.realvnc.bed"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 22
+                },
+                "filename_extension": {
+                  "const": "bed"
+                },
+                "kind": {
+                  "const": "igv_report_sites_bed"
+                },
+                "mime_type": {
+                  "const": "application/vnd.realvnc.bed"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 23
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "igv_report_sites_tsv"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "inline"
+                },
+                "display_order": {
+                  "const": 24
+                },
+                "filename_extension": {
+                  "const": "json"
+                },
+                "kind": {
+                  "const": "igv_track_config"
+                },
+                "mime_type": {
+                  "const": "application/json"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "viewer_auxiliary"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 25
+                },
+                "filename_extension": {
+                  "const": "html"
+                },
+                "kind": {
+                  "const": "igv_report"
+                },
+                "mime_type": {
+                  "const": "text/html"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "report"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 26
+                },
+                "filename_extension": {
+                  "const": "log"
+                },
+                "kind": {
+                  "const": "log"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "audit_log"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 27
+                },
+                "filename_extension": {
+                  "const": "log"
+                },
+                "kind": {
+                  "const": "log"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "audit_log"
+                },
+                "source": {
+                  "const": "sequence_qc"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 28
+                },
+                "filename_extension": {
+                  "const": "json"
+                },
+                "kind": {
+                  "const": "construct_verification_manifest"
+                },
+                "mime_type": {
+                  "const": "application/json"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "authority"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 29
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "verification_summary"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "verification"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 30
+                },
+                "filename_extension": {
+                  "const": "vcf"
+                },
+                "kind": {
+                  "const": "normalized_variants"
+                },
+                "mime_type": {
+                  "const": "text/x-vcf"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "verification"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 31
+                },
+                "filename_extension": {
+                  "const": "tsv"
+                },
+                "kind": {
+                  "const": "per_base_metrics"
+                },
+                "mime_type": {
+                  "const": "text/tab-separated-values"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "verification"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 32
+                },
+                "filename_extension": {
+                  "const": "html"
+                },
+                "kind": {
+                  "const": "human_evidence_report"
+                },
+                "mime_type": {
+                  "const": "text/html"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "report"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 33
+                },
+                "filename_extension": {
+                  "const": "fasta"
+                },
+                "kind": {
+                  "const": "observed_consensus"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "consensus"
+                },
+                "source": {
+                  "const": "construct_verification"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 34
+                },
+                "filename_extension": {
+                  "const": "json"
+                },
+                "kind": {
+                  "const": "source_read_provenance"
+                },
+                "mime_type": {
+                  "const": "application/json"
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "source_input"
+                },
+                "source": {
+                  "const": "construct_verification_input"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "attachment"
+                },
+                "display_order": {
+                  "const": 35
+                },
+                "filename_extension": {
+                  "const": "fastq.gz"
+                },
+                "kind": {
+                  "const": "source_reads_fastq"
+                },
+                "mime_type": {
+                  "const": "application/octet-stream"
+                },
+                "owner_scope": {
+                  "const": "managed_input_snapshot"
+                },
+                "range_capable": {
+                  "const": true
+                },
+                "scientific_role": {
+                  "const": "source_input"
+                },
+                "source": {
+                  "const": "construct_verification_input"
+                },
+                "state": {
+                  "const": "present"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "properties": {
+                "content_disposition": {
+                  "const": "none"
+                },
+                "display_order": {
+                  "const": 36
+                },
+                "filename_extension": {
+                  "const": null
+                },
+                "kind": {
+                  "const": "signal_data"
+                },
+                "mime_type": {
+                  "const": null
+                },
+                "owner_scope": {
+                  "const": "result_root"
+                },
+                "range_capable": {
+                  "const": false
+                },
+                "scientific_role": {
+                  "const": "optional_evidence"
+                },
+                "source": {
+                  "const": "input_mode"
+                },
+                "state": {
+                  "const": "not_applicable_to_input_mode"
+                }
+              },
+              "required": [
+                "source",
+                "kind",
+                "state",
+                "scientific_role",
+                "display_order",
+                "content_disposition",
+                "filename_extension",
+                "mime_type",
+                "range_capable",
+                "artifact_id",
+                "owner_scope"
+              ]
+            }
+          ]
+        }
+      ],
+      "type": "array"
+    },
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "alignment_readiness": {
+          "enum": [
+            "ready",
+            "unavailable"
+          ]
+        },
+        "artifact_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "construct_verification_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "declared_artifact_count": {
+          "const": 36
+        },
+        "manifest_readiness": {
+          "const": "ready"
+        },
+        "present_artifact_count": {
+          "const": 34
+        },
+        "reference_sequence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sequence_qc_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "unavailable_artifact_count": {
+          "const": 2
+        }
+      },
+      "required": [
+        "sequence_qc_manifest_sha256",
+        "construct_verification_manifest_sha256",
+        "reference_sequence_sha256",
+        "artifact_set_sha256",
+        "declared_artifact_count",
+        "present_artifact_count",
+        "unavailable_artifact_count",
+        "manifest_readiness",
+        "alignment_readiness"
+      ],
+      "type": "object"
+    },
+    "coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "bucket_width_rows": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "circular_policy": {
+          "const": "linearized_1based_reference_order_no_wrap"
+        },
+        "construction_attestation": {
+          "additionalProperties": false,
+          "properties": {
+            "projection_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "source_row_count": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "source_rows_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "validated_at": {
+              "format": "date-time",
+              "pattern": "Z$",
+              "type": "string"
+            },
+            "validator": {
+              "const": "bms.ngs.fastq-qc-result-construction-validator.v1"
+            }
+          },
+          "required": [
+            "validator",
+            "source_rows_sha256",
+            "source_row_count",
+            "projection_sha256",
+            "validated_at"
+          ],
+          "type": "object"
+        },
+        "depth_basis": {
+          "const": "samtools_depth_aa_default_filters_excludes_deletions_v1"
+        },
+        "depth_unit": {
+          "const": "base_covering_alignment_records"
+        },
+        "endpoint_policy": {
+          "const": "natural_bucket_extrema_only"
+        },
+        "maximum_point_count": {
+          "const": 2048
+        },
+        "method": {
+          "const": "minmax_envelope_v1"
+        },
+        "minimum_depth": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minimum_depth_position_1based": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "points": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "depth": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "position_1based": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "reference": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "reference",
+              "position_1based",
+              "depth"
+            ],
+            "type": "object"
+          },
+          "maxItems": 2048,
+          "minItems": 1,
+          "type": "array"
+        },
+        "source_row_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "tie_breaking": {
+          "const": "minimum:earliest_position;maximum:earliest_position"
+        }
+      },
+      "required": [
+        "bucket_width_rows",
+        "circular_policy",
+        "depth_unit",
+        "endpoint_policy",
+        "maximum_point_count",
+        "method",
+        "minimum_depth",
+        "points",
+        "source_row_count",
+        "tie_breaking",
+        "minimum_depth_position_1based",
+        "depth_basis",
+        "construction_attestation"
+      ],
+      "type": "object"
+    },
+    "execution_resources": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "admitted_cpu_threads": {
+              "type": "null"
+            },
+            "admitted_vram_bytes": {
+              "type": "null"
+            },
+            "evidence_status": {
+              "const": "historical_unavailable"
+            },
+            "execution_invocation_id": {
+              "type": "null"
+            },
+            "gpu_index": {
+              "type": "null"
+            },
+            "gpu_uuid": {
+              "type": "null"
+            },
+            "observed_memory_peak_bytes": {
+              "type": "null"
+            },
+            "observed_pids_peak": {
+              "type": "null"
+            },
+            "outcome": {
+              "type": "null"
+            },
+            "receipt_id": {
+              "type": "null"
+            },
+            "receipt_schema": {
+              "type": "null"
+            },
+            "receipt_sha256": {
+              "type": "null"
+            },
+            "run_attempt_id": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "admitted_cpu_threads": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "admitted_vram_bytes": {
+              "const": 0
+            },
+            "configured_dorado_device_ignored": {
+              "type": "null"
+            },
+            "evidence_status": {
+              "const": "accepted"
+            },
+            "execution_invocation_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "gpu_index": {
+              "type": "null"
+            },
+            "gpu_uuid": {
+              "type": "null"
+            },
+            "observed_memory_peak_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "observed_pids_peak": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "outcome": {
+              "const": "completed"
+            },
+            "receipt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "receipt_schema": {
+              "const": "bms.workflow-resource-usage.v1"
+            },
+            "receipt_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "run_attempt_id": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            "scheduler_gpu_assignment": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "accelerator_applicability": {
+          "const": "not_applicable"
+        },
+        "admitted_cpu_threads": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "admitted_vram_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "configured_dorado_device_ignored": {
+          "maxLength": 256,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dorado_invoked": {
+          "const": false
+        },
+        "evidence_status": {
+          "enum": [
+            "historical_unavailable",
+            "accepted"
+          ]
+        },
+        "execution_invocation_id": {
+          "maxLength": 128,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gpu_index": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "gpu_uuid": {
+          "maxLength": 128,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_memory_peak_bytes": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observed_pids_peak": {
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "outcome": {
+          "maxLength": 64,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "receipt_id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receipt_schema": {
+          "maxLength": 128,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receipt_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_attempt_id": {
+          "maxLength": 255,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scheduler_gpu_assignment": {
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "accelerator_applicability",
+        "reason",
+        "dorado_invoked",
+        "scheduler_gpu_assignment",
+        "configured_dorado_device_ignored",
+        "evidence_status",
+        "receipt_schema",
+        "receipt_id",
+        "receipt_sha256",
+        "run_attempt_id",
+        "gpu_index",
+        "gpu_uuid",
+        "admitted_vram_bytes",
+        "execution_invocation_id",
+        "outcome",
+        "admitted_cpu_threads",
+        "observed_memory_peak_bytes",
+        "observed_pids_peak"
+      ],
+      "type": "object"
+    },
+    "job": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_at": {
+          "$ref": "#/$defs/nullableDateTime"
+        },
+        "created_at": {
+          "$ref": "#/$defs/nullableDateTime"
+        },
+        "error_message": {
+          "maxLength": 8192,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "input_mode": {
+          "const": "fastq"
+        },
+        "name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "queue_status": {
+          "const": "completed"
+        },
+        "started_at": {
+          "$ref": "#/$defs/nullableDateTime"
+        },
+        "status": {
+          "const": "completed"
+        },
+        "workflow_id": {
+          "const": "ont_fastq_qc"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "queue_status",
+        "workflow_id",
+        "input_mode",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "error_message"
+      ],
+      "type": "object"
+    },
+    "read_length_histogram": {
+      "additionalProperties": false,
+      "properties": {
+        "bin_width_bp": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "bins": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "end_bp_exclusive": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "read_count": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "start_bp": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start_bp",
+              "end_bp_exclusive",
+              "read_count"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "minItems": 50,
+          "type": "array"
+        },
+        "method": {
+          "const": "fixed_width_v1"
+        },
+        "source_row_count": {
+          "maximum": 2000000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "method",
+        "source_row_count",
+        "bin_width_bp",
+        "bins"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": "bms.ngs.fastq-qc-result.v1"
+    },
+    "stages": {
+      "items": false,
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/fastqAlignStage"
+        },
+        {
+          "$ref": "#/$defs/dimerQcStage"
+        },
+        {
+          "$ref": "#/$defs/fastqQcStage"
+        },
+        {
+          "$ref": "#/$defs/constructVerificationStage"
+        }
+      ],
+      "type": "array"
+    },
+    "summary": {
+      "$ref": "#/$defs/sequenceQcSummary"
+    },
+    "verification": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "additionalProperties": false,
+          "properties": {
+            "coverage": {
+              "$ref": "#/$defs/coverageCheck"
+            },
+            "expected_reference_screen": {
+              "$ref": "#/$defs/expectedReferenceScreenCheck"
+            },
+            "read_support": {
+              "$ref": "#/$defs/readSupportCheck"
+            },
+            "sequence_identity": {
+              "$ref": "#/$defs/sequenceIdentityCheck"
+            },
+            "topology": {
+              "$ref": "#/$defs/topologyCheck"
+            }
+          },
+          "required": [
+            "expected_reference_screen",
+            "coverage",
+            "read_support",
+            "sequence_identity",
+            "topology"
+          ],
+          "type": "object"
+        },
+        "reason_codes": {
+          "$ref": "#/$defs/reasonCodes"
+        },
+        "summary": {
+          "$ref": "#/$defs/verificationSummary"
+        },
+        "threshold_profile": {
+          "$ref": "#/$defs/thresholdProfile"
+        },
+        "variants": {
+          "items": {
+            "$ref": "#/$defs/variant"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "verdict": {
+          "enum": [
+            "PASS",
+            "FAIL",
+            "REVIEW"
+          ]
+        }
+      },
+      "required": [
+        "verdict",
+        "reason_codes",
+        "summary",
+        "checks",
+        "variants",
+        "threshold_profile"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "job",
+    "authority",
+    "artifacts",
+    "alignment_sessions",
+    "summary",
+    "alignment",
+    "read_length_histogram",
+    "coverage",
+    "verification",
+    "stages",
+    "execution_resources"
+  ],
+  "title": "BioModStack ONT FASTQ-QC bounded result projection v1",
+  "type": "object",
+  "x-bms-cross-field-invariants": [
+    "authority.declared_artifact_count equals artifacts.length",
+    "authority.declared_artifact_count equals authority.present_artifact_count plus authority.unavailable_artifact_count",
+    "present and unavailable authority counts equal artifact item states",
+    "every artifact URL contains the exact encoded job.id and its own sha256",
+    "alignment_readiness is ready if and only if at least one alignment session is ready",
+    "read_length_histogram bins are contiguous half-open fixed_width_v1 bins beginning at zero and sum(read_count) equals source_row_count",
+    "coverage points retain one producer reference and strict ascending 1-based order; bucket_width_rows follows ceil(source_row_count/1024); each bucket retains earliest tied minimum and maximum; reported minimum_depth equals the source global minimum",
+    "summary, alignment, verification.summary, alignment sessions, coverage, and reference authority identify one exact reference name and length",
+    "verification.summary.variant_count equals verification.variants.length",
+    "each variant record and affected interval follow vcf_left_anchored_v1 kind/ref/alt semantics; insertion intervals are between_bases and cross-origin records are rejected",
+    "stages contain the four canonical entries once and in canonical order",
+    "encoded UTF-8 compact JSON size is at most 262144 bytes",
+    "all JSON numbers are finite",
+    "wire validator recomputes coverage projection digest and validates construction attestation without claiming access to omitted source rows",
+    "artifact scientific role, media type, disposition, and display order equal the SOW UI-5 table",
+    "artifact display_order is unique and contiguous from 1 through artifact_count",
+    "completed accepted results contain no missing_required artifact",
+    "execution resource branch fields are coherent with historical_unavailable or accepted state",
+    "all four stage summaries have complete status and exact output counts 5, 6, 8, 6",
+    "result alignment session summaries equal the governed session list with ready primary first and optional dimer second",
+    "wire validator recomputes bms.ngs.package-authority.v1 from all 36 descriptors and requires exact artifact counts and persisted digest equality",
+    "threshold_profile.sha256 equals SHA-256 over UTF-8 canonical JSON of threshold_profile.values using sorted keys, separators comma and colon, allow_nan false; outer version, calibration_status, and public_accuracy_validated equal values",
+    "verification verdict is REVIEW when any check status is review or fail or any reason code is present",
+    "verification verdict PASS requires every check pass, empty aggregate and row reason codes, automatic_pass_eligible true, public_accuracy_validated true, and all profile thresholds satisfied",
+    "retry3 verdict is REVIEW with exactly MIXED_ALLELES_DETECTED and VARIANT_SUPPORT_AMBIGUOUS aggregate reasons",
+    "present artifact URL final segment equals artifact_id and artifact_id differs from file sha256",
+    "source_reads_fastq alone has owner_scope managed_input_snapshot; every other descriptor has owner_scope result_root",
+    "managed-input artifact authority resolves exact persisted input snapshot without result-root containment; result artifacts resolve no-follow beneath exact Job result root"
+  ],
+  "x-bms-semantic-validators": [
+    "bms.ngs.fastq-qc-result-construction-validator.v1",
+    "bms.ngs.fastq-qc-result-wire-validator.v1"
+  ]
+}

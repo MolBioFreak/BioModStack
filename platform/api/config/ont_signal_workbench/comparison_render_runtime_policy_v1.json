@@ -1,0 +1,13 @@
+{
+  "schema": "bms.ont-squigualiser-comparison-runtime-policy.v1",
+  "runtime_id": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
+  "oci_digest": "sha256:e1a5778525539c1fd6c98c2bf53a3f341bac53b80044abd7f633e1a7e7fd70c0",
+  "upstream": {
+    "name": "Squigualiser",
+    "version": "0.7.0",
+    "commit": "5a2404f1f43bc3227a85475c59b2b77970078b2e"
+  },
+  "wrapper": "scripts/ont_signal_comparison_runtime.py",
+  "wrapper_sha256": "80f780ed1a34eb09f6f5a95db826ac13a5684a276575c2a2d867165032889ee7",
+  "network": "none"
+}

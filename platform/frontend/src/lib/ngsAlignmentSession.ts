@@ -8,13 +8,8 @@ export interface AlignmentSessionArtifact {
     sha256: string;
     size_bytes: number;
     mime_type: string;
-    range_capable: boolean;
-    declared_sha256: string | null;
-    declared_size_bytes: number | null;
-    observed_sha256: string;
-    observed_size_bytes: number;
-    integrity_valid: boolean;
-    manifest: string;
+    range_capable: true;
+    source_manifest_sha256: string;
 }
 
 export type AlignmentSessionArtifactRole =
@@ -32,32 +27,126 @@ export type AlignmentSessionArtifactRole =
     | 'report'
     | 'track_config';
 
-export interface AlignmentSession {
+export interface AlignmentSessionReference {
+    contig: string;
+    length_bp: number;
+    topology: 'linear' | 'circular';
+    normalized_sequence_sha256: string;
+    fasta_sha256: string;
+    fai_sha256: string;
+}
+
+interface AlignmentSessionBase {
+    schema: 'bms.ngs.alignment-session.v1';
     session_id: string;
     job_id: string;
     mode: AlignmentSessionMode;
-    reference_contig: string | null;
-    ready: boolean;
-    unavailable_reason: string | null;
-    reads_url: string;
-    artifacts: Partial<Record<AlignmentSessionArtifactRole, AlignmentSessionArtifact>>;
 }
 
+export interface ReadyAlignmentSession extends AlignmentSessionBase {
+    ready: true;
+    unavailable_reason: null;
+    reads_url: string;
+    sequence_qc_manifest_sha256: string;
+    verification_manifest_sha256: string;
+    artifact_set_sha256: string;
+    reference: AlignmentSessionReference;
+    artifacts: Partial<Record<AlignmentSessionArtifactRole, AlignmentSessionArtifact>>;
+    alignment_pair_sha256: string;
+}
+
+export interface UnavailableAlignmentSession extends AlignmentSessionBase {
+    mode: 'dimer_candidates';
+    ready: false;
+    unavailable_reason: string;
+    reads_url: null;
+    sequence_qc_manifest_sha256: null;
+    verification_manifest_sha256: null;
+    artifact_set_sha256: null;
+    reference: null;
+    artifacts: Record<string, never>;
+    alignment_pair_sha256: null;
+}
+
+export type AlignmentSession = ReadyAlignmentSession | UnavailableAlignmentSession;
+
 export interface AlignmentSessionResponse {
+    schema: 'bms.ngs.alignment-session-list.v1';
     job_id: string;
     sessions: AlignmentSession[];
 }
 
 export interface AlignmentAccessRotationResponse {
+    schema: 'bms.ngs.rotation-success.v1';
     job_id: string;
     rotated: true;
     scheme: 'opaque_job_capability_v1';
     rotation_count: number;
+    expires_at: string;
 }
 
-export function isAlignmentAccessDenied(reason: unknown): boolean {
-    const response = (reason as { response?: { status?: unknown; data?: { detail?: unknown } } } | null)?.response;
-    return response?.status === 403 && response.data?.detail === 'alignment access denied';
+function isExactNgsError(
+    reason: unknown,
+    status: number,
+    code: string,
+    expectedJobId?: string,
+    expectedResource?: string,
+    expectedRetryable = true,
+): boolean {
+    const response = (reason as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+    const data = response?.data;
+    if (response?.status !== status || !data || typeof data !== 'object' || Array.isArray(data)) return false;
+    const record = data as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    const expectedKeys = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
+    return keys.length === expectedKeys.length
+        && keys.every((key, index) => key === expectedKeys[index])
+        && record.schema === 'bms.ngs.error.v1'
+        && record.code === code
+        && (expectedJobId === undefined || record.job_id === expectedJobId)
+        && typeof record.job_id === 'string'
+        && typeof record.message === 'string'
+        && record.message.length > 0
+        && record.message.length <= 512
+        && typeof record.resource === 'string'
+        && (expectedResource === undefined || record.resource === expectedResource)
+        && record.retryable === expectedRetryable;
+}
+
+export function isAlignmentAccessDenied(reason: unknown, expectedJobId?: string): boolean {
+    return isExactNgsError(reason, 403, 'NGS_CAPABILITY_DENIED', expectedJobId);
+}
+
+export function describeNgsError(reason: unknown, fallback: string): string {
+    const response = (reason as { response?: { status?: unknown; data?: unknown } } | null)?.response;
+    const data = response?.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const record = data as Record<string, unknown>;
+        const keys = Object.keys(record).sort();
+        const expectedKeys = ['code', 'job_id', 'message', 'resource', 'retryable', 'schema'];
+        if (
+            keys.length === expectedKeys.length
+            && keys.every((key, index) => key === expectedKeys[index])
+            && record.schema === 'bms.ngs.error.v1'
+            && typeof record.code === 'string'
+            && typeof record.message === 'string'
+            && record.message.length > 0
+            && record.message.length <= 512
+        ) {
+            const category = record.code.includes('INTEGRITY')
+                ? 'Integrity error'
+                : record.code.includes('CAPABILITY') || record.code.includes('AUTH') || record.code.includes('HIERARCHY')
+                    ? 'Authorization error'
+                    : record.code.includes('ROTATION')
+                        ? 'Access rotation error'
+                        : 'Governed NGS error';
+            return `${category} (${record.code}): ${record.message}`;
+        }
+    }
+    if (reason instanceof Error && reason.message.startsWith('Result parser error:')) return reason.message;
+    if (typeof response?.status === 'number') return `Network error (HTTP ${response.status}): ${fallback}`;
+    if (reason instanceof Error && reason.message) return `Network or transport error: ${reason.message}`;
+    return fallback;
 }
 
 export interface AlignmentRead {
@@ -157,45 +246,274 @@ const artifactRoles = [
     'track_config',
 ] as const satisfies readonly AlignmentSessionArtifactRole[];
 
-export function normalizeAlignmentSessions(payload: AlignmentSessionResponse, expectedJobId: string): AlignmentSession[] {
-    if (!payload || payload.job_id !== expectedJobId || !Array.isArray(payload.sessions)) {
+function requireExactKeys(value: unknown, allowed: readonly string[], label: string): asserts value is Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`Invalid ${label}.`);
+    }
+    const allowedKeys = new Set(allowed);
+    if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
+        throw new Error(`Unknown field in ${label}.`);
+    }
+}
+
+export async function normalizeAlignmentSessions(payload: AlignmentSessionResponse, expectedJobId: string): Promise<AlignmentSession[]> {
+    requireExactKeys(payload, ['schema', 'job_id', 'sessions'], 'alignment session envelope');
+    if (!payload || payload.schema !== 'bms.ngs.alignment-session-list.v1'
+        || payload.job_id !== expectedJobId || !Array.isArray(payload.sessions)) {
         throw new Error('Alignment session job mismatch.');
+    }
+    if (payload.sessions.length < 1 || payload.sessions.length > 2
+        || payload.sessions[0]?.mode !== 'primary' || payload.sessions[0]?.ready !== true
+        || (payload.sessions.length === 2 && payload.sessions[1]?.mode !== 'dimer_candidates')) {
+        throw new Error('Invalid alignment session list authority.');
     }
     const artifactPrefix = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-artifacts/`;
     const readsPrefix = `/api/jobs/${encodeURIComponent(expectedJobId)}/reads`;
-    return payload.sessions.map((session) => {
-        if (session.job_id !== expectedJobId || !['primary', 'dimer_candidates'].includes(session.mode)) {
+    const sessions = await Promise.all(payload.sessions.map(async (session) => {
+        requireExactKeys(session, [
+            'schema', 'session_id', 'job_id', 'mode', 'ready', 'unavailable_reason', 'reads_url',
+            'sequence_qc_manifest_sha256', 'verification_manifest_sha256', 'artifact_set_sha256',
+            'reference', 'artifacts', 'alignment_pair_sha256',
+        ], 'alignment session');
+        if (session.schema !== 'bms.ngs.alignment-session.v1'
+            || session.job_id !== expectedJobId || !/^[0-9a-f]{24}$/.test(session.session_id)
+            || !['primary', 'dimer_candidates'].includes(session.mode)) {
             throw new Error('Alignment session job mismatch.');
         }
-        if (!session.reads_url.startsWith(readsPrefix)) {
-            throw new Error('Unsafe reads URL in alignment session.');
+        if (!session.ready) {
+            if (session.mode !== 'dimer_candidates' || !session.unavailable_reason
+                || session.reads_url !== null || session.reference !== null
+                || session.sequence_qc_manifest_sha256 !== null
+                || session.verification_manifest_sha256 !== null
+                || session.artifact_set_sha256 !== null
+                || session.alignment_pair_sha256 !== null
+                || Object.keys(session.artifacts).length !== 0) {
+                throw new Error('Invalid unavailable alignment session authority.');
+            }
+            return session;
+        }
+        const expectedReadsUrl = `${readsPrefix}?session_id=${session.session_id}`;
+        requireExactKeys(session.reference, [
+            'contig', 'length_bp', 'topology', 'normalized_sequence_sha256', 'fasta_sha256', 'fai_sha256',
+        ], 'alignment reference');
+        requireExactKeys(session.artifacts, artifactRoles, 'alignment artifacts');
+        if (session.reads_url !== expectedReadsUrl
+            || !/^[0-9a-f]{64}$/.test(session.sequence_qc_manifest_sha256)
+            || !/^[0-9a-f]{64}$/.test(session.verification_manifest_sha256)
+            || !/^[0-9a-f]{64}$/.test(session.artifact_set_sha256)
+            || !/^[0-9a-f]{64}$/.test(session.alignment_pair_sha256)
+            || !session.reference.contig
+            || !Number.isInteger(session.reference.length_bp) || session.reference.length_bp < 1
+            || !['linear', 'circular'].includes(session.reference.topology)
+            || !/^[0-9a-f]{64}$/.test(session.reference.normalized_sequence_sha256)
+            || !/^[0-9a-f]{64}$/.test(session.reference.fasta_sha256)
+            || !/^[0-9a-f]{64}$/.test(session.reference.fai_sha256)) {
+            throw new Error('Invalid ready alignment session authority.');
         }
         for (const role of artifactRoles) {
             const artifact = session.artifacts[role];
             if (!artifact) continue;
-            if (!artifact.url.startsWith(artifactPrefix) || !artifact.range_capable) {
+            requireExactKeys(artifact, [
+                'artifact_id', 'url', 'sha256', 'size_bytes', 'mime_type', 'range_capable', 'source_manifest_sha256',
+            ], 'alignment artifact');
+            if (!/^[0-9a-f]{64}$/.test(artifact.artifact_id)
+                || artifact.url !== `${artifactPrefix}${artifact.artifact_id}` || artifact.range_capable !== true) {
                 throw new Error('Unsafe artifact URL in alignment session.');
             }
-            if (!/^[0-9a-f]+$/i.test(artifact.sha256) || artifact.size_bytes < 0) {
+            if (!/^[0-9a-f]{64}$/.test(artifact.sha256)
+                || !/^[0-9a-f]{64}$/.test(artifact.source_manifest_sha256)
+                || artifact.size_bytes < 0) {
                 throw new Error('Invalid artifact integrity metadata in alignment session.');
             }
         }
+        for (const required of ['alignment', 'alignment_index', 'reference', 'reference_index'] as const) {
+            if (!session.artifacts[required]) throw new Error('Incomplete ready alignment session authority.');
+        }
+        const alignment = session.artifacts.alignment!;
+        const alignmentIndex = session.artifacts.alignment_index!;
+        const reference = session.artifacts.reference!;
+        const referenceIndex = session.artifacts.reference_index!;
+        const sourceAuthorities = new Set(
+            Object.values(session.artifacts)
+                .filter((artifact): artifact is AlignmentSessionArtifact => artifact !== null)
+                .map((artifact) => artifact.source_manifest_sha256),
+        );
+        if (sourceAuthorities.size !== 1
+            || (session.mode === 'primary' && !sourceAuthorities.has(session.sequence_qc_manifest_sha256))
+            || reference.sha256 !== session.reference.fasta_sha256
+            || referenceIndex.sha256 !== session.reference.fai_sha256) {
+            throw new Error('Alignment session artifact authority is cross-bound.');
+        }
+        const pairBytes = new TextEncoder().encode(
+            `bms.ngs.alignment-pair.v1\0${JSON.stringify({
+                alignment_index_sha256: alignmentIndex.sha256,
+                alignment_sha256: alignment.sha256,
+            })}`,
+        );
+        const pairDigest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pairBytes))]
+            .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        if (pairDigest !== session.alignment_pair_sha256) {
+            throw new Error('Alignment pair authority is invalid.');
+        }
+        const sessionArtifactIds = Object.entries(session.artifacts)
+            .filter((entry): entry is [string, AlignmentSessionArtifact] => entry[1] !== null)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([, artifact]) => artifact.artifact_id);
+        const sessionSeed = `${expectedJobId}\0${session.mode}\0${sessionArtifactIds.join('\0')}`;
+        const sessionDigest = [...new Uint8Array(await crypto.subtle.digest(
+            'SHA-256', new TextEncoder().encode(sessionSeed),
+        ))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+        if (session.session_id !== sessionDigest.slice(0, 24)) {
+            throw new Error('Alignment session identity is invalid.');
+        }
         return session;
-    });
+    }));
+    const primary = sessions[0];
+    for (const session of sessions.filter((candidate) => candidate.ready)) {
+        if (!primary.ready || !session.reference || !primary.reference
+            || session.sequence_qc_manifest_sha256 !== primary.sequence_qc_manifest_sha256
+            || session.verification_manifest_sha256 !== primary.verification_manifest_sha256
+            || session.artifact_set_sha256 !== primary.artifact_set_sha256) {
+            throw new Error('Alignment session list package authority is inconsistent.');
+        }
+    }
+    return sessions;
 }
 
-export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSession[]> {
-    const response = await api.get<AlignmentSessionResponse>(
-        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions`,
-    );
-    return normalizeAlignmentSessions(response.data, jobId);
+export function bindAlignmentSessionsToResultAuthority(
+    sessions: AlignmentSession[],
+    authority: {
+        sequence_qc_manifest_sha256: string;
+        construct_verification_manifest_sha256: string;
+        artifact_set_sha256: string;
+        reference_sequence_sha256: string;
+    },
+    expectedSessions: Array<{
+        session_id: string;
+        mode: string;
+        ready: boolean;
+        unavailable_reason: string | null;
+        reference_contig: string | null;
+    }>,
+): AlignmentSession[] {
+    if (sessions.length !== expectedSessions.length) {
+        throw new Error('Scientific integrity error: alignment session list differs from the canonical result.');
+    }
+    for (const [index, session] of sessions.entries()) {
+        const expected = expectedSessions[index];
+        if (session.session_id !== expected.session_id || session.mode !== expected.mode
+            || session.ready !== expected.ready || session.unavailable_reason !== expected.unavailable_reason
+            || (session.reference?.contig ?? null) !== expected.reference_contig) {
+            throw new Error('Scientific integrity error: alignment session identity differs from the canonical result.');
+        }
+    }
+    for (const session of sessions.filter((candidate) => candidate.ready)) {
+        if (!session.reference
+            || session.sequence_qc_manifest_sha256 !== authority.sequence_qc_manifest_sha256
+            || session.verification_manifest_sha256 !== authority.construct_verification_manifest_sha256
+            || session.artifact_set_sha256 !== authority.artifact_set_sha256
+            || (session.mode === 'primary' && session.reference.normalized_sequence_sha256 !== authority.reference_sequence_sha256)) {
+            throw new Error('Scientific integrity error: alignment session authority differs from the canonical result.');
+        }
+    }
+    return sessions;
+}
+
+interface AlignmentAccessRecoveryState {
+    epoch: number;
+    automaticRotationUsed: boolean;
+    rotation: Promise<void> | null;
+}
+
+const alignmentAccessRecoveryStateByJob = new Map<string, AlignmentAccessRecoveryState>();
+
+function alignmentAccessRecoveryState(jobId: string): AlignmentAccessRecoveryState {
+    let state = alignmentAccessRecoveryStateByJob.get(jobId);
+    if (!state) {
+        state = { epoch: 0, automaticRotationUsed: false, rotation: null };
+        alignmentAccessRecoveryStateByJob.set(jobId, state);
+    }
+    return state;
+}
+
+export function normalizeAlignmentAccessRotation(
+    value: unknown,
+    expectedJobId: string,
+): AlignmentAccessRotationResponse {
+    requireExactKeys(value, ['schema', 'job_id', 'rotated', 'scheme', 'rotation_count', 'expires_at'], 'alignment rotation response');
+    const response = value as unknown as AlignmentAccessRotationResponse;
+    if (response.schema !== 'bms.ngs.rotation-success.v1'
+        || response.job_id !== expectedJobId || response.rotated !== true
+        || response.scheme !== 'opaque_job_capability_v1'
+        || !Number.isInteger(response.rotation_count) || response.rotation_count < 1
+        || typeof response.expires_at !== 'string' || Number.isNaN(Date.parse(response.expires_at))) {
+        throw new Error('Invalid alignment rotation response.');
+    }
+    return response;
 }
 
 export async function rotateAlignmentAccess(jobId: string): Promise<AlignmentAccessRotationResponse> {
-    const response = await api.post<AlignmentAccessRotationResponse>(
+    const response = await api.post<unknown>(
         `/api/jobs/${encodeURIComponent(jobId)}/alignment-access/rotate`,
     );
-    return response.data;
+    const normalized = normalizeAlignmentAccessRotation(response.data, jobId);
+    alignmentAccessRecoveryState(jobId).epoch += 1;
+    return normalized;
+}
+
+export async function revokeAlignmentAccess(jobId: string): Promise<void> {
+    alignmentAccessRecoveryStateByJob.delete(jobId);
+    await api.delete(`/api/jobs/${encodeURIComponent(jobId)}/alignment-access`);
+}
+
+export function disposeAlignmentAccess(jobId: string): void {
+    alignmentAccessRecoveryStateByJob.delete(jobId);
+    void api.delete(`/api/jobs/${encodeURIComponent(jobId)}/alignment-access`).catch(() => undefined);
+}
+
+function isAlignmentAccessRotationConflict(reason: unknown, expectedJobId: string): boolean {
+    return isExactNgsError(reason, 409, 'NGS_CAPABILITY_ROTATION_CONFLICT', expectedJobId);
+}
+
+export async function withAlignmentAccessRecovery<T>(
+    jobId: string,
+    operation: () => Promise<T>,
+): Promise<T> {
+    const state = alignmentAccessRecoveryState(jobId);
+    const operationEpoch = state.epoch;
+    try {
+        return await operation();
+    } catch (reason) {
+        if (!isAlignmentAccessDenied(reason, jobId)) throw reason;
+        if (state.epoch > operationEpoch) return operation();
+
+        let recovery = state.rotation;
+        if (!recovery) {
+            if (state.automaticRotationUsed) throw reason;
+            state.automaticRotationUsed = true;
+            recovery = rotateAlignmentAccess(jobId)
+                .then(() => undefined)
+                .catch((rotationReason) => {
+                    if (!isAlignmentAccessRotationConflict(rotationReason, jobId)) throw rotationReason;
+                    state.epoch += 1;
+                });
+            state.rotation = recovery;
+            void recovery.finally(() => {
+                if (state.rotation === recovery) state.rotation = null;
+            }).catch(() => undefined);
+        }
+        await recovery;
+        return operation();
+    }
+}
+
+export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSession[]> {
+    return withAlignmentAccessRecovery(jobId, async () => {
+        const response = await api.get<AlignmentSessionResponse>(
+            `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions`,
+        );
+        return await normalizeAlignmentSessions(response.data, jobId);
+    });
 }
 
 export async function fetchAlignmentReads(
@@ -231,12 +549,9 @@ export async function fetchAlignmentRead(
         );
         return response.data;
     } catch (reason) {
-        const response = (reason as { response?: { status?: number; data?: { detail?: { scan_truncated?: unknown; message?: unknown } } } }).response;
-        const detail = response?.data?.detail;
-        if (response?.status === 409 && detail?.scan_truncated === true) {
-            throw new AlignmentReadScanTruncatedError(
-                typeof detail.message === 'string' ? detail.message : undefined,
-            );
+        if (isExactNgsError(reason, 409, 'NGS_READ_SCAN_TRUNCATED', jobId, 'read', false)) {
+            const data = (reason as { response: { data: { message: string } } }).response.data;
+            throw new AlignmentReadScanTruncatedError(data.message);
         }
         throw reason;
     }

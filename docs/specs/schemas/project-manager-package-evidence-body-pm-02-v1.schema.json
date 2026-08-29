@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-evidence-body.pm02.v1",
+  "title": "PM-02 authenticated coverage evidence body v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_body_id",
+    "package_id",
+    "coverage_item",
+    "coverage_contract_id",
+    "source_commit",
+    "source_tree",
+    "coverage_denominator",
+    "producer_receipts",
+    "positive_observations",
+    "negative_observations",
+    "resolver_trace",
+    "evidence_kinds",
+    "native_owner_attestations",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-evidence-body.pm02.v1"
+    },
+    "evidence_body_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "const": "PM-02"
+    },
+    "coverage_item": {
+      "enum": [
+        "source-denominator",
+        "runtime-registry",
+        "capability-dataset-exposure",
+        "operator-trust-registry",
+        "negative-drift"
+      ]
+    },
+    "coverage_contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage_denominator": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "producer_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/receiptPointer"
+      }
+    },
+    "positive_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "negative_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "resolver_trace": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "evidence_kinds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "native_owner_attestations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "ngs-molbio-shared-package-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "source-denominator"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.source-denominator.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "source-denominator-denominator",
+              "source-denominator-positive-observation",
+              "source-denominator-negative-observation",
+              "source-denominator-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "runtime-registry"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.runtime-registry.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "runtime-registry-denominator",
+              "runtime-registry-positive-observation",
+              "runtime-registry-negative-observation",
+              "runtime-registry-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "capability-dataset-exposure"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.capability-dataset-exposure.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "capability-dataset-exposure-denominator",
+              "capability-dataset-exposure-positive-observation",
+              "capability-dataset-exposure-negative-observation",
+              "capability-dataset-exposure-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "operator-trust-registry"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.operator-trust-registry.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "operator-trust-registry-denominator",
+              "operator-trust-registry-positive-observation",
+              "operator-trust-registry-negative-observation",
+              "operator-trust-registry-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "negative-drift"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.negative-drift.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "negative-drift-denominator",
+              "negative-drift-positive-observation",
+              "negative-drift-negative-observation",
+              "negative-drift-resolver-trace"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

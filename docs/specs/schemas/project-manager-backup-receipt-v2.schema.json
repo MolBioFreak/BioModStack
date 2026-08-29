@@ -1,0 +1,1063 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.backup-receipt.v2",
+  "title": "Whole-program Project Manager backup receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "backup_receipt_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_path",
+    "runtime_implementation_algorithm",
+    "runtime_implementation_sha256",
+    "snapshot_protocol",
+    "snapshot_started_at",
+    "snapshot_completed_at",
+    "captured_quiescent",
+    "quiescence_receipt",
+    "cross_store_high_watermarks",
+    "stores",
+    "artifact_roots",
+    "authority_family_coverage",
+    "historical_reopen_expectations",
+    "backup_manifest_algorithm",
+    "backup_manifest_sha256",
+    "created_by",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.backup-receipt.v2"
+    },
+    "backup_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_path": {
+      "const": "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
+    },
+    "runtime_implementation_algorithm": {
+      "const": "sha256-raw-file-v1"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "snapshot_protocol": {
+      "const": "sqlite-online-backup-plus-governed-file-manifest-v2"
+    },
+    "snapshot_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "snapshot_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "captured_quiescent": {
+      "const": true
+    },
+    "quiescence_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.quiescence.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "cross_store_high_watermarks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "global_connector_commands",
+        "global_inbox_events",
+        "local_outbox_events",
+        "local_acknowledgements"
+      ],
+      "properties": {
+        "global_connector_commands": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "global_inbox_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_outbox_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_acknowledgements": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "stores": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "global-experiments"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-ngs-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "core-ngs"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "biomodstack-native"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "artifact_roots": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "global-project-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "molbio-governed-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "ngs-governed-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "bms-native-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "authority_family_coverage": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "project-manager"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "ngs-molbio"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "protein"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "conformational-mapping"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "molecular-dynamics"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "frustrampnn"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "structure-prediction"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "trajectory"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "historical_reopen_expectations": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/reopenExpectation"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "project-manager"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "ngs-molbio"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "protein"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "conformational-mapping"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "molecular-dynamics"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "frustrampnn"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "structure-prediction"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "authority_family": {
+                "const": "trajectory"
+              }
+            },
+            "required": [
+              "authority_family"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "project_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "global_experiment_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "domain_experiment_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "local_state_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "dataset_revision"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "run"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "result"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "resource_kind": {
+                "const": "research_record"
+              }
+            },
+            "required": [
+              "resource_kind"
+            ]
+          },
+          "minContains": 1
+        }
+      ]
+    },
+    "backup_manifest_algorithm": {
+      "const": "sha256-rfc8785-backup-denominator-v2"
+    },
+    "backup_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "created_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "storeSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "store_binding_sha256",
+        "source_database_identity",
+        "snapshot_artifact_id",
+        "snapshot_algorithm",
+        "snapshot_sha256",
+        "size_bytes",
+        "schema_algorithm",
+        "schema_sha256",
+        "trigger_set_algorithm",
+        "trigger_set_sha256",
+        "migration_ledger_algorithm",
+        "migration_ledger_table",
+        "migration_ledger_primary_key_columns",
+        "migration_ledger_sha256",
+        "integrity_check",
+        "foreign_key_violation_count",
+        "object_counts_algorithm",
+        "object_counts"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs",
+            "biomodstack-native"
+          ]
+        },
+        "store_binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_database_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "snapshot_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "snapshot_algorithm": {
+          "const": "sha256-raw-file-v1"
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "schema_algorithm": {
+          "const": "sqlite-schema-rfc8785-v1"
+        },
+        "schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "trigger_set_algorithm": {
+          "const": "sqlite-trigger-set-rfc8785-v1"
+        },
+        "trigger_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migration_ledger_algorithm": {
+          "const": "sqlite-attested-table-typed-rows-v1"
+        },
+        "migration_ledger_table": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 128
+        },
+        "migration_ledger_primary_key_columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 128
+          }
+        },
+        "migration_ledger_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "integrity_check": {
+          "const": "ok"
+        },
+        "foreign_key_violation_count": {
+          "const": 0
+        },
+        "object_counts_algorithm": {
+          "const": "sqlite-count-by-attested-table-v1"
+        },
+        "object_counts": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1024,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "artifactRootSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "source_root_identity",
+        "manifest"
+      ],
+      "properties": {
+        "root_id": {
+          "enum": [
+            "global-project-artifacts",
+            "molbio-governed-artifacts",
+            "ngs-governed-results",
+            "bms-native-results"
+          ]
+        },
+        "source_root_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manifest_schema_id",
+            "manifest_id",
+            "manifest_artifact_id",
+            "manifest_content_sha256",
+            "ordered_files_sha256",
+            "file_count",
+            "total_size_bytes"
+          ],
+          "properties": {
+            "manifest_schema_id": {
+              "const": "bms.project-manager.file-manifest.v2"
+            },
+            "manifest_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_content_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ordered_files_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "total_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "authorityCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_family",
+        "store_ids",
+        "root_ids",
+        "object_count",
+        "receipt_count",
+        "artifact_count"
+      ],
+      "properties": {
+        "authority_family": {
+          "enum": [
+            "project-manager",
+            "ngs-molbio",
+            "protein",
+            "conformational-mapping",
+            "molecular-dynamics",
+            "frustrampnn",
+            "structure-prediction",
+            "trajectory"
+          ]
+        },
+        "store_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "global-experiments",
+              "molbio-domain",
+              "molbio-ngs-domain",
+              "core-ngs",
+              "biomodstack-native"
+            ]
+          }
+        },
+        "root_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "global-project-artifacts",
+              "molbio-governed-artifacts",
+              "ngs-governed-results",
+              "bms-native-results"
+            ]
+          }
+        },
+        "object_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "receipt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "reopenExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "authority_family",
+        "resource_kind",
+        "stable_id",
+        "exact_revision_id",
+        "route_template_id",
+        "route_parameters",
+        "canonical_response_algorithm",
+        "expected_content_sha256",
+        "expected_response_size_bytes"
+      ],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "authority_family": {
+          "enum": [
+            "project-manager",
+            "ngs-molbio",
+            "protein",
+            "conformational-mapping",
+            "molecular-dynamics",
+            "frustrampnn",
+            "structure-prediction",
+            "trajectory"
+          ]
+        },
+        "resource_kind": {
+          "enum": [
+            "project_revision",
+            "global_experiment_revision",
+            "domain_experiment_revision",
+            "local_state_revision",
+            "dataset_revision",
+            "run",
+            "result",
+            "research_record"
+          ]
+        },
+        "stable_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "exact_revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "route_template_id": {
+          "type": "string",
+          "pattern": "^bms\\.route\\.[A-Za-z0-9_.-]+$",
+          "maxLength": 255
+        },
+        "route_parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "canonical_response_algorithm": {
+          "const": "sha256-rfc8785-complete-response-v1"
+        },
+        "expected_content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "expected_response_size_bytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1048576
+        }
+      }
+    }
+  }
+}

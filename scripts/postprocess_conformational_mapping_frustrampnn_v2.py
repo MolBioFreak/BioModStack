@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Postprocess manifest-validated global FrustraMPNN v2 bundles for CM."""
+"""Postprocess manifest-validated modern FrustraMPNN bundles for CM."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from services.conformational_mapping.state_landscape_analysis import (  # noqa: 
 )
 from services.frustrampnn.manifests import (  # noqa: E402
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     load_result_manifest_bytes_and_document,
     validate_result_manifest,
 )
@@ -68,6 +69,7 @@ def _exact_binding(
     request: Mapping[str, Any],
     result: Mapping[str, Any],
 ) -> None:
+    scheduler_child = prepared.get("scheduler_child") is True
     exact = (
         request.get("candidate_id") == prepared.get("candidate_id")
         and request.get("invocation_id") == prepared.get("invocation_id")
@@ -75,9 +77,12 @@ def _exact_binding(
         and request.get("parent_workflow_id") == "conformational_mapping"
         and request.get("requiredness") == "required"
         and request.get("source_artifact", {}).get("sha256") == prepared.get("source_sha256")
-        and request.get("identity_authority_artifact", {}).get(
-            "cm_complex_snapshot_sha256"
-        ) == prepared.get("cm_complex_snapshot_sha256")
+        and (
+            scheduler_child
+            or request.get("identity_authority_artifact", {}).get(
+                "cm_complex_snapshot_sha256"
+            ) == prepared.get("cm_complex_snapshot_sha256")
+        )
         and request.get("requested_settings_sha256")
         == prepared.get("requested_settings_sha256")
         and request.get("effective_settings_sha256")
@@ -100,6 +105,7 @@ def postprocess_canonical_bundles(
     preparation_manifest_path: Path,
     bundle_dirs: Sequence[Path],
     output_dir: Path,
+    scheduler_terminal_receipt_path: Path | None = None,
 ) -> dict[str, Any]:
     if output_dir.exists():
         raise CMFrustraMPNNPostprocessError("CM postprocessing output already exists")
@@ -131,36 +137,75 @@ def postprocess_canonical_bundles(
             "canonical result candidate identity/order differs from CM ensemble"
         )
     prepared_by_id = {str(item["candidate_id"]): item for item in prepared_rows}
+    scheduler_by_id: dict[str, dict[str, Any]] = {}
+    if scheduler_terminal_receipt_path is not None:
+        scheduler_terminal = json.loads(
+            scheduler_terminal_receipt_path.read_text(encoding="utf-8")
+        )
+        if (
+            scheduler_terminal.get("schema_name")
+            != "bms.frustrampnn.parent-fanout-terminal.v1"
+            or scheduler_terminal.get("parent_job_id") != preparation["parent_job_id"]
+            or scheduler_terminal.get("parent_workflow_id") != "conformational_mapping"
+            or scheduler_terminal.get("status") != "complete"
+        ):
+            raise CMFrustraMPNNPostprocessError("scheduler terminal receipt is invalid")
+        for child in scheduler_terminal.get("child_receipts") or []:
+            child_id = child.get("job_id") if isinstance(child, Mapping) else None
+            for candidate in child.get("candidates") or []:
+                candidate_id = candidate.get("candidate_id")
+                if candidate_id in scheduler_by_id:
+                    raise CMFrustraMPNNPostprocessError("scheduler candidate receipt is duplicate")
+                scheduler_by_id[str(candidate_id)] = {
+                    "scheduler_child": True,
+                    "parent_job_id": child_id,
+                    "invocation_id": candidate.get("invocation_id"),
+                    "request_sha256": candidate.get("component_request_sha256"),
+                    "source_sha256": candidate.get("source_artifact_sha256"),
+                    "requested_settings_sha256": candidate.get("requested_settings_sha256"),
+                    "effective_settings_sha256": candidate.get("effective_settings_sha256"),
+                }
+        if set(scheduler_by_id) != set(prepared_by_id):
+            raise CMFrustraMPNNPostprocessError("scheduler terminal candidate set is incomplete")
 
     loaded: dict[str, dict[str, Any]] = {}
     for bundle in bundle_dirs:
         manifest_name, manifest_bytes, manifest = load_result_manifest_bytes_and_document(bundle)
-        if manifest_name != V2_MANIFEST_PATH or manifest.get("schema_version") != 2:
-            raise CMFrustraMPNNPostprocessError("CM postprocessing requires result manifest v2")
+        generation = manifest.get("schema_version")
+        expected_manifest_name = {
+            2: V2_MANIFEST_PATH,
+            3: V3_MANIFEST_PATH,
+        }.get(generation)
+        if manifest_name != expected_manifest_name:
+            raise CMFrustraMPNNPostprocessError(
+                "CM postprocessing requires a recognized modern result manifest"
+            )
         payloads = validate_result_manifest(bundle, manifest)
-        component_request = _decode(payloads, "workflow_component_request_v2.json")
-        component_result = _decode(payloads, "workflow_component_result_v2.json")
+        request_name = f"workflow_component_request_v{generation}.json"
+        result_name = f"workflow_component_result_v{generation}.json"
+        landscape_name = f"frustrampnn_landscape_v{generation}.json"
+        component_request = _decode(payloads, request_name)
+        component_result = _decode(payloads, result_name)
         candidate_id = str(component_request.get("candidate_id") or "")
         if candidate_id in loaded or candidate_id not in prepared_by_id:
             raise CMFrustraMPNNPostprocessError(
                 "canonical result candidate identity is duplicate or unexpected"
             )
-        prepared = {
-            **prepared_by_id[candidate_id],
-            "parent_job_id": preparation["parent_job_id"],
-        }
-        if hashlib.sha256(payloads["workflow_component_request_v2.json"]).hexdigest() != prepared[
+        prepared = {**prepared_by_id[candidate_id], "parent_job_id": preparation["parent_job_id"]}
+        if scheduler_by_id:
+            prepared.update(scheduler_by_id[candidate_id])
+        if hashlib.sha256(payloads[request_name]).hexdigest() != prepared[
             "request_sha256"
         ]:
             raise CMFrustraMPNNPostprocessError(
                 f"canonical result request bytes are stale: {candidate_id}"
             )
         _exact_binding(prepared, component_request, component_result)
-        landscape = _decode(payloads, "frustrampnn_landscape_v2.json")
+        landscape = _decode(payloads, landscape_name)
         structure_map = _decode(payloads, "frustrampnn_structure_map_v1.json")
         if (
             landscape.get("schema_name") != "frustrampnn_landscape"
-            or landscape.get("schema_version") != 2
+            or landscape.get("schema_version") != generation
             or landscape.get("candidate_id") != candidate_id
             or landscape.get("source_artifact_sha256") != prepared["source_sha256"]
             or structure_map.get("candidate_id") != candidate_id
@@ -173,8 +218,10 @@ def postprocess_canonical_bundles(
             "manifest": manifest,
             "manifest_bytes": manifest_bytes,
             "payloads": payloads,
+            "landscape_name": landscape_name,
             "landscape": landscape,
             "structure_map": structure_map,
+            "execution_binding": prepared,
         }
     if set(loaded) != set(candidate_ids):
         raise CMFrustraMPNNPostprocessError(
@@ -194,6 +241,7 @@ def postprocess_canonical_bundles(
         for candidate_id in candidate_ids:
             item = loaded[str(candidate_id)]
             prepared = prepared_by_id[str(candidate_id)]
+            execution_binding = item["execution_binding"]
             destination = global_results / str(candidate_id)
             shutil.copytree(item["bundle"], destination)
             copied_payloads = validate_result_manifest(destination, item["manifest"])
@@ -203,10 +251,11 @@ def postprocess_canonical_bundles(
                 )
             normalized = destination / "normalized_input.pdb"
             candidate_clashes = build_clash_rows(
-                str(candidate_id), normalized, item["structure_map"],
-                detector_version=request["analysis_policy"].get(
-                    "clash_detector_version", "cm_clash_detector_v1"
-                ),
+                normalized,
+                item["structure_map"],
+                candidate_id=str(candidate_id),
+                detector_id=request["analysis_policy"]["clash_detector_id"],
+                detector_version=request["analysis_policy"]["clash_detector_version"],
             )
             if set(clash_rows).intersection(candidate_clashes):
                 raise CMFrustraMPNNPostprocessError(
@@ -217,15 +266,15 @@ def postprocess_canonical_bundles(
             structure_maps.append(item["structure_map"])
             references.append({
                 "candidate_id": candidate_id,
-                "invocation_id": prepared["invocation_id"],
-                "source_sha256": prepared["source_sha256"],
+                "invocation_id": execution_binding["invocation_id"],
+                "source_sha256": execution_binding["source_sha256"],
                 "cm_complex_snapshot_sha256": prepared[
                     "cm_complex_snapshot_sha256"
                 ],
                 "requested_settings_sha256": prepared[
                     "requested_settings_sha256"
                 ],
-                "effective_settings_sha256": prepared[
+                "effective_settings_sha256": execution_binding[
                     "effective_settings_sha256"
                 ],
                 "bundle_relative_path": destination.relative_to(output_dir).as_posix(),
@@ -233,7 +282,7 @@ def postprocess_canonical_bundles(
                     item["manifest_bytes"]
                 ).hexdigest(),
                 "landscape_sha256": hashlib.sha256(
-                    item["payloads"]["frustrampnn_landscape_v2.json"]
+                    item["payloads"][item["landscape_name"]]
                 ).hexdigest(),
                 "structure_map_sha256": hashlib.sha256(
                     item["payloads"]["frustrampnn_structure_map_v1.json"]
@@ -396,6 +445,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--canonical", type=Path, required=True)
     parser.add_argument("--preparation-manifest", type=Path, required=True)
+    parser.add_argument("--scheduler-terminal-receipt", type=Path)
     parser.add_argument("--bundle", type=Path, action="append", required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -404,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             request_path=args.request,
             canonical_dir=args.canonical,
             preparation_manifest_path=args.preparation_manifest,
+            scheduler_terminal_receipt_path=args.scheduler_terminal_receipt,
             bundle_dirs=args.bundle,
             output_dir=args.out,
         )

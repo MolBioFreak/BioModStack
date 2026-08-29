@@ -1,0 +1,617 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.restoration-receipt.v2",
+  "title": "Whole-program isolated restoration receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "restoration_receipt_id",
+    "backup_receipt",
+    "source_commit",
+    "source_tree",
+    "destination_isolated",
+    "destination_identity",
+    "restore_started_at",
+    "restore_completed_at",
+    "stores",
+    "artifact_roots",
+    "connector_reconciliation",
+    "restart_receipt",
+    "historical_reopen_observations",
+    "created_by",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.restoration-receipt.v2"
+    },
+    "restoration_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "backup_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.backup-receipt.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "destination_isolated": {
+      "const": true
+    },
+    "destination_identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "restore_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "restore_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stores": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "global-experiments"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-ngs-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "core-ngs"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "biomodstack-native"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "artifact_roots": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "global-project-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "molbio-governed-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "ngs-governed-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restoredRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "bms-native-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "connector_reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "unresolved_conflicts",
+        "deferred_gaps",
+        "high_watermarks",
+        "high_watermarks_algorithm",
+        "high_watermarks_sha256"
+      ],
+      "properties": {
+        "state": {
+          "const": "current"
+        },
+        "unresolved_conflicts": {
+          "const": 0
+        },
+        "deferred_gaps": {
+          "const": 0
+        },
+        "high_watermarks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "global_connector_commands",
+            "global_inbox_events",
+            "local_outbox_events",
+            "local_acknowledgements"
+          ],
+          "properties": {
+            "global_connector_commands": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "global_inbox_events": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "local_outbox_events": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "local_acknowledgements": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "high_watermarks_algorithm": {
+          "const": "sha256-rfc8785-high-watermarks-v1"
+        },
+        "high_watermarks_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "restart_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.restart-reopen-acceptance.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "historical_reopen_observations": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/reopenObservation"
+      }
+    },
+    "created_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "restoredStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "store_binding_sha256",
+        "source_snapshot_artifact_id",
+        "source_snapshot_sha256",
+        "restored_database_identity",
+        "restored_database_algorithm",
+        "restored_database_sha256",
+        "size_bytes",
+        "schema_algorithm",
+        "schema_sha256",
+        "trigger_set_algorithm",
+        "trigger_set_sha256",
+        "migration_ledger_algorithm",
+        "migration_ledger_sha256",
+        "integrity_check",
+        "foreign_key_violation_count",
+        "object_counts_algorithm",
+        "object_counts"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs",
+            "biomodstack-native"
+          ]
+        },
+        "store_binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_snapshot_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "source_snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "restored_database_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "restored_database_algorithm": {
+          "const": "sha256-raw-file-v1"
+        },
+        "restored_database_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "schema_algorithm": {
+          "const": "sqlite-schema-rfc8785-v1"
+        },
+        "schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "trigger_set_algorithm": {
+          "const": "sqlite-trigger-set-rfc8785-v1"
+        },
+        "trigger_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migration_ledger_algorithm": {
+          "const": "sqlite-attested-table-typed-rows-v1"
+        },
+        "migration_ledger_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "integrity_check": {
+          "const": "ok"
+        },
+        "foreign_key_violation_count": {
+          "const": 0
+        },
+        "object_counts_algorithm": {
+          "const": "sqlite-count-by-attested-table-v1"
+        },
+        "object_counts": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1024,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "restoredRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "source_manifest_id",
+        "source_manifest_content_sha256",
+        "restored_root_identity",
+        "restored_manifest"
+      ],
+      "properties": {
+        "root_id": {
+          "enum": [
+            "global-project-artifacts",
+            "molbio-governed-artifacts",
+            "ngs-governed-results",
+            "bms-native-results"
+          ]
+        },
+        "source_manifest_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "source_manifest_content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "restored_root_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "restored_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manifest_schema_id",
+            "manifest_id",
+            "manifest_artifact_id",
+            "manifest_content_sha256",
+            "ordered_files_sha256",
+            "file_count",
+            "total_size_bytes"
+          ],
+          "properties": {
+            "manifest_schema_id": {
+              "const": "bms.project-manager.file-manifest.v2"
+            },
+            "manifest_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_content_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ordered_files_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "total_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "reopenObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectation_case_id",
+        "route_template_id",
+        "route_parameters",
+        "canonical_response_algorithm",
+        "observed_content_sha256",
+        "observed_response_size_bytes"
+      ],
+      "properties": {
+        "expectation_case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "route_template_id": {
+          "type": "string",
+          "pattern": "^bms\\.route\\.[A-Za-z0-9_.-]+$",
+          "maxLength": 255
+        },
+        "route_parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "canonical_response_algorithm": {
+          "const": "sha256-rfc8785-complete-response-v1"
+        },
+        "observed_content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "observed_response_size_bytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1048576
+        }
+      }
+    }
+  }
+}

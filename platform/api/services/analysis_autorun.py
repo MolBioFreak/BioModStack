@@ -17,6 +17,7 @@ from services.analysis_registry import (
     STRUCTURE_SUMMARY_ANALYSIS,
 )
 from services.analysis_runs import request_design_analysis
+from runtime_policy import acquire_workflow_mutation_lease, run_with_workflow_mutation_lease
 
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,13 @@ def schedule_viewer_minimum_analyses_for_job(job_id: str | None) -> bool:
         except Exception as exc:
             logger.warning("[ANALYSIS AUTO] Failed viewer-minimum autorun for %s: %s", normalized, exc)
 
-    asyncio.create_task(_runner())
+    mutation_lease = acquire_workflow_mutation_lease()
+    operation = _runner()
+    try:
+        asyncio.create_task(run_with_workflow_mutation_lease(mutation_lease, operation))
+    except BaseException:
+        operation.close()
+        mutation_lease.close()
+        raise
     return True
 

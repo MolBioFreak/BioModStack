@@ -125,6 +125,9 @@ class SequenceImportRequest(BaseModel):
         max_length=MAX_IMPORT_RECORDS,
     )
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=255)
+    origin_surface: Literal["molbio", "ngs"] = "molbio"
+    source_provider: Literal["upload", "paste", "ncbi", "library"] | None = None
+    source_id: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
     def require_one_source(self) -> "SequenceImportRequest":
@@ -711,11 +714,17 @@ async def _commit_sequence_import_transaction(
             "record_count": preview["record_count"],
             "topology_default": preview["topology_default"],
             "topology_overrides": preview["topology_overrides"],
+            "origin_surface": request.origin_surface,
+            "source_provider": request.source_provider,
+            "source_id": request.source_id,
         },
         provenance={
             "authority": "server_parser",
             "source_digest": preview["source_digest"],
             "request_fingerprint": fingerprint,
+            "origin_surface": request.origin_surface,
+            "source_provider": request.source_provider,
+            "source_id": request.source_id,
         },
         idempotency_key=key,
         request_fingerprint=fingerprint,
@@ -725,6 +734,54 @@ async def _commit_sequence_import_transaction(
     persisted_records: list[dict[str, Any]] = []
     output_edges: list[tuple[MolecularRevision, str, dict[str, Any]]] = []
     for report in preview["records"]:
+        existing_revision = (
+            await session.execute(
+                select(MolecularRevision)
+                .where(MolecularRevision.content_sha256 == report["canonical_digest"])
+                .order_by(MolecularRevision.created_at.asc(), MolecularRevision.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing_revision is not None:
+            existing_sequence = await session.get(NucleotideSequence, existing_revision.document_id)
+            if existing_sequence is None:
+                raise SequenceImportInputError(
+                    "existing molecular revision has no source sequence",
+                    code="invalid_existing_revision",
+                )
+            output_edges.append((
+                existing_revision,
+                "reused_imported_record",
+                {
+                    "record_ordinal": report["record_ordinal"],
+                    "canonical_digest": report["canonical_digest"],
+                    "origin_surface": request.origin_surface,
+                    "source_provider": request.source_provider,
+                    "source_id": request.source_id,
+                },
+            ))
+            persisted_records.append({
+                "record_ordinal": report["record_ordinal"],
+                "source_name": report["source_name"],
+                "name": existing_sequence.name,
+                "description": existing_sequence.description,
+                "sequence": existing_sequence.sequence,
+                "sequence_type": existing_sequence.sequence_type,
+                "accession": existing_sequence.accession,
+                "organism": existing_sequence.organism,
+                "sequence_id": existing_sequence.id,
+                "document_id": existing_sequence.id,
+                "revision_id": existing_revision.id,
+                "revision_number": existing_revision.revision_number,
+                "canonical_digest": existing_revision.content_sha256,
+                "content_sha256": existing_revision.content_sha256,
+                "topology": "circular" if existing_sequence.is_circular else "linear",
+                "length": existing_revision.content_length,
+                "features": existing_sequence.features or [],
+                "exact_duplicate_of": report["exact_duplicate_of"],
+                "reused_existing_revision": True,
+            })
+            continue
         sequence = NucleotideSequence(
             id=str(uuid.uuid4()),
             name=report["name"],
@@ -793,6 +850,7 @@ async def _commit_sequence_import_transaction(
                 "length": report["length"],
                 "features": report["features"],
                 "exact_duplicate_of": report["exact_duplicate_of"],
+                "reused_existing_revision": False,
             }
         )
 
@@ -806,6 +864,9 @@ async def _commit_sequence_import_transaction(
         "request_fingerprint": fingerprint,
         "source_format": preview["source_format"],
         "source_digest": preview["source_digest"],
+        "origin_surface": request.origin_surface,
+        "source_provider": request.source_provider,
+        "source_id": request.source_id,
         "topology_default": preview["topology_default"],
         "topology_overrides": preview["topology_overrides"],
         "record_count": len(persisted_records),

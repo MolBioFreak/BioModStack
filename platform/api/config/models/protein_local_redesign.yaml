@@ -4,7 +4,7 @@ version: "1.0.0"
 category: generative_design
 description: >
   First-class structure-conditioned local redesign using native RFdiffusion3
-  selections, explicit sequence-design omission, and typed result provenance.
+  coordinate selections, optional residue-level sequence recall, and typed result provenance.
 container: foundry.sif
 
 ui_icon: microscope
@@ -22,7 +22,7 @@ outputs:
 modes:
   - id: local_redesign
     name: Local Redesign
-    description: Explore a selected local region while leaving sequence design unrequested.
+    description: Explore a selected local region with explicit coordinate and amino-acid identity roles.
     params:
       - input_structure
       - redesign_mode
@@ -30,6 +30,7 @@ modes:
       - context_chains
       - redesign_ranges
       - sequence_policy
+      - select_unfixed_sequence
       - insertion_anchor
       - insertion_min_length
       - insertion_max_length
@@ -94,8 +95,14 @@ params:
     type: string
     description: Sequence handling for native RFD3 local redesign.
     required: false
-    default: skip
-    enum: [skip]
+    default: preserve
+    enum: [preserve, explicit_positions, insert_only]
+    ui_group: Sequence policy
+    ui_order: 20
+  - name: select_unfixed_sequence
+    type: string
+    description: Source residue ranges whose amino-acid identities RFD3 may recall while remodeling coordinates.
+    required: false
     ui_group: Sequence policy
     ui_order: 20
   - name: insertion_anchor
@@ -283,10 +290,3 @@ params:
     enum: [skip, fampnn, mpnn]
     ui_group: Downstream stages
     ui_order: 70
-  - name: plr_run_boltz_validation
-    type: boolean
-    description: Run downstream structure validation after sequence design.
-    required: false
-    default: false
-    ui_group: Downstream stages
-    ui_order: 71

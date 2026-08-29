@@ -11,15 +11,15 @@ import type {
     CmStateLandscapeRow,
 } from './conformationalMappingApi.js';
 
-export type StateLandscapeWorkspaceTab = 'ensemble' | 'mapping' | 'landscape' | 'state-analysis' | 'analysis' | 'evidence' | 'downloads';
+export type StateLandscapeWorkspaceTab = 'ensemble' | 'mapping' | 'state-analysis' | 'analysis' | 'evidence' | 'downloads';
 
-const WORKSPACE_TABS: StateLandscapeWorkspaceTab[] = ['ensemble', 'mapping', 'landscape', 'analysis', 'evidence', 'downloads'];
+const WORKSPACE_TABS: StateLandscapeWorkspaceTab[] = ['ensemble', 'mapping', 'analysis', 'evidence', 'downloads'];
 /** C1 only enables the compact B2 header request; it never exposes the workspace itself. */
 export const stateLandscapeSummaryEnabled = (authority: CanonicalStateLandscapeAnalysis | null): boolean => authority !== null;
 /** C2 enables the lens and bounded row requests only after B2 binds the C1 record hash. */
 export const stateLandscapeWorkspaceEnabled = (summary: CmStateLandscapeAnalysisSummary | null): boolean => summary !== null;
 export const stateLandscapeWorkspaceTabs = (available: boolean): StateLandscapeWorkspaceTab[] => available
-    ? [...WORKSPACE_TABS.slice(0, 3), 'state-analysis', ...WORKSPACE_TABS.slice(3)]
+    ? [...WORKSPACE_TABS.slice(0, 2), 'state-analysis', ...WORKSPACE_TABS.slice(2)]
     : WORKSPACE_TABS;
 
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -238,6 +238,7 @@ export const validateStateLandscapeWorkspaceRowsPage = (
     exact(page, ['request_id', 'selected_analysis_id', 'offset', 'limit', 'applied_filters', 'next_offset', 'rows'], 'State-analysis rows page is malformed');
     if (page.request_id !== summary.request_id || page.selected_analysis_id !== summary.analysis_id || page.offset !== expectedOffset) throw new Error('State-analysis rows page identity is inconsistent');
     const limit = integer(page.limit, 'State-analysis rows page limit is malformed', 1);
+    if (limit !== 50) throw new Error('State-analysis rows page limit does not match the requested bound');
     const filters = object(page.applied_filters, 'State-analysis rows filters are malformed');
     exact(filters, ['pair_id', 'candidate_id', 'entity_instance_id', 'auth_asym_id', 'sequence_start', 'sequence_end'], 'State-analysis rows filters are malformed');
     if (filters.pair_id !== selectedPairId || filters.candidate_id !== null || filters.entity_instance_id !== null || filters.auth_asym_id !== null || filters.sequence_start !== null || filters.sequence_end !== null) {
@@ -246,6 +247,17 @@ export const validateStateLandscapeWorkspaceRowsPage = (
     const selectedPair = summary.pairs.find((pair) => pair.pair_id === selectedPairId);
     if (!selectedPair) throw new Error('Selected state-analysis pair is absent from authority');
     const rows = array(page.rows, 'State-analysis rows are malformed').map((row) => validateRow(row, selectedPair, summary.comparison.target_id));
+    const seenIdentities = new Set<string>();
+    for (const row of rows) {
+        const identity = JSON.stringify([
+            row.pair_id, row.candidate_a_id, row.candidate_b_id,
+            row.identity.target_id, row.identity.entity_instance_id, row.identity.auth_asym_id,
+            row.identity.auth_seq_id, row.identity.insertion_code, row.identity.sequence_index,
+            row.identity.validated_wt,
+        ]);
+        if (seenIdentities.has(identity)) throw new Error('State-analysis rows page repeats one scientific identity');
+        seenIdentities.add(identity);
+    }
     const nextOffset = page.next_offset === null ? null : integer(page.next_offset, 'State-analysis next offset is malformed', expectedOffset + 1);
     if (rows.length > limit || (nextOffset !== null && nextOffset !== expectedOffset + rows.length)) {
         throw new Error('State-analysis rows page bounds are malformed');

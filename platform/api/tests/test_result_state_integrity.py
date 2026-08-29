@@ -19,6 +19,7 @@ if str(API_ROOT) not in sys.path:
 
 from database import (
     Base,
+    ConformationalMappingRequest,
     Design,
     Job,
     RFD3LocalRedesignArtifact,
@@ -129,6 +130,60 @@ def test_design_result_expectation_is_explicit_or_known_model_only() -> None:
             params={"result_integrity_requires_designs": True},
         )
     ) is True
+
+
+@pytest.mark.asyncio
+async def test_cm_ingestion_failure_closes_generic_job_and_typed_request(
+    tmp_path: Path,
+) -> None:
+    factory, engine = await _session_factory(tmp_path)
+    async with factory() as session:
+        job = _job(
+            "cm-retry-job",
+            model_id="conformational_mapping",
+            mode="map",
+            output_dir=str(tmp_path / "cm-output"),
+            lineage_root_job_id="cm-request",
+            stage_family="conformational_mapping",
+        )
+        request = ConformationalMappingRequest(
+            request_id="cm-request",
+            job_id=job.id,
+            principal_id="alice",
+            backend="confornets",
+            status="running",
+            request_sha256="1" * 64,
+            coordinate_plan_sha256="2" * 64,
+            resume_key="3" * 64,
+            result_contract_id="conformational_mapping_confornets_v1",
+            request_json={},
+            coordinate_plan_json={},
+            progress_json={"phase": "running"},
+        )
+        session.add_all([job, request])
+        await session.commit()
+
+        async def fail_ingestion(*_args, **_kwargs) -> int:
+            raise RuntimeError("forced CM ingestion failure")
+
+        result = await finalize_successful_job(
+            job,
+            str(tmp_path / "cm-output"),
+            session,
+            ingest_fn=fail_ingestion,
+        )
+        await session.refresh(job)
+        await session.refresh(request)
+
+        assert result.completed is False
+        assert result.integrity_state == "ingestion_failed"
+        assert job.status == "failed"
+        assert job.queue_status == "failed"
+        assert request.status == "failed"
+        assert request.failure_receipt_json is not None
+        assert request.failure_receipt_json["job_id"] == job.id
+        assert request.failure_receipt_json["message"] == job.error_message
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

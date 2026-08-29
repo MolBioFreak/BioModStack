@@ -40,6 +40,21 @@ ADAPTER_GPU_PAYLOAD = {
 }
 
 
+def test_gpu_process_labels_follow_live_validator_process_identity() -> None:
+    assert gpu._infer_gpu_process_label(
+        "python3",
+        ["python3", "/opt/esmfold2/run_esmfold2.py", "--input", "candidate.pdb"],
+    ) == "ESMFold2"
+    assert gpu._infer_gpu_process_label(
+        "python3",
+        ["python3", "/app/run_protenix_inference.py", "--model_name", "protenix-v2"],
+    ) == "Protenix V2"
+
+
+def test_generic_gpu_process_keeps_its_live_identity() -> None:
+    assert gpu._infer_gpu_process_label("python3", []) == "python3"
+
+
 def test_get_gpu_stats_with_error_uses_workflow_adapter_in_core_runtime_mode(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 

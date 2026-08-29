@@ -10,9 +10,11 @@ const managerApi = vi.hoisted(() => ({
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
     searchAdapterEntities: vi.fn(),
+    issueAdapterReceipt: vi.fn(),
     attachExistingEntity: vi.fn(),
     getResultSurface: vi.fn(),
     createLaunchContext: vi.fn(),
+    issuePreparedLaunchContext: vi.fn(),
     createProject: vi.fn(),
     createGlobalExperiment: vi.fn(),
     createDomainExperiment: vi.fn(),
@@ -26,6 +28,10 @@ const managerApi = vi.hoisted(() => ({
     archiveDomainExperiment: vi.fn(),
     restoreDomainExperiment: vi.fn(),
     createResearchRecord: vi.fn(),
+    listGlobalExperiments: vi.fn(),
+    listNgsMolBioShareableResults: vi.fn(),
+    linkNgsMolBioProject: vi.fn(),
+    listNgsMolBioProjectLinks: vi.fn(),
     projectManagerErrorMessage: vi.fn((error: unknown) => error instanceof Error ? error.message : String(error)),
     isPermissionError: vi.fn(() => false),
 }));
@@ -78,7 +84,8 @@ const baseSummary = {
         activity: { items: [{ id: 'event-1', resource_id: 'receipt-9', event_type: 'source_attached', generation: 3, payload: { receipt_id: 'receipt-9' }, created_at: '2026-08-09T11:00:00Z' }], next_cursor: 'activity:1' },
     },
     project: {
-        id: 'project-1', name: 'DNA Polymerase Design', objective: 'Improve catalytic stability',
+        id: 'project-1',
+        project_scope: 'global', name: 'DNA Polymerase Design', objective: 'Improve catalytic stability',
         lifecycle_state: 'active', head_generation: 3, current_revision_id: 'revision-project-1', updated_at: '2026-08-09T00:00:00Z',
     },
     tree: { nodes: [
@@ -169,7 +176,15 @@ function summaryFor(selectedNodeKey?: string) {
         canonical_identity: { store_id: 'core', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', receipt_id: 'receipt-9', content_digest: 'b'.repeat(64) },
         summary: {}, relationship: { parent_node_key: 'domain_experiment:domain-1' }, scientific_context: {},
         reconciliation: { state: 'current', last_verified_at: '2026-08-09T11:00:00Z', reason: null }, available_actions: ['open'],
-        canonical_surface: { schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9', contract_id: 'rfd3_local_redesign_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design', route: '/designs/job-9', readiness: 'ready', native_summary: { candidates: 12 }, scientific_acceptance: { state: 'review', reason: null }, provenance: {}, available_actions: ['open'] },
+        canonical_surface: {
+            schema: 'bms.result-surface.v1', receipt_id: 'receipt-9', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-9',
+            contract_id: 'rfd3_local_redesign_v1', content_digest: 'b'.repeat(64), surface_kind: 'protein_design',
+            route: { template_id: 'bms.route.design-result.v1', path: '/designs/job-9', query: {} }, readiness: 'ready',
+            native_summary: { schema_id: 'bms.result-summary.test.v1', content_sha256: 'c'.repeat(64), canonical_size_bytes: 17, payload: { candidates: 12 } },
+            scientific_acceptance: { state: 'review', reason: null },
+            provenance: { schema_id: 'bms.result-provenance.test.v1', content_sha256: 'd'.repeat(64), canonical_size_bytes: 2, payload: {} },
+            comparison: { state: 'not_applicable', reason: null, authority: null }, available_actions: ['open'],
+        },
     };
     return value;
 }
@@ -221,6 +236,10 @@ beforeEach(() => {
     managerApi.isPermissionError.mockReturnValue(false);
     managerApi.listProjects.mockResolvedValue({ items: [project], next_cursor: null });
     managerApi.searchProjects.mockResolvedValue({ items: [project], next_cursor: null });
+    managerApi.listGlobalExperiments.mockResolvedValue([{ id: 'global-1', name: 'Validation experiment' }]);
+    managerApi.listNgsMolBioShareableResults.mockResolvedValue([]);
+    managerApi.linkNgsMolBioProject.mockResolvedValue({});
+    managerApi.listNgsMolBioProjectLinks.mockResolvedValue([{ link_id: 'link-1' }]);
     managerApi.getProjectSummary.mockImplementation((_projectId: string, options: { selectedNodeKey?: string; activityCursor?: string }) => {
         const value = summaryFor(options.selectedNodeKey);
         if (options.activityCursor) {
@@ -255,6 +274,92 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('preserves exact selected Domain-state identity when opening NGS/MolBio', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1');
+            return Promise.resolve({ ...value, selection: { ...value.selection, summary: { ...value.selection.summary, schema: 'bms.ngs-molbio-experiment.v2', domain_kind: 'ngs_molbio' } } });
+        });
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1&state_revision_id=state-saved');
+        await waitUntil(() => expect(container.textContent).toContain('Open Plans & Runs workspace'));
+        const open = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Open Plans & Runs workspace');
+        await act(async () => open?.click());
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('state_revision_id=state-saved');
+    });
+
+    it('labels linked NGS/MolBio Projects from server-derived relationships', async () => {
+        managerApi.searchProjects.mockResolvedValue({ items: [{ ...project, payload: { ...project.payload, project_scope: 'ngs_molbio_local' } }], next_cursor: null });
+        await renderAt('/projects?project_scope=ngs_molbio_local');
+        await waitUntil(() => expect(container.textContent).toContain('Linked'));
+        expect(managerApi.listNgsMolBioProjectLinks).toHaveBeenCalledWith('project-1');
+    });
+    it('offers optional local-to-Global Project linking in the shared Add current work flow', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('project:project-1');
+            value.project.project_scope = 'ngs_molbio_local';
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        await renderAt('/projects/project-1?selected=project%3Aproject-1');
+        await waitUntil(() => expect(container.textContent).toContain('NGS/MolBio Project'));
+        const add = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Attach existing record');
+        await act(async () => add?.click());
+        const linkProject = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Link this NGS/MolBio Project to a Global Project');
+        expect(linkProject).not.toBeUndefined();
+        await act(async () => linkProject?.click());
+        await waitUntil(() => expect(container.textContent).toContain('Link NGS/MolBio Project'));
+        expect(container.textContent).toContain('Native data stays in this NGS/MolBio Project.');
+        expect(container.textContent).toContain('Experiments to expose');
+        expect(container.textContent).toContain('Results to expose');
+    });
+    it('opens a completed Design through the server-issued preparation-bound v2 MD context', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('workflow_run:run-1');
+            const mutable = value as unknown as {
+                runs: { items: Array<{
+                    available_actions: string[];
+                    attempts: Array<{ binding_receipt: Record<string, unknown> | null }>;
+                }> };
+            };
+            mutable.runs.items[0].available_actions = ['launch_molecular_dynamics'];
+            mutable.runs.items[0].attempts[1].binding_receipt = {
+                receipt_id: 'receipt-9',
+                md_preparation: {
+                    preparation_id: 'prep-md-1',
+                    source_design_id: '77777777-7777-4777-8777-777777777777',
+                    workflow_id: 'molecular_dynamics',
+                    workflow_revision_id: 'md-revision-1',
+                },
+            };
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        managerApi.issuePreparedLaunchContext.mockResolvedValue({
+            schema: 'bms.launch-context.v2',
+            launch_context_id: '88888888-8888-4888-8888-888888888888',
+            project_id: 'project-1',
+            global_experiment_id: 'global-1',
+            domain_experiment_id: 'domain-1',
+            workflow_id: 'molecular_dynamics',
+            workflow_revision_id: 'md-revision-1',
+            preparation_id: 'prep-md-1',
+            return_uri: '/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1',
+        });
+        await renderAt('/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1');
+        await waitUntil(() => expect(container.textContent).toContain('Launch Molecular Dynamics'));
+        const launch = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Launch Molecular Dynamics');
+        await act(async () => launch?.click());
+        await waitUntil(() => expect(managerApi.issuePreparedLaunchContext).toHaveBeenCalledTimes(1));
+        expect(managerApi.issuePreparedLaunchContext).toHaveBeenCalledWith(
+            'project-1',
+            'global-1',
+            'domain-1',
+            'prep-md-1',
+            '/projects/project-1?focus=global-1&selected=workflow_run%3Arun-1',
+        );
+        expect(managerApi.createLaunchContext).not.toHaveBeenCalled();
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe(
+            '/submit?template=molecular_dynamics&launch_context_id=88888888-8888-4888-8888-888888888888&source_design_id=77777777-7777-4777-8777-777777777777',
+        ));
+    });
+
     it('renders each canonical run once and labels retry provenance only as attempts', async () => {
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
         await waitUntil(() => expect(container.textContent).toContain('DNA Polymerase Design'));
@@ -303,9 +408,9 @@ describe('ProjectManager', () => {
 
     it('attaches an adapter search result from the selected Domain Experiment with an explicit lineage role', async () => {
         await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
-        await waitUntil(() => expect(container.textContent).toContain('Add existing'));
+        await waitUntil(() => expect(container.textContent).toContain('Attach existing record'));
 
-        const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Add existing');
+        const addButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Attach existing record');
         await act(async () => addButton?.click());
         await waitUntil(() => expect(container.querySelector('[role="dialog"]')).not.toBeNull());
 
@@ -316,7 +421,7 @@ describe('ProjectManager', () => {
         expect(container.textContent).toContain('Source revision');
         expect(container.textContent).toContain('Content digest');
         expect(container.textContent).toContain('Already attached');
-        expect(container.querySelector<HTMLOptionElement>('option[value="clone_import_revision"]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLOptionElement>('option[value="clone_import_revision"]')?.disabled).toBe(false);
 
         const searchInput = container.querySelector<HTMLInputElement>('[aria-label="Search canonical records"]');
         expect(searchInput).not.toBeNull();
@@ -370,6 +475,66 @@ describe('ProjectManager', () => {
         expect(managerApi.getProjectSummary).not.toHaveBeenCalled();
     });
 
+    it('owns the All, Global, and NGS/MolBio discovery scope in the URL and API query', async () => {
+        const localProject = {
+            ...project,
+            id: 'local-project-1', project_id: 'local-project-1', workspace_id: 'local-project-1',
+            name: 'Syenex New Plasmids',
+            payload: { ...project.payload, project_scope: 'ngs_molbio_local' },
+        };
+        managerApi.searchProjects.mockImplementation(({ projectScope }: { projectScope?: string }) => Promise.resolve({
+            items: projectScope === 'global' ? [project] : projectScope === 'ngs_molbio_local' ? [localProject] : [project, localProject],
+            next_cursor: null,
+        }));
+
+        await renderAt('/projects');
+        await waitUntil(() => expect(container.textContent).toContain('Syenex New Plasmids'));
+        expect(managerApi.searchProjects).toHaveBeenLastCalledWith(expect.objectContaining({ projectScope: 'all' }));
+        expect(container.querySelector('[role="tablist"][aria-label="Project scope"]')).not.toBeNull();
+        expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('All');
+        expect(container.textContent).toContain('Global');
+        expect(container.textContent).toContain('NGS/MolBio');
+
+        const localScope = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find((button) => button.textContent === 'NGS/MolBio');
+        await act(async () => localScope?.click());
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toBe('/projects?scope=ngs-molbio'));
+        await waitUntil(() => expect(managerApi.searchProjects).toHaveBeenLastCalledWith(expect.objectContaining({ projectScope: 'ngs_molbio_local' })));
+        await waitUntil(() => expect(container.textContent).toContain('Syenex New Plasmids'));
+        expect(container.textContent).not.toContain('DNA Polymerase Design');
+    });
+
+    it('creates either a Global or standalone NGS/MolBio Project from the shared dialog', async () => {
+        managerApi.createProject.mockResolvedValue({ id: 'local-new', head_generation: 1 });
+        await renderAt('/projects?scope=ngs-molbio');
+        await waitUntil(() => expect(container.textContent).toContain('Create Project'));
+        const create = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Create Project');
+        await act(async () => create?.click());
+        const type = container.querySelector<HTMLSelectElement>('[aria-label="Project type"]');
+        expect(type).not.toBeNull();
+        expect(Array.from(type?.options ?? []).map((option) => option.textContent)).toEqual(['Global Project', 'Standalone NGS/MolBio Project']);
+        await act(async () => {
+            if (type) {
+                type.value = 'ngs_molbio_local';
+                type.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+        const name = container.querySelector<HTMLInputElement>('[aria-label="Project name"]');
+        await act(async () => {
+            if (name) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                setter?.call(name, 'Standalone validation');
+                name.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Project name"]')?.value).toBe('Standalone validation'));
+        const save = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Create Project' && button.closest('[role="dialog"]'));
+        await act(async () => save?.click());
+        await waitUntil(() => expect(managerApi.createProject).toHaveBeenCalledTimes(1));
+        expect(managerApi.createProject).toHaveBeenCalledWith(expect.objectContaining({
+            schema: 'bms.project.v2', project_scope: 'ngs_molbio_local', name: 'Standalone validation',
+        }));
+    });
+
     it('filters and orders the Projects index while failing closed for unavailable aggregate indicators', async () => {
         const archived = { ...project, id: 'project-old', project_id: 'project-old', workspace_id: 'project-old', name: 'Archived enzyme', status: 'archived', lifecycle_state: 'archived', updated_at: '2026-07-01T00:00:00Z', payload: { owner: 'Archive team', tags: ['enzyme'] } };
         const blocked = { ...project, id: 'project-blocked', project_id: 'project-blocked', workspace_id: 'project-blocked', name: 'Blocked polymerase', status: 'active', lifecycle_state: 'active', updated_at: '2026-08-10T00:00:00Z', payload: { research_objective: 'Recover polymerase', owner: 'Research team', tags: ['polymerase'] }, unresolved_failure_count: 2, active_experiment_count: 3 };
@@ -418,6 +583,53 @@ describe('ProjectManager', () => {
             'exploration', 'design', 'redesign', 'prediction', 'validation', 'comparison', 'simulation', 'analysis',
         ]);
         expect(container.textContent).not.toContain('Evaluation');
+    });
+
+    it('issues a verified producer receipt before creating the first Protein Domain', async () => {
+        managerApi.listDomainAdapters.mockResolvedValue({
+            schema: 'bms.global.adapter-registry.v1',
+            adapters: [{
+                adapter_id: 'bms.core-job.esmfold2.adapter.v1', adapter_version: 1,
+                domain_kind: 'protein_in_silico', entity_kind: 'typed_core_job_result',
+                display_name: 'Typed core Job result: esmfold2',
+            }],
+        });
+        managerApi.searchAdapterEntities.mockResolvedValue({
+            schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.core-job.esmfold2.adapter.v1', adapter_version: 1,
+            items: [{
+                adapter_id: 'bms.core-job.esmfold2.adapter.v1', entity_kind: 'typed_core_job_result',
+                entity_id: 'job-1ubq', label: 'Ubiquitin 1UBQ', canonical_state: 'completed', attachable: true,
+                reason: null, reopen_uri: '/designs/job-1ubq', metadata: { content_digest: 'd'.repeat(64) },
+            }], next_cursor: null,
+        });
+        managerApi.issueAdapterReceipt.mockResolvedValue({ receipt_id: 'receipt-1ubq', receipt: { content_digest: 'd'.repeat(64) } });
+
+        await renderAt('/projects/project-1?focus=global-1&selected=global_experiment%3Aglobal-1');
+        await waitUntil(() => expect(container.textContent).toContain('New Domain Experiment'));
+        const create = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'New Domain Experiment');
+        await act(async () => create?.click());
+        await waitUntil(() => expect(container.querySelector('[aria-label="Protein source adapter"]')).not.toBeNull());
+
+        const searchInput = container.querySelector<HTMLInputElement>('[aria-label="Search Protein source records"]');
+        await act(async () => {
+            if (searchInput) {
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                setter?.call(searchInput, '1UBQ');
+                searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        const search = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Search Protein sources');
+        await act(async () => search?.click());
+        await waitUntil(() => expect(container.textContent).toContain('Ubiquitin 1UBQ'));
+        const choice = container.querySelector<HTMLInputElement>('input[type="radio"][value="job-1ubq"]');
+        await act(async () => choice?.click());
+        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Verify and use receipt');
+        await act(async () => issue?.click());
+        await waitUntil(() => expect(managerApi.issueAdapterReceipt).toHaveBeenCalledWith(
+            'bms.core-job.esmfold2.adapter.v1', 'job-1ubq', 'project-1',
+        ));
+        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs"]')?.value).toBe('receipt-1ubq');
+        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256"]')?.value).toBe('d'.repeat(64));
     });
 
     it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {

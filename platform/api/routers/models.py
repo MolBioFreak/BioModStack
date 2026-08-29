@@ -70,6 +70,9 @@ class FrustraMPNNParameterDescriptorResponse(BaseModel):
     control_kind: str
     backing: str
     default_source: str
+    minimum: int | None = None
+    maximum: int | None = None
+    applicability: JsonValue | None = None
 
 
 class FrustraMPNNCompatibilityRuleResponse(BaseModel):
@@ -115,6 +118,28 @@ def _frustrampnn_discovery_metadata() -> dict:
             "default_source": "owned_source",
         },
         {
+            "field": "batching_enabled",
+            "api_type": "boolean",
+            "ownership": "workflow_structure_grouping",
+            "control_kind": "checkbox",
+            "backing": "predict_batch",
+            "default_source": "bms_default",
+        },
+        {
+            "field": "structures_per_job",
+            "api_type": "integer",
+            "ownership": "workflow_structure_grouping",
+            "control_kind": "slider_with_numeric_input",
+            "backing": "predict_batch",
+            "default_source": "bms_default",
+            "minimum": 1,
+            "maximum": 250,
+            "applicability": {
+                "field": "batching_enabled",
+                "equals": True,
+            },
+        },
+        {
             "field": "protein_selection.mode",
             "api_type": "closed_string",
             "ownership": "scientific_operator",
@@ -128,6 +153,14 @@ def _frustrampnn_discovery_metadata() -> dict:
             "ownership": "scientific_operator",
             "control_kind": "entity_multi_selector",
             "backing": "chains",
+            "default_source": "bms_default",
+        },
+        {
+            "field": "protein_selection.regions",
+            "api_type": "array_of_stable_entity_sequence_ranges",
+            "ownership": "scientific_operator",
+            "control_kind": "region_range_editor",
+            "backing": "positions",
             "default_source": "bms_default",
         },
         {
@@ -216,7 +249,11 @@ def _frustrampnn_discovery_metadata() -> dict:
             },
             {
                 "rule_id": "selector_exact_coverage",
-                "fields": ["protein_selection.entities", "protein_selection.residues"],
+                "fields": [
+                    "protein_selection.entities",
+                    "protein_selection.regions",
+                    "protein_selection.residues",
+                ],
                 "requirement": "complete_source_identity_match",
             },
             {

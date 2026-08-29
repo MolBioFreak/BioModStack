@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.protein-target.v3",
+  "title": "Protein target intent with bounded native authority",
+  "type": "object",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "source_receipt_ids": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "source_receipt_ids"
+          ]
+        },
+        {
+          "properties": {
+            "dataset_member_refs": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "dataset_member_refs"
+          ]
+        }
+      ]
+    }
+  ],
+  "required": [
+    "target_id",
+    "label",
+    "role",
+    "source_receipt_ids",
+    "dataset_member_refs",
+    "entity_map_reference",
+    "expected_content_sha256"
+  ],
+  "properties": {
+    "target_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "role": {
+      "enum": [
+        "target",
+        "binder",
+        "partner",
+        "template",
+        "reference",
+        "control",
+        "motif",
+        "ligand_context",
+        "other"
+      ]
+    },
+    "source_receipt_ids": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "dataset_member_refs": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.protein-dataset-member-ref.v1"
+      }
+    },
+    "entity_map_reference": {
+      "$ref": "bms.protein-entity-map-reference.v1"
+    },
+    "expected_content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

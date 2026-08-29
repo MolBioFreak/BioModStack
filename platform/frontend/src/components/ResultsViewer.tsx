@@ -58,11 +58,32 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
+import {
+    getRFD3LocalRedesignCandidateLabel,
+    isRFD3LocalRedesignResultJob,
+} from './rfd3LocalRedesignResultsView';
+import ProteinLocalRedesignResultsPane, { isProteinLocalRedesignResultJob } from './ProteinLocalRedesignResultsPane';
 import { ConformationalMappingViewer } from './conformationalMapping/ConformationalMappingViewer';
 import FrustraMpnnAnalysisControls from './FrustraMpnnAnalysisControls';
 import FrustraMpnnWorkbench from './frustrampnn/FrustraMpnnWorkbench';
+import {
+    parseFrustraMpnnExperimentContext,
+    parseWorkflowResultViewState,
+    updateWorkflowResultViewSearch,
+    type FrustraMpnnResultScope,
+    type WorkflowResultModel,
+} from './frustrampnn/workflowResultViewState';
 import { hasFrustraMpnnResultSurface } from './frustraMpnnResultSurface';
+import { buildWorkflowModelResults, filterDesignsForResultModel } from './frustrampnn/workflowModelResults';
+import { buildResultsViewerMolecularDynamicsRoute } from './gen2StartingStructureState.js';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
+import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import {
+    CANONICAL_FRUSTRAMPNN_SETTINGS,
+    hydrateFrustraMpnnSettings,
+    type FrustraMpnnRequestedSettings,
+} from './frustrampnn/frustraMpnnSettingsState.js';
+import { buildAntibodyContinuationParamOverrides } from './antibodyContinuationParams.js';
 import {
     saveAntibodyRefinementLaunchState,
     type AntibodyRefinementLaunchState,
@@ -1138,6 +1159,7 @@ const getAuthoritativeDesignLens = (design: Design | null | undefined): Analysis
     if (profileId === 'ppiflow_maturation_v1') return 'ppiflow';
     if (profileId === 'de_novo_generation_v1') return 'boltzgen';
     if (profileId === 'sequence_design_v1') return 'fampnn';
+    if (profileId === 'protein_local_redesign_validation_v1') return 'validation';
     if (profileId === 'structure_prediction_v1') return 'validation';
     return null;
 };
@@ -1678,7 +1700,8 @@ export function ResultsViewer() {
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
-    const [resultSurface, setResultSurface] = useState<'workflow' | 'frustrampnn'>('workflow');
+    const [resultSurface, setResultSurfaceState] = useState<WorkflowResultModel>('workflow');
+    const [frustraMpnnScope, setFrustraMpnnScopeState] = useState<FrustraMpnnResultScope>('this-job');
     const [selectedDesignId, setSelectedDesignId] = useState<string>('');
     const [selectedDesignIds, setSelectedDesignIds] = useState<string[]>([]);
     const [iterationMessage, setIterationMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -1719,6 +1742,15 @@ export function ResultsViewer() {
         run_frustrampnn: false,
         interactive_gating: true,
     });
+    const [frustrampnnSettings, setFrustrampnnSettings] = useState<FrustraMpnnRequestedSettings>(() => (
+        hydrateFrustraMpnnSettings(CANONICAL_FRUSTRAMPNN_SETTINGS)
+    ));
+    const frustrampnnSettingsControl = (
+        <FrustraMpnnSettingsPanel
+            value={frustrampnnSettings}
+            onChange={setFrustrampnnSettings}
+        />
+    );
     const workflowOnlyRefinement = true;
     const [showParamOverrides, setShowParamOverrides] = useState(false);
 
@@ -1821,10 +1853,37 @@ export function ResultsViewer() {
         () => nonNgsJobs.find((j: Job) => j.id === selectedJobId),
         [nonNgsJobs, selectedJobId]
     );
-    const frustraMpnnSurfaceAvailable = hasFrustraMpnnResultSurface(activeJob);
     useEffect(() => {
-        setResultSurface(frustraMpnnSurfaceAvailable ? 'frustrampnn' : 'workflow');
-    }, [activeJob?.id, frustraMpnnSurfaceAvailable]);
+        const params = activeJob?.params;
+        if (!params) return;
+        const effectiveSettings = params.frustrampnn_effective_settings;
+        const effectiveSettingsJson = params.effective_settings_json;
+        const persisted = params.frustrampnn_settings
+            ?? (effectiveSettings && typeof effectiveSettings === 'object'
+                ? (effectiveSettings as Record<string, unknown>).requested_settings
+                : undefined)
+            ?? (effectiveSettingsJson && typeof effectiveSettingsJson === 'object'
+                ? (effectiveSettingsJson as Record<string, unknown>).requested_settings
+                : undefined);
+        if (persisted !== undefined) {
+            try {
+                setFrustrampnnSettings(hydrateFrustraMpnnSettings(persisted));
+            } catch {
+                setFrustrampnnSettings(hydrateFrustraMpnnSettings(CANONICAL_FRUSTRAMPNN_SETTINGS));
+            }
+        }
+        if (typeof params.run_frustrampnn === 'boolean') {
+            setPipelineOverrides((current) => ({
+                ...current,
+                run_frustrampnn: params.run_frustrampnn as boolean,
+            }));
+        }
+    }, [activeJob?.id]);
+    const frustraMpnnSurfaceAvailable = hasFrustraMpnnResultSurface(activeJob);
+    const frustraMpnnExperimentContext = useMemo(
+        () => parseFrustraMpnnExperimentContext(location.search),
+        [location.search],
+    );
     const activeParentJob = useMemo(
         () => activeJob?.parent_job_id ? nonNgsJobs.find((j: Job) => j.id === activeJob.parent_job_id) : undefined,
         [nonNgsJobs, activeJob?.parent_job_id]
@@ -1935,6 +1994,8 @@ export function ResultsViewer() {
             const batchData = job.batch_id ? batchMap.get(job.batch_id) : null;
             const hasChildren = Boolean(batchData && batchData.children.length > 0);
             const displayDesigns = (() => {
+                const rfd3CandidateLabel = getRFD3LocalRedesignCandidateLabel(job);
+                if (rfd3CandidateLabel) return rfd3CandidateLabel;
                 if (isPostRfantibodyStage(job)) {
                     const rawCount = Number(job.awaiting_payload?.raw_candidate_count || 0);
                     const screenedCount = Number(job.awaiting_payload?.filtered_candidate_count || 0);
@@ -2384,7 +2445,10 @@ export function ResultsViewer() {
     const { data: designsData, isLoading: designsLoading } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
-        enabled: !!activeJob && activeJob.model_id !== 'molecular_dynamics' && !reviewSelectionRequired,
+        enabled: !!activeJob
+            && activeJob.model_id !== 'molecular_dynamics'
+            && !isRFD3LocalRedesignResultJob(activeJob)
+            && !reviewSelectionRequired,
     });
     const rawDesigns = useMemo(
         () => (designsData?.data.designs ?? []).map(sanitizeDesignForReview),
@@ -2429,6 +2493,31 @@ export function ResultsViewer() {
         if (!canClientSortLoadedDesigns) return designs;
         return [...designs].sort((left, right) => compareDesignsByField(left, right, sortField, sortDir));
     }, [canClientSortLoadedDesigns, designs, sortDir, sortField]);
+    const resultModelHierarchy = useMemo(() => activeJob ? buildWorkflowModelResults({
+        job: activeJob,
+        designs: orderedDesigns,
+        frustraMpnnAvailable: frustraMpnnSurfaceAvailable,
+    }) : [], [activeJob, frustraMpnnSurfaceAvailable, orderedDesigns]);
+    const primaryResultModelId = resultModelHierarchy[0]?.modelId ?? activeJob?.model_id ?? '';
+    useEffect(() => {
+        if (!activeJob || !primaryResultModelId) return;
+        const viewState = parseWorkflowResultViewState(location.search, {
+            availableModelIds: resultModelHierarchy.map((item) => item.modelId),
+            primaryModelId: primaryResultModelId,
+        });
+        setResultSurfaceState(viewState.model);
+        setFrustraMpnnScopeState(viewState.scope);
+    }, [activeJob, location.search, primaryResultModelId, resultModelHierarchy]);
+    const setResultSurface = useCallback((model: WorkflowResultModel) => {
+        const scope = model === 'frustrampnn' ? frustraMpnnScope : 'this-job';
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, { model, scope })}`, { replace: true });
+    }, [frustraMpnnScope, location.pathname, location.search, navigate]);
+    const setFrustraMpnnScope = useCallback((scope: FrustraMpnnResultScope) => {
+        navigate(`${location.pathname}${updateWorkflowResultViewSearch(location.search, {
+            model: 'frustrampnn',
+            scope,
+        })}`, { replace: true });
+    }, [location.pathname, location.search, navigate]);
     const showPpiflowColumns = orderedDesigns.some((design) =>
         supportsViewerCapability(design, 'ppiflow_maturation_metrics')
     );
@@ -3016,9 +3105,12 @@ export function ResultsViewer() {
         const sourceFiltered = outputSourceFilter === 'all'
             ? orderedDesigns
             : orderedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === outputSourceFilter);
-        if (resultSetFilter === 'all') return sourceFiltered;
-        return sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
-    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, resultSetFilter]);
+        const resultSetFiltered = resultSetFilter === 'all'
+            ? sourceFiltered
+            : sourceFiltered.filter((design) => inferDesignResultSet(design as UntypedApiValue) === resultSetFilter);
+        if (resultSurface === primaryResultModelId || resultSurface === 'frustrampnn') return resultSetFiltered;
+        return filterDesignsForResultModel(resultSetFiltered, resultSurface);
+    }, [clientDerivedResultsBlocked, orderedDesigns, outputSourceFilter, primaryResultModelId, resultSetFilter, resultSurface]);
     const boltzgenScopedDesigns = useMemo(
         () => sourceScopedDesigns.filter((design) => inferDesignOutputSource(design as UntypedApiValue) === 'boltzgen'),
         [sourceScopedDesigns],
@@ -3072,7 +3164,9 @@ export function ResultsViewer() {
             ? `${activeReviewSetLabel} set`
             : 'No review set selected';
     const activeResultSetLabel = RESULT_SET_BUTTON_LABELS.find(([value]) => value === resultSetFilter)?.[1] ?? 'All result sets';
+    const activeRFD3CandidateLabel = getRFD3LocalRedesignCandidateLabel(activeJob);
     const activeBadgeLabel = useMemo(() => {
+        if (activeRFD3CandidateLabel) return activeRFD3CandidateLabel;
         if (isPostRFantibodyReview && reviewSelectionRequired) {
             return 'Select a review source';
         }
@@ -3083,7 +3177,7 @@ export function ResultsViewer() {
             return `${tableDesigns.length.toLocaleString()} visible`;
         }
         return `${totalDesigns.toLocaleString()} designs`;
-    }, [activeCurrentSetLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
+    }, [activeCurrentSetLabel, activeRFD3CandidateLabel, isPostRFantibodyReview, outputSourceFilter, reviewSelectionRequired, tableDesigns.length, totalDesigns]);
     const paginationSubject = isPostRFantibodyReview
         ? reviewSelectionRequired
             ? 'outputs'
@@ -4896,10 +4990,12 @@ export function ResultsViewer() {
             action,
             cdrIndelConfig,
             paramOverrides,
+            frustrampnnSettings,
         }: {
             action: AntibodyIterationAction;
             cdrIndelConfig?: AntibodyCdrIndelConfig;
             paramOverrides?: Record<string, unknown>;
+            frustrampnnSettings?: FrustraMpnnRequestedSettings;
         }) => {
             if (!selectedJobId) {
                 throw new Error('Select a job before launching a new round.');
@@ -4914,13 +5010,19 @@ export function ResultsViewer() {
                 action,
                 cdr_indel_config: cdrIndelConfig,
                 param_overrides: paramOverrides,
+                frustrampnn_settings: frustrampnnSettings,
             });
         },
         onSuccess: (response) => {
-            const launchedJob = response.data.launched_job;
+            const launchedJobs = response.data.launched_jobs.length > 0
+                ? response.data.launched_jobs
+                : [response.data.launched_job];
+            const launchedSummary = launchedJobs
+                .map((job) => `${job.name} (${job.id})`)
+                .join(', ');
             setIterationMessage({
                 kind: 'success',
-                text: `${response.data.message} New job: ${launchedJob.name} (${launchedJob.id}).`,
+                text: `${response.data.message} New jobs: ${launchedSummary}.`,
             });
             setShowCdrIndelModal(false);
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -5020,20 +5122,42 @@ export function ResultsViewer() {
     const selectedFrustraMpnnDesigns = selectedDesignIds
         .map((designId) => orderedDesigns.find((design) => design.id === designId))
         .filter((design): design is Design => Boolean(design));
+    const resultModelSelector = activeJob && resultModelHierarchy.length > 1 ? (
+        <nav aria-label="Workflow model results" className="flex flex-wrap gap-2 text-xs">
+            {resultModelHierarchy.map((item) => <button
+                key={item.modelId}
+                type="button"
+                aria-pressed={resultSurface === item.modelId}
+                onClick={() => setResultSurface(item.modelId)}
+                className={`rounded-lg border px-3 py-1.5 font-semibold ${resultSurface === item.modelId ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300 hover:border-slate-500'}`}
+            >{item.label}</button>)}
+        </nav>
+    ) : null;
 
     if (activeJob?.model_id === 'conformational_mapping' || activeJob?.model_id === 'confornets_experimental') {
-        return <ConformationalMappingViewer requestId={activeJob.id} title={activeJob.name} job={activeJob} />;
+        if (!activeJob.conformational_mapping_request_id) {
+            return <div role="alert" className="mx-auto mt-12 max-w-3xl rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-red-200">
+                Conformational Mapping request identity is unavailable for this job.
+            </div>;
+        }
+        return <ConformationalMappingViewer requestId={activeJob.conformational_mapping_request_id} title={activeJob.name} job={activeJob} />;
     }
     if (activeJob && frustraMpnnSurfaceAvailable && resultSurface === 'frustrampnn') {
-        return <FrustraMpnnWorkbench
-            key={activeJob.id}
-            job={activeJob}
-            onBack={activeJob.model_id === 'frustrampnn'
-                ? () => navigate('/results')
-                : () => setResultSurface('workflow')}
-            backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
-            onOpenJob={handleSelectJob}
-        />;
+        return <div className="min-h-screen bg-slate-950 text-slate-200">
+            <div className="mx-auto max-w-[1800px] px-6 pt-4">{resultModelSelector}</div>
+            <FrustraMpnnWorkbench
+                key={activeJob.id}
+                job={activeJob}
+                onBack={activeJob.model_id === 'frustrampnn'
+                    ? () => navigate('/results')
+                    : () => setResultSurface(primaryResultModelId)}
+                backLabel={activeJob.model_id === 'frustrampnn' ? 'Jobs' : 'Workflow result'}
+                onOpenJob={handleSelectJob}
+                scope={frustraMpnnScope}
+                onScopeChange={setFrustraMpnnScope}
+                experimentContext={frustraMpnnExperimentContext}
+            />
+        </div>;
     }
 
     return (
@@ -5052,15 +5176,16 @@ export function ResultsViewer() {
                         <p className="text-slate-400 text-sm mt-1">
                             {activeJob ? `${activeJob.name} • ${activeJob.model_id}` : 'Import a dataset or open an existing workflow'}
                         </p>
+                        <div className="mt-3">{resultModelSelector}</div>
                         {activeJob && (
                             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
-                                {frustraMpnnSurfaceAvailable && (
+                                {selectedDesign && activeJob.status === 'completed' && (
                                     <button
                                         type="button"
-                                        onClick={() => setResultSurface('frustrampnn')}
+                                        onClick={() => navigate(buildResultsViewerMolecularDynamicsRoute(activeJob.id, selectedDesign.id))}
                                         className="rounded-lg border border-cyan-500/50 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100 hover:bg-cyan-500/20"
                                     >
-                                        Open Frustration analysis
+                                        Use as MD starting structure
                                     </button>
                                 )}
                                 {formatLineagePathSummary(
@@ -5198,8 +5323,10 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    activeJob.model_id === 'protein_local_redesign' ? (
+                    isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : isProteinLocalRedesignResultJob(activeJob) ? (
+                        <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : (
@@ -5808,7 +5935,7 @@ export function ResultsViewer() {
                                                             let paramOverrides: Record<string, unknown> | undefined = undefined;
 
                                                             if (showParamOverrides) {
-                                                                paramOverrides = {
+                                                                paramOverrides = buildAntibodyContinuationParamOverrides({
                                                                     ...(pipelineOverrides.run_structure_validation && {
                                                                         run_structure_validation: true,
                                                                         structure_validator: pipelineOverrides.structure_validator,
@@ -5824,14 +5951,17 @@ export function ResultsViewer() {
                                                                     }),
                                                                     lock_target_chains: pipelineOverrides.lock_target_chains,
                                                                     lock_antibody_framework: pipelineOverrides.lock_antibody_framework,
-                                                                    ...(pipelineOverrides.run_frustrampnn && {
-                                                                        run_frustrampnn: true
-                                                                    }),
                                                                     interactive_gating: pipelineOverrides.interactive_gating
-                                                                };
+                                                                }, pipelineOverrides.run_frustrampnn, frustrampnnSettings);
                                                             }
 
-                                                            launchIterationMutation.mutate({ action, paramOverrides });
+                                                            launchIterationMutation.mutate({
+                                                                action,
+                                                                paramOverrides: action === 'frustrampnn' ? undefined : paramOverrides,
+                                                                frustrampnnSettings: action === 'frustrampnn'
+                                                                    ? frustrampnnSettings
+                                                                    : undefined,
+                                                            });
                                                         }}
                                                         disabled={!canLaunchWorkingSet || launchBusy}
                                                         className="hidden"
@@ -5936,6 +6066,7 @@ export function ResultsViewer() {
                                                     onChange={(checked) => setPipelineOverrides(prev => ({ ...prev, run_frustrampnn: checked }))}
                                                     fallbackLabel="Frustration analysis"
                                                     integration={frustrampnnIntegrationQuery.data}
+                                                    settingsControl={frustrampnnSettingsControl}
                                                 />
                                             </div>
 

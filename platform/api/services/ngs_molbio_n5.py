@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
 import json
 import re
+import subprocess
+from types import SimpleNamespace
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -62,8 +65,12 @@ from services.payload_ownership_audit import (
     validate_retained_payload_ownership_receipt,
 )
 from services.resource_usage_evidence import (
+    HISTORICAL_OWNER_ABSENCE_PARAM,
     ResourceUsageEvidenceError,
+    attach_pre_spawn_nonexecution_receipt,
+    build_historical_owner_absence_receipt,
     build_resource_admission_handoff,
+    historical_owner_absence_unit_glob,
     validate_producer_resource_usage_receipt,
 )
 
@@ -344,7 +351,14 @@ async def _verified_member(
         raise ValidationFailure("Dataset member belongs to another Domain or is not attached")
     try:
         persisted = json.loads(receipt.acknowledgement_json or "{}")
-        fresh = await registry.get(receipt.verification_authority).verify(core_session, receipt.entity_id)
+        verification_entity_id = receipt.entity_id
+        if receipt.verification_authority == "bms.molbio.member-molecular-revision.adapter.v1":
+            verification_entity_id = (
+                f"{verification_entity_id}&domain_experiment_id={domain_id}"
+            )
+        fresh = await registry.get(receipt.verification_authority).verify(
+            core_session, verification_entity_id
+        )
     except (json.JSONDecodeError, AdapterError) as exc:
         raise ValidationFailure(f"Dataset member native authority failed: {exc}") from exc
     owner = fresh.get("metadata", {}).get("global_domain_experiment_id")
@@ -508,6 +522,10 @@ def _resource_request(scheduler: Mapping[str, Any]) -> dict[str, Any]:
     resources = scheduler.get("resources") if isinstance(scheduler.get("resources"), Mapping) else {}
     cpu = resources.get("cpu_threads", resources.get("cpus", 1))
     dram_gib = resources.get("dram_gib", resources.get("memory_gib", 1))
+    if str(scheduler.get("model_id") or "").strip().lower() == "esmfold2":
+        if not isinstance(dram_gib, (int, float)) or isinstance(dram_gib, bool):
+            raise ResourceAdmissionDenied("invalid_dram_request", "effective DRAM request must be numeric", [])
+        dram_gib = max(float(dram_gib), 16.0)
     gpu = resources.get("pinned_gpu", resources.get("gpu_index"))
     if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1 or cpu > CPU_THREAD_LIMIT:
         raise ResourceAdmissionDenied("invalid_cpu_request", "effective CPU request is outside 1..24 threads", [])
@@ -801,6 +819,14 @@ async def resource_admission_handoff_for_attempt(
     return handoff
 
 
+def _producer_receipt_finished_at(receipt: Mapping[str, Any]) -> str:
+    observed = receipt.get("observed")
+    candidate = observed.get("finished_at") if isinstance(observed, Mapping) else receipt.get("finished_at")
+    if not isinstance(candidate, str) or not candidate:
+        raise ResourceUsageEvidenceUnavailable("producer resource receipt finished_at is unavailable")
+    return candidate
+
+
 async def persist_producer_resource_usage_evidence(
     session: AsyncSession,
     *,
@@ -820,6 +846,7 @@ async def persist_producer_resource_usage_evidence(
     except ResourceUsageEvidenceError as exc:
         raise ResourceUsageEvidenceUnavailable(str(exc)) from exc
     producer_digest = str(producer_receipt["receipt_sha256"])
+    producer_finished_at = _producer_receipt_finished_at(producer_receipt)
     public_producer_receipt = json.loads(canonical_json(producer_receipt))
     projected = {
         "schema": "bms.experiment-resource-usage-projection.v1",
@@ -833,7 +860,7 @@ async def persist_producer_resource_usage_evidence(
         "producer_receipt": public_producer_receipt,
         "producer_receipt_sha256": producer_digest,
         "admission_handoff_sha256": handoff["handoff_sha256"],
-        "projected_at": str(producer_receipt["observed"]["finished_at"]),
+        "projected_at": producer_finished_at,
     }
     projected_json = canonical_json(projected)
     receipt_id = f"resource-usage:{producer_digest}"
@@ -864,7 +891,7 @@ async def persist_producer_resource_usage_evidence(
         receipt_json=projected_json,
         receipt_sha256=sha256_text(projected_json),
         source_revision=handoff["source_revision"],
-        occurred_at=str(producer_receipt["observed"]["finished_at"]),
+        occurred_at=producer_finished_at,
         verified_at=now(),
     )
     session.add(projected_row)
@@ -1126,6 +1153,110 @@ async def _accepted_persisted_resource_evidence(
     return accepted == 1
 
 
+def _systemd_units_for_job(job_id: object) -> list[str]:
+    unit_glob = historical_owner_absence_unit_glob(job_id)
+    result = subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "list-units",
+            "--all",
+            "--plain",
+            "--no-legend",
+            "--no-pager",
+            unit_glob,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise ResourceUsageEvidenceUnavailable(
+            "historical systemd owner inventory is unavailable"
+        )
+    return sorted(
+        {
+            line.split(maxsplit=1)[0].strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+    )
+
+
+async def _recover_terminal_nonexecution_evidence(
+    core_session: Any,
+    core_job: Any,
+) -> bool | None:
+    """Seal producer-owned zero-use evidence for an exact historical pre-spawn terminal Job."""
+
+    from database import Job
+
+    terminal_status = str(getattr(core_job, "status", "") or "").strip().lower()
+    if terminal_status not in {"failed", "cancelled", "canceled"}:
+        return False
+    completed_at = getattr(core_job, "completed_at", None)
+    if isinstance(completed_at, datetime):
+        finished_at = completed_at.isoformat(timespec="microseconds") + "Z"
+    elif isinstance(completed_at, str) and completed_at:
+        finished_at = completed_at
+    else:
+        raise ResourceUsageEvidenceError(
+            "historical pre-spawn terminal timestamp is unavailable"
+        )
+    original_params = dict(getattr(core_job, "params", {}) or {})
+    original_owner = getattr(core_job, "nextflow_run_id", None)
+    original_error = getattr(core_job, "error_message", None)
+    matched_units = await asyncio.to_thread(_systemd_units_for_job, str(core_job.id))
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+    absence_receipt = build_historical_owner_absence_receipt(
+        core_job,
+        observed_at=observed_at,
+        matched_units=matched_units,
+    )
+    candidate = SimpleNamespace(
+        id=str(core_job.id),
+        status=getattr(core_job, "status", None),
+        completed_at=completed_at,
+        error_message=original_error,
+        nextflow_run_id=original_owner,
+        params={
+            **original_params,
+            HISTORICAL_OWNER_ABSENCE_PARAM: absence_receipt,
+        },
+    )
+    recovered = attach_pre_spawn_nonexecution_receipt(
+        candidate,
+        finished_at=finished_at,
+        owner_absence_receipt=absence_receipt,
+    )
+    transition = await core_session.execute(
+        update(Job)
+        .where(
+            Job.id == str(core_job.id),
+            Job.status == getattr(core_job, "status", None),
+            Job.completed_at == completed_at,
+            Job.error_message == original_error,
+            Job.nextflow_run_id == original_owner,
+            Job.params == original_params,
+        )
+        .values(params=recovered)
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await core_session.rollback()
+        if hasattr(core_session, "refresh"):
+            await core_session.refresh(core_job)
+        return None
+    await core_session.commit()
+    core_job.params = recovered
+    if hasattr(core_session, "refresh"):
+        await core_session.refresh(core_job)
+    return True
+
+
 async def reconcile_startup_admissions(
     session: AsyncSession,
     core_session: AsyncSession | None = None,
@@ -1163,7 +1294,25 @@ async def reconcile_startup_admissions(
                     )
                     accepted = True
                 except ResourceUsageEvidenceUnavailable:
-                    accepted = False
+                    try:
+                        recovered = await _recover_terminal_nonexecution_evidence(
+                            core_session,
+                            core_job,
+                        )
+                        if recovered:
+                            await persist_producer_resource_usage_evidence(
+                                session,
+                                core_job=core_job,
+                                run_attempt_id=attempt.resource_id,
+                            )
+                            accepted = True
+                        else:
+                            accepted = False
+                    except (
+                        ResourceUsageEvidenceError,
+                        ResourceUsageEvidenceUnavailable,
+                    ):
+                        accepted = False
         if accepted:
             await release_attempt_admissions(
                 session,
@@ -1249,6 +1398,7 @@ async def append_attempt_log_chunk(
                 created_at=now(),
             )
         )
+        await session.flush()
         stream = ExperimentLogStream(
             resource_id=stream_id,
             attempt_id=attempt.resource_id,
@@ -1306,8 +1456,14 @@ async def persist_attempt_validation(
     attempt = await session.get(ExperimentRunAttempt, attempt_id)
     if attempt is None:
         raise NotFound("run attempt not found")
-    normalized_outcome = outcome.strip().lower()
-    if normalized_outcome not in {"passed", "failed", "review"}:
+    requested_outcome = outcome.strip().lower()
+    outcome_map = {
+        "passed": "valid",
+        "failed": "invalid",
+        "review": "incomplete",
+    }
+    normalized_outcome = outcome_map.get(requested_outcome)
+    if normalized_outcome is None:
         raise ValidationFailure("invalid validation outcome")
     name = validator_name.strip()
     version = validator_version.strip()
@@ -1359,6 +1515,7 @@ async def persist_attempt_validation(
         created_at=now(),
     )
     session.add(validation)
+    await session.flush()
     edge_key = f"{name}:{version}:{receipt_sha256}"
     edge_id = "lineage-" + hashlib.sha256(
         f"{attempt.resource_id}\x00{validation_id}\x00validated_by\x00{edge_key}".encode("utf-8")

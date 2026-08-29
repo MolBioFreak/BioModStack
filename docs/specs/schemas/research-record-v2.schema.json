@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.research-record.v2",
+  "title": "BioModStack append-only research record v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "resource_id",
+    "project_id",
+    "record_kind",
+    "subject_resource_id",
+    "subject_revision_id",
+    "subject_revision_sha256",
+    "body",
+    "author",
+    "source_receipt_ids",
+    "supersedes_record_id",
+    "created_at",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {"const": "bms.research-record.v2"},
+    "resource_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "record_kind": {"enum": ["note", "observation", "conclusion", "decision"]},
+    "subject_resource_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "subject_revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "subject_revision_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "body": {"type": "string", "minLength": 1, "maxLength": 65536},
+    "author": {"type": "string", "minLength": 1, "maxLength": 255},
+    "source_receipt_ids": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "supersedes_record_id": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 128},
+        {"type": "null"}
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

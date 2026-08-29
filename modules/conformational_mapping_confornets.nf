@@ -101,13 +101,16 @@ process FinalizeCanonicalConforNets {
     script:
     def requestPath = shellQuote(request_root.resolve('cm_request_v1.json').toString())
     def coordinatePlanPath = shellQuote(request_root.resolve('cm_coordinate_plan_v1.json').toString())
+    def snapshotPath = shellQuote(request_root.resolve('cm_complex_snapshots_v1.json').toString())
     def nativePath = shellQuote(native_results.toString())
     """
     set -euo pipefail
     test -f ${coordinatePlanPath}
+    test -f ${snapshotPath}
     python3 ${params.code_root}/scripts/finalize_confornets_conformational_mapping.py \
         --request ${requestPath} \
         --native-root ${nativePath} \
+        --snapshot ${snapshotPath} \
         --out canonical_confornets
     """
 }

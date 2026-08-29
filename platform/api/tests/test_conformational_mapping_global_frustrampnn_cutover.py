@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +30,31 @@ def _candidate_pdb() -> bytes:
             f"{1.0:6.2f}{20.0:6.2f}          {element:>2}  \n"
         )
     return "".join(lines).encode("ascii") + b"END\n"
+
+
+def _candidate_mmcif() -> bytes:
+    columns = (
+        "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+        "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
+        "pdbx_PDB_ins_code", "Cartn_x", "Cartn_y", "Cartn_z", "occupancy",
+        "B_iso_or_equiv", "auth_seq_id", "auth_comp_id", "auth_asym_id",
+        "auth_atom_id", "pdbx_PDB_model_num",
+    )
+    rows: list[str] = []
+    for serial, (atom, element) in enumerate(
+        (("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")), 1,
+    ):
+        rows.append(" ".join((
+            "ATOM", str(serial), element, atom, ".", "GLY", "X",
+            "generated-protein", "1", "?", str(serial), str(serial + 1),
+            str(serial + 2), "1.0", "20.0", "10", "GLY", "X", atom, "1",
+        )))
+    return (
+        "data_candidate\n#\nloop_\n"
+        + "".join(f"_atom_site.{column}\n" for column in columns)
+        + "\n".join(rows)
+        + "\n#\n"
+    ).encode("ascii")
 
 
 def _candidate_snapshot(source_sha256: str) -> dict[str, object]:
@@ -90,6 +117,15 @@ def _load_cm_preparer():
 def _load_cm_postprocessor():
     path = Path(__file__).resolve().parents[3] / "scripts" / "postprocess_conformational_mapping_frustrampnn_v2.py"
     spec = importlib.util.spec_from_file_location("cm_frustrampnn_postprocessor_under_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_component_fixture():
+    path = Path(__file__).with_name("test_frustrampnn_component_phase3.py")
+    spec = importlib.util.spec_from_file_location("cm_frustrampnn_component_fixture", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -315,7 +351,7 @@ def test_cm_candidate_v2_preparation_binds_snapshot_source_settings_and_invocati
         requested_settings=settings,
     )
 
-    validate_schema("workflow_component_request_v2", request)
+    validate_schema("workflow_component_request_v3", request)
     assert request_path.is_file()
     assert normalized_path.is_file()
     assert structure_map_path.is_file()
@@ -342,6 +378,376 @@ def test_cm_candidate_v2_preparation_binds_snapshot_source_settings_and_invocati
     assert json.loads(request["producer_provenance"]["producer_sample"])[
         "backend"
     ] == "protenix_v2_ensemble"
+
+
+@pytest.mark.parametrize(
+    "selection_mode",
+    ["selected_entities", "selected_regions", "selected_residues"],
+)
+def test_cm_candidate_source_scope_resolves_per_generated_map_and_compiles_zero_based_positions(
+    tmp_path: Path, selection_mode: str,
+) -> None:
+    from services.conformational_mapping.frustrampnn_adapter import prepare_cm_candidate_v2
+    from services.frustrampnn.manifests import validate_v3_input_closure
+    from services.frustrampnn.runtime import compile_frustrampnn_command_plan
+    from services.frustrampnn.settings import (
+        FrustraMPNNEffectiveSettings,
+        validate_complete_requested_settings,
+    )
+
+    generated_entity_differs = selection_mode != "selected_residues"
+    source_bytes = _candidate_mmcif() if generated_entity_differs else _candidate_pdb()
+    source = tmp_path / ("candidate.cif" if generated_entity_differs else "candidate.pdb")
+    source.write_bytes(source_bytes)
+    snapshot = _candidate_snapshot(hashlib.sha256(source_bytes).hexdigest())
+    settings_payload = default_settings().model_dump(mode="json", exclude_none=False)
+    settings_payload.pop("settings_value_origin", None)
+    selector = {
+        "entity_instance_id": "protein-1",
+        "source_entity_id": "protein",
+        "label_asym_id": None,
+        "auth_asym_id": None,
+    }
+    settings_payload["protein_selection"] = {
+        "mode": selection_mode,
+        "entities": [selector] if selection_mode == "selected_entities" else [],
+        "regions": [
+            {**selector, "sequence_start": 1, "sequence_end": 1}
+        ] if selection_mode == "selected_regions" else [],
+        "residues": [{
+            **selector,
+            "label_asym_id": "X",
+            "auth_asym_id": "X",
+            "auth_seq_id": 10,
+            "insertion_code": "",
+            "sequence_index": 1,
+        }] if selection_mode == "selected_residues" else [],
+    }
+    settings_payload["source_structure"] = {
+        "selected_model_number": 2,
+        "preferred_altloc": "A",
+    }
+    settings = validate_complete_requested_settings(settings_payload)
+    request = prepare_cm_candidate_v2(
+        source=source,
+        output_pdb_path=tmp_path / "canonical_source.pdb",
+        structure_map_path=tmp_path / "frustrampnn_structure_map_v1.json",
+        request_path=tmp_path / "workflow_component_request_v2.json",
+        authority_artifact_path=tmp_path / "authority_artifact_v1.json",
+        parent_job_id="cm-parent-job",
+        parent_workflow_id="conformational_mapping",
+        candidate={
+            "candidate_id": "candidate-a",
+            "authoritative_structure_path": (
+                "native/candidate.cif" if generated_entity_differs
+                else "native/candidate.pdb"
+            ),
+            "backend_coordinates": {
+                "backend": "protenix_v2_ensemble",
+                "target_id": "target-a",
+                "ordered_seed": 7,
+                "sample_index": 2,
+            },
+        },
+        complex_snapshot=snapshot,
+        requested_settings=settings,
+    )
+
+    effective = FrustraMPNNEffectiveSettings.model_validate(
+        request["effective_settings"],
+        strict=True,
+    )
+    selector_collection = (
+        "entities" if selection_mode == "selected_entities"
+        else "regions" if selection_mode == "selected_regions"
+        else "residues"
+    )
+    assert request["requested_settings"]["protein_selection"][selector_collection][0][
+        "source_entity_id"
+    ] == "protein"
+    structure_map = json.loads(
+        (tmp_path / "frustrampnn_structure_map_v1.json").read_text()
+    )
+    assert structure_map["rows"][0]["source_entity_id"] == (
+        "generated-protein" if generated_entity_differs else "protein"
+    )
+    assert effective.resolved_chains[0].entity.source_entity_id == "protein"
+    if selection_mode == "selected_regions":
+        assert effective.requested_settings.protein_selection.regions[0].sequence_start == 1
+    assert effective.requested_settings.source_structure.model_dump() == {
+        "selected_model_number": 1,
+        "preferred_altloc": "",
+    }
+    validated_map, validated_effective, _ = validate_v3_input_closure(
+        request,
+        (tmp_path / "canonical_source.pdb").read_bytes(),
+        (tmp_path / "frustrampnn_structure_map_v1.json").read_bytes(),
+    )
+    assert validated_map == structure_map
+    assert validated_effective == effective
+    assert [
+        residue.model_position
+        for chain in effective.resolved_chains
+        for residue in chain.residues
+    ] == [0]
+    plan = compile_frustrampnn_command_plan(effective)
+    assert len(plan.entries) == 1
+    assert plan.entries[0].chains == (structure_map["rows"][0]["pdb_chain_id"],)
+    assert plan.entries[0].positions == (
+        None if selection_mode == "selected_entities" else (0,)
+    )
+
+
+def test_cm_external_v2_component_seals_identity_authority_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.conformational_mapping.frustrampnn_adapter import prepare_cm_candidate_v2
+    from services.frustrampnn.contracts import (
+        canonical_json_bytes,
+        canonical_json_loads,
+        canonical_sha256,
+    )
+    from services.frustrampnn.manifests import (
+        ManifestValidationError,
+        validate_external_authority_artifact,
+        validate_result_manifest,
+    )
+    from services.frustrampnn.persistence import (
+        _artifact_values,
+        load_and_validate_result_bundle,
+    )
+
+    source_bytes = _candidate_pdb()
+    source = tmp_path / "candidate.pdb"
+    source.write_bytes(source_bytes)
+    snapshot = _candidate_snapshot(hashlib.sha256(source_bytes).hexdigest())
+    candidate = {
+        "candidate_id": "candidate-a",
+        "authoritative_structure_path": "native/candidate.pdb",
+        "backend_coordinates": {
+            "backend": "protenix_v2_ensemble",
+            "target_id": "target-a",
+            "ordered_seed": 7,
+            "sample_index": 2,
+        },
+    }
+    request_path = tmp_path / "workflow_component_request_v2.json"
+    normalized_path = tmp_path / "canonical_source.pdb"
+    structure_map_path = tmp_path / "frustrampnn_structure_map_v1.json"
+    authority_path = tmp_path / "authority_artifact_v1.json"
+    request = prepare_cm_candidate_v2(
+        source=source,
+        output_pdb_path=normalized_path,
+        structure_map_path=structure_map_path,
+        request_path=request_path,
+        authority_artifact_path=authority_path,
+        parent_job_id="cm-parent-job",
+        parent_workflow_id="conformational_mapping",
+        candidate=candidate,
+        complex_snapshot=snapshot,
+        requested_settings=default_settings(),
+    )
+    fixture = _load_component_fixture()
+    authority_bytes = base64.b64decode(
+        request["identity_authority_artifact"]["canonical_json_base64"],
+        validate=True,
+    )
+    component = fixture._component()
+    fixture._mock_v2_runtime(component, monkeypatch, tmp_path)
+    runtime = __import__("services.frustrampnn.runtime", fromlist=["execute_frustrampnn"])
+
+    def execute_all_protein(invocation, _pinned, **_kwargs):
+        argv = list(invocation.argv)
+        binds = [argv[index + 1] for index, token in enumerate(argv) if token == "--bind"]
+        output_root = Path(next(value.split(":", 1)[0] for value in binds if value.endswith(":/bms/output:rw")))
+        output = output_root / Path(argv[argv.index("--output") + 1]).name
+        rows = ["frustration_pred,position,wildtype,mutation,chain,pdb"]
+        rows.extend(f"0.0,0,G,{mutation},X,normalized" for mutation in "ACDEFGHIKLMNPQRSTVWY")
+        output.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(runtime, "execute_frustrampnn", execute_all_protein)
+    output = tmp_path / "candidate_bundle"
+
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized_path,
+        structure_map=structure_map_path,
+        output_dir=output,
+        container=tmp_path / "mock.sif",
+        physical_gpu_id=3,
+    )
+
+    assert (output / "authority_artifact_v1.json").read_bytes() == authority_bytes
+    assert manifest["artifact_count"] == 10
+    assert [record["relative_path"] for record in manifest["artifacts"]] == [
+        "workflow_component_request_v3.json",
+        "authority_artifact_v1.json",
+        "normalized_input.pdb",
+        "frustrampnn_structure_map_v1.json",
+        "raw_frustrampnn.csv",
+        "frustrampnn_landscape_v3.json",
+        "frustrampnn_summary_v3.json",
+        "frustrampnn_stdout.log",
+        "frustrampnn_stderr.log",
+        "frustrampnn_execution_receipt_v3.json",
+    ]
+    assert canonical_json_loads((output / "authority_artifact_v1.json").read_bytes())["schema_name"] == "producer_manifest"
+    validate_result_manifest(output, manifest)
+    bundle = load_and_validate_result_bundle(
+        output,
+        expected_parent_job_id="cm-parent-job",
+        terminal_envelope=canonical_json_loads(
+            (output / "workflow_component_result_v3.json").read_bytes()
+        ),
+    )
+    authority_value = next(
+        value
+        for value in _artifact_values(bundle)
+        if value["relative_path"] == "authority_artifact_v1.json"
+    )
+    assert authority_value["role"] == "identity_authority"
+    assert authority_value["media_type"] == "application/json"
+
+    manifest_path = output / "frustrampnn_result_manifest_v3.json"
+    terminal_path = output / "workflow_component_result_v3.json"
+    original_manifest = canonical_json_loads(manifest_path.read_bytes())
+    original_terminal = canonical_json_loads(terminal_path.read_bytes())
+
+    forged = canonical_json_loads(authority_bytes)
+    forged["entities"][0]["sequence"] = "A"
+    forged_bytes = canonical_json_bytes(forged)
+    forged_manifest = canonical_json_loads(canonical_json_bytes(original_manifest))
+    authority_record = forged_manifest["artifacts"][1]
+    authority_record["sha256"] = hashlib.sha256(forged_bytes).hexdigest()
+    authority_record["bytes"] = len(forged_bytes)
+    forged_terminal = canonical_json_loads(canonical_json_bytes(original_terminal))
+    forged_terminal["result_manifest"]["sha256"] = canonical_sha256(forged_manifest)
+    (output / "authority_artifact_v1.json").write_bytes(forged_bytes)
+    manifest_path.write_bytes(canonical_json_bytes(forged_manifest))
+    terminal_path.write_bytes(canonical_json_bytes(forged_terminal))
+    with pytest.raises(
+        ManifestValidationError,
+        match="physical authority bytes disagree with the request-bound authority artifact",
+    ):
+        validate_result_manifest(output, forged_manifest)
+
+    tampered_request = canonical_json_loads(canonical_json_bytes(request))
+    tampered_request["identity_authority_artifact"]["canonical_json_base64"] = (
+        base64.b64encode(forged_bytes).decode("ascii")
+    )
+    tampered_request["identity_authority_artifact"]["sha256"] = hashlib.sha256(
+        forged_bytes
+    ).hexdigest()
+    tampered_structure = canonical_json_loads(structure_map_path.read_bytes())
+    tampered_structure["authority_artifact_sha256"] = hashlib.sha256(forged_bytes).hexdigest()
+    with pytest.raises(
+        ManifestValidationError,
+        match="external authority sequence identity disagrees with structure map",
+    ):
+        validate_external_authority_artifact(
+            tampered_request,
+            tampered_structure,
+            forged_bytes,
+        )
+
+def test_self_authoritative_v2_rejects_external_authority_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+    from services.frustrampnn.manifests import ManifestValidationError, build_result_manifest
+
+    fixture = _load_component_fixture()
+    component = fixture._component()
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    request, normalized, structure_map, _ = fixture._v2_inputs(
+        inputs,
+        residues=[("A", 1)],
+        selected=[("A", 0)],
+    )
+    fixture._mock_v2_runtime(component, monkeypatch, inputs)
+    output = tmp_path / "bundle"
+    manifest = component.run_component(
+        request=request,
+        source_structure=normalized,
+        structure_map=structure_map,
+        output_dir=output,
+        container=inputs / "mock.sif",
+        physical_gpu_id=3,
+    )
+    assert manifest["artifact_count"] == 10
+    (output / "frustrampnn_result_manifest_v2.json").unlink()
+    (output / "workflow_component_result_v2.json").unlink()
+    authority = {
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": request["source_artifact"]["sha256"],
+        "entities": [],
+    }
+    (output / "authority_artifact_v1.json").write_bytes(canonical_json_bytes(authority))
+    with pytest.raises(
+        ManifestValidationError,
+        match="external identity authority artifact presence disagrees with request authority",
+    ):
+        build_result_manifest(output)
+
+
+def test_external_authority_without_residue_mappings_does_not_invent_label_mapping() -> None:
+    from services.frustrampnn.contracts import canonical_json_bytes
+    from services.frustrampnn.manifests import validate_external_authority_artifact
+
+    authority = {
+        "schema_name": "producer_manifest",
+        "schema_version": 1,
+        "source_sha256": "a" * 64,
+        "cm_complex_snapshot_sha256": "b" * 64,
+        "entities": [
+            {
+                "entity_type": "protein",
+                "entity_instance_id": "A",
+                "source_entity_id": "1",
+                "label_asym_id": "A",
+                "auth_asym_id": "A",
+                "sequence": "MG",
+            }
+        ],
+    }
+    payload = canonical_json_bytes(authority)
+    digest = hashlib.sha256(payload).hexdigest()
+    request = {
+        "identity_authority": "cm_complex_snapshot",
+        "identity_authority_artifact": {
+            "relative_path": "authority_artifact_v1.json",
+            "media_type": "application/json",
+            "sha256": digest,
+            "canonical_json_base64": base64.b64encode(payload).decode("ascii"),
+            "cm_complex_snapshot_sha256": "b" * 64,
+        },
+        "source_artifact": {"sha256": "a" * 64},
+    }
+    structure = {
+        "authority_artifact_sha256": digest,
+        "source_sha256": "a" * 64,
+        "rows": [
+            {
+                "entity_instance_id": "A",
+                "source_entity_id": "1",
+                "label_asym_id": "A",
+                "auth_asym_id": "A",
+                "sequence_index": index,
+                "label_seq_id": index,
+                "auth_seq_id": index,
+                "insertion_code": "",
+                "wt": wt,
+            }
+            for index, wt in enumerate("MG", start=1)
+        ],
+    }
+
+    validate_external_authority_artifact(request, structure, payload)
 
 
 @pytest.mark.parametrize(
@@ -425,7 +831,7 @@ def test_cm_preparer_fans_in_every_producer_with_exact_candidate_identity_and_ca
     ]
     assert [
         json.loads(
-            (prepared / item["candidate_id"] / "workflow_component_request_v2.json").read_text()
+            (prepared / item["candidate_id"] / "workflow_component_request_v3.json").read_text()
         )["candidate_id"]
         for item in manifest["candidates"]
     ] == ["candidate-0", "candidate-1"]
@@ -434,7 +840,7 @@ def test_cm_preparer_fans_in_every_producer_with_exact_candidate_identity_and_ca
         assert sorted(path.name for path in candidate_root.iterdir()) == [
             "canonical_source.pdb",
             "frustrampnn_structure_map_v1.json",
-            "workflow_component_request_v2.json",
+            "workflow_component_request_v3.json",
         ]
 
 
@@ -505,7 +911,10 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
         "request_sha256": "4" * 64,
         "backend": "external_import",
         "targets": [{"target_id": "target-a"}],
-        "analysis_policy": {},
+        "analysis_policy": {
+            "clash_detector_id": "bms_clash",
+            "clash_detector_version": "1",
+        },
     }
     request_path = tmp_path / "cm_request_v1.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
@@ -596,9 +1005,28 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
             "ranking_policy": {}, "clash_records": [], "exclusions": [], "results": [],
         }
 
+    clash_calls: list[dict[str, object]] = []
+
+    def fake_build_clash_rows(
+        normalized_pdb: Path,
+        structure_map: dict[str, object],
+        *,
+        candidate_id: str,
+        detector_id: str,
+        detector_version: str,
+    ) -> dict[object, object]:
+        clash_calls.append({
+            "normalized_pdb": normalized_pdb,
+            "structure_map": structure_map,
+            "candidate_id": candidate_id,
+            "detector_id": detector_id,
+            "detector_version": detector_version,
+        })
+        return {}
+
     monkeypatch.setattr(module, "validate_result_manifest", fake_validate)
     monkeypatch.setattr(module, "analyze_landscapes", fake_analyze)
-    monkeypatch.setattr(module, "build_clash_rows", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(module, "build_clash_rows", fake_build_clash_rows)
     monkeypatch.setattr(module, "derive_state_landscape_analysis_for_request", lambda *_args: None)
     output = tmp_path / "output"
 
@@ -614,6 +1042,15 @@ def test_cm_postprocessor_validates_v2_bundle_and_passes_global_landscape_direct
         (bundle, {"schema_version": 2}),
         (output / "frustrampnn/results/candidate-a", {"schema_version": 2}),
     ]
+    assert clash_calls == [{
+        "normalized_pdb": output / "frustrampnn/results/candidate-a/normalized_input.pdb",
+        "structure_map": json.loads(
+            payloads["frustrampnn_structure_map_v1.json"]
+        ),
+        "candidate_id": candidate_id,
+        "detector_id": "bms_clash",
+        "detector_version": "1",
+    }]
     assert seen_landscapes == [global_landscape]
     references = json.loads(
         (output / "derived/cm_frustrampnn_result_references_v1.json").read_text()
@@ -708,13 +1145,16 @@ def test_cm_nextflow_wires_every_candidate_through_canonical_v2_and_no_direct_ru
     assert "CONFORMATIONAL_MAPPING_CONFORNETS" in workflow
     assert "CONFORMATIONAL_MAPPING_IMPORT" in workflow
     assert "PrepareConformationalMappingFrustraMPNNV2" in workflow
-    assert "CanonicalFrustraMPNNV2" in workflow
-    assert "StageConformationalMappingFrustraMPNNResult" in workflow
+    assert "SchedulerFrustraMPNNParentFanout" in workflow
+    assert "CanonicalFrustraMPNNV2(" not in workflow
+    assert "SchedulerFrustraMPNNParentFanout.out.result_bundles" in workflow
     assert "CanonicalConformationalAnalysisPlaneV2" in workflow
     assert "flatMap" in workflow
-    assert "workflow_component_request_v2.json" in workflow
+    assert "workflow_component_request_v3.json" in workflow
     assert "canonical_source.pdb" in workflow
-    assert "frustrampnn_structure_map_v1.json" in workflow
+    assert "frustrampnn_structure_map_v1.json" in (
+        root / "scripts" / "prepare_conformational_mapping_frustrampnn_v2.py"
+    ).read_text(encoding="utf-8")
     assert "errorStrategy 'terminate'" in module
     assert "postprocess_conformational_mapping_frustrampnn_v2.py" in module
     assert "run_conformational_mapping_analysis_plane.py" not in module
@@ -734,7 +1174,7 @@ def test_cm_persistence_reuses_global_result_rows_without_legacy_projection() ->
     assert "canonical_count is not None and not is_conformational_mapping" in ingester
     assert "canonical_count != len(ensemble" not in ingester
     assert "frustrampnn_result_references" in ingester
-    assert "frustrampnn_landscape_v2.json" in ingester
+    assert 'f"frustrampnn_landscape_v{generation}.json"' in ingester
     assert "FrustraMPNNResult" in persistence
     assert "FrustraMPNNLandscapeRow" in persistence
     assert "canonical_global_mode" in persistence

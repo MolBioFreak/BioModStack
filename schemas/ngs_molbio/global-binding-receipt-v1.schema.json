@@ -29,7 +29,7 @@
           "type": "string"
         },
         "domain_contract_version": {
-          "const": "2"
+          "enum": ["2", "3"]
         },
         "domain_kind": {
           "const": "ngs_molbio"

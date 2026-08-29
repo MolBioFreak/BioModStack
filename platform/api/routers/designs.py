@@ -2258,6 +2258,52 @@ async def _resolve_design_query_job_ids(
 
 # --- Endpoints ---
 
+
+@router.get("/reusable-structures")
+async def list_reusable_structures(
+    limit: int = Query(24, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+):
+    """List a bounded set of completed, existing structure artifacts for reuse."""
+    result = await session.execute(
+        select(
+            Design.id,
+            Design.name,
+            Design.pdb_path,
+            Job.id.label("job_id"),
+            Job.name.label("job_name"),
+            Job.model_id,
+            Job.completed_at,
+        )
+        .join(Job, Job.id == Design.job_id)
+        .where(
+            Job.status == "completed",
+            Design.pdb_path.is_not(None),
+            Design.pdb_path != "",
+        )
+        .order_by(Job.completed_at.desc().nulls_last(), Design.created_at.desc())
+        .limit(limit * 4)
+    )
+    structures = []
+    for row in result.mappings():
+        structure_path = resolve_runtime_data_path(str(row["pdb_path"]))
+        if not structure_path.is_file():
+            continue
+        design_id = str(row["id"])
+        structures.append({
+            "design_id": design_id,
+            "design_name": str(row["name"]),
+            "job_id": str(row["job_id"]),
+            "job_name": str(row["job_name"]),
+            "model_id": str(row["model_id"]),
+            "completed_at": row["completed_at"],
+            "structure_url": f"/api/designs/{design_id}/pdb",
+        })
+        if len(structures) >= limit:
+            break
+    return {"structures": structures, "limit": limit}
+
+
 @router.get("", response_model=DesignList)
 async def list_designs(
     job_id: Optional[str] = None,

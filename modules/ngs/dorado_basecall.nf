@@ -82,6 +82,7 @@ process DoradoBasecall {
 
     script:
     def summaryRequested = params.emit_summary != false
+    def movesRequested = params.emit_moves == true
     def trimAdapters = params.trim_adapters != false
     def expectedLockSha256 = (params.dorado_lock_sha256 ?: '').toString().trim().toLowerCase()
     if (expectedLockSha256 && !(expectedLockSha256 ==~ /[0-9a-f]{64}/)) {
@@ -221,6 +222,12 @@ process DoradoBasecall {
       command+=(--no-trim)
     fi
     if [[ '${summaryRequested}' == 'true' && "\${mode}" == simplex ]] && bash ${doradoShellQuote("${params.code_root}/scripts/dorado_supports_option.sh")} dorado basecaller --emit-summary; then command+=(--emit-summary); fi
+    emit_moves='${movesRequested}'
+    if [[ "\${emit_moves}" == true ]]; then
+      [[ "\${mode}" == simplex ]] || { echo 'move-tag emission is not qualified for duplex' >&2; exit 1; }
+      bash ${doradoShellQuote(params.code_root + '/scripts/dorado_supports_option.sh')} dorado basecaller --emit-moves || { echo 'locked Dorado runtime lacks --emit-moves' >&2; exit 1; }
+      command+=(--emit-moves)
+    fi
 
     : > basecall.log
     "\${command[@]}" > calls.bam 2>> basecall.log
@@ -229,12 +236,19 @@ process DoradoBasecall {
     calls_sha="\$(sha256sum calls.bam | cut -d' ' -f1)"
     preflight_sha="\$(sha256sum dorado_preflight.json | cut -d' ' -f1)"
     read_count="\$(samtools view -c calls.bam)"
+    read_inventory_sha256="\$(samtools view calls.bam | cut -f1 | LC_ALL=C sort | sha256sum | cut -d' ' -f1)"
+    mv_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^mv:B:/) {n++; break}} END{print n}')"
+    ts_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^ts:i:/) {n++; break}} END{print n}')"
+    ns_tag_count="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i ~ /^ns:i:/) {n++; break}} END{print n}')"
+    if [[ "\${emit_moves}" == true ]] && (( mv_tag_count != read_count || ts_tag_count != read_count || ns_tag_count != read_count )); then
+      echo "Dorado move-tag contract incomplete: reads=\${read_count} mv=\${mv_tag_count} ts=\${ts_tag_count} ns=\${ns_tag_count}" >&2; exit 1
+    fi
     duplex_dx1=0
     if [[ "\${mode}" == duplex ]]; then
       duplex_dx1="\$(samtools view calls.bam | awk 'BEGIN{n=0} {for(i=12;i<=NF;i++) if(\$i=="dx:i:1") {n++; break}} END{print n}')"
       (( read_count > 0 && duplex_dx1 == read_count )) || { echo "Dorado duplex output lacks authoritative dx:i:1 calls" >&2; exit 1; }
     fi
-    jq -n --arg schema 'biomodstack.dorado_runtime_provenance.v1' --arg mode "\${mode}" --arg model_id "\${model_id}" --arg calls_sha256 "\${calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --arg runtime_sha256 "\${runtime_observed}" --argjson read_count "\${read_count}" --argjson duplex_dx1 "\${duplex_dx1}" '{schema:\$schema,mode:\$mode,model_id:\$model_id,preflight_sha256:\$preflight_sha256,runtime_sha256:\$runtime_sha256,calls_bam:{sha256:\$calls_sha256,read_count:\$read_count,duplex_dx1:\$duplex_dx1},network:"denied_by_namespace",model_download:"denied_by_namespace_and_sealed_models"}' > dorado_runtime_provenance.json
+    jq -n --arg schema 'biomodstack.dorado_runtime_provenance.v1' --arg mode "\${mode}" --arg model_id "\${model_id}" --arg calls_sha256 "\${calls_sha}" --arg preflight_sha256 "\${preflight_sha}" --arg runtime_sha256 "\${runtime_observed}" --arg read_inventory_sha256 "\${read_inventory_sha256}" --argjson emit_moves "\${emit_moves}" --argjson read_count "\${read_count}" --argjson mv_tag_count "\${mv_tag_count}" --argjson ts_tag_count "\${ts_tag_count}" --argjson ns_tag_count "\${ns_tag_count}" --argjson duplex_dx1 "\${duplex_dx1}" '{schema:\$schema,mode:\$mode,model_id:\$model_id,preflight_sha256:\$preflight_sha256,runtime_sha256:\$runtime_sha256,emit_moves:\$emit_moves,calls_bam:{sha256:\$calls_sha256,read_count:\$read_count,read_inventory_sha256:\$read_inventory_sha256,move_tags:{mv:\$mv_tag_count,ts:\$ts_tag_count,ns:\$ns_tag_count},duplex_dx1:\$duplex_dx1},network:"denied_by_namespace",model_download:"denied_by_namespace_and_sealed_models"}' > dorado_runtime_provenance.json
     """
 }
 

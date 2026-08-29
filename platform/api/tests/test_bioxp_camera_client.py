@@ -311,3 +311,93 @@ def test_camera_transaction_has_absolute_wall_clock_deadline():
         asyncio.run(client.camera_latest())
     assert stream.yielded < 100
     asyncio.run(client.close())
+
+
+def camera_stream_payload(*, state: str = "live", active: bool = True) -> dict[str, object]:
+    return {
+        "schema_version": "bioxp.camera_stream.v1",
+        "state": state,
+        "active": active,
+        "stream_id": "stream-1",
+        "camera_ownership_epoch": 4,
+        "device": "/dev/video0",
+        "fps": 8 if active else None,
+        "quality": 7 if active else None,
+        "width": 640 if active else None,
+        "height": 480 if active else None,
+        "frames_emitted": 2,
+        "dropped_frames": 0,
+        "latest_frame_at": "2026-07-27T12:00:01Z" if active else None,
+        "last_error": None,
+    }
+
+
+def test_camera_stream_controls_use_fixed_registry_routes_and_strict_projection():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/stream/start"):
+            payload = camera_stream_payload()
+        elif request.url.path.endswith("/stream/state"):
+            payload = camera_stream_payload()
+        elif request.url.path.endswith("/stream/stop"):
+            payload = camera_stream_payload(state="off", active=False)
+        else:
+            raise AssertionError(request.url.path)
+        return await response(request, json=payload)
+
+    transport = CameraTransport(handler)
+    client = BioXpRobotClient(target(), transport=transport)
+
+    started = asyncio.run(client.camera_stream_start())
+    state = asyncio.run(client.camera_stream_state())
+    stopped = asyncio.run(client.camera_stream_stop())
+
+    assert started["state"] == "live"
+    assert state["camera_ownership_epoch"] == 4
+    assert stopped["state"] == "off"
+    assert [(item.method, item.url.path) for item in transport.requests] == [
+        ("POST", "/camera/stream/start"),
+        ("GET", "/camera/stream/state"),
+        ("POST", "/camera/stream/stop"),
+    ]
+    assert all(not item.url.query for item in transport.requests)
+    assert all("device" not in payload for payload in (started, state, stopped))
+    assert transport.requests[0].read() == b"{}"
+    assert transport.requests[2].read() == b"{}"
+    asyncio.run(client.close())
+
+
+def test_camera_mjpeg_context_validates_content_type_and_yields_bytes():
+    jpeg_part = b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 6\r\n\r\n\xff\xd8x\xff\xd9\r\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "multipart/x-mixed-replace; boundary=frame"},
+            stream=CountingStream([jpeg_part[:10], jpeg_part[10:]]),
+            request=request,
+        )
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+
+    async def consume():
+        async with client.camera_mjpeg_stream() as chunks:
+            return [chunk async for chunk in chunks]
+
+    chunks = asyncio.run(consume())
+    assert b"".join(chunks) == jpeg_part
+    asyncio.run(client.close())
+
+
+def test_camera_mjpeg_context_rejects_non_multipart_response():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Type": "image/jpeg"}, content=JPEG_BYTES, request=request)
+
+    client = BioXpRobotClient(target(), transport=CameraTransport(handler))
+
+    async def consume():
+        async with client.camera_mjpeg_stream():
+            pass
+
+    with pytest.raises(RobotTransportError, match="multipart"):
+        asyncio.run(consume())
+    asyncio.run(client.close())

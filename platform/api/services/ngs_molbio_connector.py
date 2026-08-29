@@ -118,6 +118,10 @@ def _validate_hierarchy_revision_payload(aggregate_kind: str, payload: dict[str,
     """Apply the frozen closed schema plus hierarchy lifecycle contract."""
     if aggregate_kind != "domain_experiment":
         filename = _HIERARCHY_SCHEMA_FILES.get(aggregate_kind)
+        if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+            filename = "project-v2.schema.json"
+        elif aggregate_kind == "experiment" and payload.get("schema") == "bms.global-experiment.v2":
+            filename = "global-experiment-v2.schema.json"
         if filename is None:
             raise ConnectorConflict(f"unsupported hierarchy revision kind: {aggregate_kind}")
         try:
@@ -200,8 +204,12 @@ async def _hierarchy(
         domain_payload = json.loads(domain_revision.canonical_payload)
     except json.JSONDecodeError as exc:
         raise ConnectorConflict("Domain Experiment revision is invalid JSON") from exc
-    if domain_payload.get("schema") != "bms.domain-experiment.v2" or domain_payload.get("domain_kind") != "ngs_molbio" or domain_payload.get("domain_contract_version") != "2":
-        raise ConnectorConflict("binding requires an exact NGS/MolBio Domain v2 revision")
+    if (
+        domain_payload.get("schema") not in {"bms.domain-experiment.v2", "bms.domain-experiment.v4"}
+        or domain_payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}
+        or domain_payload.get("domain_contract_version") not in {"2", "3"}
+    ):
+        raise ConnectorConflict("binding requires an exact NGS/MolBio Domain v2 or v4 revision")
     return project, experiment, domain, project_revision, experiment_revision, domain_revision
 
 
@@ -293,6 +301,9 @@ async def issue_binding_command(
             or current_local_binding.connector_command_id is not None
         ):
             raise RevisionConflict("stale_revision")
+    domain_kind = json.loads(domain_revision.canonical_payload).get("domain_kind")
+    if domain_kind not in {"ngs_molbio", "protein_in_silico"}:
+        raise ConnectorConflict("binding requires a supported Domain kind")
     verified_at = _utc_now()
     receipt_id = new_id("ngs-molbio-binding-receipt")
     receipt = {
@@ -312,7 +323,8 @@ async def issue_binding_command(
             "id": domain_id, "revision_id": domain_revision.resource_id,
             "generation": domain.head_generation, "digest": domain_revision.payload_sha256,
             "reopen_destination": f"/projects/{project_id}?focus={global_experiment_id}&selected=domain:{domain_id}",
-            "lifecycle_state": domain.lifecycle_state, "domain_kind": "ngs_molbio", "domain_contract_version": "2",
+            "lifecycle_state": domain.lifecycle_state, "domain_kind": "ngs_molbio",
+            "domain_contract_version": json.loads(domain_revision.canonical_payload)["domain_contract_version"],
         },
         "adapter_id": BINDING_ADAPTER_ID, "adapter_version": "1",
         "verified_at": verified_at, "acknowledgement": {"status": "verified"},
@@ -486,18 +498,18 @@ async def exact_local_launch_authority(
     domain_revision = await global_session.get(ExperimentRevision, domain.current_revision_id)
     if (
         project_revision is None or project_revision.subject_id != project_id
-        or project_revision.schema_name != "bms.project.v1"
-        or project_revision.schema_version != "1"
+        or project_revision.schema_name not in {"bms.project.v1", "bms.project.v2"}
+        or project_revision.schema_version not in {"1", "2"}
         or _digest(project_revision.canonical_payload) != project_revision.payload_sha256
         or experiment_revision is None or experiment_revision.subject_id != global_experiment_id
         or experiment_revision.revision_number != experiment.head_generation
-        or experiment_revision.schema_name != "bms.global-experiment.v1"
-        or experiment_revision.schema_version != "1"
+        or experiment_revision.schema_name not in {"bms.global-experiment.v1", "bms.global-experiment.v2"}
+        or experiment_revision.schema_version not in {"1", "2"}
         or _digest(experiment_revision.canonical_payload) != experiment_revision.payload_sha256
         or domain_revision is None or domain_revision.subject_id != domain_id
         or domain_revision.revision_number != domain.head_generation
-        or domain_revision.schema_name != "bms.domain-experiment.v2"
-        or domain_revision.schema_version != "1"
+        or domain_revision.schema_name not in {"bms.domain-experiment.v2", "bms.domain-experiment.v4"}
+        or domain_revision.schema_version not in {"1", "3"}
         or _digest(domain_revision.canonical_payload) != domain_revision.payload_sha256
     ):
         raise ValidationFailure("replacement_preparation_required")
@@ -514,9 +526,11 @@ async def exact_local_launch_authority(
         or canonical_json(experiment_payload) != experiment_revision.canonical_payload
         or not isinstance(domain_payload, dict)
         or canonical_json(domain_payload) != domain_revision.canonical_payload
-        or domain_payload.get("schema") != "bms.domain-experiment.v2"
-        or domain_payload.get("domain_kind") != "ngs_molbio"
-        or domain_payload.get("domain_contract_version") != "2"
+        or not (
+            (domain_payload.get("schema") == "bms.domain-experiment.v2" and domain_payload.get("domain_contract_version") == "2")
+            or (domain_payload.get("schema") == "bms.domain-experiment.v4" and domain_payload.get("domain_contract_version") == "3")
+        )
+        or domain_payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}
         or domain_payload.get("status") == "archived"
     ):
         raise ValidationFailure("replacement_preparation_required")
@@ -648,8 +662,8 @@ async def exact_local_launch_authority(
         or binding_receipt["domain_experiment"].get("revision_id") != domain.current_revision_id
         or binding_receipt["domain_experiment"].get("generation") != domain.head_generation
         or binding_receipt["domain_experiment"].get("digest") != domain_revision.payload_sha256
-        or binding_receipt["domain_experiment"].get("domain_kind") != "ngs_molbio"
-        or binding_receipt["domain_experiment"].get("domain_contract_version") != "2"
+        or binding_receipt["domain_experiment"].get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}
+        or binding_receipt["domain_experiment"].get("domain_contract_version") not in {"2", "3"}
         or binding_receipt.get("adapter_id") != BINDING_ADAPTER_ID
         or binding_receipt.get("acknowledgement") != {"status": "verified"}
         or not isinstance(command_payload, dict)

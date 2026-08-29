@@ -1,0 +1,665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.backup-receipt.v1",
+  "title": "Whole-program Project Manager backup receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "backup_receipt_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_sha256",
+    "snapshot_protocol",
+    "snapshot_started_at",
+    "snapshot_completed_at",
+    "captured_quiescent",
+    "active_job_count",
+    "active_connector_lease_count",
+    "cross_store_high_watermarks",
+    "stores",
+    "artifact_roots",
+    "authority_family_coverage",
+    "backup_manifest_sha256",
+    "created_by",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.backup-receipt.v1"
+    },
+    "backup_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "snapshot_protocol": {
+      "const": "sqlite-online-backup-plus-governed-file-manifest-v1"
+    },
+    "snapshot_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "snapshot_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "captured_quiescent": {
+      "const": true
+    },
+    "active_job_count": {
+      "const": 0
+    },
+    "active_connector_lease_count": {
+      "const": 0
+    },
+    "cross_store_high_watermarks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "global_connector_commands",
+        "global_inbox_events",
+        "local_outbox_events",
+        "local_acknowledgements"
+      ],
+      "properties": {
+        "global_connector_commands": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "global_inbox_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_outbox_events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_acknowledgements": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "stores": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "global-experiments"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-ngs-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "core-ngs"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/storeSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "biomodstack-native"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "artifact_roots": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "global-project-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "molbio-governed-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "ngs-governed-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/artifactRootSnapshot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "bms-native-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "authority_family_coverage": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "project-manager"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "ngs-molbio"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "protein"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "conformational-mapping"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "molecular-dynamics"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "frustrampnn"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "structure-prediction"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/authorityCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "trajectory"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "backup_manifest_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for an object containing exactly stores, artifact_roots, and authority_family_coverage in their required denominator order."
+    },
+    "created_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "storeSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "source_database_identity",
+        "snapshot_artifact_id",
+        "snapshot_sha256",
+        "size_bytes",
+        "schema_sha256",
+        "trigger_set_sha256",
+        "migration_ledger_sha256",
+        "integrity_check",
+        "foreign_key_violation_count",
+        "object_counts"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs",
+            "biomodstack-native"
+          ]
+        },
+        "source_database_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "snapshot_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "snapshot_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "trigger_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "migration_ledger_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "integrity_check": {
+          "const": "ok"
+        },
+        "foreign_key_violation_count": {
+          "const": 0
+        },
+        "object_counts": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1024,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "maxLength": 128
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "artifactRootSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "source_root_identity",
+        "manifest"
+      ],
+      "properties": {
+        "root_id": {
+          "enum": [
+            "global-project-artifacts",
+            "molbio-governed-artifacts",
+            "ngs-governed-results",
+            "bms-native-results"
+          ]
+        },
+        "source_root_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manifest_schema_id",
+            "manifest_id",
+            "manifest_artifact_id",
+            "manifest_content_sha256",
+            "ordered_files_sha256",
+            "file_count",
+            "total_size_bytes"
+          ],
+          "properties": {
+            "manifest_schema_id": {
+              "const": "bms.project-manager.file-manifest.v1"
+            },
+            "manifest_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_content_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ordered_files_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "total_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "authorityCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_family",
+        "store_ids",
+        "root_ids",
+        "object_count",
+        "receipt_count",
+        "artifact_count"
+      ],
+      "properties": {
+        "authority_family": {
+          "enum": [
+            "project-manager",
+            "ngs-molbio",
+            "protein",
+            "conformational-mapping",
+            "molecular-dynamics",
+            "frustrampnn",
+            "structure-prediction",
+            "trajectory"
+          ]
+        },
+        "store_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "global-experiments",
+              "molbio-domain",
+              "molbio-ngs-domain",
+              "core-ngs",
+              "biomodstack-native"
+            ]
+          }
+        },
+        "root_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "global-project-artifacts",
+              "molbio-governed-artifacts",
+              "ngs-governed-results",
+              "bms-native-results"
+            ]
+          }
+        },
+        "object_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "receipt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

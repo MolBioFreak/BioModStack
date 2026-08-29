@@ -25,7 +25,7 @@
     "invocation_id": {"type": "string", "minLength": 1}, "parent_job_id": {"type": "string", "minLength": 1}, "candidate_id": {"type": "string", "minLength": 1},
     "request_sha256": {"$ref": "#/$defs/sha256"}, "source_artifact_sha256": {"$ref": "#/$defs/sha256"}, "execution_configuration_sha256": {"$ref": "#/$defs/sha256"},
     "statistics_sha256": {"$ref": "#/$defs/sha256"}, "comparison_compatibility_id": {"$ref": "#/$defs/sha256"},
-    "artifact_count": {"const": 10}, "artifacts": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"$ref": "#/$defs/artifact"}}
+    "artifact_count": {"enum": [10, 11]}, "artifacts": {"type": "array", "minItems": 10, "maxItems": 11, "items": {"$ref": "#/$defs/artifact"}}
   },
   "required": ["schema_name", "schema_version", "invocation_id", "parent_job_id", "candidate_id", "request_sha256", "source_artifact_sha256", "execution_configuration_sha256", "statistics_sha256", "comparison_compatibility_id", "artifact_count", "artifacts"]
 }

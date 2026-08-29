@@ -40,9 +40,12 @@ from services.molbio_ngs_receipts import _snapshot_sequence
 from services.ngs_comparison_panels import _validated_panel_manifest
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.sequence_qc_manifest import (
+    SequenceQcManifestError,
     VERIFICATION_SCHEMA,
+    find_canonical_fastq_manifest,
     find_manifest_in_result_root,
     load_sequence_qc_manifest,
+    read_manifest_json_nofollow,
 )
 from paths import get_inputs_dir, get_results_dir, resolve_runtime_data_path
 
@@ -308,6 +311,33 @@ async def persist_member_receipt(
     if canonical_sha256 != receipt.receipt_sha256:
         raise ValueError("member receipt canonical digest mismatch")
     parsed = parse_canonical_member_receipt(receipt.canonical_receipt)
+    existing = await session.get(MolBioNGSMemberReceipt, parsed["receipt_id"])
+    if existing is not None:
+        stable_identity = {
+            "source_store_id": parsed["source_store_id"],
+            "entity_kind": parsed["entity_kind"],
+            "entity_id": parsed["entity_id"],
+            "source_generation_or_revision": parsed["source_generation_or_revision"],
+            "content_digest": parsed["content_digest"],
+            "schema_name": RECEIPT_SCHEMA_NAME,
+            "schema_version": RECEIPT_SCHEMA_VERSION,
+            "availability": parsed["availability"],
+            "reopen_destination": _canonical(parsed["reopen_destination"]),
+        }
+        existing_identity = {
+            "source_store_id": existing.source_store_id,
+            "entity_kind": existing.entity_kind,
+            "entity_id": existing.entity_id,
+            "source_generation_or_revision": existing.source_generation_or_revision,
+            "content_digest": existing.content_digest,
+            "schema_name": existing.schema_name,
+            "schema_version": existing.schema_version,
+            "availability": existing.availability,
+            "reopen_destination": existing.reopen_destination,
+        }
+        if existing_identity != stable_identity:
+            raise ValueError("member receipt deterministic identity collision")
+        return existing
     row = MolBioNGSMemberReceipt(
         receipt_id=parsed["receipt_id"],
         source_store_id=parsed["source_store_id"],
@@ -586,10 +616,16 @@ async def resolve_ngs_result_manifest_receipt(
     if job is None or job.model_id != "nanopore":
         raise KeyError("core NGS job identity was not found")
     result_root = resolve_persisted_job_result_root(job)
-    manifest_path = find_manifest_in_result_root(result_root)
-    raw = manifest_path.read_bytes()
     params = job.params if isinstance(job.params, dict) else {}
-    workflow_id = params.get("ont_workflow_id")
+    workflow_id = params.get("ont_workflow_id") or params.get("ont_request_workflow_id") or params.get("workflow_id")
+    if workflow_id == "ont_fastq_qc":
+        manifest_path = find_canonical_fastq_manifest(result_root)
+    else:
+        try:
+            manifest_path = find_manifest_in_result_root(result_root)
+        except SequenceQcManifestError as exc:
+            raise ValueError("canonical sequence-QC manifest is unavailable") from exc
+    _manifest_document, raw, _manifest_digest, _manifest_size = read_manifest_json_nofollow(manifest_path)
     if not isinstance(workflow_id, str) or not workflow_id:
         raise ValueError("core NGS job lacks a canonical workflow identity")
     workflow = get_ont_workflow_spec(workflow_id)

@@ -1,0 +1,21 @@
+{
+  "package_sha256": "49c521c784f3917359049462a3f0fc21472572b17091ce2b7691d54bc6223e74",
+  "records": [
+    {"path": "docs/specs/2026-08-20-ont-fastq-qc-result-recovery-closure-sow.md", "sha256": "72f0f6c07e443a6fb78581fda0bf5c15db1d1e77105c556d2ac69a9271b0bc44", "size_bytes": 89967},
+    {"path": "docs/specs/2026-08-20-ont-fastq-qc-result-recovery-review-ledger.md", "sha256": "8ecfb024d3751affc602cbb4b9d7cb25d52b18c47fcd4b8375e4e6ad0923be20", "size_bytes": 22667},
+    {"path": "schemas/ngs/ont_fastq_qc_result_v1.schema.json", "sha256": "4acbe3f36acd3bb8ef7bbbc98bb834a6dde34d80ba0a4d08e4bc5861e4f07476", "size_bytes": 116215},
+    {"path": "schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json", "sha256": "ab28cd645efebb2cc027c079271f0b24ea7baeec098ffe40bdcd61c85c085307", "size_bytes": 12819},
+    {"path": "schemas/ngs/ont_alignment_session_v1.schema.json", "sha256": "b16a1382cad136ffedee913de309eeb5b87a717c9c99b63316c7f15550763215", "size_bytes": 14145},
+    {"path": "schemas/ngs/ont_ngs_error_v1.schema.json", "sha256": "7f6b87fb9ac0cee623e663b2b699eae99da0c70454d143d116b84786eae52f41", "size_bytes": 3036},
+    {"path": "schemas/ngs/ont_ngs_rotation_success_v1.schema.json", "sha256": "c50417ec7a908482d7b091e2d2afdad01e07214c3bdb6616fec02a97d06c4895", "size_bytes": 770},
+    {"path": "schemas/ngs/ont_ngs_capability_revocation_success_v1.schema.json", "sha256": "94333ac451e9094fce7809fe4d798c9d7184cf1182951a6ec6dd87338ff1289d", "size_bytes": 579},
+    {"path": "schemas/ngs/ont_fastq_qc_evidence_bundle_v1.schema.json", "sha256": "5554c768e8d743a1a712a686f39b4fab3191f9cfa5f1008d13be3d94e080f03e", "size_bytes": 19736},
+    {"path": "schemas/ngs/ont_fastq_qc_gate_evidence_body_v1.schema.json", "sha256": "2602d492a35d43ae3aa7345a69bd434aaf87ef002f3e2b336100b0330da0d747", "size_bytes": 554042},
+    {"path": "schemas/ngs/ont_fastq_qc_browser_evidence_manifest_v1.schema.json", "sha256": "06247812fbc01247b008ea50b005674566e8450335cd8cd59985111e0182a31c", "size_bytes": 19901},
+    {"path": "schemas/ngs/ont_fastq_qc_independent_review_receipt_v1.schema.json", "sha256": "33968357e94f337b17b870828427f81f85261965291e50c77e59b13dfb3e22ff", "size_bytes": 3828},
+    {"path": "schemas/ngs/ont_fastq_qc_deployment_receipt_v1.schema.json", "sha256": "d04dea0f1931940dd7c2be9ea17cd0bd78c0cdb47d452c8343fcc448cefb9e8f", "size_bytes": 7104},
+    {"path": "schemas/ngs/ont_fastq_qc_final_acceptance_receipt_v1.schema.json", "sha256": "3eb2c92954e30ecbbeff17780ae667c65165a4580a71d0e2c367a9720fedf162", "size_bytes": 90161},
+    {"path": "platform/api/tests/fixtures/ont_fastq_qc_result_retry3_v1.json", "sha256": "edd8ac7b5fa181b78f9d4ca1ccc7e44531a7f19b6e748ca0fc4119c0c3919527", "size_bytes": 248530}
+  ],
+  "schema": "bms.ont-fastq-qc-specification-package.v1"
+}

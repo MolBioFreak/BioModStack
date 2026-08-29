@@ -1,0 +1,1247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.export-receipt.v3",
+  "title": "Non-serving disjoint whole-Project export receipt v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "export_receipt_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_path",
+    "runtime_implementation_algorithm",
+    "runtime_implementation_sha256",
+    "project_id",
+    "project_revision_id",
+    "project_generation",
+    "project_sha256",
+    "destination_classification",
+    "export_manifest",
+    "stores",
+    "artifact_roots",
+    "authority_family_coverage",
+    "created_at",
+    "receipt_sha256",
+    "project_digest_algorithm",
+    "archive_artifact",
+    "destination_root_identity",
+    "destination_identity_evidence",
+    "destination_isolation",
+    "export_verifier_assertion"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.export-receipt.v3"
+    },
+    "export_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_path": {
+      "const": "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
+    },
+    "runtime_implementation_algorithm": {
+      "const": "sha256-raw-file-v1"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "project_revision_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "project_generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "project_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "destination_classification": {
+      "const": "governed-offline-archive"
+    },
+    "export_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_schema_id",
+        "manifest_id",
+        "manifest_artifact_id",
+        "manifest_content_sha256",
+        "ordered_files_sha256",
+        "file_count",
+        "total_size_bytes"
+      ],
+      "properties": {
+        "manifest_schema_id": {
+          "const": "bms.project-manager.file-manifest.v2"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "manifest_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "manifest_content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "ordered_files_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "total_size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "stores": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "global-experiments"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "molbio-ngs-domain"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "core-ngs"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportStore"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "store_id": {
+                  "const": "biomodstack-native"
+                }
+              },
+              "required": [
+                "store_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "artifact_roots": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "global-project-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "molbio-governed-artifacts"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "ngs-governed-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportRoot"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "root_id": {
+                  "const": "bms-native-results"
+                }
+              },
+              "required": [
+                "root_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "authority_family_coverage": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "project-manager"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "ngs-molbio"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "protein"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "conformational-mapping"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "molecular-dynamics"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "frustrampnn"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "structure-prediction"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/exportCoverage"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "authority_family": {
+                  "const": "trajectory"
+                }
+              },
+              "required": [
+                "authority_family"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    },
+    "project_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-project-revision-v1"
+    },
+    "archive_artifact": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+    },
+    "destination_root_identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "destination_identity_evidence": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "destination_isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filesystem_read_only_after_finalize",
+        "immutable_after_finalize",
+        "comparisons",
+        "comparison_algorithm",
+        "comparison_sha256"
+      ],
+      "properties": {
+        "filesystem_read_only_after_finalize": {
+          "const": true
+        },
+        "immutable_after_finalize": {
+          "const": true
+        },
+        "comparisons": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "items": false,
+          "prefixItems": [
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "store"
+                    },
+                    "authority_id": {
+                      "const": "global-experiments"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "store"
+                    },
+                    "authority_id": {
+                      "const": "molbio-domain"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "store"
+                    },
+                    "authority_id": {
+                      "const": "molbio-ngs-domain"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "store"
+                    },
+                    "authority_id": {
+                      "const": "core-ngs"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "store"
+                    },
+                    "authority_id": {
+                      "const": "biomodstack-native"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "artifact_root"
+                    },
+                    "authority_id": {
+                      "const": "global-project-artifacts"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "artifact_root"
+                    },
+                    "authority_id": {
+                      "const": "molbio-governed-artifacts"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "artifact_root"
+                    },
+                    "authority_id": {
+                      "const": "ngs-governed-results"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            },
+            {
+              "allOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authority_type",
+                    "authority_id",
+                    "authority_storage_identity_sha256",
+                    "path_relation",
+                    "same_device_inode",
+                    "mounted_by_development",
+                    "mounted_by_production",
+                    "serving_listener_count"
+                  ],
+                  "properties": {
+                    "authority_type": {
+                      "enum": [
+                        "store",
+                        "artifact_root"
+                      ]
+                    },
+                    "authority_id": {
+                      "type": "string"
+                    },
+                    "authority_storage_identity_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "path_relation": {
+                      "const": "disjoint"
+                    },
+                    "same_device_inode": {
+                      "const": false
+                    },
+                    "mounted_by_development": {
+                      "const": false
+                    },
+                    "mounted_by_production": {
+                      "const": false
+                    },
+                    "serving_listener_count": {
+                      "const": 0
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "authority_type": {
+                      "const": "artifact_root"
+                    },
+                    "authority_id": {
+                      "const": "bms-native-results"
+                    }
+                  },
+                  "required": [
+                    "authority_type",
+                    "authority_id"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "comparison_algorithm": {
+          "const": "sha256-rfc8785-export-destination-disjointness-v1"
+        },
+        "comparison_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "export_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-export-isolation-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "exportStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "store_binding_sha256",
+        "canonical_rows_artifact_id",
+        "canonical_rows_algorithm",
+        "object_count",
+        "canonical_rows_sha256"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs",
+            "biomodstack-native"
+          ]
+        },
+        "store_binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "canonical_rows_artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "canonical_rows_algorithm": {
+          "const": "sha256-length-prefixed-sqlite-typed-rows-v1"
+        },
+        "object_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "canonical_rows_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "exportRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_id",
+        "selected_files_manifest"
+      ],
+      "properties": {
+        "root_id": {
+          "enum": [
+            "global-project-artifacts",
+            "molbio-governed-artifacts",
+            "ngs-governed-results",
+            "bms-native-results"
+          ]
+        },
+        "selected_files_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "manifest_schema_id",
+            "manifest_id",
+            "manifest_artifact_id",
+            "manifest_content_sha256",
+            "ordered_files_sha256",
+            "file_count",
+            "total_size_bytes"
+          ],
+          "properties": {
+            "manifest_schema_id": {
+              "const": "bms.project-manager.file-manifest.v2"
+            },
+            "manifest_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "manifest_content_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "ordered_files_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "file_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "total_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "exportCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_family",
+        "object_count",
+        "receipt_count",
+        "artifact_count"
+      ],
+      "properties": {
+        "authority_family": {
+          "enum": [
+            "project-manager",
+            "ngs-molbio",
+            "protein",
+            "conformational-mapping",
+            "molecular-dynamics",
+            "frustrampnn",
+            "structure-prediction",
+            "trajectory"
+          ]
+        },
+        "object_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "receipt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

@@ -2119,7 +2119,7 @@
       ],
       "entrypoint_owner": "services.nextflow.resolve_nextflow_entrypoint",
       "exposure_state": "internal",
-      "inventory_sha256": "8dc60a71fe36d83bc4ab507f1f693680aaf21526394fb343946856c0067b7c61",
+      "inventory_sha256": "4e797c9c52fc89ae7a80812331e440e899d017a1da4f3393ce4ab1142e271e26",
       "label": "ONT Construct Screening",
       "launch_mode": "typed_launcher_handoff",
       "materializer_owner": "services.nextflow.build_nextflow_command",
@@ -2175,7 +2175,7 @@
         "wf_clone_trim_length"
       ],
       "parameter_schema_id": "bms.workflow-parameters.ngs.ont.construct_screening.v1",
-      "parameter_schema_sha256": "67fd4c9d608c2fc638e24656bb739835ed67245780643da616be88d7f0b49934",
+      "parameter_schema_sha256": "6380d2eed31bc3df28ea3347f7edd9a3c657a0de2a53116ed42c2e0373871c9d",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -2785,7 +2785,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "d2683950a4403fe0b7c6a9e5b7294636b5aa341b678c89239bc2243bb23a7a71",
+  "content_sha256": "b09c453b309fd2b3d98588a6b7257e72c72f7e61036b5bff77a71069e22397a0",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2802,7 +2802,7 @@
     "bms.scientific-criterion.manual-review.v1",
     "bms.scientific-criterion.metric-threshold.v1"
   ],
-  "dataset_registry_sha256": "cb11b1b780376e9d6e5093057dbd8e6fe64a33df37988679b9d0f52530114aff",
+  "dataset_registry_sha256": "1ff6d5621f47a1e0b607348efe1c693b3bca8794d09c46d022b42542deaa1e84",
   "event_registry_sha256": "695fa4a3fae621b19c8ecdf48de1104cce59891d7c06024ea53a947fa3426adc",
   "evidence_schema_ids": [
     "bms.evidence-requirement.native-receipt.v1",
@@ -2811,7 +2811,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v1",
-  "schema_registry_sha256": "a294dca84b14ad92c8177b7a23c3001fb3366e22b57ad2664fc582c3581dd662",
+  "schema_registry_sha256": "e639e6a7d6a5da1d319ec1de5cf2e9fdb00e4d12d9c35b70329a16a56c227e45",
   "schema_version": 1,
-  "source_pin_sha256": "76028030245171a8000eccc51349e72b71081ea7efe064ca2bd5b00d431588be"
+  "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

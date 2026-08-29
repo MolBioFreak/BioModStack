@@ -28,6 +28,8 @@ import {
 import { jobPollingInterval } from '../../lib/queryPolling';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 
+const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
+
 interface OntInstrumentPanelProps {
     onAnalyzeExistingData: () => void;
 }
@@ -382,7 +384,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                 representationId,
                 waveformReadId.trim(),
             );
-            for (let attempt = 0; attempt < 30 && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+            for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
                 await new Promise((resolve) => window.setTimeout(resolve, 1000));
                 current = await fetchOntRawSignalWaveform(current.lookup_id);
             }
@@ -465,7 +467,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                     <p className="max-w-2xl text-sm text-[var(--text-secondary)]">Select a server-discovered Mk1D position and submit its opaque protocol intent. Reconnect is a trusted local BMS-host recovery action; it is not available through Tailnet.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Analyze existing data</button>
+                    <button type="button" onClick={onAnalyzeExistingData} className="rounded-lg border border-[var(--border-primary)] px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]">Data Analysis</button>
                     <button
                         type="button"
                         disabled={reconnectMk1d.isPending}
@@ -724,37 +726,44 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                                 <div>
                                                     <span className="font-semibold text-[var(--text-primary)]">{representation.format.toUpperCase()}</span>
                                                     {' '}· {representation.role} · {representation.state} · {representation.reason_code}
-                                                    <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
                                                 </div>
-                                                {representation.role === 'derived' ? (
-                                                    <div className="space-y-2 rounded border border-emerald-500/30 bg-emerald-500/5 p-2" aria-label="Raw-signal publication receipt">
-                                                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Publication</span><div>{representation.published_at ?? 'not published'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Reads</span><div>{representation.read_count ?? 'unknown'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Partitions</span><div>{semantic?.partition_count ?? 'unknown'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Indexed lookups</span><div>{semantic?.indexed_lookup_count ?? 'unknown'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Semantic receipt</span><div>{semantic?.status ?? 'missing'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Signal contract</span><div>{semantic?.signal_samples ?? 'unknown'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Duplicate reads</span><div>{semantic?.duplicate_read_ids ?? 'unknown'}</div></div>
-                                                            <div><span className="font-semibold text-[var(--text-primary)]">Compared samples</span><div>{semantic?.total_signal_samples_compared ?? 'unknown'}</div></div>
-                                                        </div>
-                                                        <div>Adjacent indexes: <span className="font-semibold text-[var(--text-primary)]">{representation.validation_receipts.adjacent_index ? 'validated' : 'not validated'}</span></div>
-                                                        <div>Mapping contract: <span className="break-all font-mono text-[var(--text-primary)]">{semantic?.mapping_contract ?? 'unknown'}</span></div>
-                                                        <div>Parent representation: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_representation_ids.join(', ') || 'none'}</span></div>
-                                                        <div>Parent manifest: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_manifest_sha256s.join(', ') || 'none'}</span></div>
-                                                        <div>Runtime: <span className="break-all font-mono text-[var(--text-primary)]">{representation.profile_id ?? 'unknown'}{containerDigest ? ` · ${containerDigest}` : ''}</span></div>
-                                                        <div className="space-y-1">
-                                                            <div className="font-semibold text-[var(--text-primary)]">Published artifacts ({representation.artifact_count})</div>
-                                                            {representation.artifacts.map((artifact) => (
-                                                                <div key={artifact.artifact_id ?? `${artifact.kind}-${artifact.sha256}`} className="rounded border border-[var(--border-primary)] p-2">
-                                                                    <div><span className="font-semibold text-[var(--text-primary)]">{artifact.kind ?? 'artifact'}</span>{artifact.read_count !== undefined ? ` · ${artifact.read_count} reads` : ''}{artifact.bytes !== undefined ? ` · ${artifact.bytes} bytes` : ''}</div>
-                                                                    {artifact.partition_fingerprint ? <div>Partition: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.partition_fingerprint}</span></div> : null}
-                                                                    <div>SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.sha256 ?? 'missing'}</span></div>
+                                                <details className="rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]">
+                                                    <summary className="cursor-pointer select-none px-3 py-2 font-semibold text-[var(--text-secondary)]">
+                                                        Technical details
+                                                    </summary>
+                                                    <div className="space-y-2 border-t border-[var(--border-primary)] p-3" aria-label="Raw-signal technical details">
+                                                        <div className="break-all font-mono">{representation.representation_id} · manifest {representation.manifest_sha256}</div>
+                                                        {representation.role === 'derived' ? (
+                                                            <div className="space-y-2 rounded border border-emerald-500/30 bg-emerald-500/5 p-2" aria-label="Raw-signal publication receipt">
+                                                                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Publication</span><div>{representation.published_at ?? 'not published'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Reads</span><div>{representation.read_count ?? 'unknown'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Partitions</span><div>{semantic?.partition_count ?? 'unknown'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Indexed lookups</span><div>{semantic?.indexed_lookup_count ?? 'unknown'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Semantic receipt</span><div>{semantic?.status ?? 'missing'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Signal contract</span><div>{semantic?.signal_samples ?? 'unknown'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Duplicate reads</span><div>{semantic?.duplicate_read_ids ?? 'unknown'}</div></div>
+                                                                    <div><span className="font-semibold text-[var(--text-primary)]">Compared samples</span><div>{semantic?.total_signal_samples_compared ?? 'unknown'}</div></div>
                                                                 </div>
-                                                            ))}
-                                                        </div>
+                                                                <div>Adjacent indexes: <span className="font-semibold text-[var(--text-primary)]">{representation.validation_receipts.adjacent_index ? 'validated' : 'not validated'}</span></div>
+                                                                <div>Mapping contract: <span className="break-all font-mono text-[var(--text-primary)]">{semantic?.mapping_contract ?? 'unknown'}</span></div>
+                                                                <div>Parent representation: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_representation_ids.join(', ') || 'none'}</span></div>
+                                                                <div>Parent manifest: <span className="break-all font-mono text-[var(--text-primary)]">{representation.parent_manifest_sha256s.join(', ') || 'none'}</span></div>
+                                                                <div>Runtime: <span className="break-all font-mono text-[var(--text-primary)]">{representation.profile_id ?? 'unknown'}{containerDigest ? ` · ${containerDigest}` : ''}</span></div>
+                                                                <div className="space-y-1">
+                                                                    <div className="font-semibold text-[var(--text-primary)]">Published artifacts ({representation.artifact_count})</div>
+                                                                    {representation.artifacts.map((artifact) => (
+                                                                        <div key={artifact.artifact_id ?? `${artifact.kind}-${artifact.sha256}`} className="rounded border border-[var(--border-primary)] p-2">
+                                                                            <div><span className="font-semibold text-[var(--text-primary)]">{artifact.kind ?? 'artifact'}</span>{artifact.read_count !== undefined ? ` · ${artifact.read_count} reads` : ''}{artifact.bytes !== undefined ? ` · ${artifact.bytes} bytes` : ''}</div>
+                                                                            {artifact.partition_fingerprint ? <div>Partition: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.partition_fingerprint}</span></div> : null}
+                                                                            <div>SHA-256: <span className="break-all font-mono text-[var(--text-primary)]">{artifact.sha256 ?? 'missing'}</span></div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        ) : null}
                                                     </div>
-                                                ) : null}
+                                                </details>
                                                 {representation.state !== 'ready' && (representation.format === 'pod5' || representation.format === 'blow5') ? (
                                                     <button
                                                         type="button"
@@ -796,7 +805,7 @@ export function OntInstrumentPanel({ onAnalyzeExistingData }: OntInstrumentPanel
                                                 {waveformError ? <div role="alert" className="text-amber-100">Waveform unavailable: {waveformError}</div> : null}
                                                 {waveform?.state === 'ready' && waveformPoints ? (
                                                     <div className="space-y-1">
-                                                        <div>Read <span className="font-mono text-[var(--text-primary)]">{waveform.read_id}</span> · {waveform.sample_count} samples returned</div>
+                                                        <div>Read <span className="font-mono text-[var(--text-primary)]">{waveform.read_id}</span> · {waveform.sample_count} source samples · {waveform.samples?.length ?? 0} displayed</div>
                                                         <svg aria-label="Raw electrical signal waveform" viewBox="0 0 600 120" className="h-36 w-full rounded bg-slate-950" preserveAspectRatio="none">
                                                             <polyline points={waveformPoints} fill="none" stroke="rgb(52 211 153)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
                                                         </svg>

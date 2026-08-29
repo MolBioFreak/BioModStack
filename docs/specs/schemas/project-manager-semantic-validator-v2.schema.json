@@ -1,0 +1,391 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.semantic-validator.v2",
+  "title": "Package-bound scientific semantic uniqueness validator v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "validator_id",
+    "implementation_artifact",
+    "rules",
+    "readiness_rules",
+    "gates",
+    "duplicate_fixture_manifest",
+    "readiness_fixture_manifest",
+    "content_algorithm",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.semantic-validator.v2"
+    },
+    "validator_id": {
+      "const": "bms.project-manager.semantic-validator.v2"
+    },
+    "implementation_artifact": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "storage_identity": {
+              "const": "platform/api/app/services/project_manager_semantic_validator_v1.py"
+            }
+          },
+          "required": [
+            "storage_identity"
+          ]
+        }
+      ]
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "ngs-group-id-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/grouping_intent"
+                },
+                "unique_tuple": {
+                  "const": "group_id"
+                },
+                "scope": {
+                  "const": "payload"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "ngs-group-member-semantic-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/grouping_intent/*/members"
+                },
+                "unique_tuple": {
+                  "const": "member_kind,resource_id,role"
+                },
+                "scope": {
+                  "const": "parent-group"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "ngs-group-member-ordinal-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/grouping_intent/*/members"
+                },
+                "unique_tuple": {
+                  "const": "ordinal"
+                },
+                "scope": {
+                  "const": "parent-group"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "ngs-criterion-id-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/acceptance_criteria"
+                },
+                "unique_tuple": {
+                  "const": "criterion_id"
+                },
+                "scope": {
+                  "const": "payload"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "ngs-evidence-requirement-id-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/evidence_plan"
+                },
+                "unique_tuple": {
+                  "const": "requirement_id"
+                },
+                "scope": {
+                  "const": "payload"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "protein-comparison-member-semantic-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/comparison_groups/*/members"
+                },
+                "unique_tuple": {
+                  "const": "target_id,role"
+                },
+                "scope": {
+                  "const": "parent-comparison-group"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "protein-comparison-member-ordinal-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/comparison_groups/*/members"
+                },
+                "unique_tuple": {
+                  "const": "ordinal"
+                },
+                "scope": {
+                  "const": "parent-comparison-group"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/rule"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "const": "protein-target-id-unique"
+                },
+                "array_pointer": {
+                  "const": "/domain_payload/targets"
+                },
+                "unique_tuple": {
+                  "const": "target_id"
+                },
+                "scope": {
+                  "const": "payload"
+                }
+              },
+              "required": [
+                "rule_id",
+                "array_pointer",
+                "unique_tuple",
+                "scope"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "gates": {
+      "const": [
+        "create",
+        "domain-upgrade",
+        "patch",
+        "exact-read",
+        "migration",
+        "backup",
+        "restoration",
+        "export",
+        "preparation",
+        "replay"
+      ]
+    },
+    "duplicate_fixture_manifest": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "content_algorithm": {
+      "const": "sha256-rfc8785-semantic-validator-contract-v2"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "readiness_rules": {
+      "const": [
+        {
+          "rule_id": "domain-planned-active-scientific-intent-nonempty",
+          "status_pointer": "/status",
+          "trigger_statuses": [
+            "planned",
+            "active"
+          ],
+          "applicable_domain_kinds": [
+            "ngs_molbio",
+            "protein_in_silico"
+          ],
+          "required_nonempty_array_pointers": [
+            "/domain_payload/planned_capability_ids",
+            "/domain_payload/acceptance_criteria",
+            "/domain_payload/evidence_plan"
+          ],
+          "minimum_items": 1,
+          "error": "domain_intent_not_ready"
+        }
+      ]
+    },
+    "readiness_fixture_manifest": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "array_pointer",
+        "unique_tuple",
+        "scope",
+        "duplicate_error"
+      ],
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "enum": [
+            "ngs-group-id-unique",
+            "ngs-group-member-semantic-unique",
+            "ngs-group-member-ordinal-unique",
+            "ngs-criterion-id-unique",
+            "ngs-evidence-requirement-id-unique",
+            "protein-comparison-member-semantic-unique",
+            "protein-comparison-member-ordinal-unique",
+            "protein-target-id-unique"
+          ]
+        },
+        "array_pointer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "unique_tuple": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "scope": {
+          "enum": [
+            "payload",
+            "parent-group",
+            "parent-comparison-group"
+          ]
+        },
+        "duplicate_error": {
+          "const": "semantic_uniqueness_violation"
+        }
+      }
+    }
+  }
+}

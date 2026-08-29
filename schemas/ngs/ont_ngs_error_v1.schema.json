@@ -1,0 +1,128 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_ngs_error_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "code": {
+            "enum": [
+              "NGS_HIERARCHY_DENIED",
+              "NGS_PRINCIPAL_DENIED",
+              "NGS_ROTATION_ORIGIN_DENIED",
+              "NGS_RESOURCE_NOT_FOUND",
+              "NGS_AUTHORITY_CONFLICT",
+              "NGS_PACKAGE_INTEGRITY_CONFLICT",
+              "NGS_ROTATION_INELIGIBLE",
+              "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+              "NGS_READ_SCAN_TRUNCATED",
+              "NGS_RANGE_INVALID",
+              "NGS_RANGE_UNSATISFIABLE"
+            ]
+          },
+          "retryable": {
+            "const": false
+          }
+        },
+        "required": [
+          "code",
+          "retryable"
+        ]
+      },
+      "if": {
+        "properties": {
+          "code": {
+            "enum": [
+              "NGS_CAPABILITY_DENIED",
+              "NGS_CAPABILITY_ROTATION_CONFLICT"
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retryable": {
+            "const": true
+          }
+        },
+        "required": [
+          "retryable"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "code": {
+      "enum": [
+        "NGS_CAPABILITY_DENIED",
+        "NGS_HIERARCHY_DENIED",
+        "NGS_PRINCIPAL_DENIED",
+        "NGS_ROTATION_ORIGIN_DENIED",
+        "NGS_RESOURCE_NOT_FOUND",
+        "NGS_AUTHORITY_CONFLICT",
+        "NGS_PACKAGE_INTEGRITY_CONFLICT",
+        "NGS_CAPABILITY_ROTATION_CONFLICT",
+        "NGS_ROTATION_INELIGIBLE",
+        "NGS_ARTIFACT_INTEGRITY_CONFLICT",
+        "NGS_READ_SCAN_TRUNCATED",
+        "NGS_RANGE_INVALID",
+        "NGS_RANGE_UNSATISFIABLE"
+      ]
+    },
+    "job_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "message": {
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+    },
+    "resource": {
+      "enum": [
+        "result",
+        "manifest",
+        "session",
+        "artifact",
+        "range",
+        "rotation",
+        "read"
+      ]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "schema": {
+      "const": "bms.ngs.error.v1"
+    }
+  },
+  "required": [
+    "schema",
+    "code",
+    "message",
+    "job_id",
+    "resource",
+    "retryable"
+  ],
+  "title": "BioModStack governed NGS error v1",
+  "type": "object",
+  "x-bms-http-status-by-code": {
+    "NGS_ARTIFACT_INTEGRITY_CONFLICT": 409,
+    "NGS_AUTHORITY_CONFLICT": 409,
+    "NGS_CAPABILITY_DENIED": 403,
+    "NGS_CAPABILITY_ROTATION_CONFLICT": 409,
+    "NGS_HIERARCHY_DENIED": 403,
+    "NGS_PACKAGE_INTEGRITY_CONFLICT": 409,
+    "NGS_PRINCIPAL_DENIED": 403,
+    "NGS_RANGE_INVALID": 400,
+    "NGS_RANGE_UNSATISFIABLE": 416,
+    "NGS_READ_SCAN_TRUNCATED": 409,
+    "NGS_RESOURCE_NOT_FOUND": 404,
+    "NGS_ROTATION_INELIGIBLE": 409,
+    "NGS_ROTATION_ORIGIN_DENIED": 403
+  }
+}

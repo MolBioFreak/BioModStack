@@ -168,10 +168,11 @@ test('launcher is a full-width card-grid run workspace with one backend authorit
     assert.match(launcher, />Input preview</);
     assert.match(launcher, />Pre-submit summary</);
     assert.doesNotMatch(launcher, />Backend<select/);
-    assert.match(launcher, /order-1 xl:order-1/);
-    assert.match(launcher, /order-2 xl:order-3/);
-    assert.match(launcher, /order-3 xl:order-4/);
-    assert.match(launcher, /order-4 xl:order-2/);
+    assert.match(launcher, /data-cm-launcher-columns/);
+    assert.match(launcher, /data-cm-launcher-column="record-source"/);
+    assert.match(launcher, /data-cm-launcher-column="science-preview"/);
+    assert.match(launcher, /grid items-start gap-5 xl:grid-cols-2/);
+    assert.doesNotMatch(launcher, /order-[1-4] xl:order-[1-4]/);
     assert.match(launcher, /const effectivePayload = validationErrors\.length === 0 \? buildPayload\(\) : null/);
 });
 

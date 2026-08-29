@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
     attachExistingEntity,
+    linkNgsMolBioProject,
     listDomainAdapters,
     listDomainExperiments,
     listGlobalExperiments,
     listProjects,
+    listNgsMolBioShareableResults,
     projectManagerErrorMessage,
+    searchProjects,
     searchAdapterEntities,
     type AdapterEntityProjection,
     type LineageRole,
@@ -65,6 +69,11 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
     const [role, setRole] = useState<LineageRole>('references');
     const [note, setNote] = useState('');
     const [attached, setAttached] = useState(false);
+    const [mode, setMode] = useState<'item' | 'project-link'>('item');
+    const [targetGlobalProjectId, setTargetGlobalProjectId] = useState('');
+    const [selectedExperimentIds, setSelectedExperimentIds] = useState<string[]>([]);
+    const [selectedResultIds, setSelectedResultIds] = useState<string[]>([]);
+    const isLocalProject = summary?.project.project_scope === 'ngs_molbio_local';
 
     useEffect(() => {
         if (!open) return;
@@ -88,12 +97,19 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
         setRole('references');
         setNote('');
         setAttached(false);
+        setMode('item');
+        setTargetGlobalProjectId('');
+        setSelectedExperimentIds([]);
+        setSelectedResultIds([]);
     }, [fixedContext?.domainExperimentId, fixedContext?.globalExperimentId, fixedProjectId, open, source]);
 
     const projects = useQuery({ queryKey: ['project-manager', 'attachment-projects'], queryFn: ({ signal }) => listProjects(signal), enabled: open && !fixedProjectId });
     const globals = useQuery({ queryKey: ['project-manager', 'attachment-globals', projectId], queryFn: ({ signal }) => listGlobalExperiments(projectId, signal), enabled: open && !fixedContext && Boolean(projectId) });
     const domains = useQuery({ queryKey: ['project-manager', 'attachment-domains', projectId, globalId], queryFn: ({ signal }) => listDomainExperiments(projectId, globalId, signal), enabled: open && !fixedContext && Boolean(projectId && globalId) });
     const adapters = useQuery({ queryKey: ['project-manager', 'attachment-adapters'], queryFn: ({ signal }) => listDomainAdapters(signal), enabled: open });
+    const globalProjects = useQuery({ queryKey: ['project-manager', 'link-target-projects'], queryFn: ({ signal }) => searchProjects({ projectScope: 'global', archive: 'active', limit: 100, signal }), enabled: open && isLocalProject && mode === 'project-link' });
+    const localExperiments = useQuery({ queryKey: ['project-manager', 'link-local-experiments', fixedProjectId], queryFn: ({ signal }) => listGlobalExperiments(fixedProjectId as string, signal), enabled: open && isLocalProject && mode === 'project-link' && Boolean(fixedProjectId) });
+    const shareableResults = useQuery({ queryKey: ['project-manager', 'link-shareable-results', fixedProjectId], queryFn: ({ signal }) => listNgsMolBioShareableResults(fixedProjectId as string, signal), enabled: open && isLocalProject && mode === 'project-link' && Boolean(fixedProjectId) });
     const selectedDomainKind = summary?.selection.node_type === 'domain_experiment' && typeof summary.selection.summary.domain_kind === 'string'
         ? summary.selection.summary.domain_kind
         : null;
@@ -144,6 +160,21 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
             onAttached?.(receipt.source_receipt_id);
         },
     });
+    const linkMutation = useMutation({
+        mutationFn: () => {
+            if (!fixedProjectId || !targetGlobalProjectId || selectedExperimentIds.length === 0) throw new Error('Choose a Global Project and at least one Experiment.');
+            return linkNgsMolBioProject(targetGlobalProjectId, {
+                local_project_id: fixedProjectId,
+                experiment_ids: selectedExperimentIds,
+                result_ids: selectedResultIds,
+                change_summary: 'Link NGS/MolBio Project from Project Manager',
+            });
+        },
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ['project-manager'] });
+            onAttached?.(null);
+        },
+    });
 
     if (!open) return null;
     const metadata = selected?.metadata ?? {};
@@ -153,15 +184,44 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
     const alreadyAttached = attached || Boolean(selected && summary?.map.nodes.some((node) => node.canonical_identity.entity_id === selected.entity_id));
     const adapterCompatible = Boolean(selectedAdapterDomainKind && domainKind && selectedAdapterDomainKind === domainKind);
     const canAttach = Boolean(projectId && globalId && domainId && adapterId && adapterCompatible && Number.isInteger(expectedHeadGeneration) && selected?.attachable && operation !== 'clone_import_revision' && !alreadyAttached);
+    const cloneOperatorHref = projectId && globalId && domainId
+        ? `/ngs?${new URLSearchParams({
+            workspace_id: projectId,
+            ownership_scope: 'global',
+            global_experiment_id: globalId,
+            domain_experiment_id: domainId,
+            section: 'workflow-plans',
+        }).toString()}`
+        : null;
+
+    if (mode === 'project-link' && isLocalProject) {
+        return (
+            <div className="fixed inset-0 z-[100] grid place-items-center bg-black/70 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
+                <section role="dialog" aria-modal="true" aria-labelledby="project-link-title" className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border-primary bg-surface-secondary shadow-2xl">
+                    <header className="flex items-start justify-between gap-4 border-b border-border-primary px-5 py-4"><div><p className="text-xs font-semibold text-accent">Add current work to Project</p><h2 id="project-link-title" className="mt-1 text-lg font-semibold text-content">Link NGS/MolBio Project</h2><p className="mt-1 text-sm text-content-secondary">Choose what the Global Project can reference. Native data stays in this NGS/MolBio Project.</p></div><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-3 py-1.5 text-xs text-content-secondary">Close</button></header>
+                    <div className="space-y-4 p-5">
+                        <button type="button" onClick={() => setMode('item')} className="rounded-lg border border-border-primary px-3 py-2 text-sm font-semibold text-content-secondary">Attach an item instead</button>
+                        <label className="block text-sm font-semibold text-content-secondary">Global Project<select aria-label="Global Project link target" value={targetGlobalProjectId} onChange={(event) => setTargetGlobalProjectId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content"><option value="">Choose Global Project…</option>{(globalProjects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+                        <fieldset className="rounded-xl border border-border-primary bg-surface p-3"><legend className="px-1 text-sm font-semibold text-content">Experiments to expose</legend><div className="space-y-2">{(localExperiments.data ?? []).map((experiment) => <label key={experiment.id} className="flex items-center gap-2 text-sm text-content-secondary"><input type="checkbox" value={experiment.id} checked={selectedExperimentIds.includes(experiment.id)} onChange={(event) => setSelectedExperimentIds((current) => event.target.checked ? [...current, experiment.id] : current.filter((id) => id !== experiment.id))} />{experiment.name}</label>)}</div>{!localExperiments.isLoading && (localExperiments.data?.length ?? 0) === 0 && <p className="text-sm text-content-muted">No Experiments are available.</p>}</fieldset>
+                        <fieldset className="rounded-xl border border-border-primary bg-surface p-3"><legend className="px-1 text-sm font-semibold text-content">Results to expose</legend><div className="space-y-2">{(shareableResults.data ?? []).map((result) => <label key={result.result_receipt_id} className="flex items-center gap-2 text-sm text-content-secondary"><input type="checkbox" value={result.result_receipt_id} checked={selectedResultIds.includes(result.result_receipt_id)} onChange={(event) => setSelectedResultIds((current) => event.target.checked ? [...current, result.result_receipt_id] : current.filter((id) => id !== result.result_receipt_id))} />{result.entity_kind} · {result.entity_id}</label>)}</div>{!shareableResults.isLoading && (shareableResults.data?.length ?? 0) === 0 && <p className="text-sm text-content-muted">No governed Results are available.</p>}</fieldset>
+                        <p className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content-secondary">This creates a governed relationship. It does not copy sequence, read, signal, or result payloads.</p>
+                        {linkMutation.isError && <p role="alert" className="rounded-lg border border-error/50 bg-error/10 p-3 text-sm text-error">{projectManagerErrorMessage(linkMutation.error)}</p>}
+                        <div className="flex justify-end gap-2 border-t border-border-primary pt-4"><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-sm font-semibold text-content-secondary">Cancel</button><button type="button" disabled={!targetGlobalProjectId || selectedExperimentIds.length === 0 || linkMutation.isPending} onClick={() => linkMutation.mutate()} className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{linkMutation.isPending ? 'Linking…' : 'Create Project link'}</button></div>
+                    </div>
+                </section>
+            </div>
+        );
+    }
 
     return (
         <div className="fixed inset-0 z-[100] grid place-items-center bg-black/70 p-3" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
             <section role="dialog" aria-modal="true" aria-labelledby="project-attachment-title" className="max-h-[94vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border-primary bg-surface-secondary shadow-2xl">
                 <header className="flex items-start justify-between gap-4 border-b border-border-primary px-5 py-4">
-                    <div><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Verified receipt reference</p><h2 id="project-attachment-title" className="mt-1 text-lg font-semibold text-content">Add existing / Add to Project</h2><p className="mt-1 text-xs text-content-secondary">One receipt-first interaction; canonical entities and bytes are never copied.</p></div>
+                    <div><p className="text-xs font-semibold text-accent">Project relationship</p><h2 id="project-attachment-title" className="mt-1 text-lg font-semibold text-content">{source ? 'Add current work to Project' : 'Attach existing record'}</h2><p className="mt-1 text-sm text-content-secondary">Attach one verified reference. Canonical entities and bytes remain in their source store.</p></div>
                     <button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-3 py-1.5 text-xs text-content-secondary">Close</button>
                 </header>
                 <div className="space-y-4 p-5">
+                    {isLocalProject && <button type="button" onClick={() => setMode('project-link')} className="rounded-lg border border-accent px-3 py-2 text-sm font-semibold text-accent">Link this NGS/MolBio Project to a Global Project</button>}
                     <div className="grid gap-3 sm:grid-cols-3">
                         <label className="text-xs font-semibold text-content-secondary">Project
                             <select aria-label="Attachment Project" value={projectId} disabled={Boolean(fixedProjectId)} onChange={(event) => { setProjectId(event.target.value); setGlobalId(''); setDomainId(''); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content disabled:opacity-70">
@@ -182,16 +242,16 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
                     <div className="grid gap-3 sm:grid-cols-2">
                         <label className="text-xs font-semibold text-content-secondary">Operation mode
                             <select aria-label="Attachment operation mode" value={operation} onChange={(event) => { const next = event.target.value as AttachmentOperationMode; setOperation(next); if (next !== 'clone_import_revision') setRole(operationCopy[next].role); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
-                                <option value="attach_reference">Attach membership / reference receipt</option><option value="bind_input">Bind immutable input</option><option value="link_output">Link generated output</option><option value="attach_evidence">Attach evidence</option><option value="clone_import_revision" disabled>Clone / import into new revision — unsupported</option>
+                                <option value="attach_reference">Attach membership / reference receipt</option><option value="bind_input">Bind immutable input</option><option value="link_output">Link generated output</option><option value="attach_evidence">Attach evidence</option><option value="clone_import_revision">Clone / import exact run intent into a new Plan draft</option>
                             </select>
                         </label>
                         <label className="text-xs font-semibold text-content-secondary">Lineage role
-                            <select aria-label="Lineage role" value={role} onChange={(event) => setRole(event.target.value as LineageRole)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content">
+                            <select aria-label="Lineage role" value={role} disabled={operation === 'clone_import_revision'} onChange={(event) => setRole(event.target.value as LineageRole)} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface px-3 py-2.5 text-content disabled:opacity-50">
                                 <option value="references">References</option><option value="uses_input">Uses immutable input</option><option value="produced">Produced output</option><option value="validated_by">Validated by evidence</option>
                             </select>
                         </label>
                     </div>
-                    <p className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content-secondary">{operation === 'clone_import_revision' ? 'Disabled: the frozen attachment API cannot create a new experiment revision or copy/import canonical material.' : operationCopy[operation].copy} {roleCopy[role]}</p>
+                    <p className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content-secondary">{operation === 'clone_import_revision' ? 'Use the exact Run Group operator. It selects one immutable run and attempt, imports the complete source Plan payload and pinned capability contract into a fresh generation-0 draft, and writes derived_from lineage. It creates no preparation or Job.' : `${operationCopy[operation].copy} ${roleCopy[role]}`}</p>
                     {!source && <div className="rounded-xl border border-border-primary bg-surface p-3">
                         <label className="text-xs font-semibold text-content-secondary">Canonical source adapter
                             <select value={adapterId} onChange={(event) => { setAdapterId(event.target.value); setSelected(null); searchMutation.reset(); }} className="mt-1.5 w-full rounded-lg border border-border-primary bg-surface-secondary px-3 py-2.5 text-content">
@@ -211,7 +271,7 @@ export function ProjectAttachmentDialog({ open, source, projectId: fixedProjectI
                     <p className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs text-content-secondary">The server re-verifies canonical identity and digest, persists the selected operation and note, and rejects stale Project generations.</p>
                     {(attachMutation.isError || searchMutation.isError || projects.isError || globals.isError || domains.isError || adapters.isError) && <p role="alert" className="rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(attachMutation.error ?? searchMutation.error ?? projects.error ?? globals.error ?? domains.error ?? adapters.error)}</p>}
                     {attached && <p role="status" className="rounded-lg border border-success/50 bg-success/10 p-3 text-xs text-success">Verified receipt attached. The canonical source remains authoritative.</p>}
-                    <div className="flex justify-end gap-2 border-t border-border-primary pt-4"><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button><button type="button" disabled={!canAttach || attachMutation.isPending} onClick={() => attachMutation.mutate()} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{attachMutation.isPending ? 'Verifying…' : alreadyAttached ? 'Already attached' : 'Verify receipt and attach'}</button></div>
+                    <div className="flex justify-end gap-2 border-t border-border-primary pt-4"><button type="button" onClick={onClose} className="rounded-lg border border-border-primary px-4 py-2 text-xs font-semibold text-content-secondary">Cancel</button>{operation === 'clone_import_revision' ? (cloneOperatorHref ? <Link to={cloneOperatorHref} onClick={onClose} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white">Open exact run-clone operator</Link> : <button type="button" disabled className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white opacity-50">Select complete hierarchy context</button>) : <button type="button" disabled={!canAttach || attachMutation.isPending} onClick={() => attachMutation.mutate()} className="rounded-lg bg-accent px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{attachMutation.isPending ? 'Verifying…' : alreadyAttached ? 'Already attached' : 'Verify receipt and attach'}</button>}</div>
                 </div>
             </section>
         </div>

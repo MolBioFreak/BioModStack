@@ -197,6 +197,48 @@ async def test_commit_is_atomic_and_idempotent_with_conflicts_failing_closed(tmp
 
 
 @pytest.mark.asyncio
+async def test_ngs_import_reuses_exact_revision_and_records_new_source_operation(tmp_path: Path) -> None:
+    engine, sessions = await _molbio_session(tmp_path)
+    try:
+        async with sessions() as session:
+            first = await commit_sequence_import(
+                session,
+                SequenceImportRequest(
+                    source_format="raw_dna",
+                    raw_rows=[{"name": "library-reference", "sequence": "ATGCGGTT"}],
+                    topology_default="circular",
+                    idempotency_key="library-origin",
+                    origin_surface="molbio",
+                    source_provider="library",
+                    source_id="library-entry",
+                ),
+            )
+            imported = await commit_sequence_import(
+                session,
+                SequenceImportRequest(
+                    source_format="fasta",
+                    source_text=">ngs-upload\nATGCGGTT\n",
+                    topology_default="linear",
+                    idempotency_key="ngs-origin",
+                    origin_surface="ngs",
+                    source_provider="upload",
+                    source_id="expected.fasta",
+                ),
+            )
+            assert imported["records"][0]["reused_existing_revision"] is True
+            assert imported["records"][0]["sequence_id"] == first["records"][0]["sequence_id"]
+            assert imported["records"][0]["revision_id"] == first["records"][0]["revision_id"]
+            assert imported["origin_surface"] == "ngs"
+            assert imported["source_provider"] == "upload"
+            assert imported["source_id"] == "expected.fasta"
+            assert await session.scalar(select(func.count()).select_from(NucleotideSequence)) == 1
+            assert await session.scalar(select(func.count()).select_from(MolecularRevision)) == 1
+            assert await session.scalar(select(func.count()).select_from(MolecularImportBatch)) == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_revision_apis_are_exact_and_historical_receipts_are_explicit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

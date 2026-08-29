@@ -533,6 +533,10 @@ def _job_create_for_ont_submit(
             "pooled reference assignment requires the dedicated atomic submission endpoint"
         )
     submitted_params = dict(request.params)
+    if "run_multimer_qc" in submitted_params:
+        raise ValueError(
+            "run_multimer_qc is read-only legacy compatibility and cannot be submitted for a fresh ONT job"
+        )
     if any(key in submitted_params for key in ("comparison_panel_snapshot", "comparison_panel_min_mapq", "ngs_comparison_panel_receipt_id")):
         raise ValueError(
             "comparison-panel paths are not accepted from ordinary NGS submissions; use a server-staged operator receipt"
@@ -632,7 +636,6 @@ async def _create_pipeline_job(
     launch_context_id = current_launch_context_id.get()
     if launch_context_id:
         job = job.model_copy(update={"launch_context_id": launch_context_id})
-        commit = True
     token, token_digest = alignment_access.issue_alignment_access_token()
     trust_token = ont_submission_trust.begin_trusted_ont_job_creation(token_digest)
     try:
@@ -815,11 +818,13 @@ async def ont_register_external_pod5_candidate(
 async def ont_create_external_raw_signal_run(
     request: OntRawSignalExternalRunRequest,
     session: AsyncSession = Depends(get_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
 ) -> dict[str, Any]:
     """Create one sealed external SLOW5/BLOW5/POD5 generation without invented ancestry."""
     try:
         result = await ont_raw_signal.create_external_run_registration(
             session,
+            domain_session=domain_session,
             format=request.format,
             input_file_id=request.input_file_id,
             index_input_file_id=request.index_input_file_id,

@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, sessionmaker, declarative_base, relationship
 from sqlalchemy.types import TypeDecorator
 from datetime import datetime
 from contextvars import ContextVar
+import asyncio
 import json
+import sqlite3
 from types import SimpleNamespace
 from paths import get_db_path, get_db_url
 from migrations.sqlite_sha256 import register_sqlite_sha256
@@ -23,6 +25,7 @@ DATABASE_URL = get_db_url()
 current_launch_context_id: ContextVar[str | None] = ContextVar("bms_launch_context_id", default=None)
 LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY = "launch_context_binding"
 LAUNCH_CONTEXT_BINDING_PROVENANCE_SCHEMA = "bms.launch-context-core-binding.v1"
+_SCIENTIFIC_JSON_INLINE_LIMIT = 256 * 1024
 
 
 def launch_context_binding_ready(job: object) -> bool:
@@ -364,6 +367,398 @@ class OntRawSignalLookup(Base):
     created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
     completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntExternalMoveBamRegistrationReceipt(Base):
+    """Immutable server-only locator and byte authority for one external BAM intake."""
+
+    __tablename__ = "ont_external_move_bam_registration_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "observed_generation", "raw_representation_id", "candidate_id", "molecule_type",
+            name="uq_ont_external_move_bam_registration",
+        ),
+        CheckConstraint("artifact_size_bytes > 0", name="ck_ont_external_move_bam_nonempty"),
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_external_move_bam_molecule"),
+    )
+
+    id = Column(String(128), primary_key=True)
+    candidate_id = Column(String(64), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    server_relative_path = Column(Text, nullable=False)
+    root_device = Column(Integer, nullable=False)
+    root_inode = Column(Integer, nullable=False)
+    file_device = Column(Integer, nullable=False)
+    file_inode = Column(Integer, nullable=False)
+    file_mtime_ns = Column(Integer, nullable=False)
+    file_ctime_ns = Column(Integer, nullable=False)
+    artifact_sha256 = Column(String(64), nullable=False)
+    artifact_size_bytes = Column(Integer, nullable=False)
+    molecule_type = Column(String(16), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntMoveTableSource(Base):
+    """Immutable, fully validated move-tag BAM authority for one run generation."""
+
+    __tablename__ = "ont_move_table_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "observed_generation",
+            "artifact_sha256",
+            "attempt_number",
+            name="uq_ont_move_source_artifact_attempt",
+        ),
+        UniqueConstraint(
+            "predecessor_move_source_id",
+            name="uq_ont_move_source_predecessor",
+        ),
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_move_source_molecule"),
+        CheckConstraint("validation_state IN ('requested','running','ready','failed')", name="ck_ont_move_source_state"),
+        CheckConstraint("attempt_number >= 1", name="ck_ont_move_source_attempt_positive"),
+        CheckConstraint(
+            "(attempt_number = 1 AND predecessor_move_source_id IS NULL) OR "
+            "(attempt_number > 1 AND predecessor_move_source_id IS NOT NULL)",
+            name="ck_ont_move_source_attempt_lineage",
+        ),
+        CheckConstraint(
+            "(source_job_id IS NULL) != (external_registration_receipt_id IS NULL)",
+            name="ck_ont_move_source_exact_producer_authority",
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    input_file_id = Column(String(36), ForeignKey("input_files.id", ondelete="RESTRICT"), nullable=False)
+    source_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    external_registration_receipt_id = Column(String(128), nullable=True)
+    artifact_sha256 = Column(String(64), nullable=False)
+    artifact_size_bytes = Column(Integer, nullable=False)
+    bam_header_sha256 = Column(String(64), nullable=True)
+    record_count = Column(Integer, nullable=True)
+    unique_read_count = Column(Integer, nullable=True)
+    mv_tag_count = Column(Integer, nullable=True)
+    ts_tag_count = Column(Integer, nullable=True)
+    ns_tag_count = Column(Integer, nullable=True)
+    basecall_model_id = Column(String(255), nullable=True)
+    molecule_type = Column(String(16), nullable=False)
+    source_runtime_identity = Column(JSON, nullable=False, default=dict)
+    read_inventory_sha256 = Column(String(64), nullable=True)
+    validation_state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="move_source_validation_requested")
+    validation_receipt = Column(JSON, nullable=False, default=dict)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    validated_at = Column(LenientSQLiteDateTime, nullable=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    predecessor_move_source_id = Column(
+        String(96),
+        ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+
+
+class OntSignalCalibrationArtifact(Base):
+    __tablename__ = "ont_signal_calibration_artifacts"
+
+    id = Column(String(96), primary_key=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    basecall_model_id = Column(String(255), nullable=False)
+    sample_selection = Column(JSON, nullable=False)
+    recommended_kmer_length = Column(Integer, nullable=False)
+    recommended_signal_move_offset = Column(Integer, nullable=False)
+    score_evidence = Column(JSON, nullable=False)
+    runtime_identity = Column(JSON, nullable=False)
+    parent_sha256s = Column(JSON, nullable=False)
+    artifact_sha256 = Column(String(64), nullable=False, unique=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalCalibrationJob(Base):
+    """Leased deterministic calibration request for one exact signal/move authority."""
+
+    __tablename__ = "ont_signal_calibration_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", name="uq_ont_signal_calibration_request"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_calibration_state"),
+        CheckConstraint("sample_count >= 1 AND sample_count <= 100", name="ck_ont_signal_calibration_sample_count"),
+        CheckConstraint("failure_message IS NULL OR length(failure_message) <= 4000", name="ck_ont_signal_calibration_failure_message"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="calibration_requested")
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True, index=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    calibration_artifact_id = Column(String(96), ForeignKey("ont_signal_calibration_artifacts.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalMappingProfile(Base):
+    """Operator-approved, model-exact reform and alignment policy."""
+
+    __tablename__ = "ont_signal_mapping_profiles"
+    __table_args__ = (
+        CheckConstraint("molecule_type IN ('dna','rna')", name="ck_ont_signal_profile_molecule"),
+        CheckConstraint("parameter_source = 'approved_calibration'", name="ck_ont_signal_profile_calibrated_only"),
+        CheckConstraint("calibration_artifact_id IS NOT NULL", name="ck_ont_signal_profile_calibration_required"),
+        CheckConstraint("primary_alignment_policy = 'primary_only'", name="ck_ont_signal_profile_primary_only"),
+        CheckConstraint("minimum_mapq = 0", name="ck_ont_signal_profile_mapq_zero"),
+        CheckConstraint("include_supplementary = 0", name="ck_ont_signal_profile_no_supplementary"),
+        CheckConstraint("read_set_selection = 'immutable_full_set'", name="ck_ont_signal_profile_full_set"),
+        UniqueConstraint(
+            "basecall_model_id", "molecule_type", "kmer_length", "signal_move_offset",
+            "calibration_artifact_id", "minimum_mapq", "read_set_selection",
+            name="uq_ont_signal_profile_calibration",
+        ),
+    )
+
+    id = Column(String(96), primary_key=True)
+    name = Column(String(255), nullable=False)
+    molecule_type = Column(String(16), nullable=False)
+    basecall_model_id = Column(String(255), nullable=False)
+    kmer_length = Column(Integer, nullable=False)
+    signal_move_offset = Column(Integer, nullable=False)
+    parameter_source = Column(String(32), nullable=False)
+    calibration_artifact_id = Column(String(96), ForeignKey("ont_signal_calibration_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    primary_alignment_policy = Column(String(32), nullable=False, default="primary_only")
+    minimum_mapq = Column(Integer, nullable=False, default=0)
+    include_supplementary = Column(Boolean, nullable=False, default=False)
+    read_set_selection = Column(String(32), nullable=False, default="immutable_full_set")
+    approval_receipt = Column(JSON, nullable=False)
+    approved_at = Column(LenientSQLiteDateTime, nullable=False)
+    approved_by = Column(String(255), nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalMappingJob(Base):
+    """Leased reusable reform/realign derivation with exact governed parents."""
+
+    __tablename__ = "ont_signal_mapping_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", name="uq_ont_signal_mapping_request"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_mapping_state"),
+        CheckConstraint("mode IN ('signal_to_read','signal_to_reference')", name="ck_ont_signal_mapping_mode"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    mode = Column(String(32), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False, index=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=False)
+    mapping_profile_id = Column(String(96), ForeignKey("ont_signal_mapping_profiles.id", ondelete="RESTRICT"), nullable=False)
+    reference_revision_id = Column(String(128), nullable=True)
+    alignment_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    alignment_session_id = Column(String(96), nullable=True)
+    parent_mapping_job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=True)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalMappingEvent(Base):
+    __tablename__ = "ont_signal_mapping_events"
+
+    id = Column(String(96), primary_key=True)
+    job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalMappingArtifact(Base):
+    __tablename__ = "ont_signal_mapping_artifacts"
+
+    id = Column(String(96), primary_key=True)
+    mapping_job_id = Column(String(96), ForeignKey("ont_signal_mapping_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    managed_relative_path = Column(Text, nullable=False, unique=True)
+    media_type = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    parent_identities = Column(JSON, nullable=False)
+    runtime_identity = Column(JSON, nullable=False)
+    validation_receipt = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSquigualiserViewJob(Base):
+    __tablename__ = "ont_squigualiser_view_jobs"
+
+    id = Column(String(96), primary_key=True)
+    mapping_artifact_id = Column(String(96), ForeignKey("ont_signal_mapping_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    mode = Column(String(32), nullable=False)
+    read_id = Column(String(128), nullable=True)
+    reference_contig = Column(String(255), nullable=True)
+    reference_start = Column(Integer, nullable=True)
+    reference_end = Column(Integer, nullable=True)
+    render_params = Column(JSON, nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False)
+    attempt = Column(Integer, nullable=False, default=0)
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    output_manifest = Column(JSON, nullable=False, default=dict)
+    render_receipt = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalViewerSession(Base):
+    __tablename__ = "ont_signal_viewer_sessions"
+
+    id = Column(String(96), primary_key=True)
+    dataset_id = Column(String(128), nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_generation = Column(Integer, nullable=False)
+    alignment_job_id = Column(String(36), ForeignKey("jobs.id", ondelete="RESTRICT"), nullable=True)
+    alignment_session_id = Column(String(96), nullable=True)
+    reference_revision_id = Column(String(128), nullable=True)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=True)
+    move_source_id = Column(String(96), ForeignKey("ont_move_table_sources.id", ondelete="RESTRICT"), nullable=True)
+    mapping_profile_id = Column(String(96), ForeignKey("ont_signal_mapping_profiles.id", ondelete="RESTRICT"), nullable=True)
+    contig = Column(String(255), nullable=True)
+    locus_start = Column(Integer, nullable=True)
+    locus_end = Column(Integer, nullable=True)
+    selected_read_id = Column(String(128), nullable=True)
+    igv_state = Column(JSON, nullable=False, default=dict)
+    signal_state = Column(JSON, nullable=False, default=dict)
+    revision = Column(Integer, nullable=False, default=1)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalComparisonJob(Base):
+    __tablename__ = "ont_signal_comparison_jobs"
+    __table_args__ = (
+        UniqueConstraint("request_fingerprint", "attempt_number", name="uq_ont_signal_comparison_attempt"),
+        CheckConstraint("state IN ('requested','running','ready','failed','cancelled')", name="ck_ont_signal_comparison_state"),
+        CheckConstraint("attempt_number BETWEEN 1 AND 3", name="ck_ont_signal_comparison_attempt"),
+    )
+
+    id = Column(String(96), primary_key=True)
+    viewer_session_id = Column(String(96), ForeignKey("ont_signal_viewer_sessions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    viewer_session_revision = Column(Integer, nullable=False)
+    run_id = Column(String(80), ForeignKey("ont_instrument_runs.id", ondelete="RESTRICT"), nullable=False)
+    observed_generation = Column(Integer, nullable=False)
+    raw_representation_id = Column(String(96), ForeignKey("ont_raw_signal_representations.id", ondelete="RESTRICT"), nullable=False)
+    mapping_artifact_id = Column(String(96), ForeignKey("ont_signal_mapping_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    reference_revision_id = Column(String(128), nullable=False)
+    selected_read_id = Column(String(128), nullable=False)
+    reference_contig = Column(String(255), nullable=False)
+    reference_start = Column(Integer, nullable=False)
+    reference_end = Column(Integer, nullable=False)
+    simulation_orientation = Column(String(16), nullable=False)
+    simulation_settings = Column(JSON, nullable=False)
+    sequence_basis = Column(String(32), nullable=False, default="managed_reference")
+    generated_read_id = Column(String(128), nullable=True)
+    render_params = Column(JSON, nullable=False)
+    preview_digest = Column(String(64), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False, index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    predecessor_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    state = Column(String(32), nullable=False, default="requested", index=True)
+    reason_code = Column(String(96), nullable=False, default="comparison_requested")
+    claim_token = Column(String(96), nullable=True, unique=True)
+    lease_expires_at = Column(LenientSQLiteDateTime, nullable=True)
+    cancel_requested_at = Column(LenientSQLiteDateTime, nullable=True)
+    resource_snapshot = Column(JSON, nullable=False, default=dict)
+    stage_receipts = Column(JSON, nullable=False, default=dict)
+    output_manifest = Column(JSON, nullable=False, default=dict)
+    failure_code = Column(String(96), nullable=True)
+    failure_message = Column(Text, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(LenientSQLiteDateTime, nullable=True)
+
+
+class OntSignalComparisonEvent(Base):
+    __tablename__ = "ont_signal_comparison_events"
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    state = Column(String(32), nullable=False)
+    reason_code = Column(String(96), nullable=False)
+    receipt = Column(JSON, nullable=False, default=dict)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalComparisonArtifact(Base):
+    __tablename__ = "ont_signal_comparison_artifacts"
+    __table_args__ = (UniqueConstraint("comparison_job_id", "kind", name="uq_ont_signal_comparison_artifact_kind"),)
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    kind = Column(String(64), nullable=False)
+    authority_class = Column(String(32), nullable=False)
+    managed_relative_path = Column(Text, nullable=False, unique=True)
+    media_type = Column(String(255), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    parent_identities = Column(JSON, nullable=False)
+    squigulator_runtime_identity = Column(JSON, nullable=True)
+    squigualiser_runtime_identity = Column(JSON, nullable=True)
+    validation_receipt = Column(JSON, nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+
+
+class OntSignalManualReview(Base):
+    __tablename__ = "ont_signal_manual_reviews"
+    __table_args__ = (
+        Index("uq_ont_signal_manual_review_root", "comparison_job_id", unique=True,
+              sqlite_where=text("predecessor_review_id IS NULL")),
+    )
+    id = Column(String(96), primary_key=True)
+    comparison_job_id = Column(String(96), ForeignKey("ont_signal_comparison_jobs.id", ondelete="RESTRICT"), nullable=False, index=True)
+    predecessor_review_id = Column(String(96), ForeignKey("ont_signal_manual_reviews.id", ondelete="RESTRICT"), nullable=True, unique=True)
+    review_question = Column(Text, nullable=False)
+    required_outcome = Column(String(16), nullable=False)
+    note = Column(Text, nullable=False)
+    reviewed_start = Column(Integer, nullable=False)
+    reviewed_end = Column(Integer, nullable=False)
+    comparison_html_artifact_id = Column(String(96), ForeignKey("ont_signal_comparison_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    comparison_html_sha256 = Column(String(64), nullable=False)
+    comparison_request_fingerprint = Column(String(64), nullable=False)
+    reviewer_identity = Column(String(255), nullable=False)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
 
 
 class OntProtocolOptionReceipt(Base):
@@ -767,6 +1162,40 @@ def _bind_new_jobs_to_launch_context(session: Session, _flush_context, _instance
             record.provenance = provenance
 
 
+class ScientificArtifactJSON(TypeDecorator):
+    """JSON column that resolves governed Parquet references on ORM reads."""
+
+    impl = JSON
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        if isinstance(value, dict) and value.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            return value
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True).encode("utf-8")
+        if len(encoded) > _SCIENTIFIC_JSON_INLINE_LIMIT:
+            raise ValueError("oversized scientific JSON must be published as a governed artifact reference")
+        return value
+
+    def process_result_value(self, value, dialect):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        if isinstance(value, dict) and value.get("schema") in {
+            "bms.scientific-artifact-reference.v1",
+            "bms.scientific-artifact-row-reference.v1",
+        }:
+            from services.scientific_artifacts import resolve_json_value
+            return resolve_json_value(value)
+        return value
+
+
 class Design(Base):
     """Individual protein design result."""
     __tablename__ = "designs"
@@ -797,11 +1226,10 @@ class Design(Base):
     review_profile_id = Column(String(64), nullable=True, index=True)
     review_contract_version = Column(Integer, nullable=True)
     review_contract_source = Column(String(32), nullable=True)
-    review_artifact_manifest = Column(JSON, nullable=True)
-    review_role_map = Column(JSON, nullable=True)
-
+    review_artifact_manifest = Column(ScientificArtifactJSON, nullable=True)
+    review_role_map = Column(ScientificArtifactJSON, nullable=True)
     selected_loop_scope = Column(JSON, nullable=True)
-    provenance = Column(JSON, nullable=True)
+    provenance = Column(ScientificArtifactJSON, nullable=True)
     
     # Structural metrics (predicted structures)
     num_helices = Column(Integer, nullable=True)
@@ -835,12 +1263,12 @@ class Design(Base):
     protein_iptm = Column(Float, nullable=True)  # Protein-protein interface
     complex_iplddt = Column(Float, nullable=True)  # Interface pLDDT
     complex_ipde = Column(Float, nullable=True)  # Interface PDE
-    chains_ptm = Column(JSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
-    pair_chains_iptm = Column(JSON, nullable=True)  # NxN chain matrix for heatmap
+    chains_ptm = Column(ScientificArtifactJSON, nullable=True)  # {"0": 0.76, "1": 0.51} per-chain pTM
+    pair_chains_iptm = Column(ScientificArtifactJSON, nullable=True)  # NxN chain matrix for heatmap
     disorder = Column(Float, nullable=True)  # Protenix disorder score/probability
     num_recycles = Column(Integer, nullable=True)  # Recycling iterations reported by model
     has_clash = Column(Boolean, nullable=True)  # Steric clash flag from confidence output
-    confidence_metrics = Column(JSON, nullable=True)  # Raw model confidence JSON payload
+    confidence_metrics = Column(ScientificArtifactJSON, nullable=True)  # Raw model confidence JSON payload
     aligned_error_path = Column(String(500), nullable=True)
     aligned_error_format = Column(String(64), nullable=True)
     aligned_error_key = Column(String(128), nullable=True)
@@ -859,8 +1287,8 @@ class Design(Base):
     
     # Per-residue metrics (stored as JSON arrays)
     # Analytics
-    chain_metrics = Column(JSON, nullable=True)  # {"A": {"type": "protein", ...}}
-    residue_plddt = Column(JSON, nullable=True)  # [85.2, 91.3, ...] per residue
+    chain_metrics = Column(ScientificArtifactJSON, nullable=True)  # {"A": {"type": "protein", ...}}
+    residue_plddt = Column(ScientificArtifactJSON, nullable=True)  # [85.2, 91.3, ...] per residue
     pae_matrix = Column(JSON, nullable=True)     # [[0.2, ...], ...]
     
     # User annotations
@@ -897,8 +1325,8 @@ class Design(Base):
     screening_reason = Column(String(255), nullable=True)     # RFantibody screening pass/fail summary
     source_stage = Column(String(64), nullable=True, index=True)   # review-stage rows (e.g. post_rfantibody)
     artifact_group = Column(String(64), nullable=True)             # candidate/raw/filtered/final
-    rfa_loop_metrics = Column(JSON, nullable=True)
-    rfa_hotspot_metrics = Column(JSON, nullable=True)
+    rfa_loop_metrics = Column(ScientificArtifactJSON, nullable=True)
+    rfa_hotspot_metrics = Column(ScientificArtifactJSON, nullable=True)
     rfa_hotspot_covered_count = Column(Integer, nullable=True)
     rfa_hotspot_min_distance = Column(Float, nullable=True)
     rfa_hotspot_avg_min_distance = Column(Float, nullable=True)
@@ -913,8 +1341,8 @@ class Design(Base):
     rfa_plddt_delta = Column(Float, nullable=True)
     rfa_plddt_selected = Column(Float, nullable=True)
     rfa_plddt_nonselected = Column(Float, nullable=True)
-    rfa_design_loops = Column(JSON, nullable=True)
-    rfa_hotspots = Column(JSON, nullable=True)
+    rfa_design_loops = Column(ScientificArtifactJSON, nullable=True)
+    rfa_hotspots = Column(ScientificArtifactJSON, nullable=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # ANTIBODY / DISCOVERY METRICS
@@ -962,7 +1390,7 @@ class Design(Base):
     frustration_high_count = Column(Integer, nullable=True)
     frustration_min_count = Column(Integer, nullable=True)
     frustration_pct_high = Column(Float, nullable=True)        # 0..100 percentage
-    frustration_residues = Column(JSON, nullable=True)         # Historical read-only per-residue projection
+    frustration_residues = Column(ScientificArtifactJSON, nullable=True)         # Historical read-only per-residue projection
     frustration_csv_path = Column(String(500), nullable=True)  # Historical read-only CSV path
     # Canonical manifest-first FrustraMPNN authority fields. The three scalar
     # columns above are deterministic summary projections; these retain the
@@ -997,11 +1425,11 @@ class Design(Base):
     ppiflow_objective_score = Column(Float, nullable=True)
     ppiflow_filter_passed = Column(Boolean, nullable=True)
     ppiflow_filter_reason = Column(String(255), nullable=True)
-    ppiflow_loop_metrics = Column(JSON, nullable=True)
+    ppiflow_loop_metrics = Column(ScientificArtifactJSON, nullable=True)
 
     # Metric provenance/completeness: explicit source/formula/direction for model and BMS-derived scores.
-    metric_provenance = Column(JSON, nullable=True)
-    metric_completeness = Column(JSON, nullable=True)
+    metric_provenance = Column(ScientificArtifactJSON, nullable=True)
+    metric_completeness = Column(ScientificArtifactJSON, nullable=True)
         
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -1057,6 +1485,155 @@ class AnalysisRun(Base):
     last_accessed_at = Column(DateTime, nullable=True)
 
 
+class ScientificArtifactReceipt(Base):
+    """Receipt for one immutable Parquet artifact in the shared data plane."""
+
+    __tablename__ = "scientific_artifact_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "storage_root", "relative_path", name="uq_scientific_artifact_path"
+        ),
+        UniqueConstraint(
+            "owner_kind", "owner_id", "role", "content_sha256",
+            name="uq_scientific_artifact_content",
+        ),
+        Index("ix_scientific_artifact_owner", "owner_kind", "owner_id", "role"),
+        Index("ix_scientific_artifact_hash", "content_sha256"),
+    )
+
+    artifact_id = Column(String(128), primary_key=True)
+    owner_kind = Column(String(96), nullable=False)
+    owner_id = Column(String(255), nullable=False)
+    role = Column(String(128), nullable=False)
+    schema_id = Column(String(160), nullable=False)
+    artifact_schema_version = Column(Integer, nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    row_count = Column(Integer, nullable=False)
+    column_schema_sha256 = Column(String(64), nullable=False)
+    storage_root = Column(String(96), nullable=False)
+    relative_path = Column(String(2000), nullable=False)
+    media_type = Column(String(160), nullable=False)
+    availability = Column(String(32), nullable=False, default="available", index=True)
+    source_receipts_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+
+
+_DESIGN_ARTIFACT_FIELDS = (
+    "confidence_metrics", "residue_plddt", "rfa_loop_metrics", "rfa_hotspot_metrics",
+    "provenance", "review_artifact_manifest", "review_role_map", "chain_metrics",
+    "frustration_residues", "rfa_design_loops", "rfa_hotspots", "ppiflow_loop_metrics",
+    "metric_provenance", "metric_completeness", "pair_chains_iptm", "chains_ptm",
+)
+_DESIGN_ALWAYS_ARTIFACT_FIELDS = frozenset(
+    {
+        "confidence_metrics",
+        "residue_plddt",
+        "rfa_loop_metrics",
+        "rfa_hotspot_metrics",
+    }
+)
+_DESIGN_INLINE_LIMIT = _SCIENTIFIC_JSON_INLINE_LIMIT
+
+
+@event.listens_for(Session, "before_flush")
+def _externalize_design_payloads(session, _flush_context, _instances):
+    import hashlib
+    import pyarrow as pa
+    from services.scientific_artifacts import artifact_row_reference, install_parquet_rows, artifact_root
+
+    schema = pa.schema([
+        ("row_index", pa.int64()), ("design_id", pa.string()),
+        ("field_name", pa.string()), ("payload_json", pa.string()),
+    ])
+    for target in tuple(session.new) + tuple(session.dirty):
+        if not isinstance(target, Design):
+            continue
+        target_state = inspect(target)
+        is_new = target in session.new
+        for field_name in _DESIGN_ARTIFACT_FIELDS:
+            if not is_new and not target_state.attrs[field_name].history.has_changes():
+                continue
+            value = getattr(target, field_name, None)
+            if value is None or (isinstance(value, dict) and value.get("schema") in {
+                "bms.scientific-artifact-reference.v1",
+                "bms.scientific-artifact-row-reference.v1",
+            }):
+                continue
+            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=True)
+            if (
+                field_name not in _DESIGN_ALWAYS_ARTIFACT_FIELDS
+                and len(encoded.encode("utf-8")) <= _DESIGN_INLINE_LIMIT
+            ):
+                continue
+            source_sha = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            row = {"row_index": 0, "design_id": str(target.id), "field_name": field_name, "payload_json": encoded}
+            artifact = install_parquet_rows(
+                root=artifact_root(), owner_kind="design_field", owner_id=f"{target.id}:{field_name}",
+                role="payload", schema_id="bms.design.field.v1", schema_version=1,
+                source_sha256=source_sha, rows=[row], schema=schema,
+            )
+            existing_receipt = next(
+                (
+                    value
+                    for value in session.new
+                    if isinstance(value, ScientificArtifactReceipt)
+                    and value.artifact_id == artifact.artifact_id
+                ),
+                None,
+            )
+            if existing_receipt is None:
+                existing_receipt = session.get(ScientificArtifactReceipt, artifact.artifact_id)
+            if existing_receipt is None:
+                session.add(ScientificArtifactReceipt(
+                    artifact_id=artifact.artifact_id, owner_kind=artifact.owner_kind, owner_id=artifact.owner_id,
+                    role=artifact.role, schema_id=artifact.schema_id, artifact_schema_version=artifact.schema_version,
+                    content_sha256=artifact.content_sha256, size_bytes=artifact.size_bytes, row_count=artifact.row_count,
+                    column_schema_sha256=artifact.column_schema_sha256, storage_root="scientific_artifacts",
+                    relative_path=artifact.relative_path, media_type=artifact.media_type, availability="available",
+                    source_receipts_json={"source_table": "designs", "source_column": field_name, "source_key": str(target.id)},
+                ))
+            elif (
+                existing_receipt.content_sha256 != artifact.content_sha256
+                or existing_receipt.size_bytes != artifact.size_bytes
+                or existing_receipt.relative_path != artifact.relative_path
+            ):
+                raise ValueError("design scientific artifact receipt conflict")
+            setattr(target, field_name, artifact_row_reference(artifact.reference(), 0, value_field="payload_json"))
+
+class ScientificPayloadMigration(Base):
+    """Idempotent source-to-artifact equivalence ledger."""
+
+    __tablename__ = "scientific_payload_migrations"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_store", "source_table", "source_column", "source_key", "source_sha256",
+            name="uq_scientific_payload_migration_source",
+        ),
+        Index("ix_scientific_payload_migration_state", "state", "updated_at"),
+        ForeignKeyConstraint(
+            ["artifact_id"], ["scientific_artifact_receipts.artifact_id"],
+        ),
+    )
+
+    migration_id = Column(String(160), primary_key=True)
+    source_store = Column(String(96), nullable=False)
+    source_table = Column(String(160), nullable=False)
+    source_column = Column(String(160), nullable=False)
+    source_key = Column(String(512), nullable=False)
+    source_sha256 = Column(String(64), nullable=False)
+    artifact_id = Column(String(128), nullable=True)
+    artifact_sha256 = Column(String(64), nullable=True)
+    equivalence_sha256 = Column(String(64), nullable=True)
+    state = Column(String(32), nullable=False, default="planned", index=True)
+    diagnostic = Column(Text, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class FrustraMPNNResult(Base):
     """Immutable manifest-backed authority for one FrustraMPNN invocation."""
 
@@ -1100,9 +1677,68 @@ class FrustraMPNNResult(Base):
     effective_settings_json = Column(JSON, nullable=True)
     capability_inventory_sha256 = Column(String(64), nullable=True)
     statistics_sha256 = Column(String(64), nullable=True)
-    statistics_json = Column(JSON, nullable=True)
+    statistics_json = Column(ScientificArtifactJSON, nullable=True)
     comparison_compatibility_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FrustraMPNNStatisticsAnalysis(Base):
+    """Independently retryable CPU statistics child bound to one core result."""
+
+    __tablename__ = "frustrampnn_statistics_analyses"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["parent_job_id", "invocation_id"],
+            ["frustrampnn_results.parent_job_id", "frustrampnn_results.invocation_id"],
+            name="fk_frustrampnn_statistics_analysis_result",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "parent_job_id",
+            "invocation_id",
+            "core_landscape_sha256",
+            name="uq_frustrampnn_statistics_analysis_core",
+        ),
+        Index(
+            "ix_frustrampnn_statistics_analysis_state_created",
+            "state",
+            "created_at",
+        ),
+        Index(
+            "ix_frustrampnn_statistics_analysis_lease",
+            "state",
+            "lease_expires_at",
+        ),
+    )
+
+    analysis_id = Column(String(36), primary_key=True)
+    parent_job_id = Column(String(36), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False, index=True)
+    core_artifact_id = Column(String(384), nullable=False)
+    core_bundle_relative_path = Column(Text, nullable=False)
+    core_landscape_sha256 = Column(String(64), nullable=False)
+    core_manifest_sha256 = Column(String(64), nullable=False)
+    state = Column(String(16), nullable=False, default="queued", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    formula_version = Column(String(64), nullable=False)
+    policy_version = Column(String(64), nullable=False)
+    package_version = Column(String(64), nullable=False)
+    schema_version = Column(Integer, nullable=False)
+    artifact_relative_path = Column(Text, nullable=True)
+    artifact_sha256 = Column(String(64), nullable=True)
+    statistics_sha256 = Column(String(64), nullable=True)
+    diagnostic = Column(Text, nullable=True)
+    claim_token = Column(String(36), nullable=True)
+    claim_owner = Column(String(128), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
 
 
 class FrustraMPNNReview(Base):
@@ -1253,9 +1889,9 @@ class FrustraMPNNLandscapeRow(Base):
 
     id = Column(String(96), primary_key=True)
     parent_job_id = Column(String(36), nullable=False, index=True)
-    invocation_id = Column(String(128), nullable=False, index=True)
-    target_id = Column(String(128), nullable=False, index=True)
-    entity_instance_id = Column(String(128), nullable=False, index=True)
+    invocation_id = Column(String(128), nullable=False)
+    target_id = Column(String(128), nullable=False)
+    entity_instance_id = Column(String(128), nullable=False)
     auth_asym_id = Column(String(128), nullable=False)
     auth_seq_id = Column(String(64), nullable=False)
     insertion_code = Column(String(16), nullable=False, default="")
@@ -1267,8 +1903,8 @@ class FrustraMPNNLandscapeRow(Base):
     scoreable = Column(Boolean, nullable=False)
     status = Column(String(32), nullable=False, index=True)
     reason = Column(Text, nullable=True)
-    row_json = Column(JSON, nullable=False)
-    provenance_json = Column(JSON, nullable=False)
+    row_json = Column(ScientificArtifactJSON, nullable=False)
+    provenance_json = Column(ScientificArtifactJSON, nullable=False)
 
 
 class FrustraMPNNComparison(Base):
@@ -1410,7 +2046,7 @@ class ConformationalMappingRecord(Base):
     record_type = Column(String(64), nullable=False, index=True)
     record_key = Column(String(255), nullable=False)
     content_sha256 = Column(String(64), nullable=False, index=True)
-    payload_json = Column(JSON, nullable=False)
+    payload_json = Column(ScientificArtifactJSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -1472,7 +2108,7 @@ class ConformationalMappingLandscapeRow(Base):
     scoreable = Column(Boolean, nullable=False)
     status = Column(String(32), nullable=False, index=True)
     reason = Column(Text, nullable=True)
-    provenance_json = Column(JSON, nullable=False, default=dict)
+    provenance_json = Column(ScientificArtifactJSON, nullable=False, default=dict)
 
 
 class ConformationalMappingStateLandscapeAnalysisHeader(Base):
@@ -1905,14 +2541,285 @@ class MdReconcilerLease(Base):
 # MSACache removed - now using file-based caching (see BMS_MSA_CACHE).
 
 
+_ONT_RECEIPT_COLUMN_CONTRACT = (
+    ("id", "VARCHAR(128)", 1, None, 1),
+    ("candidate_id", "VARCHAR(64)", 1, None, 0),
+    ("run_id", "VARCHAR(80)", 1, None, 0),
+    ("observed_generation", "INTEGER", 1, None, 0),
+    ("raw_representation_id", "VARCHAR(96)", 1, None, 0),
+    ("server_relative_path", "TEXT", 1, None, 0),
+    ("root_device", "INTEGER", 1, None, 0),
+    ("root_inode", "INTEGER", 1, None, 0),
+    ("file_device", "INTEGER", 1, None, 0),
+    ("file_inode", "INTEGER", 1, None, 0),
+    ("file_mtime_ns", "INTEGER", 1, None, 0),
+    ("file_ctime_ns", "INTEGER", 1, None, 0),
+    ("artifact_sha256", "VARCHAR(64)", 1, None, 0),
+    ("artifact_size_bytes", "INTEGER", 1, None, 0),
+    ("molecule_type", "VARCHAR(16)", 1, None, 0),
+    ("created_at", "VARCHAR", 1, None, 0),
+)
+_ONT_RECEIPT_INDEX_CONTRACT = frozenset(
+    {
+        ("sqlite_autoindex_ont_external_move_bam_registration_receipts_1", "pk", False, True, ("id",)),
+        ("sqlite_autoindex_ont_external_move_bam_registration_receipts_2", "u", False, True, ("run_id", "observed_generation", "raw_representation_id", "candidate_id", "molecule_type")),
+        ("ix_ont_external_move_bam_registration_generation", "c", False, False, ("run_id", "observed_generation")),
+    }
+)
+_ONT_RECEIPT_FOREIGN_KEY_CONTRACT = frozenset(
+    {
+        ("raw_representation_id", "ont_raw_signal_representations", "id", "NO ACTION", "RESTRICT", "NONE"),
+        ("run_id", "ont_instrument_runs", "id", "NO ACTION", "RESTRICT", "NONE"),
+    }
+)
+_ONT_RECEIPT_SQL_FRAGMENTS = (
+    "CHECK (artifact_size_bytes > 0)",
+    "CHECK (molecule_type IN ('dna','rna'))",
+)
+
+
+def _attest_sqlite_migration_ledger(db_path: str) -> None:
+    """Require an exact applied migration prefix and all available byte checksums."""
+    from migrations.runner import MIGRATIONS, _migration_content_sha256
+
+    try:
+        with sqlite3.connect(db_path) as connection:
+            rows = connection.execute(
+                "SELECT version, name, content_sha256 FROM schema_migrations ORDER BY version"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        if "no such table: schema_migrations" in str(exc):
+            raise RuntimeError("migration 33 authority is absent: migration ledger is unavailable") from exc
+        raise RuntimeError("migration ledger is unavailable") from exc
+    expected_prefix = MIGRATIONS[: len(rows)]
+    if len(rows) != len(expected_prefix) or [
+        (int(version), str(name)) for version, name, _checksum in rows
+    ] != [(migration.version, migration.name) for migration in expected_prefix]:
+        raise RuntimeError("migration ledger is not a contiguous exact prefix")
+    if len(rows) != len(MIGRATIONS):
+        raise RuntimeError("migration ledger is incomplete for startup")
+    for (version, _name, recorded_checksum), migration in zip(rows, expected_prefix, strict=True):
+        recorded = None if recorded_checksum is None else str(recorded_checksum)
+        if recorded in {None, "legacy_unknown"}:
+            if int(version) >= 33:
+                raise RuntimeError(
+                    f"migration ledger checksum is missing for version {int(version)}"
+                )
+            continue
+        if recorded != _migration_content_sha256(migration):
+            raise RuntimeError(
+                f"migration ledger checksum diverged for version {int(version)}"
+            )
+
+
+def _attest_sqlite_migration_33(db_path: str) -> None:
+    """Prove migration 33 ledger and schema authority without synthesizing history."""
+    from migrations.add_ont_external_move_bam_receipts import (
+        MIGRATION_33_TRIGGER_SQL,
+        MIGRATION_33_TRIGGER_SQL_DIGESTS,
+        migration_33_trigger_sql_digest,
+    )
+    from migrations.ont_sqlite_schema_contract import assert_sqlite_table_contract, normalize_sql
+    from migrations import runner as migration_runner
+
+    with sqlite3.connect(db_path) as connection:
+        ledger_exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+        ).fetchone()
+        ledger_has_history = ledger_exists and connection.execute(
+            "SELECT 1 FROM schema_migrations LIMIT 1"
+        ).fetchone()
+    if not ledger_has_history:
+        raise RuntimeError(
+            "migration 33 authority is absent; metadata bootstrap cannot substitute for migration history"
+        )
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 33)
+    )
+    with sqlite3.connect(db_path) as connection:
+        try:
+            assert_sqlite_table_contract(
+                connection,
+                table_name="ont_external_move_bam_registration_receipts",
+                columns=_ONT_RECEIPT_COLUMN_CONTRACT,
+                indexes=_ONT_RECEIPT_INDEX_CONTRACT,
+                foreign_keys=_ONT_RECEIPT_FOREIGN_KEY_CONTRACT,
+                sql_fragments=_ONT_RECEIPT_SQL_FRAGMENTS,
+                label="ONT external move-BAM receipt table",
+                triggers={
+                    name: normalize_sql(sql)
+                    for name, sql in MIGRATION_33_TRIGGER_SQL.items()
+                    if name.startswith("trg_ont_external_move_bam_receipt_")
+                },
+            )
+        except RuntimeError as exc:
+            raise RuntimeError("migration 33 startup attestation failed") from exc
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=33"
+        ).fetchone()
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        trigger_sql_digests = {
+            str(row[0]): migration_33_trigger_sql_digest(str(row[1] or ""))
+            for row in connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
+            )
+            if str(row[0]) in MIGRATION_33_TRIGGER_SQL_DIGESTS
+        }
+        receipt_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info('ont_external_move_bam_registration_receipts')"
+            )
+        }
+        source_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info('ont_move_table_sources')")
+        }
+    if (
+        ledger != ("add_ont_external_move_bam_receipts", expected_checksum)
+        or not {
+            "ont_external_move_bam_registration_receipts",
+            "ont_move_table_sources",
+        }.issubset(tables)
+        or trigger_sql_digests != MIGRATION_33_TRIGGER_SQL_DIGESTS
+        or not {
+            "candidate_id",
+            "server_relative_path",
+            "artifact_sha256",
+            "artifact_size_bytes",
+        }.issubset(receipt_columns)
+        or not {"source_job_id", "external_registration_receipt_id"}.issubset(
+            source_columns
+        )
+    ):
+        raise RuntimeError("migration 33 startup attestation failed")
+
+
+def _attest_sqlite_migration_34(db_path: str) -> None:
+    """Prove move-source attempt lineage and its sealed migration ledger."""
+    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
+    from migrations import runner as migration_runner
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 34)
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=34"
+        ).fetchone()
+        if ledger != ("add_ont_move_source_attempt_lineage", expected_checksum):
+            raise RuntimeError("migration 34 startup attestation failed")
+        try:
+            assert_ont_move_source_table_contract(
+                connection,
+                include_external_receipt_binding=True,
+            )
+            attest(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 34 startup attestation failed") from exc
+
+
+def _attest_sqlite_migration_38(db_path: str) -> None:
+    """Prove migration 38 ledger identity and terminal trigger authority."""
+    from migrations.add_ont_move_source_attempt_lineage import attest
+    from migrations.ont_sqlite_schema_contract import assert_ont_move_source_table_contract
+    from migrations import runner as migration_runner
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 38)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=38"
+        ).fetchone()
+        if ledger != ("seal_ont_move_source_terminal_immutability", expected_checksum):
+            raise RuntimeError("migration 38 startup attestation failed")
+        try:
+            assert_ont_move_source_table_contract(
+                connection,
+                include_external_receipt_binding=True,
+            )
+            attest(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 38 startup attestation failed") from exc
+
+
+def _attest_sqlite_migration_39(db_path: str) -> None:
+    """Prove migration 39 ledger identity and receipt tuple triggers."""
+    from migrations import runner as migration_runner
+    from migrations.seal_ont_external_move_bam_receipt_binding import assert_attested
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 39)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=39"
+        ).fetchone()
+        if ledger != ("seal_ont_external_move_bam_receipt_binding", expected_checksum):
+            raise RuntimeError("migration 39 startup attestation failed")
+        try:
+            assert_attested(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 39 startup attestation failed") from exc
+
+
+def _attest_sqlite_migration_40(db_path: str) -> None:
+    """Prove migration 40 ledger identity and terminal lookup triggers."""
+    from migrations import runner as migration_runner
+    from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
+        assert_attested,
+    )
+
+    expected_checksum = migration_runner._migration_content_sha256(
+        next(migration for migration in migration_runner.MIGRATIONS if migration.version == 40)
+    )
+    with sqlite3.connect(db_path) as connection:
+        ledger = connection.execute(
+            "SELECT name, content_sha256 FROM schema_migrations WHERE version=40"
+        ).fetchone()
+        if ledger != (
+            "seal_ont_raw_signal_lookup_terminal_immutability",
+            expected_checksum,
+        ):
+            raise RuntimeError("migration 40 startup attestation failed")
+        try:
+            assert_attested(connection)
+        except RuntimeError as exc:
+            raise RuntimeError("migration 40 startup attestation failed") from exc
+
+
 async def init_db():
-    """Create all tables if they don't exist."""
+    """Require an already migrated authoritative core database before startup."""
+    if engine.dialect.name == "sqlite":
+        db_path = engine.url.database
+        if not db_path or db_path == ":memory:":
+            raise RuntimeError(
+                "SQLite startup migrations require a durable filesystem database path"
+            )
+    else:
+        db_path = None
+
     async with engine.begin() as conn:
         if engine.dialect.name == "sqlite":
             await conn.execute(text("PRAGMA journal_mode=WAL"))
             await conn.execute(text("PRAGMA busy_timeout=30000"))
-        await conn.run_sync(Base.metadata.create_all)
-        await _ensure_schema(conn)
+
+    if db_path is not None:
+        await asyncio.to_thread(_attest_sqlite_migration_ledger, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_33, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_34, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_38, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_39, str(db_path))
+        await asyncio.to_thread(_attest_sqlite_migration_40, str(db_path))
 
 
 async def _ensure_schema(conn):

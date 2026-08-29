@@ -60,12 +60,12 @@ def _loop(category: str, fields: Sequence[str], rows: Sequence[Mapping[str, str]
     return lines
 
 
-def _tables(source_bytes: bytes):
+def _tables(source_bytes: bytes, *, require_materializable: bool = True):
     try:
         document = _parse_document(source_bytes)
-        if "struct_conn" in document.loops or any(
+        if require_materializable and ("struct_conn" in document.loops or any(
             key.startswith("_struct_conn.") for key in document.scalars
-        ):
+        )):
             raise RcsbSourceError(
                 "RCSB entry contains covalent struct_conn authority unsupported by CM materialization"
             )
@@ -227,32 +227,41 @@ def _materialize(
     return materialized
 
 
-def discover_rcsb_contexts(accession: str, source_bytes: bytes) -> dict[str, Any]:
-    """Enumerate only model/chain/entity contexts accepted by the CM importer."""
+def discover_rcsb_contexts(
+    accession: str,
+    source_bytes: bytes,
+    *,
+    require_materializable: bool = True,
+) -> dict[str, Any]:
+    """Enumerate exact model/chain/entity contexts for the requested consumer."""
 
     normalized = accession.strip().upper()
     if not re.fullmatch(r"[A-Z0-9]{4}", normalized):
         raise RcsbSourceError("RCSB accession must be exactly four letters or digits")
-    entry_id, entities, asym, polymers, sequences, atoms, atom_fields = _tables(source_bytes)
+    entry_id, entities, asym, polymers, sequences, atoms, atom_fields = _tables(
+        source_bytes,
+        require_materializable=require_materializable,
+    )
     if entry_id != normalized:
         raise RcsbSourceError("RCSB mmCIF entry identity does not match the requested accession")
     candidates = _protein_candidates(entities, asym, polymers, sequences, atoms)
     valid_pairs: set[tuple[str, str]] = set()
     for candidate in candidates:
         for model_id in sorted(candidate["models"], key=_sort_model_id):
-            try:
-                _materialize(
-                    normalized,
-                    entity_rows=entities,
-                    asym_rows=asym,
-                    polymer_rows=polymers,
-                    atom_fields=atom_fields,
-                    atoms=atoms,
-                    candidate=candidate,
-                    model_id=model_id,
-                )
-            except RcsbSourceError:
-                continue
+            if require_materializable:
+                try:
+                    _materialize(
+                        normalized,
+                        entity_rows=entities,
+                        asym_rows=asym,
+                        polymer_rows=polymers,
+                        atom_fields=atom_fields,
+                        atoms=atoms,
+                        candidate=candidate,
+                        model_id=model_id,
+                    )
+                except RcsbSourceError:
+                    continue
             valid_pairs.add((model_id, str(candidate["chain_id"])))
     valid_models = sorted({model for model, _ in valid_pairs}, key=_sort_model_id)
     valid_chains = [
@@ -269,7 +278,8 @@ def discover_rcsb_contexts(accession: str, source_bytes: bytes) -> dict[str, Any
             if (valid_models[0], str(candidate["chain_id"])) in valid_pairs
         ]
     if not valid_models or not valid_chains:
-        raise RcsbSourceError("RCSB entry has no protein context the CM server can materialize")
+        suffix = " the CM server can materialize" if require_materializable else ""
+        raise RcsbSourceError(f"RCSB entry has no protein context{suffix}")
     valid_chains.sort(key=lambda item: (str(item["chain_id"]), str(item["entity_id"])))
     entity_by_id = {str(item["entity_id"]): item for item in valid_chains}
     return {

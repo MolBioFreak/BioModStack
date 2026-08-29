@@ -33,6 +33,12 @@ import {
 } from '../lib/api';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
+import { NanoporeWorkflowChooser, type WorkflowKey } from './ngs/NanoporeWorkflowChooser';
+import { buildNanoporeOperatorStageParams } from '../lib/nanoporeLaunchPayload';
+
+const TASK_FLOW_PANEL = 'rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_75%,#000)] p-5 shadow-[0_18px_45px_rgba(0,0,0,0.32)]';
+const TASK_FLOW_CARD = 'rounded-xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-tertiary)_70%,#000)] p-4';
+const TASK_FLOW_LABEL = 'text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]';
 
 
 // ============================================================================
@@ -46,7 +52,6 @@ type AssemblyTool = 'flye' | 'canu';
 type FlyeReadQuality = 'nano-hq' | 'nano-corr' | 'nano-raw';
 type MinimapPreset = 'map-ont' | 'map-hifi' | 'map-pb' | 'sr';
 type InputSource = 'pod5' | 'bam' | 'fastq';
-type WorkflowKey = 'clone' | 'plasmidQc' | 'constructScreening' | 'fastqQc' | 'bamQc' | 'dna' | 'rna' | 'duplex' | 'modified' | 'barcode' | 'pooledAssignment';
 type PathField = 'pod5Dir' | 'bamPath' | 'fastqPath';
 type PathPickerMode = 'file' | 'directory';
 type ReferenceTab = 'managed' | 'paste' | 'create' | 'legacy';
@@ -805,7 +810,6 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         queryKey: ['molbio-ngs-sequences'],
         queryFn: async () => (await fetchNucleotideSequences({
             limit: 100,
-            sequence_type: 'dna',
             sort_by: 'name',
             sort_desc: false,
         })).data,
@@ -970,23 +974,16 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                 .sort((a, b) => a - b);
         }
         const single = Number(raw);
-        if (Number.isInteger(single) && single >= 0) {
-            return [single];
-        }
-        return [];
-    });
-    const [lockGpus, setLockGpus] = useState<boolean>(() => {
-        const raw = (initialValues?.lockGpus ?? initialValues?.lock_gpus) as unknown;
-        return raw === true;
+        return Number.isInteger(single) && single >= 0 ? [single] : [];
     });
 
     // ============================================================================
     // State: Advanced (collapsed by default)
     // ============================================================================
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [showGpuPinning] = useState(false);
     const [batchSize, setBatchSize] = useState<number | null>((initialValues?.batchSize as number | null | undefined) ?? null);
     const [emitSummary, setEmitSummary] = useState(initialValues?.emitSummary !== false);
+    const [emitMoves, setEmitMoves] = useState(initialValues?.emitMoves !== false);
     const [modkitFilterThreshold, setModkitFilterThreshold] = useState<number | null>(
         (initialValues?.modkitFilterThreshold as number | null | undefined) ?? null
     );
@@ -1062,8 +1059,31 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     ), [expectedPlasmidSize, igvReportFlankingBp, igvReportMaxSites, igvTrackWindowBp, minFastqReadLength]);
 
     const requiresReference = selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc' || selectedWorkflow === 'bamQc' || selectedWorkflow === 'modified';
-    const molbioSequences = molbioSequencesQuery.data || [];
-    const molbioRevisions = molbioRevisionsQuery.data || [];
+    const exactStateMolecularRevisionKeys = useMemo(() => new Set(
+        (exactStateRevisionQuery.data?.members ?? [])
+            .filter((member) => member.entity_kind === 'molecular_revision')
+            .map((member) => {
+                const destination = member.reopen_destination;
+                const params = destination && typeof destination === 'object' && !Array.isArray(destination)
+                    ? (destination as { params?: unknown }).params
+                    : null;
+                if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+                const sequenceId = (params as Record<string, unknown>).sequence_id;
+                const revisionId = (params as Record<string, unknown>).revision_id;
+                return typeof sequenceId === 'string' && typeof revisionId === 'string'
+                    ? `${sequenceId}:${revisionId}`
+                    : null;
+            })
+            .filter((value): value is string => Boolean(value)),
+    ), [exactStateRevisionQuery.data?.members]);
+    const allMolbioSequences = molbioSequencesQuery.data || [];
+    const allMolbioRevisions = molbioRevisionsQuery.data || [];
+    const molbioSequences = exactDomainExperimentId
+        ? allMolbioSequences.filter((sequence) => [...exactStateMolecularRevisionKeys].some((key) => key.startsWith(`${sequence.id}:`)))
+        : allMolbioSequences;
+    const molbioRevisions = exactDomainExperimentId
+        ? allMolbioRevisions.filter((revision) => exactStateMolecularRevisionKeys.has(`${selectedMolbioSequenceId}:${revision.id}`))
+        : allMolbioRevisions;
     const selectedMolbioSequence = molbioSequences.find((sequence) => sequence.id === selectedMolbioSequenceId) || null;
     const selectedMolbioRevision = molbioRevisions.find((revision) => revision.id === selectedMolbioRevisionId) || null;
     const usesMolBioReceiptLane = Boolean(selectedMolbioSequenceId);
@@ -1089,39 +1109,71 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
         selectedReferenceIsExactStateMember,
         usesMolBioReceiptLane,
     ]);
-    const canSubmit = useMemo(() => {
-        if (selectedWorkflow === 'pooledAssignment' || !jobName.trim()) return false;
-        if (molbioRevisionPairError) return false;
-        if (!usesMolBioReceiptLane && !availability.canMutateDomain) return false;
-        if (!usesMolBioReceiptLane && managedReferenceBlocker) return false;
-        if (requiresReference && !usesMolBioReceiptLane && !selectedManagedReference) return false;
-        if (inputSource === 'pod5') return pod5Dir.trim() !== '';
-        if (inputSource === 'bam') return bamPath.trim() !== '';
-        return fastqPath.trim() !== ''
-            && (selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening' || selectedWorkflow === 'fastqQc')
-            && (Boolean(selectedManagedReference) || usesMolBioReceiptLane)
-            && hasValidFastqNumericControls;
-    }, [
-        availability.canMutateDomain,
-        bamPath,
-        fastqPath,
-        hasValidFastqNumericControls,
-        inputSource,
-        jobName,
-        managedReferenceBlocker,
-        molbioRevisionPairError,
-        pod5Dir,
-        selectedManagedReference,
-        selectedWorkflow,
-        usesMolBioReceiptLane,
-    ]);
+    const methylationEnabled = modifiedBases !== 'none';
+    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
+    const fastqQcSettingAvailable = selectedWorkflow === 'plasmidQc'
+        || selectedWorkflow === 'bamQc'
+        || selectedWorkflow === 'fastqQc'
+        || ((selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && inputSource === 'fastq');
+    const cloneValidationControlsActive = selectedWorkflow === 'clone'
+        || (selectedWorkflow === 'constructScreening' && runAssembly);
+    const reviewInputReady = inputSource === 'pod5'
+        ? Boolean(pod5Dir.trim())
+        : inputSource === 'bam'
+            ? Boolean(bamPath.trim())
+            : Boolean(fastqPath.trim()) && hasValidFastqNumericControls;
+    const reviewReferenceReady = !requiresReference
+        || (usesMolBioReceiptLane ? Boolean(selectedMolbioSequenceId && selectedMolbioRevisionId) : Boolean(selectedManagedReference && selectedReferenceIsExactStateMember));
+    const getSubmissionBlockers = (): string[] => {
+        const blockers: string[] = [];
+        if (selectedWorkflow === 'pooledAssignment') blockers.push('Use the pooled assignment panel to submit this workflow.');
+        if (!jobName.trim()) blockers.push('Enter a job name.');
+        if (inputSource !== 'fastq' && pinnedGpus.length > 1) blockers.push('Select one GPU or Scheduler auto before submitting this NGS job.');
+        if (inputSource === 'pod5' && !pod5Dir.trim()) blockers.push('Please specify a POD5 data directory.');
+        if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') blockers.push('RNA duplex is unsupported by the locked Dorado runtime.');
+        if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) blockers.push('Duplex basecalling requires a confined read-pairs file.');
+        if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) blockers.push('Barcode classification and duplex cannot be combined in the locked runtime.');
+        if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) blockers.push('Modified-base calling requires DNA HAC simplex.');
+        if (inputSource === 'bam' && !bamPath.trim()) blockers.push('Please specify a BAM file path.');
+        if (inputSource === 'fastq' && !fastqPath.trim()) blockers.push('Please specify a FASTQ file path.');
+        if (inputSource === 'fastq' && !['clone', 'plasmidQc', 'constructScreening', 'fastqQc', 'pooledAssignment'].includes(selectedWorkflow)) blockers.push('The selected workflow does not accept FASTQ input.');
+        if (molbioRevisionPairError) blockers.push(molbioRevisionPairError);
+        if (!usesMolBioReceiptLane && managedReferenceBlocker) blockers.push(managedReferenceBlocker);
+        if (inputSource === 'fastq' && !hasValidFastqNumericControls) blockers.push('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
+        return [...new Set(blockers)];
+    };
+    const submissionBlockers = getSubmissionBlockers();
+    const canSubmit = submissionBlockers.length === 0;
+    const reviewBlocker = submissionBlockers[0] ?? null;
     const selectedLegacyReference = useMemo(
         () => legacyReferenceHints.find((entry) => entry.id === selectedLegacyReferenceId) ?? null,
         [legacyReferenceHints, selectedLegacyReferenceId],
     );
-
-    const methylationEnabled = modifiedBases !== 'none';
-    const canRunModkit = selectedWorkflow === 'modified' && methylationEnabled;
+    const reviewWorkflowLabel = selectedWorkflow === 'constructScreening'
+        ? 'CONSTRUCT SCREENING'
+        : selectedWorkflow === 'plasmidQc'
+            ? 'PLASMID QC'
+            : selectedWorkflow === 'bamQc'
+                ? 'BAM QC'
+                : selectedWorkflow === 'fastqQc'
+                    ? 'ONT FASTQ QC'
+                    : selectedWorkflow === 'clone'
+                        ? 'CLONE VALIDATION'
+                        : selectedWorkflow.replace(/([A-Z])/g, ' $1').toUpperCase();
+    const reviewModeLabel = inputSource === 'pod5'
+        ? `${doradoMolecule.toUpperCase()} ${doradoMode.toUpperCase()}`
+        : inputSource === 'bam'
+            ? 'ALIGNED READS'
+            : 'ALREADY BASECALLED';
+    const reviewModelLabel = inputSource === 'pod5' ? doradoModel.toUpperCase() : 'N/A';
+    const reviewGpuLabel = inputSource === 'fastq'
+        ? 'CPU ONLY'
+        : pinnedGpus.length === 1 ? `GPU ${pinnedGpus[0]}` : 'AUTO GPU';
+    const reviewReferenceLabel = requiresReference ? (reviewReferenceReady ? 'REFERENCE READY' : 'REFERENCE REQUIRED') : 'REFERENCE OPTIONAL';
+    const handleValidate = () => {
+        const blockers = getSubmissionBlockers();
+        setError(blockers.length > 0 ? blockers.join(' ') : null);
+    };
     const refreshManagedReferences = async () => {
         await queryClient.invalidateQueries({ queryKey: ['molbio-ngs-references', exactDomainExperimentId] });
         await queryClient.invalidateQueries({ queryKey: ['molbio-ngs-reference-revisions'] });
@@ -1230,14 +1282,18 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             : 'ont_basecall_dna';
             const jobPayload = {
                 name: jobName || `nanopore_${Date.now()}`,
+                pinned_gpu: inputSource !== 'fastq' && pinnedGpus.length === 1 ? pinnedGpus[0] : null,
                 params: {
                     ...(molbioNgsReceiptId && { molbio_ngs_receipt_id: molbioNgsReceiptId }),
                     ...(comparisonPanelReceiptId && { ngs_comparison_panel_receipt_id: comparisonPanelReceiptId }),
                     min_qscore: inputSource === 'pod5' ? minQscore : undefined,
                     run_modkit: runModkit && canRunModkit,
-                    run_fastq_qc: inputSource === 'fastq' && selectedWorkflow !== 'clone',
-                    run_multimer_qc: inputSource === 'fastq' && selectedWorkflow !== 'clone',
-                    run_assembly: selectedWorkflow === 'clone',
+                    ...buildNanoporeOperatorStageParams({
+                        selectedWorkflow,
+                        inputSource,
+                        runFastqQc,
+                        runAssembly,
+                    }),
                     ...(inputSource === 'pod5' && {
                         pod5_dir: pod5Dir,
                         dorado_quality_mode: doradoModel,
@@ -1249,6 +1305,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         sample_sheet: barcodeKit ? (sampleSheet || undefined) : undefined,
                         trim_adapters: trimAdapters,
                         emit_summary: emitSummary,
+                        emit_moves: doradoMode === 'simplex' ? emitMoves : false,
                         ...(batchSize !== null && { dorado_batch_size: batchSize }),
                     }),
                     ...(inputSource === 'bam' && {
@@ -1266,7 +1323,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                         igv_report_max_sites: igvReportMaxSites,
                         igv_report_flanking_bp: igvReportFlankingBp,
                     }),
-                    ...(selectedWorkflow === 'clone' && {
+                    ...((selectedWorkflow === 'clone' || (selectedWorkflow === 'constructScreening' && runAssembly)) && {
                         wf_clone_assembly_tool: assemblyTool,
                         wf_clone_approx_size: assemblyApproxSize,
                         wf_clone_assm_coverage: assemblyCoverage,
@@ -1316,55 +1373,12 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     });
 
     const handleSubmit = () => {
+        const blockers = getSubmissionBlockers();
+        if (blockers.length > 0) {
+            setError(blockers.join(' '));
+            return;
+        }
         setError(null);
-        if (!jobName.trim()) {
-            setError('Please enter a job name');
-            return;
-        }
-        if (inputSource === 'pod5' && !pod5Dir.trim()) {
-            setError('Please specify a POD5 data directory');
-            return;
-        }
-        if (inputSource === 'pod5' && doradoMolecule === 'rna' && doradoMode === 'duplex') {
-            setError('RNA duplex is unsupported by the locked Dorado runtime.');
-            return;
-        }
-        if (inputSource === 'pod5' && doradoMode === 'duplex' && !duplexPairs.trim()) {
-            setError('Duplex basecalling requires a confined read-pairs file.');
-            return;
-        }
-        if (inputSource === 'pod5' && doradoMode === 'duplex' && barcodeKit) {
-            setError('Barcode classification and duplex cannot be combined in the locked runtime.');
-            return;
-        }
-        if (inputSource === 'pod5' && modifiedBases !== 'none' && (doradoMolecule !== 'dna' || doradoModel !== 'hac' || doradoMode !== 'simplex')) {
-            setError('Modified-base calling requires DNA HAC simplex.');
-            return;
-        }
-        if (inputSource === 'bam' && !bamPath.trim()) {
-            setError('Please specify a BAM file path');
-            return;
-        }
-        if (inputSource === 'fastq' && !fastqPath.trim()) {
-            setError('Please specify a FASTQ file path');
-            return;
-        }
-        if (molbioRevisionPairError) {
-            setError(molbioRevisionPairError);
-            return;
-        }
-        if (!usesMolBioReceiptLane && !availability.canMutateDomain) {
-            setError(availability.reason);
-            return;
-        }
-        if (!usesMolBioReceiptLane && managedReferenceBlocker) {
-            setError(managedReferenceBlocker);
-            return;
-        }
-        if (inputSource === 'fastq' && !hasValidFastqNumericControls) {
-            setError('FASTQ QC numeric controls must be finite integers within the displayed bounds.');
-            return;
-        }
         submitMutation.mutate();
     };
 
@@ -1514,7 +1528,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
     // Render
     // ============================================================================
     return (
-        <div className="nanopore-template p-4 lg:p-6 space-y-5 max-w-[1440px] mx-auto">
+        <div className="nanopore-template mx-auto max-w-[1480px] space-y-6 rounded-2xl border border-[var(--border-primary)] bg-[color-mix(in_srgb,var(--bg-secondary)_25%,#000)] p-4 shadow-[0_28px_90px_rgba(0,0,0,0.38)] lg:p-6">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -1536,125 +1550,49 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
             </div>
 
             {/* Operator-first workflow chooser: do not make users infer a workflow from low-level switches. */}
-            <section className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3" aria-label="Choose an NGS workflow">
-                <div>
-                    <h2 className="text-base font-semibold text-[var(--text-primary)]">Choose what you want to do</h2>
-                    <p className="text-sm text-[var(--text-secondary)] mt-1">Choose one path first. The form below then exposes only its compatible inputs and locked runtime settings.</p>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                    {[
-                        { key: 'clone' as const, title: 'Validate a known plasmid / clone', input: 'POD5, BAM, or FASTQ + saved MolBio revision', result: 'Vendor wf-clone-validation HTML report, assembly, construct evidence', tone: 'border-[var(--accent-secondary)]' },
-                        { key: 'plasmidQc' as const, title: 'QC plasmid reads', input: 'POD5, BAM, or FASTQ + saved MolBio revision', result: 'BMS plasmid QC, alignment and generic multimer evidence', tone: 'border-[var(--border-primary)]' },
-                        { key: 'constructScreening' as const, title: 'Screen a construct', input: 'POD5, BAM, or FASTQ + saved MolBio revision', result: 'BMS construct-screening evidence; not a competing clone report', tone: 'border-[var(--border-primary)]' },
-                        { key: 'fastqQc' as const, title: 'ONT FASTQ QC', input: 'FASTQ + saved MolBio revision', result: 'Read and alignment QC only; no clone report', tone: 'border-[var(--border-primary)]' },
-                        { key: 'bamQc' as const, title: 'Analyze aligned plasmid BAM', input: 'BAM + saved MolBio revision', result: 'BMS plasmid QC and alignment evidence', tone: 'border-[var(--border-primary)]' },
-                        { key: 'dna' as const, title: 'Basecall DNA simplex', input: 'DNA POD5', result: 'Dorado calls BAM, summary and runtime provenance', tone: 'border-[var(--border-primary)]' },
-                        { key: 'rna' as const, title: 'Basecall RNA', input: 'RNA POD5', result: 'RNA004 simplex calls BAM, trimming and provenance', tone: 'border-[var(--border-primary)]' },
-                        { key: 'duplex' as const, title: 'Basecall DNA duplex', input: 'DNA POD5 + validated read-pairs file', result: 'Duplex BAM with retained stereo model provenance', tone: 'border-[var(--border-primary)]' },
-                        { key: 'modified' as const, title: 'Call modified bases', input: 'DNA POD5', result: 'HAC simplex calls plus modkit tables', tone: 'border-[var(--border-primary)]' },
-                        { key: 'barcode' as const, title: 'Classify and demultiplex RBK114', input: 'DNA POD5', result: 'Canonical barcodeNN units and demux outputs', tone: 'border-[var(--border-primary)]' },
-                        { key: 'pooledAssignment' as const, title: 'Assign pooled FASTQ references', input: 'FASTQ + 2-96 exact saved revisions', result: 'Review-only assignment; explicit target release gates consensus', tone: 'border-[var(--accent-secondary)]' },
-                    ].map((workflow) => (
-                        <button
-                            key={workflow.key}
-                            type="button"
-                            onClick={() => selectWorkflow(workflow.key)}
-                            aria-pressed={selectedWorkflow === workflow.key}
-                            className={`rounded-lg border-2 p-3 text-left hover:bg-[var(--bg-tertiary)] transition-colors ${selectedWorkflow === workflow.key ? 'border-[var(--accent-secondary)] bg-[color-mix(in_srgb,var(--accent-secondary)_12%,transparent)] ring-1 ring-[var(--accent-secondary)]' : workflow.tone}`}
-                        >
-                            <div className="font-medium text-[var(--text-primary)] text-sm">{workflow.title}</div>
-                            <div className="text-xs text-[var(--text-secondary)] mt-1"><strong>Provide:</strong> {workflow.input}</div>
-                            <div className="text-xs text-[var(--text-secondary)] mt-1"><strong>Get:</strong> {workflow.result}</div>
-                        </button>
-                    ))}
-                </div>
-                <div className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/50 p-3 text-xs text-[var(--text-secondary)]">
-                    <strong className="text-[var(--text-primary)]">How to use this page:</strong> choose a workflow → choose the requested POD5, BAM, or FASTQ input → select a saved MolBio sequence and exact revision when required → enter a job name → submit. Completed jobs appear through <strong className="text-[var(--text-primary)]">Runs</strong>; no completed sequencing results are shown until an input is actually processed. Selecting a workflow never starts an instrument run.
-                </div>
-            </section>
+            <NanoporeWorkflowChooser
+                selectedWorkflow={selectedWorkflow}
+                onSelect={selectWorkflow}
+            />
 
-            {selectedWorkflow === 'pooledAssignment' && (
-                <PooledReferenceAssignmentPanel
-                    fastqPath={fastqPath}
-                    sequences={molbioSequences}
-                    onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
-                />
-            )}
-
-            <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
-            {/* Job Name */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
-                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Job Name *</label>
-                <input
-                    type="text"
-                    value={jobName}
-                    onChange={(e) => setJobName(e.target.value)}
-                    placeholder="my_nanopore_run"
-                    className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
-                />
-                {showGpuPinning && (
-                    <div className="mt-4">
-                        <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
-                            GPU Pinning {pinnedGpus.length > 0 && <span className="text-[var(--accent-secondary)]">({pinnedGpus.length} selected)</span>}
-                        </label>
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                onClick={() => setPinnedGpus([])}
-                                className={`px-3 py-2 rounded border text-sm transition-colors ${pinnedGpus.length === 0
-                                    ? 'text-[var(--text-primary)]'
-                                    : 'text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
-                                    }`}
-                                style={pinnedGpus.length === 0
-                                    ? {
-                                        borderColor: 'var(--accent-secondary)',
-                                        backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
-                                    }
-                                    : undefined}
-                            >
-                                Auto
-                            </button>
-                            {gpuOptions.map((gpu) => (
-                                <button
-                                    key={gpu.index}
-                                    onClick={() => {
-                                        setPinnedGpus((prev) => (
-                                            prev.includes(gpu.index)
-                                                ? prev.filter((g) => g !== gpu.index)
-                                                : [...prev, gpu.index].sort((a, b) => a - b)
-                                        ));
-                                    }}
-                                    className={`px-3 py-2 rounded border text-sm transition-colors ${pinnedGpus.includes(gpu.index)
-                                        ? 'text-[var(--text-primary)]'
-                                        : 'text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]'
-                                        }`}
-                                    style={pinnedGpus.includes(gpu.index)
-                                        ? {
-                                            borderColor: 'var(--accent-secondary)',
-                                            backgroundColor: 'color-mix(in srgb, var(--accent-secondary) 12%, transparent)',
-                                        }
-                                        : undefined}
-                                >
-                                    {gpu.label}
-                                </button>
-                            ))}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+            <section className={TASK_FLOW_PANEL} data-testid="ngs-job-input-section" aria-labelledby="ngs-job-input-heading">
+                <h2 id="ngs-job-input-heading" className={`${TASK_FLOW_LABEL} mb-3`}>1 · Job and input</h2>
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <div className={TASK_FLOW_CARD}>
+                    <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Job Name *</label>
+                    <input
+                        type="text"
+                        value={jobName}
+                        onChange={(e) => setJobName(e.target.value)}
+                        placeholder="my_nanopore_run"
+                        className="w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
+                    />
+                    {inputSource === 'fastq' ? (
+                        <div className="mt-4 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/60 px-3 py-2" data-testid="ngs-gpu-cpu-only">
+                            <div className="text-sm font-medium text-[var(--text-secondary)]">GPU assignment</div>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">CPU only for FASTQ input. GPU pinning is not applicable.</p>
                         </div>
-                        {pinnedGpus.length > 0 && (
-                            <label className="mt-3 flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={lockGpus}
-                                    onChange={(e) => setLockGpus(e.target.checked)}
-                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
-                                />
-                                <span className="text-xs text-[var(--text-secondary)]">Lock selected GPU(s)</span>
-                            </label>
-                        )}
-                    </div>
-                )}
-            </div>
+                    ) : (
+                    <label className="mt-4 block text-sm font-medium text-[var(--text-secondary)]">
+                        GPU assignment
+                        <select
+                            aria-label="GPU assignment"
+                            data-testid="ngs-gpu-assignment"
+                            value={pinnedGpus.length === 1 ? String(pinnedGpus[0]) : ''}
+                            onChange={(event) => setPinnedGpus(event.target.value ? [Number(event.target.value)] : [])}
+                            className="mt-1 w-full bg-[var(--bg-tertiary)] border border-[var(--border-primary)] rounded px-3 py-2 text-[var(--text-primary)]"
+                        >
+                            <option value="">Scheduler auto</option>
+                            {gpuOptions.map((gpu) => <option key={gpu.index} value={gpu.index}>{gpu.label}</option>)}
+                        </select>
+                    </label>
+                    )}
+                    {inputSource !== 'fastq' && pinnedGpus.length > 1 && <p role="alert" className="mt-2 text-xs text-amber-200">This saved job contains multiple GPU pins. Select one GPU or Scheduler auto before submitting this NGS job.</p>}
+                </div>
 
             {/* Data Source */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
+            <div className={TASK_FLOW_CARD}>
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Primary Input *</label>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
                     {(selectedWorkflow === 'clone' || selectedWorkflow === 'plasmidQc' || selectedWorkflow === 'constructScreening'
@@ -1673,7 +1611,9 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     ).map((source) => (
                         <button
                             key={source.key}
+                            type="button"
                             onClick={() => setInputSource(source.key)}
+                            aria-pressed={inputSource === source.key}
                             className={`px-3 py-2 rounded border text-sm text-left transition-colors ${inputSource === source.key
                                 ? ''
                                 : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)]'
@@ -1776,16 +1716,29 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                     </>
                 )}
             </div>
+                </div>
+            </section>
 
-            {/* Immutable MolBio reference plane */}
-            {selectedWorkflow !== 'pooledAssignment' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-8" data-testid="immutable-molbio-reference-panel">
+            {/* Shared MolBio and NGS reference library */}
+            <section className={TASK_FLOW_PANEL} data-testid="immutable-molbio-reference-panel" data-ngs-section="reference" aria-labelledby="ngs-reference-heading">
+                <h2 id="ngs-reference-heading" className={`${TASK_FLOW_LABEL} mb-3`}>2 · Reference / sample</h2>
+                {selectedWorkflow === 'pooledAssignment' ? (
+                    <PooledReferenceAssignmentPanel
+                        fastqPath={fastqPath}
+                        sequences={molbioSequences}
+                        onFastqBrowse={() => openPathPicker({ field: 'fastqPath', title: 'Select FASTQ File', mode: 'file', filter: 'fastq' })}
+                    />
+                ) : (
+                    <>
                     <div className="mb-3">
-                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Immutable MolBio reference</h2>
-                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Reference-requiring workflows use a saved sequence and one exact immutable revision. References are issued to the job only through a server receipt.</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Shared Experiment reference</h3>
+                        <p className="mt-1 text-xs text-[var(--text-secondary)]">Choose one exact revision from the references attached to this Experiment. MolBio and NGS use the same molecular sequence library; NGS receives runtime FASTA only through a server receipt.</p>
+                        {exactDomainExperimentId && molbioSequences.length === 0 && !molbioSequencesQuery.isLoading && !exactStateRevisionQuery.isLoading && (
+                            <p role="alert" className="mt-2 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-100">No shared reference is attached to this scientific-state revision. Return to the Experiment’s Molecular Inputs section to add one or more references.</p>
+                        )}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <label className="text-xs text-[var(--text-secondary)]">Saved MolBio sequence
+                        <label className="text-xs text-[var(--text-secondary)]">Experiment reference sequence
                             <select
                                 value={selectedMolbioSequenceId}
                                 onChange={(event) => {
@@ -1796,7 +1749,7 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                                 className="mt-1 w-full rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-2 py-2 text-sm text-[var(--text-primary)]"
                                 data-testid="molbio-sequence-selector"
                             >
-                                <option value="">Select saved sequence…</option>
+                                <option value="">Select attached reference…</option>
                                 {molbioSequences.map((sequence) => <option key={sequence.id} value={sequence.id}>{sequence.name}</option>)}
                             </select>
                         </label>
@@ -1840,14 +1793,15 @@ export function NanoporeTemplate({ onBack, initialValues }: NanoporeTemplateProp
                             setSelectedMolbioRevisionId('');
                         }} />
                     </div>
-                </div>
-            )}
-            {/* Server-managed immutable reference authority */}
-            {selectedWorkflow !== 'pooledAssignment' && (
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4 space-y-3">
+                    </>
+                )}
+            </section>
+            {/* Historical Domain-managed references remain visible only when reopening an older job. */}
+            {Boolean(initialValues?.ngsReferenceRevisionId) && selectedWorkflow !== 'pooledAssignment' && (
+            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-1 space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Managed Reference FASTA</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Only immutable server-managed revisions can enter managed-reference submission.</p></div>
-                    <div className="flex flex-wrap gap-1">{(['managed', 'paste', 'create', 'legacy'] as ReferenceTab[]).map((tab) => <button key={tab} type="button" onClick={() => setReferenceTab(tab)} className={`px-3 py-1.5 rounded text-xs font-medium ${referenceTab === tab ? 'text-[var(--text-primary)] bg-[var(--bg-tertiary)]' : 'text-[var(--text-secondary)]'}`}>{tab === 'managed' ? 'Managed' : tab === 'paste' ? 'Paste + Import' : tab === 'create' ? 'Create Managed' : 'Legacy Import'}</button>)}</div>
+                    <div><label className="block text-sm font-medium text-[var(--text-secondary)]">Historical Domain-managed reference</label><p className="mt-1 text-xs text-[var(--text-secondary)]">Read-only compatibility for a job created before the shared MolBio and NGS reference library.</p></div>
+                    <span className="rounded border border-border-primary px-2 py-1 text-xs text-[var(--text-secondary)]">Historical compatibility</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/40 p-3 text-xs">
                     <div>Project ID: <span className="font-mono break-all">{workspaceId || 'not selected'}</span></div><div>Global Experiment ID: <span className="font-mono break-all">{globalExperimentId || 'not selected'}</span></div>
@@ -1883,9 +1837,19 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             </div>
             )}
 
+                <section className={TASK_FLOW_PANEL} data-testid="ngs-basecalling-section" aria-labelledby="ngs-basecalling-heading">
+                    <h2 id="ngs-basecalling-heading" className={`${TASK_FLOW_LABEL} mb-3`}>3 · Basecalling and quality</h2>
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {inputSource === 'fastq' && (
+                <div className={`${TASK_FLOW_CARD} xl:col-span-2`}>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Already basecalled</div>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">Basecalling is not applicable to FASTQ input.</p>
+                </div>
+            )}
             {/* Locked P4 molecule, mode, and multiplexing controls */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3 xl:col-span-4">
+                <div className={`${TASK_FLOW_CARD} space-y-3`}>
+                    <div className="text-sm font-semibold text-[var(--text-primary)]">Runtime settings</div>
                     <div className="grid grid-cols-2 gap-3">
                         <label className="text-sm text-[var(--text-secondary)]">Molecule
                             <select value={doradoMolecule} onChange={(event) => {
@@ -1927,7 +1891,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* Basecalling Model */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
+                <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Basecalling Model</label>
                     <div className="grid grid-cols-3 gap-3">
                         {(Object.entries(DORADO_MODELS) as [DoradoModel, typeof DORADO_MODELS[DoradoModel]][]).map(([key, model]) => (
@@ -1953,7 +1917,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* Methylation Detection */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
+                <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-3">Modified Base Detection</label>
                     <div className="grid grid-cols-2 gap-3">
                         {(Object.entries(MODIFIED_BASES_OPTIONS) as [ModifiedBases, typeof MODIFIED_BASES_OPTIONS[ModifiedBases]][]).map(([key, opt]) => (
@@ -1980,7 +1944,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* POD5 basecall quality filter */}
             {inputSource === 'pod5' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
+                <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
                         Basecall Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">Q{minQscore}</span>
                         <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{getQscoreLabel(minQscore)}</span>
@@ -2006,7 +1970,7 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
 
             {/* BAM alignment quality filter */}
             {inputSource === 'bam' && (
-                <div className="bg-[var(--bg-secondary)] rounded-lg p-4 xl:col-span-4">
+                <div className={TASK_FLOW_CARD}>
                     <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
                         Alignment Quality Filter — <span className="text-[var(--accent-secondary)] font-semibold">MAPQ {'>='} {bamMinMapq}</span>
                     </label>
@@ -2028,9 +1992,15 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     </div>
                 </div>
             )}
+                    </div>
+                </section>
 
+            <section className={TASK_FLOW_PANEL} data-testid="ngs-analysis-section" aria-labelledby="ngs-analysis-heading">
+                <h2 id="ngs-analysis-heading" className={`${TASK_FLOW_LABEL} mb-3`}>4 · Analysis and advanced controls</h2>
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             {/* Analysis Toggles — mode-aware: only relevant options shown */}
-            <div className="bg-[var(--bg-secondary)] rounded-lg p-4 space-y-3 xl:col-span-6">
+            <div className={`${TASK_FLOW_CARD} space-y-3`}>
+                <div className="text-sm font-semibold text-[var(--text-primary)]">Analysis options</div>
                 <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">Analysis Options</label>
 
                 {/* Trim adapters — POD5 only */}
@@ -2083,40 +2053,39 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                     </label>
                 )}
 
-                {/* Assembly — vendor wf-clone-validation accepts FASTQ or BAM and BMS also accepts DNA POD5. */}
-                {(inputSource === 'fastq' || inputSource === 'bam' || (doradoMolecule === 'dna' && !barcodeKit)) && (
-                    <label className="flex items-center gap-3 cursor-pointer">
+                {/* Assembly is required by clone validation and optional for construct screening. */}
+                {(selectedWorkflow === 'clone' || selectedWorkflow === 'constructScreening') && (
+                    <label className={`flex items-center gap-3 ${selectedWorkflow === 'clone' ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}>
                         <input
                             type="checkbox"
-                            checked={runAssembly}
+                            checked={selectedWorkflow === 'clone' || runAssembly}
                             onChange={(e) => {
-                                const value = e.target.checked;
-                                setRunAssembly(value);
-                                if (value && inputSource === 'fastq') setRunFastqQc(false);
+                                if (selectedWorkflow === 'constructScreening') setRunAssembly(e.target.checked);
                             }}
-                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                            disabled={selectedWorkflow === 'clone'}
+                            className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)] disabled:cursor-not-allowed"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">Consensus assembly (wf-clone-validation)</span>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                {selectedWorkflow === 'clone' ? 'Required by the selected clone-validation workflow.' : 'Optional for construct screening.'}
+                            </p>
                         </div>
                     </label>
                 )}
 
-                {/* Standalone plasmid QC is an alternative to vendor clone validation for FASTQ inputs. */}
-                {inputSource === 'fastq' && (
+                {/* FASTQ/plasmid QC is an executable optional stage. */}
+                {fastqQcSettingAvailable && (
                     <label className="flex items-center gap-3 cursor-pointer">
                         <input
                             type="checkbox"
                             checked={runFastqQc}
-                            onChange={(e) => {
-                                const value = e.target.checked;
-                                setRunFastqQc(value);
-                                if (value) setRunAssembly(false);
-                            }}
+                            onChange={(e) => setRunFastqQc(e.target.checked)}
                             className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                         />
                         <div>
                             <span className="text-sm text-[var(--text-primary)]">FASTQ plasmid QC</span>
+                            <p className="text-xs text-[var(--text-secondary)]">Runs the optional alignment, coverage, consensus, and multimer evidence stage when this input supports it.</p>
                         </div>
                     </label>
                 )}
@@ -2188,18 +2157,22 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
             </div>
 
             {/* Advanced Options */}
-            <div className={`bg-[var(--bg-secondary)] rounded-lg p-4 ${runAssembly && !barcodeKit ? 'xl:col-span-12' : 'xl:col-span-6'}`}>
+            <div className={`${TASK_FLOW_CARD} ${cloneValidationControlsActive && !barcodeKit ? 'xl:col-span-2' : 'xl:col-span-1'}`}>
+                <div className="mb-3 text-sm font-semibold text-[var(--text-primary)]">Advanced controls</div>
                 <button
+                    type="button"
                     onClick={() => setShowAdvanced(!showAdvanced)}
-                    className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors w-full"
+                    className="flex w-full items-center gap-2 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+                    aria-expanded={showAdvanced}
+                    aria-controls="ngs-advanced-controls"
                 >
-                    <svg className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                    <svg className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
                     </svg>
-                    <span className="font-medium">Advanced Controls</span>
+                    <span className="font-medium">{showAdvanced ? 'Hide advanced controls' : 'Show advanced controls'}</span>
                 </button>
                 {showAdvanced && (
-                    <div className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
+                    <div id="ngs-advanced-controls" className="mt-4 space-y-4 pl-6 border-l-2 border-[var(--border-primary)]">
                         {inputSource === 'pod5' && (
                             <div>
                                 <label className="text-xs text-[var(--text-secondary)] mb-1 block">Dorado batch size (GPU memory tuning)</label>
@@ -2221,6 +2194,21 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                                     className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
                                 />
                                 <span className="text-sm text-[var(--text-primary)]">Emit sequencing summary TSV</span>
+                            </label>
+                        )}
+                        {inputSource === 'pod5' && (
+                            <label
+                                className={`flex items-center gap-2 ${doradoMode === 'duplex' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
+                                title={doradoMode === 'duplex' ? 'Move-tag emission is unavailable for duplex until its move semantics are qualified.' : 'Persist mv, ts, and ns move-table evidence for aligned signal views.'}
+                            >
+                                <input
+                                    type="checkbox"
+                                    checked={doradoMode === 'simplex' && emitMoves}
+                                    disabled={doradoMode === 'duplex'}
+                                    onChange={(e) => setEmitMoves(e.target.checked)}
+                                    className="w-4 h-4 rounded border-[var(--border-primary)] text-[var(--accent-secondary)] focus:ring-[var(--accent-secondary)]"
+                                />
+                                <span className="text-sm text-[var(--text-primary)]">Emit move tags for aligned signal views</span>
                             </label>
                         )}
                         {runModkit && canRunModkit && (
@@ -2470,58 +2458,47 @@ ATCGATCG…" rows={6} className="w-full bg-[var(--bg-tertiary)] border rounded p
                 )}
             </div>
             </div>
+            </section>
+            </div>
+
+            <div data-testid="ngs-review-bar" tabIndex={-1} className="flex flex-col gap-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-tertiary)] px-4 py-3 text-sm shadow-[0_16px_40px_rgba(0,0,0,0.24)] lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                    <div className="font-semibold text-[var(--text-primary)]">Review and submit <span className="ml-2 text-xs font-normal text-[var(--text-secondary)]">{jobName || 'unnamed job'}</span></div>
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold uppercase tracking-[0.12em]">
+                        <span data-testid="ngs-review-workflow" className="text-violet-200">WORKFLOW · {reviewWorkflowLabel}</span>
+                        <span data-testid="ngs-review-input" className={reviewInputReady ? 'text-emerald-300' : 'text-amber-200'}>● {reviewInputReady ? 'INPUT READY' : 'INPUT REQUIRED'} · {inputSource.toUpperCase()}</span>
+                        <span data-testid="ngs-review-mode" className="text-cyan-200">MODE · {reviewModeLabel}</span>
+                        <span data-testid="ngs-review-model" className="text-[var(--text-secondary)]">MODEL · {reviewModelLabel}</span>
+                        <span data-testid="ngs-review-gpu" className="text-emerald-300">GPU · {reviewGpuLabel}</span>
+                        <span data-testid="ngs-review-reference" className={reviewReferenceReady ? 'text-emerald-300' : 'text-amber-200'}>{reviewReferenceLabel}</span>
+                    </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                    <span className={`hidden rounded-full px-2 py-1 text-xs font-semibold sm:inline-flex ${canSubmit ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-200'}`}>{canSubmit ? 'Ready' : 'Needs input'}</span>
+                    <button type="button" onClick={handleValidate} className="rounded-lg border border-[var(--border-primary)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent-secondary)]">Validate</button>
+                    {selectedWorkflow !== 'pooledAssignment' && (
+                        <button
+                            type="button"
+                            onClick={handleSubmit}
+                            disabled={!canSubmit || submitMutation.isPending}
+                            title={reviewBlocker || undefined}
+                            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${canSubmit && !submitMutation.isPending ? 'text-[var(--text-primary)] shadow-lg' : 'cursor-not-allowed bg-[var(--bg-secondary)] text-[var(--text-secondary)]'}`}
+                            style={canSubmit && !submitMutation.isPending ? { backgroundColor: 'var(--accent-secondary)', boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)' } : undefined}
+                        >
+                            {submitMutation.isPending ? 'Submitting…' : 'Review and submit'}
+                        </button>
+                    )}
+                </div>
+            </div>
 
             {/* Error Display */}
             {error && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+                <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
                     {error}
                 </div>
             )}
-
-            {/* Submit Button */}
-            <div className="flex justify-end gap-3">
-                <button
-                    onClick={onBack}
-                    className="px-6 py-2.5 rounded-lg border border-[var(--border-primary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-secondary)] transition-colors"
-                >
-                    Cancel
-                </button>
-                {selectedWorkflow !== 'pooledAssignment' && (
-                    <button
-                        onClick={handleSubmit}
-                        disabled={!canSubmit || submitMutation.isPending}
-                        title={!usesMolBioReceiptLane && !availability.canMutateDomain
-                            ? availability.reason
-                            : (!usesMolBioReceiptLane && managedReferenceBlocker ? managedReferenceBlocker : undefined)}
-                        className={`px-6 py-2.5 rounded-lg font-medium transition-all ${canSubmit && !submitMutation.isPending
-                            ? 'text-[var(--text-primary)] shadow-lg'
-                            : 'bg-[var(--bg-tertiary)] text-[var(--text-secondary)] cursor-not-allowed'
-                            }`}
-                        style={canSubmit && !submitMutation.isPending ? {
-                            backgroundColor: 'var(--accent-secondary)',
-                            boxShadow: '0 10px 20px color-mix(in srgb, var(--accent-secondary) 30%, transparent)',
-                        } : undefined}
-                    >
-                        {submitMutation.isPending ? (
-                            <span className="flex items-center gap-2">
-                                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                </svg>
-                                Submitting...
-                            </span>
-                        ) : 'Submit Nanopore Job'}
-                    </button>
-                )}
-            </div>
-            {!canSubmit && (
-                <p className="text-right text-xs text-[var(--text-secondary)]">
-                    {!usesMolBioReceiptLane && !availability.canMutateDomain
-                        ? `Run disabled: ${availability.reason}`
-                        : (!usesMolBioReceiptLane && managedReferenceBlocker
-                            ? `Run disabled: ${managedReferenceBlocker}`
-                            : 'Run disabled until all required inputs and valid controls are present.')}
-                </p>
+            {!canSubmit && reviewBlocker && (
+                <p className="text-right text-xs text-[var(--text-secondary)]">Run disabled: {reviewBlocker}</p>
             )}
 
             {pathPicker && (

@@ -14,27 +14,37 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_SCHEMAS = {
     "capability_inventory_v1.schema.json",
     "effective_settings_v1.schema.json",
+    "effective_settings_v2.schema.json",
     "execution_configuration_v2.schema.json",
+    "execution_configuration_v3.schema.json",
     "frustrampnn_global_configuration_v2.schema.json",
     "workflow_component_request_v1.schema.json",
     "workflow_component_request_v2.schema.json",
+    "workflow_component_request_v3.schema.json",
     "workflow_component_result_v1.schema.json",
     "workflow_component_result_v2.schema.json",
+    "workflow_component_result_v3.schema.json",
     "frustrampnn_structure_map_v1.schema.json",
     "frustrampnn_landscape_v1.schema.json",
     "frustrampnn_landscape_v2.schema.json",
+    "frustrampnn_landscape_v3.schema.json",
     "frustrampnn_summary_v1.schema.json",
     "frustrampnn_summary_v2.schema.json",
+    "frustrampnn_summary_v3.schema.json",
     "frustrampnn_execution_receipt_v1.schema.json",
     "frustrampnn_execution_receipt_v2.schema.json",
+    "frustrampnn_execution_receipt_v3.schema.json",
     "frustrampnn_result_manifest_v1.schema.json",
     "frustrampnn_result_manifest_v2.schema.json",
+    "frustrampnn_result_manifest_v3.schema.json",
     "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1.schema.json",
     "frustrampnn_multistate_comparison_v1.schema.json",
     "frustrampnn_settings_v1.schema.json",
     "frustrampnn_statistics_v1.schema.json",
+    "frustrampnn_statistics_v2.schema.json",
     "settings_v1.schema.json",
+    "settings_v2.schema.json",
 }
 
 
@@ -355,10 +365,24 @@ def _summary_v2() -> dict:
     contracts = _contracts()
     from test_frustrampnn_phase3_contracts import _effective, _raw
     from services.frustrampnn.analysis import finalize_landscape_v2
-    from services.frustrampnn.configuration import execution_configuration
+    from services.frustrampnn.configuration import (
+        FrustraMPNNExecutionConfigurationV2,
+        configuration_sha256,
+        execution_configuration,
+    )
 
     effective = _effective()
-    configuration = execution_configuration(effective)
+    configuration_payload = execution_configuration(effective).model_dump(
+        mode="json", exclude_none=False
+    )
+    configuration_payload["configuration_id"] = "frustrampnn_execution_configuration_v2"
+    configuration_payload["schema_version"] = 2
+    configuration_payload["configuration_sha256"] = configuration_sha256(
+        configuration_payload
+    )
+    configuration = FrustraMPNNExecutionConfigurationV2.model_validate(
+        configuration_payload
+    )
     source = io.StringIO(_raw().decode("utf-8"))
     rows = list(csv.DictReader(source))
     for row in rows:

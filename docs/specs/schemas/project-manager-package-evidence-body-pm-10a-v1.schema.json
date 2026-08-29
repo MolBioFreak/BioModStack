@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-evidence-body.pm10a.v1",
+  "title": "PM-10A authenticated coverage evidence body v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_body_id",
+    "package_id",
+    "coverage_item",
+    "coverage_contract_id",
+    "source_commit",
+    "source_tree",
+    "coverage_denominator",
+    "producer_receipts",
+    "positive_observations",
+    "negative_observations",
+    "resolver_trace",
+    "evidence_kinds",
+    "native_owner_attestations",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-evidence-body.pm10a.v1"
+    },
+    "evidence_body_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "const": "PM-10A"
+    },
+    "coverage_item": {
+      "enum": [
+        "connector-commands",
+        "inbox-outbox",
+        "acknowledgements",
+        "lease-retry-reconciliation"
+      ]
+    },
+    "coverage_contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage_denominator": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "producer_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/receiptPointer"
+      }
+    },
+    "positive_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "negative_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "resolver_trace": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "evidence_kinds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "native_owner_attestations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "ngs-molbio-shared-package-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "connector-commands"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.connector-commands.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "connector-commands-denominator",
+              "connector-commands-positive-observation",
+              "connector-commands-negative-observation",
+              "connector-commands-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "inbox-outbox"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.inbox-outbox.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "inbox-outbox-denominator",
+              "inbox-outbox-positive-observation",
+              "inbox-outbox-negative-observation",
+              "inbox-outbox-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "acknowledgements"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.acknowledgements.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "acknowledgements-denominator",
+              "acknowledgements-positive-observation",
+              "acknowledgements-negative-observation",
+              "acknowledgements-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "lease-retry-reconciliation"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.lease-retry-reconciliation.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "lease-retry-reconciliation-denominator",
+              "lease-retry-reconciliation-positive-observation",
+              "lease-retry-reconciliation-negative-observation",
+              "lease-retry-reconciliation-resolver-trace"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

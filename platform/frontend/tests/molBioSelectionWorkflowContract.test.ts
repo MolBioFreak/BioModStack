@@ -7,6 +7,19 @@ const readSource = (relativePath: string) => readFileSync(`${frontendRoot}/${rel
 
 const dialogSource = readSource('src/components/MolBioToolkit/SelectionActionDialog.tsx');
 const toolkitSource = readSource('src/components/MolBioToolkit/MolBioToolkitV2.tsx');
+
+test('saved molecular revisions use compact status and collapsed revision details', () => {
+    assert.match(toolkitSource, /Viewing saved revision/);
+    assert.match(toolkitSource, /Read-only/);
+    assert.match(toolkitSource, /<summary[^>]*>Revision details<\/summary>/);
+    assert.match(toolkitSource, /Open latest editable version/);
+    assert.doesNotMatch(toolkitSource, /Exact immutable revision · read-only authority/);
+});
+
+test('the Project Construct Shelf labels the exact Project-owned collection', () => {
+    assert.match(toolkitSource, /Project constructs \(\$\{sequences\.length\}\)/);
+    assert.match(toolkitSource, /Constructs in this Project/);
+});
 const viewerSource = readSource('src/components/MolBioToolkit/SequenceViewer.tsx');
 const gcTrackSource = readSource('src/components/MolBioToolkit/GCContentTrack.tsx');
 const primerPanelSource = readSource('src/components/MolBioToolkit/panels/PrimerPanel.tsx');

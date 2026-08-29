@@ -8,6 +8,7 @@ interface ProjectInspectorProps {
     onClose?: () => void;
     onOpenCanonical: () => void;
     onOpenNgsMolBio?: () => void;
+    onOpenNgsRuns?: () => void;
     onAddExisting: () => void;
     onCreateDomain: () => void;
     onEdit: () => void;
@@ -38,6 +39,7 @@ export function ProjectInspector({
     onClose,
     onOpenCanonical,
     onOpenNgsMolBio,
+    onOpenNgsRuns,
     onAddExisting,
     onCreateDomain,
     onEdit,
@@ -52,10 +54,21 @@ export function ProjectInspector({
     const identity = selection.canonical_identity;
     const reconciliationIssue = selection.reconciliation.state !== 'current';
     const canOpen = actions.has('open') || Boolean(surface?.available_actions.includes('open'));
-    const isNgsMolBioDomain = selection.node_type === 'domain_experiment'
-        && (selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
+    const isWorkflowDomain = selection.node_type === 'domain_experiment'
+        && (selection.summary.schema === 'bms.protein-in-silico-experiment.v3'
+            || selection.summary.schema === 'bms.domain-experiment.v4'
+            || selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
             || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
             || Array.isArray(selection.summary.planned_capability_ids));
+    const domainPayload = selection.summary.domain_payload;
+    const domainPayloadSchema = domainPayload && typeof domainPayload === 'object' && !Array.isArray(domainPayload)
+        ? domainPayload.schema
+        : null;
+    const isNgsDomain = selection.node_type === 'domain_experiment'
+        && (selection.summary.schema === 'bms.ngs-molbio-experiment.v2'
+            || selection.summary.schema === 'bms.ngs-molbio-experiment.v1'
+            || domainPayloadSchema === 'bms.ngs-molbio-experiment.v2'
+            || domainPayloadSchema === 'bms.ngs-molbio-experiment.v1');
 
     return (
         <aside aria-label="Selected node inspector" aria-busy={busy || undefined} className="flex h-full min-h-0 flex-col border-l border-border-primary bg-surface-secondary">
@@ -70,7 +83,7 @@ export function ProjectInspector({
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                     {selection.node_type === 'domain_experiment' && actions.has('attach') && (
-                        <button type="button" onClick={onAddExisting} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-secondary">Add existing</button>
+                        <button type="button" onClick={onAddExisting} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-surface-secondary">Attach existing record</button>
                     )}
                     {selection.node_type === 'global_experiment' && (
                         <button type="button" onClick={onCreateDomain} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">New Domain Experiment</button>
@@ -78,8 +91,11 @@ export function ProjectInspector({
                     {canOpen && (
                         <button type="button" onClick={onOpenCanonical} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open canonical source</button>
                     )}
-                    {isNgsMolBioDomain && onOpenNgsMolBio && (
-                        <button type="button" onClick={onOpenNgsMolBio} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open NGS/MolBio workspace</button>
+                    {isWorkflowDomain && onOpenNgsMolBio && (
+                        <button type="button" onClick={onOpenNgsMolBio} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open Plans &amp; Runs workspace</button>
+                    )}
+                    {isNgsDomain && onOpenNgsRuns && (
+                        <button type="button" onClick={onOpenNgsRuns} className="rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent outline-none focus:ring-2 focus:ring-accent">Open NGS Run Inspector</button>
                     )}
                     {actions.has('edit') && <button type="button" onClick={onEdit} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Edit revision</button>}
                     {(actions.has('add_note') || ['project', 'global_experiment', 'domain_experiment'].includes(selection.node_type)) && <button type="button" onClick={onRecord} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content focus:ring-2 focus:ring-accent">Add record</button>}

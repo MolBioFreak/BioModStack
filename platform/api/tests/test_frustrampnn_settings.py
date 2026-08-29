@@ -44,6 +44,20 @@ def _residue(
     }
 
 
+def _region(
+    sequence_start: int = 10,
+    sequence_end: int = 20,
+    *,
+    instance: str = "entity-1",
+    chain: str = "A",
+) -> dict[str, object]:
+    return {
+        **_entity(instance, chain),
+        "sequence_start": sequence_start,
+        "sequence_end": sequence_end,
+    }
+
+
 def _requested(**overrides):
     settings = _settings_module()
     payload = {
@@ -175,9 +189,7 @@ def test_requested_models_are_closed_strict_and_canonical() -> None:
     )
 
 
-def test_requested_selection_modes_and_thresholds_remain_fail_closed() -> None:
-    settings = _settings_module()
-
+def test_requested_selection_modes_remain_fail_closed() -> None:
     with pytest.raises(ValidationError, match="all_protein_entities"):
         _requested(
             protein_selection={
@@ -192,6 +204,68 @@ def test_requested_selection_modes_and_thresholds_remain_fail_closed() -> None:
             protein_selection={
                 "mode": "selected_residues",
                 "residues": [_residue(), _residue()],
+            }
+        )
+    regions = _requested(
+        protein_selection={
+            "mode": "selected_regions",
+            "regions": [_region(30, 40), _region(10, 20)],
+        }
+    )
+    assert [
+        (item.sequence_start, item.sequence_end)
+        for item in regions.protein_selection.regions
+    ] == [(10, 20), (30, 40)]
+
+
+def test_effective_region_validation_never_expands_caller_controlled_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings_module()
+    requested = _requested(
+        protein_selection={
+            "mode": "selected_regions",
+            "regions": [_region(10, 10)],
+        }
+    )
+    effective = _effective(
+        requested=requested,
+        chains=(
+            _resolved_chain(
+                _resolved_residue(10, model_position=9, wt="L"),
+            ),
+        ),
+    )
+    payload = effective.model_dump(mode="json", exclude_none=False)
+    payload["requested_settings"]["protein_selection"]["regions"][0][
+        "sequence_end"
+    ] = 10**12
+    real_range = range
+
+    def bounded_range(*values: int):
+        if any(abs(value) > 10_000 for value in values):
+            raise RuntimeError("caller-controlled interval was expanded")
+        return real_range(*values)
+
+    monkeypatch.setattr(settings, "range", bounded_range, raising=False)
+    with pytest.raises(ValidationError, match="coverage|span"):
+        settings.FrustraMPNNEffectiveSettings.model_validate(payload, strict=True)
+
+
+def test_requested_selection_modes_reject_overlapping_or_invalid_regions() -> None:
+    settings = _settings_module()
+    with pytest.raises(ValidationError, match="overlap"):
+        _requested(
+            protein_selection={
+                "mode": "selected_regions",
+                "regions": [_region(10, 20), _region(20, 30)],
+            }
+        )
+    with pytest.raises(ValidationError, match="sequence_start"):
+        _requested(
+            protein_selection={
+                "mode": "selected_regions",
+                "regions": [_region(20, 10)],
             }
         )
     for high_max, minimal_min in (
@@ -210,6 +284,87 @@ def test_requested_selection_modes_and_thresholds_remain_fail_closed() -> None:
             )
 
 
+def test_batching_settings_v2_are_strict_bounded_and_historically_compatible() -> None:
+    settings = _settings_module()
+    defaults = settings.default_settings()
+
+    assert defaults.model_dump(mode="json", exclude_none=False) == {
+        "schema_name": "frustrampnn_settings",
+        "schema_version": 2,
+        "settings_value_origin": "bms_default",
+        "batching_enabled": False,
+        "structures_per_job": 1,
+        "protein_selection": {
+            "mode": "all_protein_entities",
+            "entities": [],
+            "regions": [],
+            "residues": [],
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "",
+        },
+        "classification_policy": {
+            "mode": "canonical",
+            "high_max": -1.0,
+            "minimal_min": 0.58,
+        },
+    }
+
+    supplied = defaults.model_dump(mode="json", exclude_none=False)
+    supplied.pop("settings_value_origin")
+    supplied.update({"batching_enabled": True, "structures_per_job": 250})
+    validated = settings.validate_complete_requested_settings(supplied)
+    assert validated.batching_enabled is True
+    assert validated.structures_per_job == 250
+    assert validated.settings_value_origin == "operator_request"
+
+    schema = settings.complete_requested_settings_schema()
+    assert {"batching_enabled", "structures_per_job"} <= set(schema["required"])
+    assert schema["properties"]["structures_per_job"]["minimum"] == 1
+    assert schema["properties"]["structures_per_job"]["maximum"] == 250
+
+    for field, value in (
+        ("batching_enabled", 1),
+        ("structures_per_job", True),
+        ("structures_per_job", 0),
+        ("structures_per_job", 251),
+    ):
+        invalid = dict(supplied)
+        invalid[field] = value
+        with pytest.raises((ValidationError, settings.RequestedSettingsPayloadError)):
+            settings.validate_complete_requested_settings(invalid)
+
+    historical_payload = {
+        "schema_name": "frustrampnn_settings",
+        "schema_version": 1,
+        "settings_value_origin": "bms_default",
+        "protein_selection": {
+            "mode": "all_protein_entities",
+            "entities": [],
+            "regions": [],
+            "residues": [],
+        },
+        "source_structure": {
+            "selected_model_number": 1,
+            "preferred_altloc": "",
+        },
+        "classification_policy": {
+            "mode": "canonical",
+            "high_max": -1.0,
+            "minimal_min": 0.58,
+        },
+    }
+    historical = settings.validate_persisted_requested_settings(historical_payload)
+    assert historical.schema_version == 1
+    assert historical.batching_enabled is False
+    assert historical.structures_per_job == 1
+    assert (
+        settings.requested_settings_sha256(historical)
+        == "2c0c0061521132498189fca37b443c7fe6f6a4aded0bc3dfa62abc3f35de6d98"
+    )
+
+
 def test_default_settings_match_installed_behavior_and_have_explicit_value_sources() -> None:
     settings = _settings_module()
     defaults = settings.default_settings()
@@ -226,9 +381,12 @@ def test_default_settings_match_installed_behavior_and_have_explicit_value_sourc
 
     effective = _effective(defaults)
     assert effective.value_sources.model_dump(mode="json") == {
+        "batching_enabled": "bms_default",
+        "structures_per_job": "bms_default",
         "protein_selection": {
             "mode": "bms_default",
             "entities": "bms_default",
+            "regions": "bms_default",
             "residues": "bms_default",
         },
         "source_structure": {
@@ -256,6 +414,8 @@ def test_explicit_default_values_remain_operator_request_after_durable_reparse()
 
     effective = _effective(explicit)
     expected_sources = effective.value_sources.model_dump(mode="json")
+    assert expected_sources.pop("batching_enabled") == "operator_request"
+    assert expected_sources.pop("structures_per_job") == "operator_request"
     assert {
         source
         for group in expected_sources.values()
@@ -358,6 +518,36 @@ def test_resolver_builds_complete_deterministic_effective_settings() -> None:
     assert effective.value_sources.classification_policy.mode == "operator_request"
     assert "pdb_chain_id" not in requested.model_dump(mode="json")
     assert "model_position" not in requested.model_dump(mode="json")
+
+
+def test_selected_regions_bind_exact_sequence_coverage_and_reject_missing_positions() -> None:
+    requested = _requested(
+        protein_selection={
+            "mode": "selected_regions",
+            "regions": [_region(10, 12)],
+        }
+    )
+    complete = _resolved_chain(
+        _resolved_residue(10, model_position=9, wt="L"),
+        _resolved_residue(11, model_position=10, wt="A"),
+        _resolved_residue(12, model_position=11, wt="V"),
+    )
+
+    effective = _effective(requested, (complete,))
+
+    assert [
+        residue.sequence_index for residue in effective.resolved_chains[0].residues
+    ] == [10, 11, 12]
+    with pytest.raises((TypeError, ValueError), match="region.*coverage|requested region"):
+        _effective(
+            requested,
+            (
+                _resolved_chain(
+                    _resolved_residue(10, model_position=9, wt="L"),
+                    _resolved_residue(12, model_position=11, wt="V"),
+                ),
+            ),
+        )
 
 
 def test_resolved_chain_order_is_canonical_before_effective_hashing() -> None:

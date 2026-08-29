@@ -96,6 +96,99 @@ def _read_json_object(path: Path, *, raw_bytes: bytes | None = None) -> dict[str
     return payload
 
 
+def _reject_symlink_components(root: Path, candidate: Path) -> None:
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise SequenceQcManifestError("manifest path escapes persisted job result root") from exc
+    cursor = root
+    for component in relative.parts:
+        cursor /= component
+        try:
+            if cursor.is_symlink():
+                raise SequenceQcManifestError(f"manifest path traverses a symlink: {cursor}")
+        except OSError as exc:
+            raise SequenceQcManifestError("manifest path cannot be inspected safely") from exc
+
+
+def read_manifest_json_nofollow(
+    path: Path,
+    *,
+    max_bytes: int = MAX_MANIFEST_BYTES,
+    pinned_root_descriptor: Path | None = None,
+) -> tuple[dict[str, Any], bytes, str, int]:
+    """Read one manifest through component-wise no-follow descriptors."""
+    if pinned_root_descriptor is None:
+        absolute = Path(os.path.abspath(path))
+        components = absolute.parts[1:]
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    else:
+        try:
+            components = path.relative_to(pinned_root_descriptor).parts
+        except ValueError as exc:
+            raise SequenceQcManifestError("manifest path escapes pinned result root") from exc
+        descriptor = os.open(pinned_root_descriptor, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for index, component in enumerate(components):
+            final = index == len(components) - 1
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if not final:
+                flags |= os.O_DIRECTORY
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise SequenceQcManifestError("manifest path is not a regular file")
+        size_bytes = int(file_stat.st_size)
+        if size_bytes < 2 or size_bytes > max_bytes:
+            raise SequenceQcManifestError("manifest size is invalid")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            raw_bytes = handle.read(max_bytes + 1)
+        descriptor = -1
+    except (OSError, ValueError) as exc:
+        raise SequenceQcManifestError("manifest path is unsafe") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(raw_bytes) != size_bytes:
+        raise SequenceQcManifestError("manifest changed while it was read")
+    payload = _read_json_object(path, raw_bytes=raw_bytes)
+    return payload, raw_bytes, hashlib.sha256(raw_bytes).hexdigest(), size_bytes
+
+
+def find_canonical_fastq_manifest(
+    result_root: str | Path,
+    *,
+    pinned_root_descriptor: bool = False,
+) -> Path:
+    """Resolve only ``fastq_qc/qc_manifest.json`` below one job root."""
+    declared_root = Path(result_root).expanduser()
+    if not pinned_root_descriptor and declared_root.is_symlink():
+        raise SequenceQcManifestError("job result root is an unsafe symlink")
+    if pinned_root_descriptor:
+        root = declared_root
+    else:
+        try:
+            root = declared_root.resolve(strict=True)
+        except OSError as exc:
+            raise SequenceQcManifestError("job result root is unavailable") from exc
+    if not root.is_dir():
+        raise SequenceQcManifestError("job result root is not a directory")
+    manifest_path = root / "fastq_qc" / MANIFEST_FILENAME
+    _reject_symlink_components(root, manifest_path)
+    if not manifest_path.is_file():
+        raise SequenceQcManifestError("canonical sequence-QC manifest is unavailable")
+    if pinned_root_descriptor:
+        return manifest_path
+    try:
+        resolved = manifest_path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise SequenceQcManifestError("canonical sequence-QC manifest escapes result root") from exc
+    return resolved
+
+
 def _resolve_manifest_relative_path(manifest_dir: Path, raw_path: object) -> Path:
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise SequenceQcManifestError("artifact path must be a non-empty string")
@@ -511,16 +604,23 @@ def _validate_job_id(job_id: str) -> str:
     return normalized
 
 
-def find_manifest_in_result_root(result_root: str | Path) -> Path:
+def find_manifest_in_result_root(
+    result_root: str | Path,
+    *,
+    pinned_root_descriptor: bool = False,
+) -> Path:
     """Find a sequence-QC manifest below one already-authorized job root."""
 
     declared_root = Path(result_root).expanduser()
-    if declared_root.is_symlink():
+    if not pinned_root_descriptor and declared_root.is_symlink():
         raise SequenceQcManifestError("job result root is an unsafe symlink")
-    try:
-        root = declared_root.resolve(strict=True)
-    except OSError as exc:
-        raise SequenceQcManifestError("job result root is unavailable") from exc
+    if pinned_root_descriptor:
+        root = declared_root
+    else:
+        try:
+            root = declared_root.resolve(strict=True)
+        except OSError as exc:
+            raise SequenceQcManifestError("job result root is unavailable") from exc
     if not root.is_dir():
         raise SequenceQcManifestError("job result root is not a directory")
 
@@ -533,6 +633,14 @@ def find_manifest_in_result_root(result_root: str | Path) -> Path:
 
     seen: set[Path] = set()
     for candidate in candidates:
+        _reject_symlink_components(root, candidate)
+        if pinned_root_descriptor:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.is_file():
+                return candidate
+            continue
         try:
             resolved = candidate.resolve(strict=True)
         except OSError:

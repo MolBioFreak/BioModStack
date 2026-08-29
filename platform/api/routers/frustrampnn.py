@@ -5,6 +5,8 @@ Provides endpoint for running FrustraMPNN on PDB structures.
 Returns per-residue frustration profiles for all amino acid mutations.
 """
 
+import base64
+import copy
 import hashlib
 import json
 import logging
@@ -34,6 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from PIL import Image, UnidentifiedImageError
 
 from database import (
+    ConformationalMappingArtifact,
+    ConformationalMappingRequest,
     FrustraMPNNArtifact,
     FrustraMPNNComparison,
     FrustraMPNNComparisonRow,
@@ -41,11 +45,13 @@ from database import (
     FrustraMPNNGuidancePlan,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     FrustraMPNNReview,
     FrustraMPNNReviewArtifact,
     Job,
     get_session,
 )
+from services.scientific_artifacts import resolve_json_value
 from services.frustrampnn.analytics import multidimensional_points, parse_dataset_ids
 from services.frustrampnn.comparison import (
     ComparisonCompatibilityError,
@@ -61,6 +67,11 @@ from services.frustrampnn.derived import (
     persist_comparison,
     persist_guidance_plan,
 )
+from services.frustrampnn.persistence import landscape_page as persisted_landscape_page
+from services.frustrampnn.statistics_jobs import (
+    FrustraMPNNStatisticsJobError,
+    retry_statistics_child,
+)
 from services.frustrampnn.guidance import GuidanceValidationError, build_guidance_plan
 from services.frustrampnn.contracts import (
     ContractValidationError,
@@ -70,8 +81,10 @@ from services.frustrampnn.contracts import (
     load_schema,
     validate_schema,
 )
+from services.conformational_mapping.contracts import validate_schema as validate_cm_schema
 from services.frustrampnn.configuration import (
     FrustraMPNNExecutionConfigurationV2,
+    FrustraMPNNExecutionConfigurationV3,
     execution_configuration,
 )
 from services.frustrampnn.jobs import (
@@ -80,9 +93,19 @@ from services.frustrampnn.jobs import (
     create_child_job,
     create_reanalysis_child,
     design_selections,
+    discard_uncommitted_child_artifacts,
     handoff_selection,
     upload_selection,
+    workflow_selection,
 )
+from services.structure_dataset_fanout import (
+    FANOUT_SCHEMA,
+    StructureDatasetBatch,
+    StructureDatasetFanoutError,
+    StructureDatasetMember,
+    fan_out_structure_dataset,
+)
+from services import stage_reporting
 from services.frustrampnn.settings import (
     FrustraMPNNEffectiveSettings,
     FrustraMPNNRequestedSettings,
@@ -306,6 +329,42 @@ class FrustraMPNNChildResultReceiptResponse(BaseModel):
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
 
 
+class FrustraMPNNBatchManifestReceiptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_name: Literal["bms_frustrampnn_scheduler_batch"]
+    schema_version: Literal[3]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+    expected_cardinality: int = Field(ge=1)
+    ordered_candidate_ids: list[str] = Field(min_length=1)
+    ordered_invocation_ids: list[str] = Field(min_length=1)
+
+
+class FrustraMPNNBatchTerminalRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ordinal: int = Field(ge=0)
+    candidate_id: str
+    invocation_id: str
+    pdb_stem: str
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    started_at: str
+    terminal_at: str
+    status: Literal["succeeded", "failed"]
+    failure_code: str | None
+    diagnostic: str | None = Field(default=None, max_length=1024)
+    row_count: int | None = Field(default=None, ge=0)
+    output_csv: str | None
+    output_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class FrustraMPNNGroupedTerminalArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    artifact_id: str
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(ge=1)
+    records: list[FrustraMPNNBatchTerminalRecordResponse] = Field(min_length=1)
+
+
 class FrustraMPNNChildReceiptResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: str
@@ -322,8 +381,40 @@ class FrustraMPNNChildReceiptResponse(BaseModel):
     settings_value_origin: Literal["bms_default", "operator_request"]
     requested_settings: FrustraMPNNRequestedSettings
     requested_settings_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    batch_manifest: FrustraMPNNBatchManifestReceiptResponse
+    grouped_terminal_artifact: FrustraMPNNGroupedTerminalArtifactResponse | None = None
     candidates: list[FrustraMPNNChildCandidateReceiptResponse]
     results: list[FrustraMPNNChildResultReceiptResponse]
+
+
+class FrustraMPNNFanoutChildResponse(FrustraMPNNChildReceiptResponse):
+    structure_count: int = Field(ge=1)
+
+
+class FrustraMPNNStructureDatasetFanoutResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_name: Literal["bms.structure-dataset-fanout.v1"]
+    fanout_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parent_job_id: str
+    selected_structure_count: int = Field(ge=1)
+    structures_per_job: int = Field(ge=1)
+    effective_structures_per_job: int = Field(ge=1)
+    replayed: bool
+    child_jobs: list[FrustraMPNNFanoutChildResponse] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_canonical_partition(self):
+        full_groups, remainder = divmod(
+            self.selected_structure_count, self.effective_structures_per_job
+        )
+        expected = [self.effective_structures_per_job] * full_groups
+        if remainder:
+            expected.append(remainder)
+        observed = [child.structure_count for child in self.child_jobs]
+        if observed != expected:
+            raise ValueError("child_jobs do not form the canonical partition")
+        return self
 
 
 class FrustraMPNNHandoffMetadataResponse(BaseModel):
@@ -394,19 +485,33 @@ Phase4Field = Literal[
 
 
 class FrustraMPNNStatisticsDocument(RootModel[dict[str, JsonValue]]):
-    """Exact persisted statistics authority validated by its canonical schema."""
+    """Exact historical-v1 or current-v2 persisted statistics authority."""
 
     @model_validator(mode="before")
     @classmethod
     def validate_statistics_schema(cls, value: Any) -> Any:
-        validate_schema("frustrampnn_statistics_v1", value)
+        if not isinstance(value, Mapping):
+            raise ValueError("FrustraMPNN statistics document must be an object")
+        schema_version = value.get("schema_version")
+        if schema_version == 1:
+            schema_id = "frustrampnn_statistics_v1"
+        elif schema_version == 2:
+            schema_id = "frustrampnn_statistics_v2"
+        else:
+            raise ValueError("FrustraMPNN statistics schema generation is unsupported")
+        validate_schema(schema_id, value)
         return value
 
     @classmethod
     def __get_pydantic_json_schema__(
         cls, _core_schema: Any, _handler: Any
     ) -> dict[str, Any]:
-        return load_schema("frustrampnn_statistics_v1")
+        return {
+            "oneOf": [
+                load_schema("frustrampnn_statistics_v1"),
+                load_schema("frustrampnn_statistics_v2"),
+            ]
+        }
 
 
 class FrustraMPNNSummaryV2Document(RootModel[dict[str, JsonValue]]):
@@ -423,6 +528,22 @@ class FrustraMPNNSummaryV2Document(RootModel[dict[str, JsonValue]]):
         cls, _core_schema: Any, _handler: Any
     ) -> dict[str, Any]:
         return load_schema("frustrampnn_summary_v2")
+
+
+class FrustraMPNNSummaryV3Document(RootModel[dict[str, JsonValue]]):
+    """Exact current core summary authority validated by its canonical schema."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_summary_schema(cls, value: Any) -> Any:
+        validate_schema("frustrampnn_summary_v3", value)
+        return value
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, _core_schema: Any, _handler: Any
+    ) -> dict[str, Any]:
+        return load_schema("frustrampnn_summary_v3")
 
 
 class FrustraMPNNHistoricalSummaryV1Document(RootModel[dict[str, JsonValue]]):
@@ -470,7 +591,7 @@ class FrustraMPNNStatisticsResponse(BaseModel):
     parent_job_id: str
     candidate_id: str
     invocation_id: str
-    authority_version: Literal["v2", "historical_v1"]
+    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     missing_fields: list[Phase4Field]
     settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
@@ -938,12 +1059,22 @@ class FrustraMPNNExecutionReceiptResponse(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
 
 
+class FrustraMPNNResultSourceIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    design_id: str | None
+    artifact_id: str | None
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    candidate_id: str
+
+
 class FrustraMPNNResultItemResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     invocation_id: str
     parent_job_id: str
     parent_workflow_id: str
     candidate_id: str
+    operator_label: str = Field(min_length=1, max_length=160)
+    source_identity: FrustraMPNNResultSourceIdentityResponse
     design_id: str | None
     requiredness: str
     source_artifact_id: str | None
@@ -952,7 +1083,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     summary_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at: datetime
-    authority_version: Literal["v2", "historical_v1"]
+    authority_version: Literal["v3", "v2", "historical_v1"]
     availability: bool
     statistics_available: bool
     missing_fields: list[Phase4Field]
@@ -964,7 +1095,7 @@ class FrustraMPNNResultItemResponse(BaseModel):
     statistics_json: FrustraMPNNStatisticsDocument | None = None
     comparison_compatibility_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: Literal["succeeded", "failed", "not_run"]
-    component_contract_version: Literal["1.0", "2.0"]
+    component_contract_version: Literal["1.0", "2.0", "3.0"]
     runtime_identity: FrustraMPNNRuntimeIdentityResponse
     runtime_identity_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     gpu_provenance: FrustraMPNNGpuProvenanceResponse | None = None
@@ -973,7 +1104,11 @@ class FrustraMPNNResultItemResponse(BaseModel):
 
 
 class FrustraMPNNResultDetailResponse(FrustraMPNNResultItemResponse):
-    summary: FrustraMPNNSummaryV2Document | FrustraMPNNHistoricalSummaryV1Document
+    summary: (
+        FrustraMPNNSummaryV3Document
+        | FrustraMPNNSummaryV2Document
+        | FrustraMPNNHistoricalSummaryV1Document
+    )
     terminal_result: FrustraMPNNTerminalResultResponse
     execution_receipt: FrustraMPNNExecutionReceiptResponse | None
 
@@ -984,6 +1119,26 @@ class FrustraMPNNResultListResponse(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1, le=200)
     offset: int = Field(ge=0)
+
+
+class FrustraMPNNStatisticsAnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_id: str
+    parent_job_id: str
+    invocation_id: str
+    state: Literal["queued", "running", "completed", "failed"]
+    attempt_count: int = Field(ge=0)
+    core_artifact_id: str
+    core_landscape_sha256: str
+    core_manifest_sha256: str
+    formula_version: str
+    policy_version: str
+    package_version: str
+    schema_version: Literal[1]
+    artifact_sha256: str | None
+    statistics_sha256: str | None
+    diagnostic: str | None
 
 
 class FrustraMPNNLandscapeRowResponse(BaseModel):
@@ -1721,9 +1876,12 @@ class FrustraMPNNSafeRuntimeProjection(BaseModel):
 class FrustraMPNNSafeExecutionConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    configuration_id: Literal["frustrampnn_execution_configuration_v2"]
+    configuration_id: Literal[
+        "frustrampnn_execution_configuration_v2",
+        "frustrampnn_execution_configuration_v3",
+    ]
     schema_name: Literal["frustrampnn_execution_configuration"]
-    schema_version: Literal[2]
+    schema_version: Literal[2, 3]
     tool_id: Literal["frustrampnn"]
     tool_version: Literal["MegaScale"]
     effective_settings: FrustraMPNNEffectiveSettings
@@ -1741,6 +1899,17 @@ class FrustraMPNNSafeExecutionConfiguration(BaseModel):
     structure_map_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     normalized_pdb_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _configuration_generation_is_paired(
+        self,
+    ) -> "FrustraMPNNSafeExecutionConfiguration":
+        if (self.configuration_id, self.schema_version) not in {
+            ("frustrampnn_execution_configuration_v2", 2),
+            ("frustrampnn_execution_configuration_v3", 3),
+        }:
+            raise ValueError("execution configuration generation is inconsistent")
+        return self
 
 
 class FrustraMPNNSettingsValidationResponse(BaseModel):
@@ -1811,6 +1980,104 @@ def _source_resolution_http_error(
 async def _child_job_receipt(session: AsyncSession, child: Job) -> dict[str, Any]:
     """Serialize a child that the service has already committed atomically."""
     return await child_receipt(session, child=child)
+
+
+def _frustrampnn_consumer_workflow(parent: Job) -> str:
+    """Resolve the supported consumer while the generic API owner keeps fan-out."""
+    model_id = str(parent.model_id or "").strip().lower()
+    mode = str(parent.mode or "").strip().lower()
+    parent_params = getattr(parent, "params", None)
+    params = parent_params if isinstance(parent_params, Mapping) else {}
+    if model_id == "conformational_mapping" or mode == "map":
+        return "conformational_mapping"
+    if "antibody" in model_id or "antibody" in mode:
+        return "antibody_denovo"
+    if mode == "complex_prediction" or any(
+        params.get(key)
+        for key in ("complex_components", "complex_json_path", "complex_batch_dir")
+    ):
+        return "complex_prediction"
+    if mode == "structure_prediction" or (model_id == "boltz2" and mode == "predict"):
+        return "structure_prediction"
+    # The supported entrypoint resolver sends all remaining design modes to
+    # workflows/protein_design.nf. Preserve that compatibility boundary here.
+    return "protein_design"
+
+
+async def _fanout_design_selections(
+    session: AsyncSession,
+    *,
+    parent: Job,
+    selections: list[Any],
+    requested_settings: FrustraMPNNRequestedSettings,
+    trigger: str,
+    require_running_parent: bool = False,
+    workflow_capability_digest: str | None = None,
+):
+    members = [
+        StructureDatasetMember(
+            structure_id=str(
+                selection.design_id
+                or selection.producer_coordinates.get("candidate_id")
+                or _candidate_id
+            ),
+            lineage={
+                "design_id": selection.design_id,
+                "source_job_id": selection.source_job_id,
+                "source_sha256": selection.source_sha256,
+                "producer_stage": selection.producer_stage,
+                "producer_coordinates": selection.producer_coordinates,
+            },
+            payload=selection,
+        )
+        for _candidate_id, selection in enumerate(selections, 1)
+    ]
+
+    async def create_batch(batch: StructureDatasetBatch[Any]) -> Job:
+        return await create_child_job(
+            session,
+            selections=[member.payload for member in batch.members],
+            source_parent=parent,
+            trigger=trigger,
+            requested_settings=requested_settings,
+            preallocated_job_id=batch.child_job_id,
+            commit=False,
+        )
+
+    return await fan_out_structure_dataset(
+        session,
+        workflow_id=f"{_frustrampnn_consumer_workflow(parent)}.frustrampnn.v1",
+        parent_job=parent,
+        members=members,
+        batching_enabled=requested_settings.batching_enabled,
+        structures_per_job=requested_settings.structures_per_job,
+        request_identity={
+            "requested_settings": requested_settings.model_dump(mode="json", exclude_none=False),
+            "trigger": trigger,
+        },
+        create_child=create_batch,
+        discard_child=discard_uncommitted_child_artifacts,
+        require_running_parent=require_running_parent,
+        workflow_capability_digest=workflow_capability_digest,
+    )
+
+
+async def _fanout_receipt(session: AsyncSession, fanout: Any) -> dict[str, Any]:
+    children: list[dict[str, Any]] = []
+    for child in fanout.child_jobs:
+        receipt = await _child_job_receipt(session, child)
+        receipt["structure_count"] = len(receipt["candidates"])
+        children.append(receipt)
+    return {
+        "schema_name": FANOUT_SCHEMA,
+        "fanout_id": fanout.fanout_id,
+        "parent_job_id": fanout.parent_job_id,
+        "selected_structure_count": fanout.selected_structure_count,
+        "structures_per_job": fanout.structures_per_job,
+        "effective_structures_per_job": fanout.effective_structures_per_job,
+        "replayed": fanout.replayed,
+        "child_jobs": children,
+    }
 
 
 def _multipart_requested_settings(form: Any) -> FrustraMPNNRequestedSettings:
@@ -1933,23 +2200,290 @@ def _source_descriptor(filename: str | None, media_type: str | None) -> tuple[st
     return suffix, observed_media
 
 
+async def _cm_owned_source_bytes(
+    *,
+    job: Job,
+    result: FrustraMPNNResult,
+    invocation_id: str,
+    manifest: Mapping[str, Any],
+    session: AsyncSession,
+) -> tuple[bytes, str]:
+    """Load a CM-owned retry source through its persisted v2 result closure."""
+
+    if (
+        job.model_id != "conformational_mapping"
+        or not isinstance(job.output_dir, str)
+        or job.status != "completed"
+        or job.queue_status != "completed"
+        or job.current_stage != "Complete"
+        or (job.params or {}).get("run_frustrampnn") is not True
+    ):
+        raise HTTPException(409, "CM result source lineage authority is unavailable")
+    root = Path(job.output_dir)
+
+    typed_request_rows = (
+        await session.execute(
+            select(ConformationalMappingRequest).where(
+                ConformationalMappingRequest.job_id == job.id,
+            )
+        )
+    ).scalars().all()
+    if len(typed_request_rows) != 1:
+        raise HTTPException(409, "CM typed request authority is unavailable")
+    typed_request = typed_request_rows[0]
+    if typed_request.status != "completed" or typed_request.backend != "confornets":
+        raise HTTPException(409, "CM typed request is not a completed ConforNets request")
+    cm_request_path_value = (job.params or {}).get("cm_request_path")
+    if not isinstance(cm_request_path_value, str):
+        raise HTTPException(409, "CM typed request path authority is unavailable")
+
+    request_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "component_request",
+            )
+        )
+    ).scalars().all()
+    authority_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "identity_authority",
+            )
+        )
+    ).scalars().all()
+    map_rows = (
+        await session.execute(
+            select(FrustraMPNNArtifact).where(
+                FrustraMPNNArtifact.parent_job_id == job.id,
+                FrustraMPNNArtifact.invocation_id == invocation_id,
+                FrustraMPNNArtifact.role == "structure_map",
+            )
+        )
+    ).scalars().all()
+    if len(request_rows) != 1 or len(authority_rows) != 1 or len(map_rows) != 1:
+        raise HTTPException(409, "CM result authority artifact closure is unavailable")
+    request_artifact = request_rows[0]
+    authority_artifact = authority_rows[0]
+    map_artifact = map_rows[0]
+
+    source_registry_rows = (
+        await session.execute(
+            select(ConformationalMappingArtifact).where(
+                ConformationalMappingArtifact.request_id == typed_request.request_id,
+                ConformationalMappingArtifact.candidate_id == result.candidate_id,
+                ConformationalMappingArtifact.role == "authoritative_cif",
+            )
+        )
+    ).scalars().all()
+    if len(source_registry_rows) != 1:
+        raise HTTPException(409, "CM authoritative source registry row is unavailable")
+    source_registry = source_registry_rows[0]
+
+    def manifest_record(artifact: FrustraMPNNArtifact) -> dict[str, Any]:
+        records = [
+            record
+            for record in manifest.get("artifacts", [])
+            if isinstance(record, dict)
+            and record.get("relative_path") == artifact.relative_path
+        ]
+        if len(records) != 1:
+            raise ValueError("CM artifact is not manifest-attested")
+        record = records[0]
+        if (
+            record.get("sha256") != artifact.content_sha256
+            or record.get("bytes") != artifact.size_bytes
+        ):
+            raise ValueError("CM artifact identity is inconsistent")
+        return record
+
+    try:
+        request_record = manifest_record(request_artifact)
+        authority_record = manifest_record(authority_artifact)
+        map_record = manifest_record(map_artifact)
+        request_path = _owned_manifest_artifact_path(
+            root,
+            request_artifact.storage_path,
+            request_artifact.relative_path,
+        )
+        authority_path = _owned_manifest_artifact_path(
+            root,
+            authority_artifact.storage_path,
+            authority_artifact.relative_path,
+        )
+        map_path = _owned_manifest_artifact_path(
+            root,
+            map_artifact.storage_path,
+            map_artifact.relative_path,
+        )
+        request_bytes = _verified_bytes(
+            request_path,
+            expected_sha256=request_artifact.content_sha256,
+            expected_size=request_artifact.size_bytes,
+            max_bytes=4 * 1024 * 1024,
+        )
+        request_payload = canonical_json_loads(request_bytes)
+        if canonical_json_bytes(request_payload) != request_bytes:
+            raise ValueError("CM component request is not canonical JSON")
+        if (
+            request_payload.get("parent_job_id") != str(job.id)
+            or request_payload.get("invocation_id") != invocation_id
+            or request_payload.get("candidate_id") != result.candidate_id
+            or result.request_sha256 != request_artifact.content_sha256
+        ):
+            raise ValueError("CM component request identity is not cross-bound")
+
+        cm_request_path = Path(cm_request_path_value)
+        if (
+            not cm_request_path.is_absolute()
+            or cm_request_path != root / "cm_request_v1.json"
+        ):
+            raise ValueError("CM typed request path is not bound to the job root")
+        cm_request_bytes = read_structure_bytes(
+            cm_request_path,
+            max_bytes=4 * 1024 * 1024,
+        )
+        cm_request_payload = canonical_json_loads(cm_request_bytes)
+        if canonical_json_bytes(cm_request_payload) != cm_request_bytes:
+            raise ValueError("CM typed request is not canonical JSON")
+        validate_cm_schema("cm_request_v1", cm_request_payload)
+        persisted_cm_request = typed_request.request_json
+        if isinstance(persisted_cm_request, str):
+            persisted_cm_request = canonical_json_loads(persisted_cm_request.encode())
+        if (
+            canonical_json_bytes(persisted_cm_request) != cm_request_bytes
+            or cm_request_payload.get("request_id") != typed_request.request_id
+            or cm_request_payload.get("request_sha256") != typed_request.request_sha256
+        ):
+            raise ValueError("CM typed request bytes are not cross-bound")
+
+        identity_payload = request_payload.get("identity_authority_artifact")
+        if not isinstance(identity_payload, dict):
+            raise ValueError("CM identity authority envelope is unavailable")
+        encoded_authority = identity_payload.get("canonical_json_base64")
+        if not isinstance(encoded_authority, str):
+            raise ValueError("CM identity authority bytes are unavailable")
+        authority_bytes = base64.b64decode(encoded_authority, validate=True)
+        if (
+            not authority_bytes
+            or canonical_json_bytes(canonical_json_loads(authority_bytes)) != authority_bytes
+            or hashlib.sha256(authority_bytes).hexdigest() != identity_payload.get("sha256")
+            or identity_payload.get("relative_path") != authority_artifact.relative_path
+            or identity_payload.get("media_type") != "application/json"
+            or len(authority_bytes) != authority_artifact.size_bytes
+            or authority_artifact.content_sha256 != identity_payload.get("sha256")
+        ):
+            raise ValueError("CM identity authority bytes are not cross-bound")
+        persisted_authority_bytes = _verified_bytes(
+            authority_path,
+            expected_sha256=authority_artifact.content_sha256,
+            expected_size=authority_artifact.size_bytes,
+            max_bytes=4 * 1024 * 1024,
+        )
+        if persisted_authority_bytes != authority_bytes:
+            raise ValueError("CM identity authority artifact differs from request bytes")
+
+        try:
+            validate_schema("workflow_component_request_v2", request_payload)
+        except ContractValidationError as exc:
+            legacy_reseal = (
+                identity_payload.get("bytes") is None
+                and str(exc)
+                == "workflow_component_request_v2 rejected $['identity_authority_artifact']: 'bytes' is a required property"
+                and manifest.get("artifact_count") == 11
+                and len(manifest.get("artifacts", [])) == 11
+                and authority_artifact.relative_path == "authority_artifact_v1.json"
+                and persisted_authority_bytes == authority_bytes
+            )
+            if not legacy_reseal:
+                raise
+            request_for_validation = copy.deepcopy(request_payload)
+            request_for_validation["identity_authority_artifact"]["bytes"] = len(authority_bytes)
+            validate_schema("workflow_component_request_v2", request_for_validation)
+
+        source_authority = request_payload.get("source_artifact")
+        if not isinstance(source_authority, dict):
+            raise ValueError("CM original source authority is unavailable")
+        source_relative = source_authority.get("relative_path")
+        source_sha256 = source_authority.get("sha256")
+        if (
+            source_authority.get("artifact_id") != result.candidate_id
+            or source_authority.get("producer_stage") != "conformational_mapping:confornets"
+            or source_sha256 != result.source_artifact_sha256
+            or source_sha256 != request_payload.get("source_artifact", {}).get("sha256")
+            or result.source_artifact_id != source_registry.candidate_id
+            or source_authority.get("artifact_id") != source_registry.candidate_id
+            or source_authority.get("relative_path") != source_registry.relative_path
+            or source_sha256 != source_registry.content_sha256
+            or source_authority.get("media_type") != source_registry.media_type
+        ):
+            raise ValueError("CM original source authority is not cross-bound")
+        suffix, _ = _source_descriptor(
+            source_relative,
+            source_authority.get("media_type"),
+        )
+        source_path = _owned_manifest_artifact_path(
+            root,
+            source_registry.storage_path,
+            source_registry.relative_path,
+        )
+        source_bytes = _verified_bytes(
+            source_path,
+            expected_sha256=source_registry.content_sha256,
+            expected_size=source_registry.size_bytes,
+            max_bytes=_MAX_MULTIPART_STRUCTURE_BYTES,
+        )
+        if hashlib.sha256(source_bytes).hexdigest() != source_sha256:
+            raise ValueError("CM original source bytes do not match persisted authority")
+
+        map_bytes = _verified_bytes(
+            map_path,
+            expected_sha256=map_artifact.content_sha256,
+            expected_size=map_artifact.size_bytes,
+            max_bytes=16 * 1024 * 1024,
+        )
+        structure_map = canonical_json_loads(map_bytes)
+        if canonical_json_bytes(structure_map) != map_bytes:
+            raise ValueError("CM structure map is not canonical JSON")
+        validate_schema("frustrampnn_structure_map_v1", structure_map)
+        if (
+            structure_map.get("parent_job_id") != str(job.id)
+            or structure_map.get("candidate_id") != result.candidate_id
+            or structure_map.get("source_sha256") != source_sha256
+            or structure_map.get("source_sha256") != hashlib.sha256(source_bytes).hexdigest()
+            or structure_map.get("identity_authority") != "producer_manifest_v1"
+            or structure_map.get("authority_artifact_sha256") != authority_artifact.content_sha256
+            or canonical_sha256(structure_map) != request_payload.get("structure_map_sha256")
+        ):
+            raise ValueError("CM structure map authority is not cross-bound")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(409, "CM owned source artifact byte identity is unavailable") from exc
+    return source_bytes, suffix
+
+
 async def _owned_source_bytes(
     *,
     job_id: str,
     invocation_id: str,
     session: AsyncSession,
 ) -> tuple[bytes, str]:
-    """Load one persisted v2 original source after validating its full attestation chain."""
+    """Load one persisted v2/v3 original source after validating its attestation chain."""
 
     result = await _scoped_result(invocation_id, job_id, session)
     manifest = result.manifest_json or {}
-    if manifest.get("schema_version") != 2 or result.effective_settings_json is None:
+    manifest_generation = manifest.get("schema_version")
+    if manifest_generation not in (2, 3) or result.effective_settings_json is None:
         raise HTTPException(
             409,
             "historical v1 result has no governed original-source authority",
         )
     try:
-        validate_schema("frustrampnn_result_manifest_v2", manifest)
+        validate_schema(f"frustrampnn_result_manifest_v{manifest_generation}", manifest)
     except Exception as exc:
         raise HTTPException(409, "result manifest authority is unavailable") from exc
     if canonical_sha256(manifest) != result.manifest_sha256:
@@ -1964,6 +2498,14 @@ async def _owned_source_bytes(
         raise HTTPException(409, "result manifest identity does not match persisted result")
 
     job = await session.get(Job, job_id)
+    if job is not None and job.model_id == "conformational_mapping":
+        return await _cm_owned_source_bytes(
+            job=job,
+            result=result,
+            invocation_id=invocation_id,
+            manifest=manifest,
+            session=session,
+        )
     envelope = (job.params or {}).get("_frustrampnn_child_v1") if job else None
     if (
         job is None
@@ -1998,6 +2540,11 @@ async def _owned_source_bytes(
     if len(manifest_requests) != 1:
         raise HTTPException(409, "component request is not manifest-attested")
     manifest_request = manifest_requests[0]
+    if (
+        manifest_request.get("schema_name") != "workflow_component_request"
+        or manifest_request.get("schema_version") != manifest_generation
+    ):
+        raise HTTPException(409, "component request generation is not manifest-attested")
     try:
         request_path = _owned_manifest_artifact_path(
             root,
@@ -2022,7 +2569,11 @@ async def _owned_source_bytes(
         request_payload = canonical_json_loads(request_bytes)
         if canonical_json_bytes(request_payload) != request_bytes:
             raise ValueError("component request is not canonical JSON")
-        validate_schema("workflow_component_request_v2", request_payload)
+        if request_payload.get("schema_version") != manifest_generation:
+            raise ValueError("component request generation is not cross-bound")
+        validate_schema(
+            f"workflow_component_request_v{manifest_generation}", request_payload
+        )
     except Exception as exc:
         raise HTTPException(409, "component request byte identity is unavailable") from exc
     if (
@@ -2064,7 +2615,7 @@ async def _owned_source_bytes(
         record = record_matches[0]
         if (
             batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 2
+            or batch.get("schema_version") != manifest_generation
             or batch.get("execution_owner_job_id") != job_id
             or record.get("record_schema_name") != "bms_frustrampnn_scheduler_record"
             or record.get("record_schema_version") != 2
@@ -2144,7 +2695,8 @@ def _inspect_live_source(
 
 
 def _safe_configuration_projection(
-    configuration: FrustraMPNNExecutionConfigurationV2,
+    configuration: FrustraMPNNExecutionConfigurationV2
+    | FrustraMPNNExecutionConfigurationV3,
 ) -> FrustraMPNNSafeExecutionConfiguration:
     payload = configuration.model_dump(mode="json", exclude_none=False)
     runtime = dict(payload["runtime"])
@@ -2328,6 +2880,90 @@ async def analyze_uploaded_structure(
 
 
 @router.post(
+    "/jobs/{parent_job_id}/workflow-dataset/analyze",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=FrustraMPNNStructureDatasetFanoutResponse,
+)
+async def analyze_parent_workflow_dataset(
+    parent_job_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Create ordinary scheduler children from one live parent's terminal dataset."""
+
+    parent = await session.get(Job, parent_job_id)
+    if parent is None:
+        raise HTTPException(404, "source parent Job not found")
+    if parent.status != "running" or parent.queue_status != "running":
+        raise HTTPException(409, "source parent Job is not authoritatively running")
+    authorization = str(request.headers.get("authorization") or "")
+    scheme, _, capability = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(
+        parent.provenance, capability
+    ):
+        raise HTTPException(403, "invalid parent workflow capability")
+    capability_digest = hashlib.sha256(capability.encode("ascii")).hexdigest()
+    form = await request.form()
+    if set(form) != {
+        "structure_files", "dataset_manifest", "frustrampnn_settings",
+        "settings_value_origin", "parent_workflow_id",
+    }:
+        raise HTTPException(422, "workflow dataset multipart fields are not exact")
+    workflow_id = form.get("parent_workflow_id")
+    if not isinstance(workflow_id, str) or workflow_id != _frustrampnn_consumer_workflow(parent):
+        raise HTTPException(422, "workflow dataset parent identity is invalid")
+    origin = form.get("settings_value_origin")
+    if origin not in {"bms_default", "operator_request"}:
+        raise HTTPException(422, "workflow dataset settings origin is invalid")
+    raw_manifest = form.get("dataset_manifest")
+    raw_settings = form.get("frustrampnn_settings")
+    try:
+        manifest = json.loads(raw_manifest) if isinstance(raw_manifest, str) else None
+        settings_payload = json.loads(raw_settings) if isinstance(raw_settings, str) else None
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"candidates"}
+            or not isinstance(manifest["candidates"], list)
+            or not manifest["candidates"]
+            or canonical_json_bytes(manifest) != raw_manifest.encode("utf-8")
+        ):
+            raise ValueError("workflow dataset manifest is not canonical")
+        requested_settings = validate_complete_requested_settings(settings_payload).model_copy(
+            update={"settings_value_origin": origin}
+        )
+    except (json.JSONDecodeError, RequestedSettingsPayloadError, ValidationError, TypeError, ValueError) as exc:
+        raise HTTPException(422, f"invalid workflow dataset authority: {exc}") from exc
+    uploads = list(form.getlist("structure_files"))
+    if len(uploads) != len(manifest["candidates"]):
+        raise HTTPException(422, "workflow dataset file cardinality is invalid")
+    try:
+        selections = [
+            workflow_selection(
+                filename=str(getattr(upload, "filename", "") or ""),
+                payload=await _read_bounded_upload(upload),
+                metadata=metadata,
+                parent_job_id=parent_job_id,
+                parent_workflow_id=workflow_id,
+            )
+            for metadata, upload in zip(manifest["candidates"], uploads, strict=True)
+        ]
+        fanout = await _fanout_design_selections(
+            session,
+            parent=parent,
+            selections=selections,
+            requested_settings=requested_settings,
+            trigger="parent_workflow_terminal_dataset",
+            require_running_parent=True,
+            workflow_capability_digest=capability_digest,
+        )
+        return await _fanout_receipt(session, fanout)
+    except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
+        await session.rollback()
+        status_code = 409 if "mutation authority" in str(exc) else 422
+        raise HTTPException(status_code, str(exc)) from exc
+
+
+@router.post(
     "/candidates/handoff",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=FrustraMPNNHandoffResponse,
@@ -2504,14 +3140,14 @@ async def handoff_external_candidate(
 @router.post(
     "/jobs/{parent_job_id}/analyze",
     status_code=status.HTTP_202_ACCEPTED,
-    response_model=FrustraMPNNChildReceiptResponse,
+    response_model=FrustraMPNNStructureDatasetFanoutResponse,
 )
 async def analyze_designs(
     parent_job_id: str,
     body: AnalyzeDesignsRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Queue immutable selected Designs under an existing parent authority."""
+    """Fan out immutable selected Designs as scheduler-visible child Jobs."""
     parent = await session.get(Job, parent_job_id)
     if parent is None:
         raise HTTPException(404, "source parent Job not found")
@@ -2524,15 +3160,15 @@ async def analyze_designs(
             design_ids=design_ids,
             expected_sha256=expected,
         )
-        job = await create_child_job(
+        fanout = await _fanout_design_selections(
             session,
+            parent=parent,
             selections=selections,
-            source_parent=parent,
-            trigger="design_analyze",
             requested_settings=body.frustrampnn_settings,
+            trigger="design_analyze",
         )
-        return await _child_job_receipt(session, job)
-    except FrustraMPNNChildError as exc:
+        return await _fanout_receipt(session, fanout)
+    except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
         await session.rollback()
         raise HTTPException(422, str(exc)) from exc
 
@@ -2634,29 +3270,43 @@ _LANDSCAPE_FIELDS = (
 
 def _result_authority(result: FrustraMPNNResult) -> dict[str, Any]:
     terminal = dict(result.terminal_result_json or {})
+    component_contract_version = terminal.get("component_contract_version")
     authority_version = (
-        "v2"
-        if terminal.get("component_contract_version") == "2.0"
+        "v3" if component_contract_version == "3.0"
+        else "v2" if component_contract_version == "2.0"
         else "historical_v1"
     )
     values = {field: getattr(result, field) for field in _PHASE4_FIELDS}
+    values["statistics_json"] = resolve_json_value(values["statistics_json"])
     if authority_version == "historical_v1":
         values = {field: None for field in _PHASE4_FIELDS}
         missing_fields = list(_PHASE4_FIELDS)
     else:
         missing_fields = [field for field, value in values.items() if value is None]
-    available = authority_version == "v2" and not missing_fields
+    core_fields = _PHASE4_FIELDS[:4]
+    statistics_fields = _PHASE4_FIELDS[4:]
+    core_available = authority_version in {"v2", "v3"} and not any(
+        field in missing_fields for field in core_fields
+    )
+    statistics_available = core_available and not any(
+        field in missing_fields for field in statistics_fields
+    )
+    available = (
+        core_available
+        if authority_version == "v3"
+        else core_available and statistics_available
+    )
     return {
         "authority_version": authority_version,
         "availability": available,
-        "statistics_available": available,
+        "statistics_available": statistics_available,
         "missing_fields": missing_fields,
         **values,
     }
 
 
 def _comparison_authority(result: FrustraMPNNResult) -> dict[str, Any]:
-    statistics = result.statistics_json
+    statistics = resolve_json_value(result.statistics_json)
     basis = (
         statistics.get("comparison_compatibility_basis")
         if isinstance(statistics, dict)
@@ -2877,6 +3527,20 @@ def _safe_execution_receipt(
 
 def _result_payload(result: FrustraMPNNResult, *, detail: bool = False) -> dict[str, Any]:
     payload = {name: getattr(result, name) for name in _RESULT_FIELDS}
+    parent_metadata = result.parent_metadata_json if isinstance(result.parent_metadata_json, Mapping) else {}
+    raw_operator_label = result.candidate_id
+    for key in ("operator_label", "display_label", "name"):
+        candidate_label = parent_metadata.get(key)
+        if isinstance(candidate_label, str) and candidate_label.strip():
+            raw_operator_label = candidate_label
+            break
+    payload["operator_label"] = str(raw_operator_label).strip()[:160]
+    payload["source_identity"] = {
+        "design_id": result.design_id,
+        "artifact_id": result.source_artifact_id,
+        "artifact_sha256": result.source_artifact_sha256,
+        "candidate_id": result.candidate_id,
+    }
     payload.update(_result_authority(result))
     payload["reopen_destination"] = {
         "surface": "frustrampnn-workbench",
@@ -3016,7 +3680,7 @@ async def analytics_points(
 
 
 def _comparison_payload(model: FrustraMPNNComparison) -> dict[str, Any]:
-    payload = dict(model.payload_json)
+    payload = dict(resolve_json_value(model.payload_json))
     payload["comparison_id"] = model.comparison_id
     payload["persisted"] = True
     payload["created_at"] = model.created_at
@@ -3199,7 +3863,7 @@ async def comparison_rows(
     )).scalars().all()
     return {
         "comparison_id": comparison_id,
-        "items": [dict(row.row_json) for row in rows],
+        "items": [dict(resolve_json_value(row.row_json)) for row in rows],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -3439,6 +4103,91 @@ async def statistics_query(
 
 
 @router.get(
+    "/results/{parent_job_id}/{invocation_id}/statistics/analysis",
+    response_model=FrustraMPNNStatisticsAnalysisResponse,
+)
+async def get_result_statistics_analysis(
+    parent_job_id: str,
+    invocation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> FrustraMPNNStatisticsAnalysisResponse:
+    child = (
+        await session.execute(
+            select(FrustraMPNNStatisticsAnalysis).where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == invocation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(status_code=404, detail="statistics analysis child not found")
+    return FrustraMPNNStatisticsAnalysisResponse(
+        analysis_id=child.analysis_id,
+        parent_job_id=child.parent_job_id,
+        invocation_id=child.invocation_id,
+        state=child.state,
+        attempt_count=child.attempt_count,
+        core_artifact_id=child.core_artifact_id,
+        core_landscape_sha256=child.core_landscape_sha256,
+        core_manifest_sha256=child.core_manifest_sha256,
+        formula_version=child.formula_version,
+        policy_version=child.policy_version,
+        package_version=child.package_version,
+        schema_version=child.schema_version,
+        artifact_sha256=child.artifact_sha256,
+        statistics_sha256=child.statistics_sha256,
+        diagnostic=child.diagnostic,
+    )
+
+
+@router.post(
+    "/results/{parent_job_id}/{invocation_id}/statistics/retry",
+    response_model=FrustraMPNNStatisticsAnalysisResponse,
+)
+async def retry_result_statistics_analysis(
+    parent_job_id: str,
+    invocation_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> FrustraMPNNStatisticsAnalysisResponse:
+    child = (
+        await session.execute(
+            select(FrustraMPNNStatisticsAnalysis).where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == invocation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if child is None:
+        raise HTTPException(status_code=404, detail="statistics analysis child not found")
+    try:
+        child = await retry_statistics_child(
+            session,
+            analysis_id=child.analysis_id,
+        )
+        await session.commit()
+    except FrustraMPNNStatisticsJobError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FrustraMPNNStatisticsAnalysisResponse(
+        analysis_id=child.analysis_id,
+        parent_job_id=child.parent_job_id,
+        invocation_id=child.invocation_id,
+        state=child.state,
+        attempt_count=child.attempt_count,
+        core_artifact_id=child.core_artifact_id,
+        core_landscape_sha256=child.core_landscape_sha256,
+        core_manifest_sha256=child.core_manifest_sha256,
+        formula_version=child.formula_version,
+        policy_version=child.policy_version,
+        package_version=child.package_version,
+        schema_version=child.schema_version,
+        artifact_sha256=child.artifact_sha256,
+        statistics_sha256=child.statistics_sha256,
+        diagnostic=child.diagnostic,
+    )
+
+
+@router.get(
     "/results/{invocation_id}/statistics",
     response_model=FrustraMPNNStatisticsResponse,
 )
@@ -3509,60 +4258,39 @@ async def result_landscape(
     session: AsyncSession = Depends(get_session),
 ):
     result = await _scoped_result(invocation_id, job_id, session)
-    filters = [
-        FrustraMPNNLandscapeRow.parent_job_id == job_id,
-        FrustraMPNNLandscapeRow.invocation_id == invocation_id,
-    ]
-    exact = {
-        "target_id": target_id,
-        "entity_instance_id": entity_instance_id,
-        "auth_asym_id": auth_asym_id,
-        "auth_seq_id": auth_seq_id,
-        "insertion_code": insertion_code,
-        "sequence_index": sequence_index,
-        "mutation_aa": mutation_aa,
-        "status": status,
-    }
-    for field, value in exact.items():
-        if value is not None:
-            filters.append(getattr(FrustraMPNNLandscapeRow, field) == value)
-    total = int(
-        (
-            await session.execute(
-                select(func.count()).select_from(FrustraMPNNLandscapeRow).where(*filters)
-            )
-        ).scalar_one()
+    page = await persisted_landscape_page(
+        session,
+        job_id,
+        invocation_id,
+        limit=limit,
+        offset=offset,
+        target_id=target_id,
+        entity_instance_id=entity_instance_id,
+        auth_asym_id=auth_asym_id,
+        auth_seq_id=auth_seq_id,
+        insertion_code=insertion_code,
+        sequence_index=sequence_index,
+        mutation_aa=mutation_aa,
+        status=status,
     )
-    rows = (
-        await session.execute(
-            select(FrustraMPNNLandscapeRow)
-            .where(*filters)
-            .order_by(
-                FrustraMPNNLandscapeRow.entity_instance_id.asc(),
-                FrustraMPNNLandscapeRow.sequence_index.asc(),
-                FrustraMPNNLandscapeRow.mutation_aa.asc(),
-                FrustraMPNNLandscapeRow.id.asc(),
-            )
-            .offset(offset)
-            .limit(limit)
-        )
-    ).scalars().all()
+    total = int(page["total"])
+    rows = page["items"]
     items = []
     for row in rows:
-        stored = dict(row.row_json)
+        stored = dict(row["row"])
         residue = stored.get("residue")
         residue_identity = residue if isinstance(residue, dict) else {}
         items.append({
-            **{name: getattr(row, name) for name in _LANDSCAPE_FIELDS},
+            **{name: row[name] for name in _LANDSCAPE_FIELDS},
             "candidate_id": result.candidate_id,
             "source_entity_id": residue_identity.get("source_entity_id"),
             "label_asym_id": residue_identity.get("label_asym_id"),
-            "auth_seq_id": int(row.auth_seq_id),
+            "auth_seq_id": int(row["auth_seq_id"]),
             "pdb_chain_id": residue_identity.get("pdb_chain_id"),
             "model_position": residue_identity.get("model_position"),
-            "class": row.score_class,
-            "native": row.mutation_aa == row.wt,
-            "provenance": dict(row.provenance_json),
+            "class": row["score_class"],
+            "native": row["mutation_aa"] == row["wt"],
+            "provenance": dict(row["provenance"]),
             "residue": dict(residue) if isinstance(residue, dict) else None,
         })
     return {
@@ -4051,31 +4779,19 @@ async def create_governed_export(
     if review.invocation_id != payload.invocation_id:
         raise HTTPException(status_code=422, detail="export invocation does not match review authority")
     result = await _scoped_result(payload.invocation_id, job_id, session)
-    filters = [
-        FrustraMPNNLandscapeRow.parent_job_id == job_id,
-        FrustraMPNNLandscapeRow.invocation_id == payload.invocation_id,
-    ]
-    for field in ("auth_asym_id", "mutation_aa", "status"):
-        value = getattr(payload, field)
-        if value is not None:
-            filters.append(getattr(FrustraMPNNLandscapeRow, field) == value)
-    total = int((await session.execute(
-        select(func.count()).select_from(FrustraMPNNLandscapeRow).where(*filters)
-    )).scalar_one())
-    rows = (await session.execute(
-        select(FrustraMPNNLandscapeRow)
-        .where(*filters)
-        .order_by(
-            FrustraMPNNLandscapeRow.entity_instance_id.asc(),
-            FrustraMPNNLandscapeRow.sequence_index.asc(),
-            FrustraMPNNLandscapeRow.mutation_aa.asc(),
-            FrustraMPNNLandscapeRow.id.asc(),
-        )
-        .limit(payload.limit)
-    )).scalars().all()
+    page = await persisted_landscape_page(
+        session,
+        job_id,
+        payload.invocation_id,
+        limit=payload.limit,
+        auth_asym_id=payload.auth_asym_id,
+        mutation_aa=payload.mutation_aa,
+        status=payload.status,
+    )
+    total = int(page["total"])
     exported_rows = [
-        {field: getattr(row, field) for field in _EXPORT_FIELDS}
-        for row in rows
+        {field: row[field] for field in _EXPORT_FIELDS}
+        for row in page["items"]
     ]
     export_payload = {
         "schema_name": "frustrampnn_governed_export",

@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-evidence-body.pm08b.v1",
+  "title": "PM-08B authenticated coverage evidence body v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_body_id",
+    "package_id",
+    "coverage_item",
+    "coverage_contract_id",
+    "source_commit",
+    "source_tree",
+    "coverage_denominator",
+    "producer_receipts",
+    "positive_observations",
+    "negative_observations",
+    "resolver_trace",
+    "evidence_kinds",
+    "native_owner_attestations",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-evidence-body.pm08b.v1"
+    },
+    "evidence_body_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "const": "PM-08B"
+    },
+    "coverage_item": {
+      "enum": [
+        "protein-adapters",
+        "molecular-dynamics-adapters",
+        "compatible-comparison",
+        "native-result-chain"
+      ]
+    },
+    "coverage_contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage_denominator": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "producer_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/receiptPointer"
+      }
+    },
+    "positive_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "negative_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "resolver_trace": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "evidence_kinds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "native_owner_attestations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "global-protein-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "molecular-dynamics-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "protein-adapters"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.protein-adapters.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "protein-adapters-denominator",
+              "protein-adapters-positive-observation",
+              "protein-adapters-negative-observation",
+              "protein-adapters-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "molecular-dynamics-adapters"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.molecular-dynamics-adapters.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "molecular-dynamics-adapters-denominator",
+              "molecular-dynamics-adapters-positive-observation",
+              "molecular-dynamics-adapters-negative-observation",
+              "molecular-dynamics-adapters-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "compatible-comparison"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.compatible-comparison.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "compatible-comparison-denominator",
+              "compatible-comparison-positive-observation",
+              "compatible-comparison-negative-observation",
+              "compatible-comparison-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "native-result-chain"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.native-result-chain.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "native-result-chain-denominator",
+              "native-result-chain-positive-observation",
+              "native-result-chain-negative-observation",
+              "native-result-chain-resolver-trace"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

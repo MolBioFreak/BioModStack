@@ -462,6 +462,28 @@ async def publish_launch_context_binding(
     await core_session.refresh(job)
 
 
+def normalize_bound_job_params(
+    *,
+    supplied_params: dict[str, Any],
+    expected_params: dict[str, Any],
+) -> dict[str, Any]:
+    expected_adapter = expected_params.get("workflow_adapter")
+    supplied_adapter = supplied_params.get("workflow_adapter")
+    if not isinstance(expected_adapter, str) or not expected_adapter:
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Bound Workflow Revision has no workflow adapter authority.",
+            status_code=409,
+        )
+    if supplied_adapter not in (None, expected_adapter):
+        raise LaunchContextError(
+            "launch_context_workflow_mismatch",
+            "Native workflow adapter does not match the bound Workflow Revision.",
+            status_code=409,
+        )
+    return {**supplied_params, "workflow_adapter": expected_adapter}
+
+
 async def validate_bound_job_request(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -512,17 +534,25 @@ async def validate_bound_job_request(
     scheduler: dict[str, Any] = raw_scheduler if isinstance(raw_scheduler, dict) else {}
     expected_adapter = str(payload.get("adapter_id") or "")
     raw_expected_params = scheduler.get("params")
-    expected_params: dict[str, Any] = raw_expected_params if isinstance(raw_expected_params, dict) else {}
+    expected_params: dict[str, Any] = dict(raw_expected_params) if isinstance(raw_expected_params, dict) else {}
+    if expected_adapter:
+        expected_params.setdefault("workflow_adapter", expected_adapter)
     if scheduler.get("model_id") != model_id or scheduler.get("mode") != mode:
         raise LaunchContextError(
             "launch_context_workflow_mismatch",
             "Job model or mode does not match the bound Workflow Revision.",
             status_code=409,
         )
-    prepared_params = dict(params)
-    params_match = _canonical_json(params) == _canonical_json(expected_params)
+    prepared_params = normalize_bound_job_params(
+        supplied_params=params,
+        expected_params=expected_params,
+    )
+    params_match = _canonical_json(prepared_params) == _canonical_json(expected_params)
     if model_id == "nanopore":
-        params_match = all(key in params and params[key] == value for key, value in expected_params.items())
+        params_match = all(
+            key in prepared_params and prepared_params[key] == value
+            for key, value in expected_params.items()
+        )
     if model_id == "protein_local_redesign":
         supplied_adapter = params.get("workflow_adapter")
         if supplied_adapter not in (None, expected_adapter):
@@ -869,6 +899,30 @@ async def resolve_launch_context_for_display(
     return context
 
 
+def _resource_authority_matches_reserved(
+    expected_authoritative_params: dict[str, Any],
+    actual_authoritative_params: dict[str, Any],
+) -> bool:
+    """Accept only the governed prepared-v1 to assigned-v2 extension."""
+    from services.resource_usage_evidence import (
+        GLOBAL_DISPATCH_AUTHORITY_PARAM,
+        ResourceUsageEvidenceError,
+        attach_dispatch_materialization_authority,
+    )
+
+    actual_dispatch = actual_authoritative_params.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+    if not isinstance(actual_dispatch, dict):
+        return False
+    try:
+        expected_with_observed_dispatch = attach_dispatch_materialization_authority(
+            expected_authoritative_params,
+            actual_dispatch,
+        )
+    except ResourceUsageEvidenceError:
+        return False
+    return expected_with_observed_dispatch == actual_authoritative_params
+
+
 async def validate_bound_job(
     session: AsyncSession,
     context: ExperimentLaunchContext,
@@ -914,7 +968,10 @@ async def validate_bound_job(
         )
         actual_authoritative_params = strip_execution_metadata(job_params)
         actual_authoritative_params.pop(RESOURCE_USAGE_RECEIPTS_PARAM, None)
-        resource_authority_matches = actual_authoritative_params == expected_authoritative_params
+        resource_authority_matches = _resource_authority_matches_reserved(
+            expected_authoritative_params,
+            actual_authoritative_params,
+        )
     except (LaunchContextError, ResourceUsageEvidenceError):
         resource_authority_matches = False
     if not resource_authority_matches:
@@ -939,7 +996,10 @@ async def validate_bound_job(
         raw_resources = scheduler.get("resources")
         resources: dict[str, Any] = raw_resources if isinstance(raw_resources, dict) else {}
         expected_pinned_gpu = resources.get("pinned_gpu")
-        params_match = _canonical_json(base_job_params) == _canonical_json(expected_job_params)
+        params_match = all(
+            base_job_params.get(key, 1 if key == "num_parallel_jobs" else object()) == value
+            for key, value in expected_job_params.items()
+        )
         if job.model_id == "protein_local_redesign":
             try:
                 expected_native_params = prepare_local_redesign_scheduler_params(

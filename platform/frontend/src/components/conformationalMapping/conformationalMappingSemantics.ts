@@ -1,4 +1,4 @@
-import type { CmArtifact, CmLandscapeRow, CmRecord, CmResults } from './conformationalMappingApi';
+import type { CmArtifact, CmLandscapeRow, CmLegacyLandscapeRow, CmRecord, CmResults } from './conformationalMappingApi';
 
 export const APPROVED_CM_CONTRACTS = new Set([
     'conformational_mapping_protenix_v1',
@@ -129,6 +129,19 @@ export interface CmLandscapeResidue {
     slots: CmLandscapeRow[];
 }
 
+export interface LegacyCmLandscapeResidue {
+    key: string;
+    candidate_id: string;
+    entity_instance_id: string;
+    auth_asym_id: string;
+    auth_seq_id: string;
+    insertion_code: string;
+    sequence_index: number;
+    wt: string;
+    slots: CmLegacyLandscapeRow[];
+    provenance: Record<string, unknown>;
+}
+
 const object = (value: unknown, message: string): Record<string, unknown> => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
     return value as Record<string, unknown>;
@@ -194,8 +207,18 @@ export const requireApprovedCmResults = (results: CmResults): CmResults => {
     }
     const recordIdentities = new Set<string>();
     results.records.forEach((item) => {
-        if (!item || typeof item.type !== 'string' || typeof item.key !== 'string' || !SHA256.test(item.sha256) || !item.payload) {
+        if (!item || typeof item.type !== 'string' || typeof item.key !== 'string' || !SHA256.test(item.sha256)) {
             throw new Error('Malformed canonical record identity');
+        }
+        if (item.payload !== undefined && (!item.payload || typeof item.payload !== 'object' || Array.isArray(item.payload))) {
+            throw new Error('Malformed canonical record payload');
+        }
+        if (item.artifact !== undefined && item.artifact !== null
+            && (!item.artifact.artifact_id || !SHA256.test(item.artifact.content_sha256)
+                || !Number.isInteger(item.artifact.size_bytes) || item.artifact.size_bytes < 0
+                || !Number.isInteger(item.artifact.row_count) || item.artifact.row_count < 0
+                || !item.artifact.relative_path || item.artifact.relative_path.startsWith('/'))) {
+            throw new Error('Malformed canonical record artifact identity');
         }
         const identity = `${item.type}\u0000${item.key}`;
         if (recordIdentities.has(identity)) throw new Error('Duplicate canonical record identity');
@@ -295,7 +318,12 @@ export const candidateStructureMap = (results: CmResults, candidateId: string): 
     string(payload.source_format, 'Structure-map source format is missing');
     string(payload.normalizer_version, 'Structure-map normalizer identity is missing');
     string(payload.altloc_policy, 'Structure-map alternate-location policy is missing');
-    payload.rows.forEach((value) => {
+    validateStructureMapRows(payload.rows);
+    return payload as unknown as CmStructureMap;
+};
+
+export const validateStructureMapRows = (values: unknown[]): CmStructureMapRow[] => {
+    values.forEach((value) => {
         const row = object(value, 'Structure-map row is malformed');
         string(row.entity_instance_id, 'Structure-map entity instance is missing');
         string(row.label_asym_id, 'Structure-map label chain is missing');
@@ -305,7 +333,7 @@ export const candidateStructureMap = (results: CmResults, candidateId: string): 
             throw new Error('Structure-map row status is unknown');
         }
     });
-    return payload as unknown as CmStructureMap;
+    return values as CmStructureMapRow[];
 };
 
 export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
@@ -321,7 +349,12 @@ export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
         || !payload.ranking_policy || typeof payload.ranking_policy !== 'object' || Array.isArray(payload.ranking_policy)) {
         throw new Error('Canonical analysis contract is malformed');
     }
-    payload.results.forEach((value) => {
+    validateCanonicalAnalysisRows(payload.results);
+    return payload as unknown as CmAnalysis;
+};
+
+export const validateCanonicalAnalysisRows = (values: unknown[]): CmAnalysisResult[] => {
+    values.forEach((value) => {
         const row = object(value, 'Analysis result is malformed');
         if (!['robust', 'conditional', 'insufficient_support'].includes(String(row.status))
             || typeof row.components !== 'object' || typeof row.sort_keys !== 'object') throw new Error('Analysis result contract is malformed');
@@ -335,7 +368,7 @@ export const canonicalAnalysis = (results: CmResults): CmAnalysis => {
         integer(row.expected_coordinate_count, 'Analysis expected support is malformed', 1);
         integer(row.valid_coordinate_count, 'Analysis valid support is malformed', 0);
     });
-    return payload as unknown as CmAnalysis;
+    return values as CmAnalysisResult[];
 };
 
 export const recordsByType = (results: CmResults, type: string): CmRecord[] =>
@@ -375,6 +408,154 @@ export const groupExact20Landscape = (rows: CmLandscapeRow[]): CmLandscapeResidu
             pdb_chain_id: first.pdb_chain_id, pdb_residue_id: first.pdb_residue_id,
             pdb_insertion_code: first.pdb_insertion_code, model_position: first.model_position,
             residue_name: first.residue_name, slots,
+        });
+    }
+    return residues;
+};
+
+const LEGACY_CM_LANDSCAPE_STATUSES = new Set([
+    'ok',
+    'unscoreable_residue',
+    'missing_row',
+    'duplicate_row',
+    'malformed_row',
+    'nonfinite_score',
+    'mapping_failed',
+    'conformer_missing',
+]);
+
+const LEGACY_CM_LANDSCAPE_ROW_KEYS = [
+    'candidate_id',
+    'entity_instance_id',
+    'auth_asym_id',
+    'auth_seq_id',
+    'insertion_code',
+    'sequence_index',
+    'wt',
+    'mutation_aa',
+    'score',
+    'class',
+    'scoreable',
+    'status',
+    'reason',
+    'provenance',
+] as const;
+const LEGACY_CM_LANDSCAPE_ROW_KEY_SET = new Set<string>(LEGACY_CM_LANDSCAPE_ROW_KEYS);
+
+const LEGACY_CM_PROVENANCE_REQUIRED_KEYS = [
+    'raw_csv_sha256',
+    'checkpoint_sha256',
+    'tool_sha256',
+    'threshold_policy_sha256',
+] as const;
+
+const legacyCmProvenanceIdentity = (value: unknown): string => {
+    const provenance = object(value, 'Landscape slot provenance is malformed');
+    const expectedKeys = Object.hasOwn(provenance, 'container_sha256')
+        ? [...LEGACY_CM_PROVENANCE_REQUIRED_KEYS, 'container_sha256']
+        : [...LEGACY_CM_PROVENANCE_REQUIRED_KEYS];
+    const actualKeys = Object.keys(provenance).sort();
+    const sortedExpectedKeys = [...expectedKeys].sort();
+    if (actualKeys.length !== sortedExpectedKeys.length
+        || actualKeys.some((key, index) => key !== sortedExpectedKeys[index])
+        || expectedKeys.some((key) => typeof provenance[key] !== 'string'
+            || !SHA256.test(provenance[key] as string))) {
+        throw new Error('Landscape slot provenance must contain exact SHA-256 identity fields');
+    }
+    return JSON.stringify(expectedKeys.map((key) => [key, provenance[key]]));
+};
+
+const legacyCmScoreClass = (score: number): 'high' | 'neutral' | 'minimally_frustrated' =>
+    score <= -1.0 ? 'high' : score >= 0.58 ? 'minimally_frustrated' : 'neutral';
+
+const validateLegacyCmLandscapeSlot = (
+    slot: CmLegacyLandscapeRow,
+    expectedCandidateId: string,
+    expectedProvenance: string,
+): void => {
+    const keys = Object.keys(slot);
+    if (keys.length !== LEGACY_CM_LANDSCAPE_ROW_KEYS.length
+        || keys.some((key) => !LEGACY_CM_LANDSCAPE_ROW_KEY_SET.has(key))
+        || LEGACY_CM_LANDSCAPE_ROW_KEYS.some((key) => !Object.hasOwn(slot, key))) {
+        throw new Error('Landscape slot fields do not match the historical API contract');
+    }
+    if (slot.candidate_id !== expectedCandidateId) {
+        throw new Error('Landscape slot does not match the selected candidate');
+    }
+    if (typeof slot.entity_instance_id !== 'string' || !slot.entity_instance_id
+        || typeof slot.auth_asym_id !== 'string' || !slot.auth_asym_id
+        || typeof slot.auth_seq_id !== 'string' || !/^-?(?:0|[1-9]\d*)$/.test(slot.auth_seq_id)
+        || typeof slot.insertion_code !== 'string' || slot.insertion_code.length > 1
+        || !Number.isInteger(slot.sequence_index) || slot.sequence_index < 1
+        || !CANONICAL_AMINO_ACIDS.includes(slot.wt as typeof CANONICAL_AMINO_ACIDS[number])
+        || !CANONICAL_AMINO_ACIDS.includes(slot.mutation_aa as typeof CANONICAL_AMINO_ACIDS[number])) {
+        throw new Error('Landscape slot residue identity is malformed');
+    }
+    const provenance = object(slot.provenance, 'Landscape slot provenance is malformed');
+    if (legacyCmProvenanceIdentity(provenance) !== expectedProvenance) {
+        throw new Error('Landscape slot provenance is inconsistent');
+    }
+    if (!LEGACY_CM_LANDSCAPE_STATUSES.has(slot.status)) {
+        throw new Error('Landscape slot status is unknown');
+    }
+    if (typeof slot.scoreable !== 'boolean') {
+        throw new Error('Landscape slot scoreable value is malformed');
+    }
+    if (slot.status === 'ok') {
+        if (!slot.scoreable || typeof slot.score !== 'number' || !Number.isFinite(slot.score)
+            || slot.class !== legacyCmScoreClass(slot.score) || slot.reason !== null) {
+            throw new Error('Landscape slot score, class, or availability semantics are invalid');
+        }
+        return;
+    }
+    if (slot.scoreable || slot.score !== null || slot.class !== null
+        || typeof slot.reason !== 'string' || !slot.reason) {
+        throw new Error('Landscape slot missingness semantics are invalid');
+    }
+};
+
+export const groupLegacyExact20Landscape = (
+    rows: CmLegacyLandscapeRow[],
+    expectedCandidateId: string,
+): LegacyCmLandscapeResidue[] => {
+    if (!expectedCandidateId) throw new Error('Landscape selected candidate is missing');
+    if (rows.length === 0) throw new Error('Canonical candidate landscape is explicitly unavailable');
+    if (rows.length % CANONICAL_AMINO_ACIDS.length !== 0) {
+        throw new Error('Landscape page does not contain complete exact-20 residues');
+    }
+    const firstProvenance = object(rows[0]?.provenance, 'Landscape slot provenance is malformed');
+    const provenanceIdentity = legacyCmProvenanceIdentity(firstProvenance);
+    const residues: LegacyCmLandscapeResidue[] = [];
+    const seenResidueIdentities = new Set<string>();
+    for (let offset = 0; offset < rows.length; offset += CANONICAL_AMINO_ACIDS.length) {
+        const slots = rows.slice(offset, offset + CANONICAL_AMINO_ACIDS.length);
+        slots.forEach((slot) => validateLegacyCmLandscapeSlot(
+            slot,
+            expectedCandidateId,
+            provenanceIdentity,
+        ));
+        const first = slots[0];
+        const identity = `${first.candidate_id}\u0000${first.entity_instance_id}\u0000${first.auth_asym_id}\u0000${first.auth_seq_id}\u0000${first.insertion_code}\u0000${first.sequence_index}`;
+        if (slots.some((slot) => `${slot.candidate_id}\u0000${slot.entity_instance_id}\u0000${slot.auth_asym_id}\u0000${slot.auth_seq_id}\u0000${slot.insertion_code}\u0000${slot.sequence_index}` !== identity)
+            || slots.some((slot) => slot.wt !== first.wt)
+            || slots.some((slot, index) => slot.mutation_aa !== CANONICAL_AMINO_ACIDS[index])) {
+            throw new Error('Landscape slots do not match the canonical exact-20 API order');
+        }
+        if (seenResidueIdentities.has(identity)) {
+            throw new Error('Landscape page repeats one residue identity');
+        }
+        seenResidueIdentities.add(identity);
+        residues.push({
+            key: `${first.candidate_id}:${first.entity_instance_id}:${first.auth_asym_id}:${first.auth_seq_id}${first.insertion_code}:${first.sequence_index}`,
+            candidate_id: first.candidate_id,
+            entity_instance_id: first.entity_instance_id,
+            auth_asym_id: first.auth_asym_id,
+            auth_seq_id: first.auth_seq_id,
+            insertion_code: first.insertion_code,
+            sequence_index: first.sequence_index,
+            wt: first.wt,
+            slots,
+            provenance: firstProvenance,
         });
     }
     return residues;

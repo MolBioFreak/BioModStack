@@ -15,7 +15,13 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Job, get_session as get_core_session
+from database import (
+    Design,
+    FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
+    Job,
+    get_session as get_core_session,
+)
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
 from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
@@ -23,11 +29,13 @@ from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDispatchOutbox,
+    ExperimentExternalEntityReceipt,
     ExperimentIdempotencyClaim,
     ExperimentLineageEdge,
     ExperimentLaunchContext,
     ExperimentResource,
     ExperimentRevision,
+    ExperimentRevisionEdge,
     ExperimentRunAttempt,
     ExperimentRunGroup,
     ExperimentRunGroupPreparation,
@@ -39,6 +47,8 @@ from experiment_models import (
 )
 from experiment_operations import register_external_entity_receipt
 from experiment_services import (
+    add_audit_event,
+    canonical_json,
     ExperimentServiceError,
     IdempotencyConflict,
     NotFound,
@@ -47,6 +57,7 @@ from experiment_services import (
     create_run_group,
     create_workflow,
     load_workflow_plan_authority,
+    new_id,
     persist_workflow_plan_authority,
     prepare_workflow,
     derive_run_group_state,
@@ -57,6 +68,7 @@ from experiment_services import (
     save_workflow_draft,
     save_workflow_revision,
     validate_preparation_authority,
+    validate_workflow_payload_for_plan,
     workflow_plan_capability_contract,
 )
 from services.global_experiments.adapters import AdapterError, registry
@@ -77,6 +89,7 @@ from services.global_experiments.receipts import attach_verified_entity
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 from services.ngs_molbio_connector import exact_local_launch_authority
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, capability_inventory
+from services.protein_project_capabilities import protein_capability_inventory
 from services.ngs_molbio_n5 import (
     ResourceAdmissionDenied,
     persist_admission_refusal,
@@ -165,6 +178,20 @@ class RunGroupRetryRequest(StrictRequestModel):
 class RunGroupResubmitRequest(StrictRequestModel):
     expected_run_group_generation: int = Field(ge=0)
     preparation_launches: list[PreparationLaunch] = Field(min_length=1, max_length=128)
+
+
+class RunCloneRequest(StrictRequestModel):
+    schema_id: Literal["bms.run-clone-request.v1"] = Field(
+        default="bms.run-clone-request.v1",
+        alias="schema",
+    )
+    source_run_id: str = Field(min_length=1, max_length=128)
+    source_attempt_id: str = Field(min_length=1, max_length=128)
+    new_workflow_name: str = Field(min_length=1, max_length=255)
+    change_summary: str = Field(min_length=1, max_length=1024)
+    expected_domain_revision_id: str = Field(min_length=1, max_length=128)
+    expected_run_group_generation: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=16, max_length=128)
 
 
 class RunGroupCancelRequest(StrictRequestModel):
@@ -388,6 +415,32 @@ async def list_domain_adapters() -> dict:
     return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
 
 
+async def _launch_context_document(
+    session: AsyncSession,
+    context: ExperimentLaunchContext,
+) -> dict[str, object]:
+    document = context_document(context)
+    if context.preparation_id:
+        preparation = await session.get(ExperimentWorkflowPreparation, context.preparation_id)
+        if preparation is not None:
+            try:
+                scheduler = json.loads(preparation.scheduler_payload_json)
+            except (TypeError, ValueError) as exc:
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is invalid.",
+                    status_code=409,
+                ) from exc
+            if not isinstance(scheduler, dict):
+                raise LaunchContextError(
+                    "launch_context_preparation_invalid",
+                    "Prepared scheduler payload is not an object.",
+                    status_code=409,
+                )
+            document["pinned_scheduler"] = scheduler
+    return document
+
+
 @router.post(
     "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/launch-contexts",
     response_model=LaunchContextResponse,
@@ -412,7 +465,7 @@ async def issue_launch_context(
             workflow_revision_id=payload.workflow_revision_id,
             return_uri=payload.return_uri,
         )
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         await session.commit()
         return document
@@ -429,7 +482,7 @@ async def get_launch_context(
 ) -> dict[str, object]:
     try:
         context = await resolve_launch_context_for_display(session, launch_context_id)
-        document = context_document(context)
+        document = await _launch_context_document(session, context)
         document["pinned_gpu"] = await workflow_pinned_gpu(session, context)
         if context.canonical_job_id is None:
             job_ids = list((await core_session.scalars(
@@ -665,6 +718,563 @@ async def _domain_hierarchy(session: AsyncSession, project_id: str, experiment_i
     return project, experiment, domain
 
 
+def _bounded_scope_diagnostic(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()[:240]
+
+
+def _frustrampnn_scope_state(availability: str, canonical_state: str) -> str:
+    if availability != "available" or canonical_state == "missing":
+        return "missing"
+    if canonical_state in {"succeeded", "completed"}:
+        return "completed"
+    if canonical_state == "failed":
+        return "failed"
+    if canonical_state in {"not_run", "skipped"}:
+        return "skipped"
+    return "missing"
+
+
+@router.get(
+    "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/frustrampnn-results"
+)
+async def list_domain_frustrampnn_results(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    global_experiment_revision_id: str = Query(min_length=1, max_length=128),
+    domain_revision_id: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
+) -> dict[str, Any]:
+    try:
+        await _domain_hierarchy(session, project_id, experiment_id, domain_id)
+        global_revision = await session.get(
+            ExperimentRevision, global_experiment_revision_id
+        )
+        domain_revision = await session.get(ExperimentRevision, domain_revision_id)
+        if global_revision is None or global_revision.subject_id != experiment_id:
+            raise NotFound("Global Experiment revision not found in Global Experiment")
+        if domain_revision is None or domain_revision.subject_id != domain_id:
+            raise NotFound("Domain revision not found in Domain Experiment")
+        parent_edges = list((await session.scalars(
+            select(ExperimentRevisionEdge)
+            .where(
+                ExperimentRevisionEdge.revision_id == domain_revision_id,
+                ExperimentRevisionEdge.role == "parent_global_revision",
+            )
+            .limit(2)
+        )).all())
+        global_revision_resource = await session.get(
+            ExperimentResource, global_experiment_revision_id
+        )
+        domain_revision_resource = await session.get(
+            ExperimentResource, domain_revision_id
+        )
+        if (
+            len(parent_edges) != 1
+            or parent_edges[0].target_resource_id != global_experiment_revision_id
+            or parent_edges[0].ordinal != 0
+            or parent_edges[0].metadata_json
+            != canonical_json({"authority": "server_resolved"})
+            or parent_edges[0].expected_sha256 != global_revision.payload_sha256
+            or hashlib.sha256(global_revision.canonical_payload.encode("utf-8")).hexdigest()
+            != global_revision.payload_sha256
+            or global_revision_resource is None
+            or global_revision_resource.kind != "revision"
+            or global_revision_resource.workspace_id != project_id
+            or global_revision_resource.lifecycle_owner_id != experiment_id
+            or domain_revision_resource is None
+            or domain_revision_resource.kind != "revision"
+            or domain_revision_resource.workspace_id != project_id
+            or domain_revision_resource.lifecycle_owner_id != domain_id
+        ):
+            raise NotFound(
+                "Domain revision not found for the selected Global Experiment revision"
+            )
+    except ExperimentServiceError as exc:
+        raise _service_error(exc) from exc
+
+    rows = list(
+        (
+            await session.execute(
+                select(ExperimentExternalEntityReceipt, ExperimentRevisionEdge)
+                .join(
+                    ExperimentRevisionEdge,
+                    ExperimentRevisionEdge.target_resource_id
+                    == ExperimentExternalEntityReceipt.id,
+                )
+                .where(
+                    ExperimentExternalEntityReceipt.workspace_id == project_id,
+                    ExperimentExternalEntityReceipt.entity_kind.in_(("design", "frustrampnn_result")),
+                    ExperimentRevisionEdge.revision_id == domain_revision_id,
+                    ExperimentRevisionEdge.role == "source_receipt",
+                )
+                .order_by(
+                    ExperimentExternalEntityReceipt.created_at.asc(),
+                    ExperimentExternalEntityReceipt.id.asc(),
+                    ExperimentRevisionEdge.role.asc(),
+                    ExperimentRevisionEdge.ordinal.asc(),
+                )
+                .limit(257)
+            )
+        ).all()
+    )
+    if len(rows) > 256:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "frustrampnn_scope_bound_exceeded",
+                "message": "FrustraMPNN experiment scope exceeds the supported 256-result bound",
+            },
+        )
+
+    items_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
+    selected_design_memberships: list[tuple[ExperimentExternalEntityReceipt, int, str]] = []
+    for row, revision_edge in rows:
+        try:
+            acknowledgement = json.loads(row.acknowledgement_json)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt acknowledgement is invalid",
+                },
+            ) from exc
+        metadata = acknowledgement.get("metadata") if isinstance(acknowledgement, dict) else None
+        if (
+            not isinstance(acknowledgement, dict)
+            or revision_edge.expected_sha256 != row.content_digest
+            or acknowledgement.get("schema") != "bms.global.external-entity-receipt.v1"
+            or acknowledgement.get("store_id") != row.store_id
+            or acknowledgement.get("entity_kind") != row.entity_kind
+            or acknowledgement.get("entity_id") != row.entity_id
+            or acknowledgement.get("entity_revision_id")
+            != row.generation_or_revision
+            or acknowledgement.get("content_digest") != row.content_digest
+            or acknowledgement.get("availability") != row.availability
+            or acknowledgement.get("verifier_id") != row.verification_authority
+            or row.store_id != "core"
+            or not isinstance(metadata, dict)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt authority is invalid",
+                },
+            )
+        if row.entity_kind == "design":
+            design_id = metadata.get("design_id")
+            if (
+                row.verification_authority != "bms.core.protein-result-reference.adapter.v1"
+                or row.availability != "available"
+                or not isinstance(design_id, str)
+                or design_id != row.entity_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_receipt_invalid",
+                        "message": "FrustraMPNN selected source membership is invalid",
+                    },
+                )
+            selected_design_memberships.append((row, int(revision_edge.ordinal), design_id))
+            continue
+        if (
+            row.entity_kind != "frustrampnn_result"
+            or row.verification_authority
+            != "bms.frustrampnn.result-reference.adapter.v1"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt authority is invalid",
+                },
+            )
+        parent_job_id = metadata.get("parent_job_id")
+        invocation_id = metadata.get("invocation_id")
+        candidate_id = metadata.get("candidate_id")
+        operator_label = metadata.get("operator_label")
+        design_id = metadata.get("design_id")
+        source_artifact_id = metadata.get("source_artifact_id")
+        source_artifact_sha256 = metadata.get("source_artifact_sha256")
+        canonical_state = metadata.get("canonical_state")
+        statistics_analysis_state = metadata.get("statistics_analysis_state", "not_started")
+        manifest_sha256 = metadata.get("manifest_sha256")
+        reopen_uri = acknowledgement.get("reopen_uri")
+        scope_state = _frustrampnn_scope_state(row.availability, str(canonical_state))
+        if (
+            not isinstance(parent_job_id, str)
+            or not parent_job_id
+            or not isinstance(invocation_id, str)
+            or not invocation_id
+            or not isinstance(candidate_id, str)
+            or not candidate_id
+            or not isinstance(operator_label, str)
+            or not operator_label
+            or len(operator_label) > 160
+            or (design_id is not None and (not isinstance(design_id, str) or not design_id))
+            or not isinstance(source_artifact_id, str)
+            or not source_artifact_id
+            or not isinstance(source_artifact_sha256, str)
+            or len(source_artifact_sha256) != 64
+            or canonical_state not in {"succeeded", "completed", "failed", "missing", "not_run", "skipped"}
+            or statistics_analysis_state not in {"not_started", "queued", "running", "completed", "failed"}
+            or (
+                scope_state == "completed"
+                and (not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64)
+            )
+            or (
+                scope_state != "completed"
+                and manifest_sha256 is not None
+                and (not isinstance(manifest_sha256, str) or len(manifest_sha256) != 64)
+            )
+            or not isinstance(reopen_uri, str)
+            or not reopen_uri
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_receipt_invalid",
+                    "message": "FrustraMPNN scope receipt identity is incomplete",
+                },
+            )
+        item = {
+            "result_receipt_id": row.id,
+            "parent_job_id": parent_job_id,
+            "invocation_id": invocation_id,
+            "candidate_id": candidate_id,
+            "operator_label": operator_label,
+            "source_identity": {
+                "design_id": design_id,
+                "artifact_id": source_artifact_id,
+                "artifact_sha256": source_artifact_sha256,
+                "candidate_id": candidate_id,
+            },
+            "state": scope_state,
+            "diagnostic": _bounded_scope_diagnostic(metadata.get("diagnostic")),
+            "statistics_analysis": {
+                "state": statistics_analysis_state,
+                "diagnostic": _bounded_scope_diagnostic(
+                    metadata.get("statistics_analysis_diagnostic")
+                ),
+            },
+            "manifest_sha256": manifest_sha256 if scope_state == "completed" else None,
+            "content_digest": row.content_digest,
+            "reopen_uri": reopen_uri,
+        }
+        identity = (parent_job_id, invocation_id)
+        prior = items_by_identity.get(identity)
+        if prior is not None and prior != item:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_identity_conflict",
+                    "message": "FrustraMPNN scope has conflicting receipts for one result identity",
+                },
+            )
+        items_by_identity[identity] = item
+
+    if selected_design_memberships:
+        selected_design_ids = [design_id for _row, _ordinal, design_id in selected_design_memberships]
+        if len(selected_design_ids) != len(set(selected_design_ids)):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_identity_conflict",
+                    "message": "FrustraMPNN scope repeats one selected Design membership",
+                },
+            )
+        designs = list((await core_session.scalars(
+            select(Design).where(Design.id.in_(selected_design_ids)).limit(257)
+        )).all())
+        designs_by_id = {str(design.id): design for design in designs}
+        if len(designs_by_id) != len(selected_design_ids):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_source_unavailable",
+                    "message": "A selected Domain-revision Design is unavailable in the core store",
+                },
+            )
+
+        source_job_ids = sorted({str(design.job_id) for design in designs})
+        source_jobs = list((await core_session.scalars(
+            select(Job).where(Job.id.in_(source_job_ids)).limit(257)
+        )).all())
+        if len(source_jobs) != len(source_job_ids):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_source_unavailable",
+                    "message": "A selected Domain-revision Design has no owning core Job",
+                },
+            )
+        source_jobs_by_id = {str(job.id): job for job in source_jobs}
+        source_batch_ids = sorted({
+            str(job.batch_id) for job in source_jobs if job.batch_id is not None
+        })
+        child_owner_predicates = [
+            Job.parent_job_id.in_(source_job_ids),
+            Job.selection_source_job_id.in_(source_job_ids),
+        ]
+        if source_batch_ids:
+            child_owner_predicates.append(Job.batch_id.in_(source_batch_ids))
+        child_jobs = list((await core_session.scalars(
+            select(Job)
+            .where(
+                Job.model_id == "frustrampnn",
+                Job.child_stage == "frustrampnn",
+                or_(*child_owner_predicates),
+            )
+            .order_by(Job.created_at.desc(), Job.id.desc())
+            .limit(257)
+        )).all())
+        if len(child_jobs) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN scheduler authority exceeds the supported 256-job bound",
+                },
+            )
+        authority_by_design: dict[str, tuple[Job, dict[str, Any]]] = {}
+        memberships_by_design = {
+            design_id: membership
+            for membership, _ordinal, design_id in selected_design_memberships
+        }
+        for child in child_jobs:
+            envelope = (child.params or {}).get("_frustrampnn_child_v1")
+            if not isinstance(envelope, dict):
+                continue
+            selection = envelope.get("selection")
+            invocation_ids = envelope.get("component_invocation_ids")
+            if (
+                envelope.get("schema_name") != "bms.frustrampnn.scheduler-child.v1"
+                or envelope.get("schema_version") != 1
+                or envelope.get("execution_owner_job_id") != child.id
+                or not isinstance(selection, list)
+                or not isinstance(invocation_ids, list)
+                or len(selection) > 256
+                or len(invocation_ids) != len(selection)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_scheduler_authority_invalid",
+                        "message": "FrustraMPNN scheduler child authority is invalid",
+                    },
+                )
+            for member in selection:
+                design_id = member.get("design_id") if isinstance(member, dict) else None
+                source_job_id = member.get("source_job_id") if isinstance(member, dict) else None
+                invocation_id = member.get("invocation_id") if isinstance(member, dict) else None
+                candidate_id = member.get("candidate_id") if isinstance(member, dict) else None
+                source_sha = member.get("sha256") if isinstance(member, dict) else None
+                if design_id not in designs_by_id:
+                    continue
+                design = designs_by_id[str(design_id)]
+                membership = memberships_by_design[str(design_id)]
+                if (
+                    source_job_id != str(design.job_id)
+                    or source_sha != membership.content_digest
+                ):
+                    continue
+                if (
+                    not isinstance(invocation_id, str)
+                    or invocation_id not in invocation_ids
+                    or not isinstance(candidate_id, str)
+                    or not candidate_id
+                    or not isinstance(source_sha, str)
+                    or len(source_sha) != 64
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "frustrampnn_scope_scheduler_authority_invalid",
+                            "message": "FrustraMPNN selected member authority is invalid",
+                        },
+                    )
+                authority_by_design.setdefault(str(design_id), (child, member))
+
+        child_ids = [str(child.id) for child, _member in authority_by_design.values()]
+        results = list((await core_session.scalars(
+            select(FrustraMPNNResult)
+            .where(FrustraMPNNResult.parent_job_id.in_(child_ids or [""]))
+            .limit(257)
+        )).all())
+        if len(results) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN persisted results exceed the supported 256-result bound",
+                },
+            )
+        results_by_identity = {
+            (str(result.parent_job_id), str(result.invocation_id)): result for result in results
+        }
+        analyses = list((await core_session.scalars(
+            select(FrustraMPNNStatisticsAnalysis)
+            .where(FrustraMPNNStatisticsAnalysis.parent_job_id.in_(child_ids or [""]))
+            .order_by(FrustraMPNNStatisticsAnalysis.created_at.desc())
+            .limit(257)
+        )).all())
+        if len(analyses) > 256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "frustrampnn_scope_bound_exceeded",
+                    "message": "FrustraMPNN statistics authority exceeds the supported 256-analysis bound",
+                },
+            )
+        analysis_by_identity: dict[tuple[str, str], FrustraMPNNStatisticsAnalysis] = {}
+        for analysis in analyses:
+            analysis_by_identity.setdefault(
+                (str(analysis.parent_job_id), str(analysis.invocation_id)), analysis
+            )
+
+        projected_items: list[dict[str, Any]] = []
+        for membership, ordinal, design_id in sorted(
+            selected_design_memberships, key=lambda item: (item[1], item[0].id)
+        ):
+            authority = authority_by_design.get(design_id)
+            if authority is None:
+                design = designs_by_id[design_id]
+                source_job = source_jobs_by_id[str(design.job_id)]
+                explicitly_disabled = (source_job.params or {}).get("run_frustrampnn") is False
+                projected_items.append({
+                    "result_receipt_id": membership.id,
+                    "parent_job_id": None,
+                    "invocation_id": None,
+                    "candidate_id": design_id,
+                    "operator_label": str(design.name)[:160],
+                    "source_identity": {
+                        "design_id": design_id,
+                        "artifact_id": design_id,
+                        "artifact_sha256": membership.content_digest,
+                        "candidate_id": design_id,
+                    },
+                    "state": "skipped" if explicitly_disabled else "missing",
+                    "diagnostic": (
+                        "FrustraMPNN was explicitly disabled for this source workflow."
+                        if explicitly_disabled
+                        else "No FrustraMPNN execution exists for this selected Design."
+                    ),
+                    "statistics_analysis": {"state": "not_started", "diagnostic": None},
+                    "manifest_sha256": None,
+                    "content_digest": membership.content_digest,
+                    "reopen_uri": None,
+                })
+                continue
+            child, member = authority
+            invocation_id = str(member["invocation_id"])
+            candidate_id = str(member["candidate_id"])
+            identity = (str(child.id), invocation_id)
+            result = results_by_identity.get(identity)
+            if result is not None and (
+                str(result.design_id or "") != design_id
+                or str(result.candidate_id) != candidate_id
+                or str(result.source_artifact_sha256) != str(member["sha256"])
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_result_authority_conflict",
+                        "message": "Persisted FrustraMPNN result does not match the selected Design authority",
+                    },
+                )
+            analysis = analysis_by_identity.get(identity)
+            source_job = source_jobs_by_id[str(designs_by_id[design_id].job_id)]
+            explicitly_disabled = (source_job.params or {}).get("run_frustrampnn") is False
+            child_state = str(child.queue_status or child.status or "").lower()
+            if explicitly_disabled:
+                state = "skipped"
+                diagnostic = "FrustraMPNN was explicitly disabled for this source workflow."
+            elif child_state == "failed":
+                state = "failed"
+                diagnostic = _bounded_scope_diagnostic(child.error_message)
+            elif child_state in {"cancelled", "canceled"}:
+                state = "missing"
+                diagnostic = (
+                    _bounded_scope_diagnostic(child.error_message)
+                    or "FrustraMPNN execution was cancelled before a persisted result existed."
+                )
+            elif child_state == "completed" and result is not None:
+                state = "completed"
+                diagnostic = None
+            else:
+                state = "missing"
+                diagnostic = "expected persisted result absent"
+            manifest_sha = (
+                str(result.manifest_sha256)
+                if state == "completed" and result is not None
+                else None
+            )
+            projected_items.append({
+                "result_receipt_id": membership.id,
+                "parent_job_id": str(child.id),
+                "invocation_id": invocation_id,
+                "candidate_id": candidate_id,
+                "operator_label": str(designs_by_id[design_id].name)[:160],
+                "source_identity": {
+                    "design_id": design_id,
+                    "artifact_id": (
+                        str(result.source_artifact_id)
+                        if result is not None and result.source_artifact_id
+                        else design_id
+                    ),
+                    "artifact_sha256": str(member["sha256"]),
+                    "candidate_id": candidate_id,
+                },
+                "state": state,
+                "diagnostic": diagnostic,
+                "statistics_analysis": {
+                    "state": str(analysis.state) if analysis is not None else "not_started",
+                    "diagnostic": _bounded_scope_diagnostic(
+                        analysis.diagnostic if analysis is not None else None
+                    ),
+                },
+                "manifest_sha256": manifest_sha,
+                "content_digest": membership.content_digest,
+                "reopen_uri": (
+                    f"/designs/{child.id}?frustrampnn_invocation_id={invocation_id}"
+                ),
+            })
+        for item in projected_items:
+            identity = (
+                item["parent_job_id"] or f"membership:{item['result_receipt_id']}",
+                item["invocation_id"] or item["source_identity"]["design_id"],
+            )
+            prior = items_by_identity.get(identity)
+            if prior is not None and prior != item:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "frustrampnn_scope_identity_conflict",
+                        "message": "FrustraMPNN scope has conflicting native authorities",
+                    },
+                )
+            items_by_identity[identity] = item
+
+    items = list(items_by_identity.values())
+    return {
+        "schema": "bms.project-frustrampnn-result-scope.v1",
+        "project_id": project_id,
+        "global_experiment_id": experiment_id,
+        "global_experiment_revision_id": global_experiment_revision_id,
+        "domain_experiment_id": domain_id,
+        "domain_revision_id": domain_revision_id,
+        "items": items,
+        "count": len(items),
+        "bounded": True,
+    }
+
+
 def _domain_capability_authority(
     revision: ExperimentRevision | None,
 ) -> tuple[str, dict[str, Any]]:
@@ -674,21 +1284,20 @@ def _domain_capability_authority(
         payload = json.loads(revision.canonical_payload)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValidationFailure("current Domain revision authority is malformed") from exc
-    if not isinstance(payload, dict) or payload.get("domain_kind") != "ngs_molbio":
-        raise HTTPException(
-            503,
-            detail={
-                "code": "protein_capability_authority_unavailable",
-                "message": "accepted Protein capability authority is not installed",
-            },
-        )
+    if not isinstance(payload, dict) or payload.get("domain_kind") not in {"ngs_molbio", "protein_in_silico"}:
+        raise ValidationFailure("current Domain kind has no capability authority")
     raw_domain_payload = payload.get("domain_payload")
     if not isinstance(raw_domain_payload, dict):
         raise ValidationFailure("current Domain revision has no exact domain payload authority")
     experiment_mode = raw_domain_payload.get("experiment_mode")
     if not isinstance(experiment_mode, str) or not experiment_mode:
         raise ValidationFailure("current Domain revision has no exact experiment_mode authority")
-    return experiment_mode, capability_inventory()
+    inventory = (
+        protein_capability_inventory()
+        if payload["domain_kind"] == "protein_in_silico"
+        else capability_inventory()
+    )
+    return experiment_mode, inventory
 
 
 def _capability_is_allowed_for_domain(capability: dict[str, Any], experiment_mode: str) -> bool:
@@ -1279,14 +1888,27 @@ async def prepare_domain_plan(project_id: str, experiment_id: str, domain_id: st
                 raise IdempotencyConflict("preparation replay conflicts with its immutable launch authority")
         else:
             prior = await session.scalar(select(ExperimentWorkflowPreparation).join(ExperimentRevision, ExperimentRevision.resource_id == ExperimentWorkflowPreparation.workflow_revision_id).where(ExperimentRevision.subject_id == plan_id).order_by(ExperimentWorkflowPreparation.created_at.desc(), ExperimentWorkflowPreparation.resource_id.desc()))
-            preparation = await prepare_workflow(
-                session,
-                revision_id,
-                {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
-                core_session=core_session,
-            )
-            if prior is not None and prior.resource_id != preparation.resource_id:
-                session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="supersedes", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
+            prior_authority = None
+            if prior is not None:
+                try:
+                    prior_authority = json.loads(prior.normalized_request_json).get("launch_authority")
+                except (TypeError, ValueError):
+                    prior_authority = None
+            if (
+                prior is not None
+                and prior.workflow_revision_id == revision_id
+                and prior_authority == launch_authority
+            ):
+                preparation = prior
+            else:
+                preparation = await prepare_workflow(
+                    session,
+                    revision_id,
+                    {"input_dataset_revision_ids": payload.input_dataset_revision_ids, "launch_authority": launch_authority},
+                    core_session=core_session,
+                )
+                if prior is not None and prior.resource_id != preparation.resource_id:
+                    session.add(ExperimentLineageEdge(id=f"preparation-supersedes:{uuid.uuid4()}", workspace_id=project_id, source_resource_id=preparation.resource_id, target_resource_id=prior.resource_id, edge_mode="retry_of", edge_key="prior-preparation", metadata_json=json.dumps({"reason": "current-authority-revalidation"}), created_at=datetime.now(timezone.utc).isoformat()))
             session.add(ExperimentIdempotencyClaim(scope=scope, idempotency_key=key, request_sha256=digest, result_resource_id=preparation.resource_id, response_json=json.dumps({"preparation_id": preparation.resource_id}), created_at=datetime.now(timezone.utc).isoformat()))
         await session.commit()
         return _preparation_document(preparation)
@@ -1618,6 +2240,242 @@ async def resubmit_domain_run_group(project_id: str, experiment_id: str, domain_
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _service_error(exc) from exc
+
+
+@router.post("/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/run-groups/{run_group_id}/clone", status_code=201)
+async def clone_domain_run_intent(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    run_group_id: str,
+    payload: RunCloneRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    scope = ""
+    key = ""
+    request_sha256 = ""
+    try:
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
+        if not actor or len(actor) > 255:
+            raise ValidationFailure("run clone actor identity is outside the closed receipt bound")
+        _project, _experiment, domain = await _domain_hierarchy(
+            session, project_id, experiment_id, domain_id
+        )
+        key = payload.idempotency_key
+        normalized_request = {
+            "operation": "run-clone",
+            "project_id": project_id,
+            "global_experiment_id": experiment_id,
+            "domain_experiment_id": domain_id,
+            "source_run_group_id": run_group_id,
+            "created_by": actor,
+            **payload.model_dump(by_alias=True),
+        }
+        request_sha256 = hashlib.sha256(
+            canonical_json(normalized_request).encode("utf-8")
+        ).hexdigest()
+        scope = f"run-clone:{hashlib.sha256(f'{project_id}:{domain_id}:{run_group_id}'.encode()).hexdigest()}"
+        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
+        if claim is not None:
+            if claim.request_sha256 != request_sha256:
+                raise IdempotencyConflict("run clone idempotency key conflicts with another request")
+            receipt_resource = await session.get(ExperimentResource, claim.result_resource_id)
+            if receipt_resource is None or receipt_resource.kind != "run_clone_receipt":
+                raise ValidationFailure("persisted run clone receipt authority is unavailable")
+            return json.loads(claim.response_json)
+
+        group = await session.get(ExperimentRunGroup, run_group_id)
+        if group is None or group.workspace_id != project_id:
+            raise NotFound("Run group not found")
+        if group.generation != payload.expected_run_group_generation:
+            raise RevisionConflict("Run group generation changed")
+        if domain.current_revision_id != payload.expected_domain_revision_id:
+            raise RevisionConflict("Domain revision changed")
+
+        source_run = await session.get(ExperimentWorkflowRun, payload.source_run_id)
+        source_attempt = await session.get(ExperimentRunAttempt, payload.source_attempt_id)
+        if (
+            source_run is None
+            or source_run.workspace_id != project_id
+            or source_run.run_group_id != run_group_id
+            or source_attempt is None
+            or source_attempt.workspace_id != project_id
+            or source_attempt.workflow_run_id != source_run.resource_id
+        ):
+            raise ValidationFailure("source attempt does not belong to the exact source run and run group")
+        source_preparation = await session.get(
+            ExperimentWorkflowPreparation, source_attempt.preparation_id
+        )
+        source_revision = await session.get(
+            ExperimentRevision,
+            source_preparation.workflow_revision_id if source_preparation else "",
+        )
+        source_plan = await session.get(
+            ExperimentAggregateHead, source_revision.subject_id if source_revision else ""
+        )
+        if (
+            source_preparation is None
+            or source_preparation.workspace_id != project_id
+            or source_revision is None
+            or source_plan is None
+            or source_plan.aggregate_kind != "workflow"
+            or source_plan.workspace_id != project_id
+            or source_plan.parent_id != domain_id
+        ):
+            raise ValidationFailure("source attempt has no exact immutable Plan authority")
+        source_authority, source_contract = await _stored_plan_authority(session, source_plan)
+        source_payload = json.loads(source_revision.canonical_payload)
+        validate_workflow_payload_for_plan(source_payload, source_contract)
+        requested_settings = source_payload.get("parameters")
+        effective_settings = json.loads(source_preparation.scheduler_payload_json).get("params")
+        if not isinstance(requested_settings, dict) or not isinstance(effective_settings, dict):
+            raise ValidationFailure("source preparation lacks complete requested/effective settings")
+        copied_payload_sha256 = hashlib.sha256(
+            source_revision.canonical_payload.encode("utf-8")
+        ).hexdigest()
+        if copied_payload_sha256 != source_revision.payload_sha256:
+            raise ValidationFailure("source Workflow Plan revision payload digest mismatch")
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        new_plan = await create_workflow(
+            session,
+            project_id,
+            payload.new_workflow_name,
+            source_plan.description,
+            experiment_id=domain_id,
+        )
+        session.add(
+            ExperimentWorkflowPlanAuthority(
+                workflow_id=new_plan.aggregate_id,
+                workspace_id=project_id,
+                domain_experiment_id=domain_id,
+                expected_domain_revision_id=payload.expected_domain_revision_id,
+                capability_contract_json=source_authority.capability_contract_json,
+                capability_contract_sha256=source_authority.capability_contract_sha256,
+                created_at=created_at,
+            )
+        )
+        new_draft = await session.scalar(
+            select(ExperimentWorkflowDraft).where(
+                ExperimentWorkflowDraft.workflow_id == new_plan.aggregate_id
+            )
+        )
+        if new_draft is None or new_draft.generation != 0:
+            raise ValidationFailure("fresh cloned Plan draft authority is unavailable")
+        new_draft.base_revision_id = source_revision.resource_id
+        new_draft.canonical_payload = source_revision.canonical_payload
+        new_draft.updated_at = created_at
+
+        lineage_edge = ExperimentLineageEdge(
+            id=new_id("lineage"),
+            workspace_id=project_id,
+            source_resource_id=new_draft.resource_id,
+            target_resource_id=source_revision.resource_id,
+            edge_mode="derived_from",
+            edge_key="cloned-plan-intent",
+            metadata_json=canonical_json(
+                {
+                    "operation": "run-clone",
+                    "source_run_group_id": run_group_id,
+                    "source_run_id": source_run.resource_id,
+                    "source_attempt_id": source_attempt.resource_id,
+                    "change_summary": payload.change_summary,
+                }
+            ),
+            created_at=created_at,
+        )
+        session.add(lineage_edge)
+        receipt_resource_id = new_id("run-clone-receipt")
+        session.add(
+            ExperimentResource(
+                id=receipt_resource_id,
+                kind="run_clone_receipt",
+                workspace_id=project_id,
+                lifecycle_owner_id=new_plan.aggregate_id,
+                created_at=created_at,
+            )
+        )
+        await session.flush()
+        receipt = {
+            "schema": "bms.run-clone-receipt.v1",
+            "clone_receipt_id": receipt_resource_id,
+            "project_id": project_id,
+            "global_experiment_id": experiment_id,
+            "domain_experiment_id": domain_id,
+            "domain_experiment_revision_id": payload.expected_domain_revision_id,
+            "source_run_group_id": run_group_id,
+            "source_run_id": source_run.resource_id,
+            "source_attempt_id": source_attempt.resource_id,
+            "source_preparation_id": source_preparation.resource_id,
+            "source_workflow_plan_id": source_plan.aggregate_id,
+            "source_workflow_revision_id": source_revision.resource_id,
+            "source_capability_contract_sha256": source_authority.capability_contract_sha256,
+            "source_requested_settings_sha256": hashlib.sha256(
+                canonical_json(requested_settings).encode("utf-8")
+            ).hexdigest(),
+            "source_effective_settings_sha256": hashlib.sha256(
+                canonical_json(effective_settings).encode("utf-8")
+            ).hexdigest(),
+            "new_workflow_plan_id": new_plan.aggregate_id,
+            "new_draft_id": new_draft.resource_id,
+            "new_draft_generation": 0,
+            "copied_payload_sha256": copied_payload_sha256,
+            "lineage_edge_id": lineage_edge.id,
+            "lineage_mode": "derived_from",
+            "lineage_source_resource_id": new_draft.resource_id,
+            "lineage_target_resource_id": source_revision.resource_id,
+            "lineage_edge_key": "cloned-plan-intent",
+            "normalized_request_sha256": request_sha256,
+            "created_by": actor,
+            "created_at": created_at,
+        }
+        receipt["receipt_sha256"] = hashlib.sha256(
+            canonical_json(receipt).encode("utf-8")
+        ).hexdigest()
+        session.add(
+            ExperimentIdempotencyClaim(
+                scope=scope,
+                idempotency_key=key,
+                request_sha256=request_sha256,
+                result_resource_id=receipt_resource_id,
+                response_json=canonical_json(receipt),
+                created_at=created_at,
+            )
+        )
+        add_audit_event(
+            session,
+            workspace_id=project_id,
+            resource_id=domain_id,
+            event_type="run_intent_cloned",
+            generation=domain.head_generation,
+            payload={
+                "clone_receipt_id": receipt_resource_id,
+                "source_run_group_id": run_group_id,
+                "source_run_id": source_run.resource_id,
+                "source_attempt_id": source_attempt.resource_id,
+                "new_workflow_plan_id": new_plan.aggregate_id,
+                "new_draft_id": new_draft.resource_id,
+                "lineage_edge_id": lineage_edge.id,
+                "change_summary": payload.change_summary,
+            },
+        )
+        await session.commit()
+        return receipt
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
+    except IntegrityError:
+        await session.rollback()
+        if not scope or not key or not request_sha256:
+            raise
+        claim = await session.get(ExperimentIdempotencyClaim, (scope, key))
+        if claim is None or claim.request_sha256 != request_sha256:
+            raise
+        receipt_resource = await session.get(ExperimentResource, claim.result_resource_id)
+        if receipt_resource is None or receipt_resource.kind != "run_clone_receipt":
+            raise ValidationFailure("persisted run clone receipt authority is unavailable")
+        return json.loads(claim.response_json)
 
 
 @router.post("/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/run-groups/{run_group_id}/cancel")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import os
 import secrets
@@ -13,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, Mapping
 
+import pyarrow as pa
 from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,11 +29,22 @@ from database import (
     FrustraMPNNResult,
     FrustraMPNNLandscapeRow,
     Job,
+    ScientificArtifactReceipt,
 )
 from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
+from services.frustrampnn.persistence import landscape_page as frustrampnn_landscape_page
 from services.frustrampnn.settings import (
     requested_settings_sha256,
     validate_persisted_requested_settings,
+)
+from services.scientific_artifacts import (
+    ScientificArtifactError,
+    artifact_reference,
+    count_rows,
+    publish_json_payload,
+    publish_table_rows,
+    query_rows,
+    resolve_json_value,
 )
 
 from .contracts import (
@@ -41,7 +54,7 @@ from .contracts import (
     validate_contract_bundle,
     validate_schema,
 )
-from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes
+from .frustrampnn_adapter import bind_cm_candidate_snapshot_bytes, project_cm_structure_map
 from .state_landscape_analysis import (
     MAX_STATE_LANDSCAPE_COMPARISON_ROWS,
     StateLandscapeAnalysisError,
@@ -67,6 +80,23 @@ _RECORD_TYPES = frozenset(
         "frustrampnn_result_references", "failure_receipt",
     }
 )
+_CM_LANDSCAPE_PARQUET_SCHEMA = pa.schema([
+    pa.field("id", pa.string(), nullable=False),
+    pa.field("candidate_id", pa.string(), nullable=False),
+    pa.field("entity_instance_id", pa.string(), nullable=False),
+    pa.field("auth_asym_id", pa.string(), nullable=False),
+    pa.field("auth_seq_id", pa.string(), nullable=False),
+    pa.field("insertion_code", pa.string(), nullable=False),
+    pa.field("sequence_index", pa.int64(), nullable=False),
+    pa.field("wt", pa.string(), nullable=False),
+    pa.field("mutation_aa", pa.string(), nullable=False),
+    pa.field("score", pa.float64()),
+    pa.field("score_class", pa.string()),
+    pa.field("scoreable", pa.bool_(), nullable=False),
+    pa.field("status", pa.string(), nullable=False),
+    pa.field("reason", pa.string()),
+    pa.field("provenance_json", pa.string(), nullable=False),
+])
 
 
 class ConformationalPersistenceError(ValueError):
@@ -405,10 +435,19 @@ async def _replace_record(
         if existing.content_sha256 != digest:
             raise ConformationalPersistenceError("record identity conflicts with previously ingested bytes")
         return
+    artifact_reference = await publish_json_payload(
+        session,
+        owner_kind="conformational_mapping_record",
+        owner_id=f"{request_id}:{record_type}:{record_key}",
+        role="payload",
+        schema_id=f"bms.cm.{record_type}.v1",
+        payload=payload,
+        source_sha256=digest,
+    )
     session.add(
         ConformationalMappingRecord(
             id=str(uuid.uuid4()), request_id=request_id, record_type=record_type,
-            record_key=record_key, content_sha256=digest, payload_json=dict(payload),
+            record_key=record_key, content_sha256=digest, payload_json=artifact_reference,
         )
     )
 
@@ -442,6 +481,62 @@ async def persist_derived_record(
     await _replace_record(session, request_id, record_type, record_key, payload)
 
 
+def _cm_landscape_artifact_rows(
+    request_id: str, landscape: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    candidate_id = str(landscape["candidate_id"])
+    provenance_json = canonical_json_bytes(_landscape_provenance(landscape)).decode("utf-8")
+    rows: list[dict[str, Any]] = []
+    for residue in landscape["residues"]:
+        for slot in residue["slots"]:
+            identity = [
+                request_id,
+                candidate_id,
+                residue["entity_instance_id"],
+                residue["auth_asym_id"],
+                str(residue["auth_seq_id"]),
+                residue["insertion_code"],
+                residue["sequence_index"],
+                residue["wt"],
+                slot["mutation_aa"],
+            ]
+            rows.append({
+                "id": "cm_landscape_row_" + canonical_sha256(identity)[:64],
+                "candidate_id": candidate_id,
+                "entity_instance_id": str(residue["entity_instance_id"]),
+                "auth_asym_id": str(residue["auth_asym_id"]),
+                "auth_seq_id": str(residue["auth_seq_id"]),
+                "insertion_code": str(residue["insertion_code"]),
+                "sequence_index": int(residue["sequence_index"]),
+                "wt": str(residue["wt"]),
+                "mutation_aa": str(slot["mutation_aa"]),
+                "score": None if slot["score"] is None else float(slot["score"]),
+                "score_class": None if slot["class"] is None else str(slot["class"]),
+                "scoreable": bool(slot["scoreable"]),
+                "status": str(slot["status"]),
+                "reason": None if slot["reason"] is None else str(slot["reason"]),
+                "provenance_json": provenance_json,
+            })
+    return rows
+
+
+def _artifact_reference_from_receipt(
+    receipt: ScientificArtifactReceipt,
+) -> dict[str, Any]:
+    return artifact_reference(
+        artifact_id=receipt.artifact_id,
+        owner_kind=receipt.owner_kind,
+        owner_id=receipt.owner_id,
+        role=receipt.role,
+        schema_id=receipt.schema_id,
+        schema_version=receipt.artifact_schema_version,
+        content_sha256=receipt.content_sha256,
+        size_bytes=receipt.size_bytes,
+        row_count=receipt.row_count,
+        relative_path=receipt.relative_path,
+    )
+
+
 async def persist_landscape_matrix(
     session: AsyncSession,
     request_id: str,
@@ -465,27 +560,17 @@ async def persist_landscape_matrix(
         raise ConformationalPersistenceError("candidate landscape conflicts with persisted matrix")
     if existing is None:
         await _replace_record(session, request_id, "landscape", candidate_id, landscape)
-    existing_slot = (
-        await session.execute(
-            select(ConformationalMappingLandscapeRow.id).where(
-                ConformationalMappingLandscapeRow.request_id == request_id,
-                ConformationalMappingLandscapeRow.candidate_id == candidate_id,
-            ).limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing_slot is not None:
-        return
-    for residue in landscape["residues"]:
-        for slot in residue["slots"]:
-            session.add(ConformationalMappingLandscapeRow(
-                id=str(uuid.uuid4()), request_id=request_id, candidate_id=candidate_id,
-                entity_instance_id=residue["entity_instance_id"], auth_asym_id=residue["auth_asym_id"],
-                auth_seq_id=str(residue["auth_seq_id"]), insertion_code=residue["insertion_code"],
-                sequence_index=residue["sequence_index"], wt=residue["wt"],
-                mutation_aa=slot["mutation_aa"], score=slot["score"], score_class=slot["class"],
-                scoreable=slot["scoreable"], status=slot["status"], reason=slot["reason"],
-                provenance_json=_landscape_provenance(landscape),
-            ))
+    artifact_rows = _cm_landscape_artifact_rows(request_id, landscape)
+    await publish_table_rows(
+        session,
+        owner_kind="conformational_mapping_landscape",
+        owner_id=f"{request_id}:{candidate_id}",
+        role="rows",
+        schema_id="bms.cm-landscape.v1",
+        source_sha256=digest,
+        rows=artifact_rows,
+        schema=_CM_LANDSCAPE_PARQUET_SCHEMA,
+    )
 
 
 async def _preflight_state_landscape_analysis_projection(
@@ -683,11 +768,11 @@ async def ingest_result_bundle(
     candidate_snapshot_bindings_by_path: dict[
         str, list[tuple[str, Mapping[str, Any]]]
     ] = {}
+    snapshot_by_target: dict[str, Mapping[str, Any]] = {}
     if canonical_global_mode:
         snapshots = bundle.get("cm_complex_snapshots")
         if not isinstance(snapshots, list) or not snapshots:
             raise ConformationalPersistenceError("canonical CM snapshot authority is missing")
-        snapshot_by_target: dict[str, Mapping[str, Any]] = {}
         try:
             for snapshot in snapshots:
                 if not isinstance(snapshot, Mapping):
@@ -804,6 +889,10 @@ async def ingest_result_bundle(
                 validate_frustrampnn_schema("frustrampnn_structure_map_v1", value)
             for value in landscapes:
                 validate_frustrampnn_schema("frustrampnn_landscape_v2", value)
+            cm_structure_maps_for_persistence = [
+                project_cm_structure_map(value, snapshot_by_target[str(value["target_id"])])
+                for value in structure_maps
+            ]
         except Exception as exc:
             raise ConformationalPersistenceError(
                 "canonical global FrustraMPNN result payload is invalid"
@@ -815,6 +904,7 @@ async def ingest_result_bundle(
             )
         structure_maps = bundle.get("cm_structure_maps") or []
         landscapes = bundle.get("cm_frustration_landscapes") or []
+        cm_structure_maps_for_persistence = structure_maps
     structure_map_ids = {
         str(value.get("candidate_id")) for value in structure_maps
         if isinstance(value, Mapping)
@@ -959,7 +1049,11 @@ async def ingest_result_bundle(
 
     validated_optional_records: list[tuple[str, str, Mapping[str, Any]]] = []
     for bundle_key, record_type in optional_records.items():
-        value = bundle.get(bundle_key)
+        value = (
+            cm_structure_maps_for_persistence
+            if bundle_key == "cm_structure_maps"
+            else bundle.get(bundle_key)
+        )
         if value is None:
             continue
         records = value if isinstance(value, list) else [value]
@@ -1011,14 +1105,7 @@ async def ingest_result_bundle(
         artifacts_to_create.append((artifact_id, item, path))
 
     landscapes_to_insert = bundle.get("cm_frustration_landscapes") or []
-    existing_landscapes = (
-        await session.execute(
-            select(ConformationalMappingLandscapeRow).where(
-                ConformationalMappingLandscapeRow.request_id == record.request_id
-            ).limit(1)
-        )
-    ).scalar_one_or_none()
-    if existing_landscapes is not None and landscapes_to_insert:
+    if landscapes_to_insert:
         stored_records = (
             await session.execute(
                 select(ConformationalMappingRecord).where(
@@ -1027,14 +1114,16 @@ async def ingest_result_bundle(
                 )
             )
         ).scalars().all()
-        stored = {row.record_key: row.content_sha256 for row in stored_records}
-        incoming = {
-            str(value.get("candidate_id") or index): canonical_sha256(value)
-            for index, value in enumerate(landscapes_to_insert)
-        }
-        if incoming != stored:
-            raise ConformationalPersistenceError("landscape retry conflicts with persisted matrix")
-        landscapes_to_insert = []
+        if stored_records:
+            stored = {row.record_key: row.content_sha256 for row in stored_records}
+            incoming = {
+                str(value.get("candidate_id") or index): canonical_sha256(value)
+                for index, value in enumerate(landscapes_to_insert)
+            }
+            if incoming != stored:
+                raise ConformationalPersistenceError(
+                    "landscape retry conflicts with persisted matrix"
+                )
 
     state_analysis_projection = await _preflight_state_landscape_analysis_projection(
         session, record.request_id, proposed_state_analysis,
@@ -1065,21 +1154,7 @@ async def ingest_result_bundle(
         )
 
     for landscape in landscapes_to_insert:
-        for residue in landscape["residues"]:
-            for slot in residue["slots"]:
-                session.add(
-                    ConformationalMappingLandscapeRow(
-                        id=str(uuid.uuid4()), request_id=record.request_id,
-                        candidate_id=landscape["candidate_id"],
-                        entity_instance_id=residue["entity_instance_id"],
-                        auth_asym_id=residue["auth_asym_id"], auth_seq_id=str(residue["auth_seq_id"]),
-                        insertion_code=residue["insertion_code"], sequence_index=residue["sequence_index"],
-                        wt=residue["wt"], mutation_aa=slot["mutation_aa"], score=slot["score"],
-                        score_class=slot["class"], scoreable=slot["scoreable"],
-                        status=slot["status"], reason=slot["reason"],
-                        provenance_json=_landscape_provenance(landscape),
-                    )
-                )
+        await persist_landscape_matrix(session, record.request_id, landscape)
     record.status = "completed"
     record.terminal_at = datetime.now(timezone.utc).replace(tzinfo=None)
     record.updated_at = record.terminal_at
@@ -1239,6 +1314,84 @@ async def paged_landscape(
     ):
         raise ConformationalPersistenceError("invalid landscape sequence range")
 
+    receipt_statement = select(ScientificArtifactReceipt).where(
+        ScientificArtifactReceipt.owner_kind == "conformational_mapping_landscape",
+        ScientificArtifactReceipt.role == "rows",
+        ScientificArtifactReceipt.schema_id == "bms.cm-landscape.v1",
+        ScientificArtifactReceipt.availability == "available",
+    )
+    if candidate_id:
+        receipt_statement = receipt_statement.where(
+            ScientificArtifactReceipt.owner_id == f"{request_id}:{candidate_id}"
+        )
+    else:
+        receipt_statement = receipt_statement.where(
+            ScientificArtifactReceipt.owner_id.like(f"{request_id}:%")
+        )
+    receipts = list((await session.scalars(
+        receipt_statement.order_by(ScientificArtifactReceipt.owner_id)
+    )).all())
+    if receipts:
+        exact_filters = (
+            {"entity_instance_id": entity_instance_id}
+            if entity_instance_id is not None else {}
+        )
+        range_filters = (
+            {"sequence_index": (sequence_start, sequence_end)}
+            if sequence_start is not None or sequence_end is not None else {}
+        )
+        columns = (
+            "id", "candidate_id", "entity_instance_id", "auth_asym_id",
+            "auth_seq_id", "insertion_code", "sequence_index", "wt",
+            "mutation_aa", "score", "score_class", "scoreable", "status",
+            "reason", "provenance_json",
+        )
+        remaining_offset = offset
+        remaining_limit = limit
+        result: list[Any] = []
+        try:
+            for receipt in receipts:
+                reference = _artifact_reference_from_receipt(receipt)
+                candidate_total = count_rows(
+                    reference,
+                    filters=exact_filters,
+                    range_filters=range_filters,
+                )
+                if remaining_offset >= candidate_total:
+                    remaining_offset -= candidate_total
+                    continue
+                page_rows = query_rows(
+                    reference,
+                    columns=columns,
+                    limit=remaining_limit,
+                    offset=remaining_offset,
+                    max_limit=1000,
+                    filters=exact_filters,
+                    range_filters=range_filters,
+                    order_by=(
+                        "candidate_id", "entity_instance_id", "sequence_index",
+                        "mutation_aa", "id",
+                    ),
+                )
+                result.extend(
+                    SimpleNamespace(
+                        **{
+                            **row,
+                            "provenance_json": json.loads(row["provenance_json"]),
+                        }
+                    )
+                    for row in page_rows
+                )
+                remaining_limit -= len(page_rows)
+                remaining_offset = 0
+                if remaining_limit == 0:
+                    break
+        except ScientificArtifactError as exc:
+            raise ConformationalPersistenceError(
+                f"persisted CM landscape artifact is unavailable: {exc}"
+            ) from exc
+        return result
+
     request_record = await session.get(ConformationalMappingRequest, request_id)
     canonical_reference = await session.scalar(
         select(ConformationalMappingRecord).where(
@@ -1247,7 +1400,7 @@ async def paged_landscape(
         )
     )
     if request_record is not None and canonical_reference is not None:
-        reference_payload = canonical_reference.payload_json
+        reference_payload = resolve_json_value(canonical_reference.payload_json)
         reference_rows = reference_payload.get("results") if isinstance(reference_payload, Mapping) else None
         if not isinstance(reference_rows, list) or not reference_rows:
             raise ConformationalPersistenceError(
@@ -1262,81 +1415,94 @@ async def paged_landscape(
             raise ConformationalPersistenceError(
                 "canonical FrustraMPNN landscape references are ambiguous"
             )
-        global_statement = (
-            select(FrustraMPNNLandscapeRow, FrustraMPNNResult.candidate_id)
-            .join(
-                FrustraMPNNResult,
-                (FrustraMPNNResult.parent_job_id == FrustraMPNNLandscapeRow.parent_job_id)
-                & (FrustraMPNNResult.invocation_id == FrustraMPNNLandscapeRow.invocation_id),
-            )
-            .where(
-                FrustraMPNNLandscapeRow.parent_job_id == request_record.job_id,
-                FrustraMPNNLandscapeRow.invocation_id.in_(invocation_ids),
-            )
+        result_statement = select(FrustraMPNNResult).where(
+            FrustraMPNNResult.parent_job_id == request_record.job_id,
+            FrustraMPNNResult.invocation_id.in_(invocation_ids),
         )
         if candidate_id:
-            global_statement = global_statement.where(FrustraMPNNResult.candidate_id == candidate_id)
-        if entity_instance_id:
-            global_statement = global_statement.where(
-                FrustraMPNNLandscapeRow.entity_instance_id == entity_instance_id
+            result_statement = result_statement.where(
+                FrustraMPNNResult.candidate_id == candidate_id
             )
-        if sequence_start is not None:
-            global_statement = global_statement.where(
-                FrustraMPNNLandscapeRow.sequence_index >= sequence_start
-            )
-        if sequence_end is not None:
-            global_statement = global_statement.where(
-                FrustraMPNNLandscapeRow.sequence_index <= sequence_end
-            )
-        result_rows = (await session.execute(
-            global_statement.order_by(
+        global_results = list((await session.scalars(
+            result_statement.order_by(
                 FrustraMPNNResult.candidate_id,
-                FrustraMPNNLandscapeRow.entity_instance_id,
-                FrustraMPNNLandscapeRow.sequence_index,
-                FrustraMPNNLandscapeRow.mutation_aa,
-            ).offset(offset).limit(limit)
-        )).all()
-        return [
-            SimpleNamespace(
-                id=row.id,
-                candidate_id=canonical_candidate_id,
-                entity_instance_id=row.entity_instance_id,
-                auth_asym_id=row.auth_asym_id,
-                auth_seq_id=row.auth_seq_id,
-                insertion_code=row.insertion_code,
-                sequence_index=row.sequence_index,
-                wt=row.wt,
-                mutation_aa=row.mutation_aa,
-                score=row.score,
-                score_class=row.score_class,
-                scoreable=row.scoreable,
-                status=row.status,
-                reason=row.reason,
-                provenance_json=row.provenance_json,
+                FrustraMPNNResult.invocation_id,
             )
-            for row, canonical_candidate_id in result_rows
-        ]
+        )).all())
+        if not candidate_id and {row.invocation_id for row in global_results} != invocation_ids:
+            raise ConformationalPersistenceError(
+                "canonical FrustraMPNN landscape results are incomplete"
+            )
+        remaining_offset = offset
+        remaining_limit = limit
+        result: list[Any] = []
+        for global_result in global_results:
+            first_page = await frustrampnn_landscape_page(
+                session,
+                global_result.parent_job_id,
+                global_result.invocation_id,
+                limit=1,
+                entity_instance_id=entity_instance_id,
+                sequence_start=sequence_start,
+                sequence_end=sequence_end,
+            )
+            candidate_total = int(first_page["total"])
+            if remaining_offset >= candidate_total:
+                remaining_offset -= candidate_total
+                continue
+            local_offset = remaining_offset
+            while remaining_limit and local_offset < candidate_total:
+                page = await frustrampnn_landscape_page(
+                    session,
+                    global_result.parent_job_id,
+                    global_result.invocation_id,
+                    limit=min(500, remaining_limit),
+                    offset=local_offset,
+                    entity_instance_id=entity_instance_id,
+                    sequence_start=sequence_start,
+                    sequence_end=sequence_end,
+                )
+                if not page["items"]:
+                    break
+                result.extend(
+                    SimpleNamespace(
+                        id=row["id"],
+                        candidate_id=global_result.candidate_id,
+                        entity_instance_id=row["entity_instance_id"],
+                        auth_asym_id=row["auth_asym_id"],
+                        auth_seq_id=row["auth_seq_id"],
+                        insertion_code=row["insertion_code"],
+                        sequence_index=row["sequence_index"],
+                        wt=row["wt"],
+                        mutation_aa=row["mutation_aa"],
+                        score=row["score"],
+                        score_class=row["score_class"],
+                        scoreable=row["scoreable"],
+                        status=row["status"],
+                        reason=row["reason"],
+                        provenance_json=row["provenance"],
+                    )
+                    for row in page["items"]
+                )
+                consumed = len(page["items"])
+                remaining_limit -= consumed
+                local_offset += consumed
+            remaining_offset = 0
+            if remaining_limit == 0:
+                break
+        return result
 
-    statement = select(ConformationalMappingLandscapeRow).where(
-        ConformationalMappingLandscapeRow.request_id == request_id
+    has_landscape_record = await session.scalar(
+        select(ConformationalMappingRecord.id).where(
+            ConformationalMappingRecord.request_id == request_id,
+            ConformationalMappingRecord.record_type == "landscape",
+        ).limit(1)
     )
-    if candidate_id:
-        statement = statement.where(ConformationalMappingLandscapeRow.candidate_id == candidate_id)
-    if entity_instance_id:
-        statement = statement.where(
-            ConformationalMappingLandscapeRow.entity_instance_id == entity_instance_id
+    if has_landscape_record is not None:
+        raise ConformationalPersistenceError(
+            "persisted CM landscape artifact receipt is missing"
         )
-    if sequence_start is not None:
-        statement = statement.where(ConformationalMappingLandscapeRow.sequence_index >= sequence_start)
-    if sequence_end is not None:
-        statement = statement.where(ConformationalMappingLandscapeRow.sequence_index <= sequence_end)
-    statement = statement.order_by(
-        ConformationalMappingLandscapeRow.candidate_id,
-        ConformationalMappingLandscapeRow.entity_instance_id,
-        ConformationalMappingLandscapeRow.sequence_index,
-        ConformationalMappingLandscapeRow.mutation_aa,
-    ).offset(offset).limit(limit)
-    return list((await session.execute(statement)).scalars().all())
+    return []
 
 
 async def rollback_request_records(session: AsyncSession, request_id: str) -> None:

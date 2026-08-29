@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-evidence-body.pm03a.v2",
+  "title": "PM-03A authenticated coverage evidence body v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_body_id",
+    "package_id",
+    "coverage_item",
+    "coverage_contract_id",
+    "source_commit",
+    "source_tree",
+    "coverage_denominator",
+    "producer_receipts",
+    "positive_observations",
+    "negative_observations",
+    "resolver_trace",
+    "evidence_kinds",
+    "native_owner_attestations",
+    "self_digest_algorithm",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-evidence-body.pm03a.v2"
+    },
+    "evidence_body_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "const": "PM-03A"
+    },
+    "coverage_item": {
+      "enum": [
+        "project-v2",
+        "global-experiment-v2",
+        "protein-domain-v3",
+        "hierarchy-revisions"
+      ]
+    },
+    "coverage_contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage_denominator": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "producer_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/receiptPointer"
+      }
+    },
+    "positive_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "negative_observations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+      }
+    },
+    "resolver_trace": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "evidence_kinds": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "native_owner_attestations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "global-hierarchy-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "global-protein-owner"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only content_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "project-v2"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.project-v2.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "project-v2-denominator",
+              "project-v2-positive-observation",
+              "project-v2-negative-observation",
+              "project-v2-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "global-experiment-v2"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.global-experiment-v2.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "global-experiment-v2-denominator",
+              "global-experiment-v2-positive-observation",
+              "global-experiment-v2-negative-observation",
+              "global-experiment-v2-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "protein-domain-v3"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.protein-domain-v3.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "protein-domain-v3-denominator",
+              "protein-domain-v3-positive-observation",
+              "protein-domain-v3-negative-observation",
+              "protein-domain-v3-resolver-trace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "coverage_item": {
+            "const": "hierarchy-revisions"
+          }
+        },
+        "required": [
+          "coverage_item"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage_contract_id": {
+            "const": "bms.project-manager.coverage.hierarchy-revisions.v1"
+          },
+          "evidence_kinds": {
+            "const": [
+              "hierarchy-revisions-denominator",
+              "hierarchy-revisions-positive-observation",
+              "hierarchy-revisions-negative-observation",
+              "hierarchy-revisions-resolver-trace"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

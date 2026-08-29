@@ -5,6 +5,7 @@ Handles launching and managing Nextflow pipeline processes.
 """
 
 import asyncio
+import copy
 import codecs
 from collections import deque
 import subprocess
@@ -18,11 +19,12 @@ import shutil
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
+from typing import Callable, Deque, Dict, Any, Iterable, Iterator, Optional, List, Tuple, Set
 import logging
 
 from services import ont_submission_trust, stage_reporting
 from services.frustrampnn.contracts import canonical_json_bytes
+
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,90 @@ NEXTFLOW_ATTEMPT_LOG_MAX_LINES = 1_024
 NEXTFLOW_LOG_MAX_LINE_CHARS = 16_384
 FRUSTRAMPNN_SETTINGS_MAX_BYTES = 64 * 1024
 GPU_REQUIRED_MODEL_IDS = {"protein_local_redesign"}
+
+
+def capture_terminal_job_publication_snapshot(job: Any) -> dict[str, Any]:
+    """Capture every persisted Job column for terminal publication CAS."""
+    from database import Job
+
+    return {
+        column.name: copy.deepcopy(getattr(job, column.name))
+        for column in Job.__table__.columns
+    }
+
+
+async def publish_terminal_job_changes(
+    session: Any,
+    *,
+    job_id: str,
+    snapshot: dict[str, Any],
+    changes: dict[str, Any],
+) -> int:
+    """Apply terminal changes only when the complete Job snapshot is unchanged."""
+    from sqlalchemy import JSON, and_, bindparam, text, update
+    from database import Job
+
+    columns = {column.name: column for column in Job.__table__.columns}
+    if set(snapshot) != set(columns):
+        raise ValueError("terminal publication snapshot does not cover every Job column")
+    if any(field not in columns for field in changes):
+        raise ValueError("terminal publication contains an unknown Job column")
+    if (
+        snapshot.get("status") != "running"
+        or snapshot.get("queue_status") != "running"
+        or snapshot.get("paused") is not False
+        or snapshot.get("awaiting_input") is not False
+        or snapshot.get("awaiting_stage") not in (None, "")
+        or snapshot.get("awaiting_payload") not in (None, {})
+    ):
+        return 0
+    predicates = [Job.id == job_id]
+    for index, (field, value) in enumerate(snapshot.items()):
+        column = columns[field]
+        if isinstance(column.type, JSON):
+            parameter_name = f"snapshot_json_{index}"
+            expected_json = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            column_name = f'jobs."{field}"'
+            predicates.append(
+                text(
+                    f"""
+                    (
+                      ({column_name} IS NULL AND json_type(:{parameter_name}) = 'null')
+                      OR (
+                        {column_name} IS NOT NULL
+                        AND json_valid({column_name})
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM json_tree({column_name}) AS current_json
+                          LEFT JOIN json_tree(:{parameter_name}) AS expected_json
+                            ON expected_json.fullkey = current_json.fullkey
+                          WHERE expected_json.fullkey IS NULL
+                             OR current_json.type IS NOT expected_json.type
+                             OR current_json.atom IS NOT expected_json.atom
+                        )
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM json_tree(:{parameter_name}) AS expected_json
+                          LEFT JOIN json_tree({column_name}) AS current_json
+                            ON current_json.fullkey = expected_json.fullkey
+                          WHERE current_json.fullkey IS NULL
+                             OR current_json.type IS NOT expected_json.type
+                             OR current_json.atom IS NOT expected_json.atom
+                        )
+                      )
+                    )
+                    """
+                ).bindparams(bindparam(parameter_name, expected_json))
+            )
+        else:
+            predicates.append(column.is_(None) if value is None else column == value)
+    result = await session.execute(
+        update(Job)
+        .where(and_(*predicates))
+        .values(**copy.deepcopy(changes))
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
 
 
 def _parse_gpu_authority(raw_value: Any) -> int:
@@ -1838,6 +1924,23 @@ async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> No
 
 
 
+async def _validate_ont_fastq_qc_terminal_completion(
+    job: Any,
+    terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Bind producer resource evidence through the production completion validator."""
+
+    from services.ont_ngs_completion import validate_and_prepare_ont_fastq_qc_completion
+
+    if terminal_resource_receipt_factory is None:
+        raise RuntimeError("ONT FASTQ-QC completion requires producer resource evidence")
+    resource_usage_receipt = terminal_resource_receipt_factory()
+    return await validate_and_prepare_ont_fastq_qc_completion(
+        job,
+        resource_usage_receipt=resource_usage_receipt,
+    )
+
+
 async def launch_nextflow_job(
     job_id: str,
     model_id: str,
@@ -1845,6 +1948,7 @@ async def launch_nextflow_job(
     params: Dict[str, Any],
     output_dir: str,
     allow_running_job: bool = False,
+    terminal_resource_receipt_factory: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> None:
     """
     Launch a Nextflow pipeline job.
@@ -1888,28 +1992,33 @@ async def launch_nextflow_job(
     ) -> bool:
         """Publish an active Job failure and typed receipts in one transaction."""
 
-        changes = {
-            attribute.key: attribute.value
-            for attribute in inspect(failed_job).attrs
-            if attribute.history.has_changes()
-        }
+        mapper = inspect(failed_job)
+        expected_snapshot: dict[str, Any] = {}
+        changes = {}
+        for column in Job.__table__.columns:
+            attribute = mapper.attrs[column.name]
+            history = attribute.history
+            current_value = getattr(failed_job, column.name)
+            expected_snapshot[column.name] = (
+                history.deleted[0]
+                if history.has_changes() and history.deleted
+                else current_value
+            )
+            if history.has_changes():
+                changes[column.name] = current_value
         if "params" in changes:
             changes["params"] = release_scheduler_gpu_assignment(changes["params"])
         else:
             changes["params"] = release_scheduler_gpu_assignment(getattr(failed_job, "params", {}))
         changes["assigned_gpu"] = None
         failure_session.expunge(failed_job)
-        published = await failure_session.execute(
-            update(Job)
-            .where(
-                Job.id == job_id,
-                Job.status == JobStatus.RUNNING.value,
-                Job.queue_status == "running",
-                Job.awaiting_input.is_(False),
-            )
-            .values(**changes)
+        rowcount = await publish_terminal_job_changes(
+            failure_session,
+            job_id=str(job_id),
+            snapshot=expected_snapshot,
+            changes=changes,
         )
-        if published.rowcount:
+        if rowcount:
             from services.conformational_mapping.persistence import (
                 terminalize_failed_request_for_job,
             )
@@ -1924,9 +2033,9 @@ async def launch_nextflow_job(
                 exit_code=exit_code,
             )
         await failure_session.commit()
-        if not published.rowcount:
+        if not rowcount:
             logger.info(stale_log_message, job_id)
-        return bool(published.rowcount)
+        return bool(rowcount)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
@@ -2016,7 +2125,19 @@ async def launch_nextflow_job(
         # both workflows consume deployment-owned CPU defaults from Nextflow
         # configuration instead.
         dynamic_gpu_cpus = None
-        if model_id not in {"conformational_mapping", "frustrampnn"}:
+        launch_workflow_id = str(
+            launch_params.get("ont_workflow_id")
+            or launch_params.get("ont_request_workflow_id")
+            or launch_params.get("workflow_id")
+            or ""
+        ).strip()
+        launch_input_mode = str(launch_params.get("ont_input_mode") or launch_params.get("input_mode") or "").strip()
+        is_fastq_only_ont_launch = (
+            model_id == "nanopore"
+            and launch_workflow_id == "ont_fastq_qc"
+            and launch_input_mode == "fastq"
+        )
+        if model_id not in {"conformational_mapping", "frustrampnn"} and not is_fastq_only_ont_launch:
             dynamic_gpu_cpus = await _resolve_dynamic_gpu_cpu_share(session, job, launch_params)
         if dynamic_gpu_cpus is not None:
             launch_params["cpus_per_gpu"] = dynamic_gpu_cpus
@@ -2561,6 +2682,7 @@ async def launch_nextflow_job(
             if job:
                 # Refresh status to see if it was cancelled by API while we waited
                 await session.refresh(job)
+                terminal_snapshot = capture_terminal_job_publication_snapshot(job)
                 
                 if job.status == JobStatus.CANCELLED.value:
                     logger.info(f"Job {job_id} was cancelled, keeping CANCELLED status")
@@ -2593,11 +2715,42 @@ async def launch_nextflow_job(
                             is_md_parent = (
                                 job.model_id == "molecular_dynamics" and job.mode == "simulate"
                             )
+                            from services.ont_ngs_completion import (
+                                is_ont_fastq_qc_job,
+                                is_ont_signal_alignment_job,
+                                validate_and_prepare_ont_signal_alignment_completion,
+                            )
+
                             if is_md_parent:
                                 from services.md.completion import validate_and_finalize_md_job
 
                                 await validate_and_finalize_md_job(job, session)
                                 logger.info("Validated the immutable MD completion generation for job %s", job_id)
+                            elif is_ont_fastq_qc_job(job):
+                                integrity = await _validate_ont_fastq_qc_terminal_completion(
+                                    job,
+                                    terminal_resource_receipt_factory,
+                                )
+                                logger.info(
+                                    "Validated ONT FASTQ-QC result package for job %s (%s declared artifacts)",
+                                    job_id,
+                                    integrity["declared_artifact_count"],
+                                )
+                            elif is_ont_signal_alignment_job(job):
+                                integrity = await validate_and_prepare_ont_signal_alignment_completion(
+                                    job,
+                                    resource_usage_receipt=(
+                                        terminal_resource_receipt_factory()
+                                        if terminal_resource_receipt_factory is not None
+                                        else None
+                                    ),
+                                )
+                                logger.info(
+                                    "Validated external ONT signal-alignment result package for job %s "
+                                    "(%s declared artifacts)",
+                                    job_id,
+                                    integrity["declared_artifact_count"],
+                                )
                             else:
                                 from services.result_state_integrity import finalize_successful_job
 
@@ -2718,17 +2871,13 @@ async def launch_nextflow_job(
                     # SQL, then conditionally publish only to an active row so
                     # autoflush/direct commit cannot resurrect operator state.
                     session.expunge(job)
-                    published = await session.execute(
-                        update(Job)
-                        .where(
-                            Job.id == job_id,
-                            Job.status == JobStatus.RUNNING.value,
-                            Job.queue_status == "running",
-                            Job.awaiting_input.is_(False),
-                        )
-                        .values(**changes)
+                    published_rowcount = await publish_terminal_job_changes(
+                        session,
+                        job_id=job_id,
+                        snapshot=terminal_snapshot,
+                        changes=changes,
                     )
-                    if published.rowcount and terminalizing_cm_failure:
+                    if published_rowcount and terminalizing_cm_failure:
                         from services.conformational_mapping.persistence import (
                             terminalize_failed_request_for_job,
                         )
@@ -2743,7 +2892,7 @@ async def launch_nextflow_job(
                             exit_code=exit_code,
                         )
                     await session.commit()
-                    if not published.rowcount:
+                    if not published_rowcount:
                         logger.info("Skipped stale Nextflow terminal publication for job %s", job_id)
                     if md_analysis_parent_id:
                         # Reconcile only after the guarded child publication.  The
@@ -2770,6 +2919,7 @@ async def launch_nextflow_job(
                 return
             logger.exception(f"Error running job {job_id}")
             _running_units.pop(job_id, None)
+            await session.rollback()
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
@@ -2902,6 +3052,60 @@ def resolve_nextflow_executable() -> str:
     )
 
 
+PLR_STRUCTURE_VALIDATORS = ("boltz2", "esmfold2", "protenix_v2")
+
+
+def normalize_plr_structure_validators(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate one closed Protein Local Redesign validator suite."""
+    normalized = dict(params or {})
+    selected = normalized.get("structure_validators")
+    if selected is None:
+        legacy = normalized.pop("run_boltz_validation", None)
+        if legacy is True:
+            selected = ["boltz2"]
+        elif legacy is False:
+            raise ValueError("structure_validators must select between one and three validators")
+        else:
+            selected = ["protenix_v2"]
+    else:
+        normalized.pop("run_boltz_validation", None)
+
+    if not isinstance(selected, list):
+        raise ValueError("structure_validators must be a list")
+    if not 1 <= len(selected) <= len(PLR_STRUCTURE_VALIDATORS):
+        raise ValueError("structure_validators must select between one and three validators")
+    if any(not isinstance(value, str) or value not in PLR_STRUCTURE_VALIDATORS for value in selected):
+        raise ValueError("structure_validators contains an unsupported validator")
+    if len(set(selected)) != len(selected):
+        raise ValueError("structure_validators contains duplicates")
+
+    normalized["structure_validators"] = list(selected)
+    return normalized
+
+
+def normalize_plr_input_pdb_path(
+    params: Dict[str, Any],
+    resolve_relative=None,
+) -> Dict[str, Any]:
+    """Absolutize a provisioned relative PLR input_pdb path.
+
+    UI uploads land under the state inputs root and return a relative path
+    like ``inputs/protein_local_redesign/<name>``. Nextflow resolves relative
+    paths against the repo root where the workflow launches, so the adapter
+    must absolutize the value against the same allowed root the upload
+    endpoint wrote to. Absolute paths pass through unchanged.
+    """
+    normalized = dict(params or {})
+    value = normalized.get("input_pdb")
+    if not isinstance(value, str) or not value.strip():
+        return normalized
+    candidate = value.strip()
+    if os.path.isabs(candidate) or resolve_relative is None:
+        return normalized
+    normalized["input_pdb"] = str(resolve_relative(candidate))
+    return normalized
+
+
 def build_nextflow_command(
     model_id: str,
     mode: str,
@@ -2916,6 +3120,11 @@ def build_nextflow_command(
     """
     # Never mutate caller params; launch retries may reuse the same dict.
     params = dict(params or {})
+    if (
+        str(model_id or "").strip().lower() == "protein_modification_experimental"
+        and str(mode or "").strip().lower() == "region_redesign"
+    ):
+        params = normalize_plr_structure_validators(params)
 
     if str(model_id or "").strip() == "frustrampnn":
         if str(mode or "").strip() != "analyze":
@@ -2932,7 +3141,7 @@ def build_nextflow_command(
         if not job_id:
             raise ValueError("FrustraMPNN scheduler launch requires job_id")
         output_root = Path(os.path.abspath(str(output_dir)))
-        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+        expected_manifest = output_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
         manifest_path = Path(os.path.abspath(batch_manifest_path))
         if manifest_path != expected_manifest or manifest_path.is_symlink() or not manifest_path.is_file():
             raise ValueError("FrustraMPNN batch manifest is not the job-owned immutable authority")
@@ -2941,7 +3150,7 @@ def build_nextflow_command(
             raise ValueError("FrustraMPNN scheduler-child envelope is required")
         if envelope.get("execution_owner_job_id") != str(job_id):
             raise ValueError("FrustraMPNN execution owner does not match job_id")
-        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v1.json":
+        if envelope.get("batch_manifest_relative_path") != "inputs/frustrampnn_scheduler_batch_v3.json":
             raise ValueError("FrustraMPNN manifest relative authority is invalid")
         manifest_payload = manifest_path.read_bytes()
         if len(manifest_payload) != envelope.get("batch_manifest_size_bytes"):
@@ -2953,13 +3162,33 @@ def build_nextflow_command(
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("FrustraMPNN batch manifest is invalid JSON") from exc
         records = batch.get("records") if isinstance(batch, dict) else None
+        batching_enabled = batch.get("batching_enabled") if isinstance(batch, dict) else None
+        structures_per_job = batch.get("structures_per_job") if isinstance(batch, dict) else None
         if (
             not isinstance(batch, dict)
+            or set(batch) != {
+                "schema_name",
+                "schema_version",
+                "execution_owner_job_id",
+                "batching_enabled",
+                "structures_per_job",
+                "settings_sha256",
+                "expected_cardinality",
+                "records",
+            }
             or batch.get("schema_name") != "bms_frustrampnn_scheduler_batch"
-            or batch.get("schema_version") != 2
+            or batch.get("schema_version") != 3
             or batch.get("execution_owner_job_id") != str(job_id)
+            or not isinstance(batching_enabled, bool)
+            or isinstance(structures_per_job, bool)
+            or not isinstance(structures_per_job, int)
+            or not 1 <= structures_per_job <= 250
+            or batch.get("settings_sha256") != envelope.get("settings_sha256")
             or not isinstance(records, list)
             or not records
+            or batch.get("expected_cardinality") != len(records)
+            or len(records) > structures_per_job
+            or (not batching_enabled and len(records) != 1)
             or len(records) != len(envelope.get("component_invocation_ids") or [])
         ):
             raise ValueError("FrustraMPNN batch manifest authority is invalid")
@@ -3239,6 +3468,10 @@ def build_nextflow_command(
         effective_profile = resolve_ont_workflow_alias(effective_profile)
         params = normalize_ont_launch_params(effective_profile, params)
         params['workflow_id'] = effective_profile
+    is_fastq_only_ont_command = (
+        effective_profile == 'ont_fastq_qc'
+        and str(params.get('ont_input_mode') or params.get('input_mode') or '').strip() == 'fastq'
+    )
 
     if model_id == 'molecular_dynamics' and params.get('md_job_config'):
         params = dict(params)
@@ -3294,8 +3527,8 @@ def build_nextflow_command(
 
     explicit_code_root = params.get("code_root") or os.getenv("BMS_HOME") or str(get_code_root())
     explicit_weights_root = params.get("weights_root") or os.getenv("BMS_WEIGHTS") or str(get_weights_root())
-    explicit_msa_db = params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db())
-    explicit_msa_cache = params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir())
+    explicit_msa_db = None if is_fastq_only_ont_command else (params.get("msa_local_db") or os.getenv("BMS_COLABFOLD_DB") or str(get_colabfold_db()))
+    explicit_msa_cache = None if is_fastq_only_ont_command else (params.get("msa_cache_dir") or os.getenv("BMS_MSA_CACHE") or str(get_msa_cache_dir()))
     explicit_work_dir = params.get("work_dir") or os.getenv("BMS_WORK") or str(get_work_dir())
     explicit_container_dir = (
         params.get("container_dir")
@@ -3342,14 +3575,17 @@ def build_nextflow_command(
         "code_root": explicit_code_root,
         "data_root": explicit_data_root,
         "weights_root": explicit_weights_root,
-        "msa_local_db": explicit_msa_db,
-        "msa_cache_dir": explicit_msa_cache,
         "container_dir": explicit_container_dir,
         "rfd_models": explicit_rfd_models,
         "af2_models": explicit_af2_models,
         "boltz_models": explicit_boltz_models,
         "alphafold_params": explicit_alphafold_params,
     }
+    if not is_fastq_only_ont_command:
+        explicit_path_defaults.update({
+            "msa_local_db": explicit_msa_db,
+            "msa_cache_dir": explicit_msa_cache,
+        })
     for key, value in explicit_path_defaults.items():
         if params.get(key) in (None, ""):
             cmd.extend([f"--{key}", str(value)])
@@ -3363,10 +3599,18 @@ def build_nextflow_command(
         from services.gpu_config import read_scheduler_config
         from services.msa_server import read_server_settings
 
-        scheduler_cfg = read_scheduler_config() or {}
-        global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
-        overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
-        msa_server_settings = read_server_settings() or {}
+        if is_fastq_only_ont_command:
+            scheduler_cfg = {}
+            global_cfg = {}
+            overrides_cfg = {}
+            msa_server_settings = {}
+            params.pop("msa_preferred_gpus", None)
+            params.pop("msa_excluded_gpus", None)
+        else:
+            scheduler_cfg = read_scheduler_config() or {}
+            global_cfg = scheduler_cfg.get("global", {}) if isinstance(scheduler_cfg, dict) else {}
+            overrides_cfg = scheduler_cfg.get("overrides", {}) if isinstance(scheduler_cfg, dict) else {}
+            msa_server_settings = read_server_settings() or {}
         skip_persisted_msa_pin = (
             str(params.get("structure_validator", "")).strip().lower() == "protenix"
             and str(params.get("protenix_msa_backend", "auto")).strip().lower() == "local"
@@ -3445,31 +3689,35 @@ def build_nextflow_command(
     except Exception as exc:
         logger.warning(f"[MSA] Could not load scheduler GPU policy defaults: {exc}")
 
-    try:
-        from services.anarcii_runtime import (
-            get_default_anarcii_mode,
-            resolve_anarcii_runtime,
-        )
+    if is_fastq_only_ont_command:
+        params.pop("anarcii_execution_mode", None)
+        params.pop("anarcii_gpu_id", None)
+    else:
+        try:
+            from services.anarcii_runtime import (
+                get_default_anarcii_mode,
+                resolve_anarcii_runtime,
+            )
 
-        requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
-        anarcii_runtime = resolve_anarcii_runtime(
-            requested_mode=requested_anarcii_mode,
-            preferred_gpu=params.get("anarcii_gpu_id"),
-            excluded_gpu_ids=params.get("msa_excluded_gpus"),
-        )
-        params["anarcii_execution_mode"] = anarcii_runtime.mode
-        if anarcii_runtime.gpu_id is None:
-            params.pop("anarcii_gpu_id", None)
-        else:
-            params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
-        logger.info(
-            "[ANARCII] Launch runtime=%s gpu=%s (%s)",
-            anarcii_runtime.mode,
-            anarcii_runtime.gpu_id,
-            anarcii_runtime.reason,
-        )
-    except Exception as exc:
-        logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
+            requested_anarcii_mode = params.get("anarcii_execution_mode") or get_default_anarcii_mode()
+            anarcii_runtime = resolve_anarcii_runtime(
+                requested_mode=requested_anarcii_mode,
+                preferred_gpu=params.get("anarcii_gpu_id"),
+                excluded_gpu_ids=params.get("msa_excluded_gpus"),
+            )
+            params["anarcii_execution_mode"] = anarcii_runtime.mode
+            if anarcii_runtime.gpu_id is None:
+                params.pop("anarcii_gpu_id", None)
+            else:
+                params["anarcii_gpu_id"] = anarcii_runtime.gpu_id
+            logger.info(
+                "[ANARCII] Launch runtime=%s gpu=%s (%s)",
+                anarcii_runtime.mode,
+                anarcii_runtime.gpu_id,
+                anarcii_runtime.reason,
+            )
+        except Exception as exc:
+            logger.warning(f"[ANARCII] Could not resolve runtime defaults: {exc}")
     
     # Map model-specific params to Nextflow params
     param_mapping = {
@@ -3669,12 +3917,13 @@ def build_nextflow_command(
             'context_chains': 'plr_context_chains',
             'region_mode': 'plr_region_mode',
             'redesign_ranges': 'plr_redesign_ranges',
+            'sequence_redesign_ranges': 'plr_sequence_redesign_ranges',
             'interface_cutoff': 'plr_interface_cutoff',
             'region_padding': 'plr_region_padding',
             'num_designs': 'plr_num_designs',
             'seq_method': 'plr_seq_method',
             'fix_fixed_sidechains': 'plr_fix_fixed_sidechains',
-            'run_boltz_validation': 'plr_run_boltz_validation',
+            'structure_validators': 'plr_structure_validators',
             'redesign_mode': 'plr_redesign_mode',
             'select_fixed_atoms': 'plr_select_fixed_atoms',
             'contig': 'plr_contig',
@@ -3711,6 +3960,20 @@ def build_nextflow_command(
                 if dest_key not in params:
                     params[dest_key] = params[src_key]
                 params.pop(src_key, None)
+
+        if params.get('plr_structure_validators'):
+            params['plr_validator_suite_active'] = True
+            raw_validators = params['plr_structure_validators']
+            validator_tokens = raw_validators if isinstance(raw_validators, list) else str(raw_validators).split(',')
+            selected_validators = {
+                str(token).strip().lower()
+                for token in validator_tokens
+                if str(token).strip()
+            }
+            if 'protenix_v2' in selected_validators and not params.get('protenix_msa_backend'):
+                requested_msa_provider = str(params.get('msa_provider', '')).strip().lower()
+                if requested_msa_provider in {'local', 'colabfold_api'}:
+                    params['protenix_msa_backend'] = requested_msa_provider
 
         if 'plr_num_designs' in params and 'rfd_num_designs' not in params:
             params['rfd_num_designs'] = params['plr_num_designs']
@@ -4107,6 +4370,15 @@ def build_nextflow_command(
             elif isinstance(value, dict):
                 if key == "frustrampnn_settings":
                     transport_value = dict(value)
+                    protein_selection = transport_value.get("protein_selection")
+                    if (
+                        isinstance(protein_selection, dict)
+                        and "regions" not in protein_selection
+                    ):
+                        transport_value["protein_selection"] = {
+                            **protein_selection,
+                            "regions": [],
+                        }
                     settings_value_origin = transport_value.pop(
                         "settings_value_origin", None
                     )

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
+from typing import Any, cast
 import pytest
 from fastapi import Request
 from fastapi.routing import APIRoute
 
+import experiment_services
+from experiment_services import workflow_plan_capability_contract
 from routers import project_manager
+from services.global_experiments import launch_contexts
 from routers.projects import router
 
 
@@ -12,6 +18,61 @@ def test_domain_activity_uses_the_frozen_singular_route() -> None:
     paths = {route.path for route in router.routes if isinstance(route, APIRoute)}
     assert "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activity" in paths
     assert "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activities" not in paths
+
+
+def test_protein_domain_exposes_accepted_esmfold2_plan_capability() -> None:
+    revision = SimpleNamespace(canonical_payload=json.dumps({
+        "domain_kind": "protein_in_silico",
+        "domain_payload": {"experiment_mode": "folding_structure_prediction"},
+    }))
+    experiment_mode, inventory = project_manager._domain_capability_authority(cast(Any, revision))
+
+    assert experiment_mode == "folding_structure_prediction"
+    assert [item["capability_id"] for item in inventory["capabilities"]] == [
+        "protein.structure_prediction.esmfold2"
+    ]
+    capability = inventory["capabilities"][0]
+    assert project_manager._capability_is_allowed_for_domain(capability, experiment_mode)
+    contract = workflow_plan_capability_contract(capability["capability_id"])
+    assert contract["allowed_model_modes"] == [{"model_id": "esmfold2", "mode": "predict"}]
+
+
+def test_protein_plan_draft_binds_source_receipt_and_native_request() -> None:
+    builder = cast(Any, getattr(experiment_services, "initial_workflow_plan_payload", None))
+    assert callable(builder), "server-owned Plan draft builder is missing"
+    contract = workflow_plan_capability_contract("protein.structure_prediction.esmfold2")
+    draft = cast(dict[str, Any], builder(
+        plan_name="1UBQ ESMFold2 governed run",
+        capability_contract=contract,
+        domain_payload={
+            "domain_kind": "protein_in_silico",
+            "domain_payload": {"target": {"source_receipt_ids": ["receipt-1"]}},
+        },
+    ))
+
+    assert draft["source_receipt_ids"] == ["receipt-1"]
+    assert "sequence" not in draft["parameters"]
+    assert draft["scheduler"] == {
+        "name": "1UBQ ESMFold2 governed run",
+        "model_id": "esmfold2",
+        "mode": "predict",
+        "params": {**draft["parameters"], "workflow_adapter": "bms.core-job.esmfold2.adapter.v1"},
+    }
+
+
+def test_bound_native_job_injects_only_server_owned_workflow_adapter() -> None:
+    normalizer = cast(Any, getattr(launch_contexts, "normalize_bound_job_params", None))
+    assert callable(normalizer), "bound Job parameter normalizer is missing"
+    expected = {"sequence": "MQIFVK", "workflow_adapter": "bms.core-job.esmfold2.adapter.v1"}
+    assert normalizer(
+        supplied_params={"sequence": "MQIFVK"},
+        expected_params=expected,
+    ) == expected
+    with pytest.raises(launch_contexts.LaunchContextError, match="workflow adapter"):
+        normalizer(
+            supplied_params={"sequence": "MQIFVK", "workflow_adapter": "wrong"},
+            expected_params=expected,
+        )
 
 
 @pytest.mark.asyncio

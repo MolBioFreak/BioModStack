@@ -4,7 +4,7 @@ def shellQuote(value) {
 }
 
 process ConstructVerify {
-    label 'local_cpu'
+    label 'fastq_qc_cpu'
     publishDir "${params.out_dir}", mode: 'copy'
     tag "construct_verify"
 

@@ -86,6 +86,7 @@ def _tree_node(
 def _head_summary(head: ExperimentAggregateHead, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": head.aggregate_id,
+        "project_scope": payload.get("project_scope", "global"),
         "name": str(payload.get("name") or head.display_name),
         "objective": str(payload.get("research_objective") or payload.get("objective") or ""),
         "lifecycle_state": head.lifecycle_state,
@@ -628,6 +629,8 @@ def _run_item(
     adapter_id = _first_value([terminal, binding, scheduler_params, workflow], "adapter_id", "workflow_adapter")
     effective_state = latest.state if latest is not None else run.state
     available_actions = ["view_lineage"]
+    if latest is not None:
+        available_actions.append("clone")
     if effective_state == "completed" and output_receipt_ids:
         available_actions.insert(0, "open_results")
     if effective_state == "failed":
@@ -996,6 +999,168 @@ async def build_project_manager_read_model(
         }
     ]
     stable_map_edges: list[dict[str, Any]] = []
+
+    ngs_project_links = list(
+        (
+            await session.scalars(
+                select(ExperimentLineageEdge)
+                .where(
+                    ExperimentLineageEdge.workspace_id == project_id,
+                    ExperimentLineageEdge.source_resource_id == project_id,
+                    ExperimentLineageEdge.edge_mode == "references",
+                    ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
+                )
+                .order_by(ExperimentLineageEdge.created_at, ExperimentLineageEdge.id)
+                .limit(MAX_MAP_NODES + 1)
+            )
+        ).all()
+    )
+    if len(ngs_project_links) > MAX_MAP_NODES:
+        raise ValidationFailure("NGS/MolBio Project links exceed the supported relationship-map bound")
+    linked_local_ids = sorted({edge.target_resource_id for edge in ngs_project_links})
+    stable_map_nodes[0]["counts"]["linked_ngs_molbio_projects"] = len(linked_local_ids)
+    linked_local_heads = list(
+        (
+            await session.scalars(
+                select(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id.in_(linked_local_ids),
+                    ExperimentAggregateHead.aggregate_kind == "workspace",
+                )
+            )
+        ).all()
+    ) if linked_local_ids else []
+    linked_local_payloads = {
+        head.aggregate_id: await _payload(session, head) for head in linked_local_heads
+    }
+    linked_local_by_id = {head.aggregate_id: head for head in linked_local_heads}
+    link_metadata = {edge.id: json.loads(edge.metadata_json) for edge in ngs_project_links}
+    shared_experiment_ids = sorted({
+        experiment_id
+        for metadata in link_metadata.values()
+        for experiment_id in metadata.get("experiment_ids", [])
+    })
+    shared_result_ids = sorted({
+        result_id
+        for metadata in link_metadata.values()
+        for result_id in metadata.get("result_ids", [])
+    })
+    shared_experiment_heads = list(
+        (
+            await session.scalars(
+                select(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id.in_(shared_experiment_ids)
+                )
+            )
+        ).all()
+    ) if shared_experiment_ids else []
+    shared_experiment_by_id = {head.aggregate_id: head for head in shared_experiment_heads}
+    shared_result_receipts = list(
+        (
+            await session.scalars(
+                select(ExperimentExternalEntityReceipt).where(
+                    ExperimentExternalEntityReceipt.id.in_(shared_result_ids)
+                )
+            )
+        ).all()
+    ) if shared_result_ids else []
+    shared_result_by_id = {receipt.id: receipt for receipt in shared_result_receipts}
+    for edge in ngs_project_links:
+        local_head = linked_local_by_id.get(edge.target_resource_id)
+        if local_head is None:
+            continue
+        metadata = link_metadata[edge.id]
+        local_key = _key("local_ngs_molbio_project", local_head.aggregate_id)
+        local_link_metadata = [
+            link_metadata[candidate.id]
+            for candidate in ngs_project_links
+            if candidate.target_resource_id == local_head.aggregate_id
+        ]
+        local_experiment_ids = {
+            experiment_id
+            for candidate_metadata in local_link_metadata
+            for experiment_id in candidate_metadata.get("experiment_ids", [])
+        }
+        local_result_ids = {
+            result_id
+            for candidate_metadata in local_link_metadata
+            for result_id in candidate_metadata.get("result_ids", [])
+        }
+        stable_map_nodes.append(
+            {
+                "node_key": local_key,
+                "node_type": "local_ngs_molbio_project",
+                "label": str(linked_local_payloads[local_head.aggregate_id].get("name") or local_head.display_name),
+                "normalized_state": local_head.lifecycle_state,
+                "canonical_identity": {"store_id": "global", "entity_id": local_head.aggregate_id},
+                "counts": {
+                    "shared_experiments": len(local_experiment_ids),
+                    "shared_results": len(local_result_ids),
+                },
+                "reconciliation": {"state": "current", "last_verified_at": edge.created_at, "reason": None},
+                "allowed_actions": ["select", "open"],
+            }
+        )
+        stable_map_edges.append(
+            {
+                "source_node_key": _key("project", project_id),
+                "target_node_key": local_key,
+                "lineage_mode": "references",
+                "edge_key": edge.edge_key,
+                "accessible_label": "Broader Project references selected Experiments and Results from local NGS/MolBio Project",
+            }
+        )
+        for experiment_id in metadata.get("experiment_ids", []):
+            experiment_head = shared_experiment_by_id.get(experiment_id)
+            if experiment_head is None:
+                continue
+            experiment_key = _key("shared_ngs_molbio_experiment", experiment_id)
+            stable_map_nodes.append(
+                {
+                    "node_key": experiment_key,
+                    "node_type": "shared_ngs_molbio_experiment",
+                    "label": experiment_head.display_name,
+                    "normalized_state": experiment_head.lifecycle_state,
+                    "canonical_identity": {"store_id": "global", "entity_id": experiment_id},
+                    "counts": {},
+                    "reconciliation": {"state": "current", "last_verified_at": edge.created_at, "reason": None},
+                    "allowed_actions": ["select", "open"],
+                }
+            )
+            stable_map_edges.append(
+                {
+                    "source_node_key": local_key,
+                    "target_node_key": experiment_key,
+                    "lineage_mode": "exposes",
+                    "edge_key": f"{edge.edge_key}:experiment:{experiment_id}",
+                    "accessible_label": "Local NGS/MolBio Project exposes contained Experiment",
+                }
+            )
+        for result_id in metadata.get("result_ids", []):
+            result_receipt = shared_result_by_id.get(result_id)
+            if result_receipt is None:
+                continue
+            result_key = _key("shared_ngs_molbio_result", result_id)
+            stable_map_nodes.append(
+                {
+                    "node_key": result_key,
+                    "node_type": "shared_ngs_molbio_result",
+                    "label": f"{result_receipt.entity_kind}: {result_receipt.entity_id}",
+                    "normalized_state": result_receipt.availability,
+                    "canonical_identity": {"store_id": result_receipt.store_id, "entity_id": result_receipt.entity_id},
+                    "counts": {},
+                    "reconciliation": {"state": "current", "last_verified_at": edge.created_at, "reason": None},
+                    "allowed_actions": ["select", "open"],
+                }
+            )
+            stable_map_edges.append(
+                {
+                    "source_node_key": local_key,
+                    "target_node_key": result_key,
+                    "lineage_mode": "shares_result",
+                    "edge_key": f"{edge.edge_key}:result:{result_id}",
+                    "accessible_label": "Local NGS/MolBio Project exposes governed native Result reference",
+                }
+            )
     for global_head in context_globals:
         node_key = _key("global_experiment", global_head.aggregate_id)
         stable_map_nodes.append(

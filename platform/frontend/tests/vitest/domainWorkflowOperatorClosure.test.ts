@@ -82,8 +82,19 @@ describe('NGS/MolBio frontend closure wiring', () => {
         const workspace = readFileSync(resolve(process.cwd(), 'src/components/molbio-ngs/DomainExperimentWorkspace.tsx'), 'utf8');
 
         expect(manager).toContain("section: 'workflow-plans'");
-        expect(inspector).toContain('Select NGS/MolBio capability');
+        expect(inspector).toContain("selection.summary.schema === 'bms.protein-in-silico-experiment.v3'");
+        expect(inspector).toContain('Open Plans &amp; Runs workspace');
         expect(workspace).toContain('<DomainWorkflowOperator');
+    });
+
+    it('routes the selected NGS Domain to its ordinary persisted Run Inspector', () => {
+        const manager = readFileSync(resolve(process.cwd(), 'src/pages/ProjectManager.tsx'), 'utf8');
+        const inspector = readFileSync(resolve(process.cwd(), 'src/components/project-manager/ProjectInspector.tsx'), 'utf8');
+
+        expect(manager).toContain("section: 'analyses'");
+        expect(manager).toContain('onOpenNgsRuns={openNgsRunInspector}');
+        expect(inspector).toContain('Open NGS Run Inspector');
+        expect(inspector).toContain('selection.summary.domain_payload');
     });
 
     it('uses one pinned typed destination and retains exact return/reopen context', () => {
@@ -96,6 +107,7 @@ describe('NGS/MolBio frontend closure wiring', () => {
         expect(operator).toContain('requested={selection.preparation.requested_settings}');
         expect(operator).toContain('effective={selection.preparation.effective_settings}');
         expect(operator).toContain('launch_context_id: launchContextId');
+        expect(operator).toContain('params: { ...parameterValues, workflow_adapter: draft.adapter_id }');
         expect(operator).not.toContain("appendLaunchContext('/molbio'");
         expect(operator).not.toContain("appendLaunchContext('/ngs'");
     });

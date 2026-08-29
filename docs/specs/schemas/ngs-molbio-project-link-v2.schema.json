@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.ngs-molbio-project-link.v2",
+  "title": "NGS/MolBio Project association head and current revision v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "link_id",
+    "link_revision_id",
+    "revision_number",
+    "head_generation",
+    "state",
+    "global_project_id",
+    "global_project_revision_id",
+    "global_project_generation",
+    "global_project_sha256",
+    "local_project_id",
+    "local_project_revision_id",
+    "local_project_generation",
+    "local_project_sha256",
+    "experiments",
+    "result_receipt_ids",
+    "supersedes_link_revision_id",
+    "legacy_source_link_id",
+    "created_by",
+    "change_summary",
+    "created_at"
+  ],
+  "properties": {
+    "schema": {"const": "bms.ngs-molbio-project-link.v2"},
+    "link_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "link_revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "revision_number": {"type": "integer", "minimum": 0},
+    "head_generation": {"type": "integer", "minimum": 0},
+    "state": {"enum": ["active", "revoked"]},
+    "global_project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "global_project_revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "global_project_generation": {"type": "integer", "minimum": 0},
+    "global_project_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "local_project_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "local_project_revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "local_project_generation": {"type": "integer", "minimum": 0},
+    "local_project_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "experiments": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["experiment_id", "experiment_revision_id", "experiment_generation", "experiment_sha256"],
+        "properties": {
+          "experiment_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "experiment_revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "experiment_generation": {"type": "integer", "minimum": 0},
+          "experiment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "result_receipt_ids": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "supersedes_link_revision_id": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 128},
+        {"type": "null"}
+      ]
+    },
+    "legacy_source_link_id": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 128},
+        {"type": "null"}
+      ]
+    },
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "change_summary": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"revision_number": {"const": 0}}, "required": ["revision_number"]},
+      "then": {
+        "properties": {
+          "head_generation": {"const": 0},
+          "state": {"const": "active"},
+          "supersedes_link_revision_id": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"revision_number": {"minimum": 1}}, "required": ["revision_number"]},
+      "then": {
+        "properties": {
+          "supersedes_link_revision_id": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"state": {"const": "active"}}, "required": ["state"]},
+      "then": {"properties": {"experiments": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"state": {"const": "revoked"}}, "required": ["state"]},
+      "then": {
+        "properties": {
+          "experiments": {"maxItems": 0},
+          "result_receipt_ids": {"maxItems": 0},
+          "supersedes_link_revision_id": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      }
+    }
+  ]
+}

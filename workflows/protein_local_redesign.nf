@@ -1,13 +1,32 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
+params.plr_validator_suite_active = true
+
 include { RunRFD3 ; FilterRFD3 } from '../modules/rfd3.nf'
 include { RunFAMPNN ; FilterFAMPNN } from '../modules/fampnn.nf'
 include { RunMPNN ; FilterMPNN } from '../modules/proteinmpnn.nf'
 include { PrepBoltz ; RunBoltz } from '../modules/boltz.nf'
+include { ESMFold2FromPdb } from '../modules/esmfold2_experimental.nf'
+include { ProtenixFromComplex } from '../modules/protenix.nf'
 
 def shellQuote(value) {
     return "'" + value.toString().replace("'", "'\"'\"'") + "'"
+}
+
+def parseProteinLocalValidators(raw) {
+    def values = raw == null
+        ? ['protenix_v2']
+        : raw.toString().split(',').collect { it.trim() }.findAll { it }
+    def supported = ['boltz2', 'esmfold2', 'protenix_v2']
+    if (values.size() < 1 || values.size() > 3 || values.toSet().size() != values.size()) {
+        throw new IllegalArgumentException('plr_structure_validators must contain one to three unique validators')
+    }
+    def unknown = values.findAll { !supported.contains(it) }
+    if (unknown) {
+        throw new IllegalArgumentException("Unsupported Protein Local Redesign validators: ${unknown.join(',')}")
+    }
+    return supported.findAll { values.contains(it) }
 }
 
 def loadProteinLocalDesignArtifacts(rawDir) {
@@ -44,6 +63,134 @@ def partitionProteinLocalGpuBatches(allPdbs, gpus) {
         [batchId, pdb]
     }
     return batches
+}
+
+process PrepareProteinLocalValidatorInput {
+    tag "${producer_meta.candidate_id}"
+    label 'process_low'
+    errorStrategy 'ignore'
+
+    publishDir "${params.out_dir}/validation/contracts", mode: 'copy', pattern: '*.validator_contract.json'
+
+    input:
+    tuple val(producer_meta), path(source_pdb)
+
+    output:
+    tuple val(producer_meta), path(source_pdb), path('*.validator_contract.json'), path('*.protenix.json'), emit: prepared
+
+    script:
+    def candidateId = producer_meta.candidate_id
+    """
+    set -euo pipefail
+    python3 ${params.code_root}/scripts/prepare_protein_local_validator_input.py \
+        --input-pdb ${shellQuote(source_pdb)} \
+        --contract-out ${candidateId}.validator_contract.json \
+        --protenix-out ${candidateId}.protenix.json \
+        --model-seeds ${shellQuote(params.protenix_seeds ?: '42')}
+    """
+}
+
+process FinalizeProteinLocalValidatorSuite {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/validation", mode: 'copy', pattern: 'validator_suite_receipt.json'
+
+    input:
+    val requested_validators
+    val expected_candidate_count
+    val validator_summaries
+
+    output:
+    path 'validator_suite_receipt.json', emit: receipt
+
+    script:
+    def normalized = validator_summaries.collectEntries { [(it.validator): (it.completed_candidates as Integer)] }
+    def expectedCount = expected_candidate_count as Integer
+    def artifactRoots = [
+        boltz2: 'validation/boltz2',
+        esmfold2: 'validation/esmfold2',
+        protenix_v2: 'validation/protenix_v2',
+    ]
+    def enrichedSummaries = requested_validators.collect { validator ->
+        def completedCount = normalized.get(validator, 0) as Integer
+        [
+            validator: validator,
+            state: expectedCount > 0 && completedCount == expectedCount ? 'complete' : 'failed',
+            completed_candidates: completedCount,
+            expected_candidate_count: expectedCount,
+            artifact_root: artifactRoots[validator],
+        ]
+    }
+    def completeCount = enrichedSummaries.count { it.state == 'complete' }
+    def state = expectedCount < 1
+        ? 'failed'
+        : (completeCount == requested_validators.size() ? 'complete' : (completeCount == 0 ? 'failed' : 'partial'))
+    def receipt = [
+        schema_version: 1,
+        workflow: 'protein_local_redesign',
+        state: state,
+        state_vocabulary: ['complete', 'partial', 'failed'],
+        requested_validators: requested_validators,
+        expected_candidate_count: expected_candidate_count,
+        contract_root: 'validation/contracts',
+        validator_summaries: enrichedSummaries,
+    ]
+    def receiptJson = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(receipt))
+    """
+    cat > validator_suite_receipt.json <<'EOF'
+${receiptJson}
+EOF
+    """
+}
+
+process EnforceProteinLocalValidatorSuite {
+    label 'process_low'
+
+    input:
+    path suite_receipt
+
+    output:
+    path 'validator_suite_complete', emit: complete
+
+    script:
+    """
+    python3 - <<'PY'
+import json
+from pathlib import Path
+
+receipt_path = Path('${suite_receipt}')
+receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+if receipt.get('state') != 'complete':
+    raise SystemExit(
+        'Protein Local Redesign validator suite is '
+        + str(receipt.get('state'))
+        + ': '
+        + json.dumps(receipt, sort_keys=True, separators=(',', ':'))
+    )
+PY
+    touch validator_suite_complete
+    """
+}
+
+process StageProteinLocalValidatedCandidates {
+    label 'process_low'
+
+    publishDir "${params.out_dir}/validation/review_candidates", mode: 'copy', pattern: 'review_candidates/*.pdb', saveAs: { filename -> filename.replace('review_candidates/', '') }
+
+    input:
+    path candidate_pdbs
+    path suite_receipt
+    path validator_suite_complete
+
+    output:
+    path 'review_candidates/*.pdb', emit: candidates
+
+    script:
+    """
+    test -s ${suite_receipt}
+    mkdir -p review_candidates
+    cp ${candidate_pdbs} review_candidates/
+    """
 }
 
 process OpenInteractiveGate {
@@ -100,6 +247,7 @@ process ResolveProteinLocalRegion {
     script:
     def contextChains = (params.plr_context_chains ?: '').toString()
     def redesignRanges = (params.plr_redesign_ranges ?: '').toString()
+    def sequenceRedesignRanges = (params.plr_sequence_redesign_ranges ?: '').toString()
     def modelNumberArg = params.plr_model_number != null ? "--model_number ${params.plr_model_number}" : ''
     """
     python3 ${params.code_root}/scripts/resolve_redesign_regions.py \
@@ -109,8 +257,9 @@ process ResolveProteinLocalRegion {
         --context_chains '${contextChains}' \
         --region_mode ${params.plr_region_mode ?: 'manual_ranges'} \
         --redesign_ranges '${redesignRanges}' \
+        --sequence_redesign_ranges '${sequenceRedesignRanges}' \
         --interface_cutoff ${params.plr_interface_cutoff ?: 6.0} \
-        --region_padding ${params.plr_region_padding ?: 2} \
+        --region_padding ${params.containsKey('plr_region_padding') ? params.plr_region_padding : 2} \
         --output_seed_pdb resolved_design_chain.pdb \
         --output_manifest region_manifest.json
     """
@@ -327,9 +476,10 @@ process ExportProteinLocalMPNNResults {
 
 process ExportProteinLocalBoltzPredictions {
     label 'process_low'
+    errorStrategy 'ignore'
 
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
-    publishDir "${params.out_dir}/pdb_files/predictions", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.pdb', saveAs: { fn -> fn.replace('published/', '') }
+    publishDir "${params.out_dir}/validation/boltz2", mode: 'copy', pattern: 'published/*.json', saveAs: { fn -> fn.replace('published/', '') }
 
     input:
     tuple path(pdb_files), path(json_files)
@@ -550,37 +700,108 @@ workflow PROTEIN_LOCAL_REDESIGN {
         return
     }
 
-    def shouldRunBoltzValidation = params.plr_run_boltz_validation != false && !resumeFromValidation
+    def selectedValidators = parseProteinLocalValidators(params.plr_structure_validators)
 
-    if (shouldRunBoltzValidation) {
-        PrepBoltz(finalDesignPdbs)
-        PrepBoltz.out.yamls
-            .collect()
-            .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
-            .flatten()
-            .groupTuple()
-            .set { boltzInput }
-        RunBoltz(boltzInput)
-        ExportProteinLocalBoltzPredictions(RunBoltz.out.pdbs_jsons)
+    if (!resumeFromValidation) {
+        def validatorSummaryChannels = []
+        def expectedCandidateCount = finalDesignPdbs.map { pdbs -> (pdbs instanceof Collection ? pdbs.size() : 0) as Integer }
+
+        if (selectedValidators.contains('boltz2')) {
+            PrepBoltz(finalDesignPdbs)
+            PrepBoltz.out.yamls
+                .collect()
+                .map { allPdbs -> partitionProteinLocalGpuBatches(allPdbs, params.gpus) }
+                .flatten()
+                .groupTuple()
+                .set { boltzInput }
+            RunBoltz(boltzInput)
+            ExportProteinLocalBoltzPredictions(RunBoltz.out.pdbs_jsons)
+            validatorSummaryChannels << RunBoltz.out.completion
+                .map { completionReceipt ->
+                    def payload = new groovy.json.JsonSlurper().parse(completionReceipt.toFile())
+                    (payload.completed_candidates instanceof Collection ? payload.completed_candidates.size() : 0) as Integer
+                }
+                .collect()
+                .map { completedCounts -> [validator: 'boltz2', completed_candidates: completedCounts.sum(0) as Integer] }
+                .ifEmpty { [validator: 'boltz2', completed_candidates: 0] }
+        }
+
+        def needsTypedInputs = selectedValidators.any { it in ['esmfold2', 'protenix_v2'] }
+        if (needsTypedInputs) {
+            finalDesignPdbs
+                .flatten()
+                .map { pdb ->
+                    def normalized = pdb.baseName.replaceAll(/[^A-Za-z0-9._-]+/, '_')
+                    [[candidate_id: normalized, source_file: pdb.name], pdb]
+                }
+                .set { validatorCandidateInputs }
+            PrepareProteinLocalValidatorInput(validatorCandidateInputs)
+        }
+
+        if (selectedValidators.contains('esmfold2')) {
+            PrepareProteinLocalValidatorInput.out.prepared
+                .map { producerMeta, sourcePdb, contract, protenixJson ->
+                    [producerMeta, sourcePdb, producerMeta.candidate_id]
+                }
+                .set { esmfold2ValidatorInputs }
+            ESMFold2FromPdb(esmfold2ValidatorInputs)
+            validatorSummaryChannels << ESMFold2FromPdb.out.typed_results
+                .map { producerMeta, validator, cifs, metrics -> producerMeta.candidate_id }
+                .collect()
+                .map { candidates -> [validator: 'esmfold2', completed_candidates: candidates.size()] }
+                .ifEmpty { [validator: 'esmfold2', completed_candidates: 0] }
+        }
+
+        if (selectedValidators.contains('protenix_v2')) {
+            PrepareProteinLocalValidatorInput.out.prepared
+                .map { producerMeta, sourcePdb, contract, protenixJson -> [producerMeta, protenixJson] }
+                .set { protenixValidatorInputs }
+            ProtenixFromComplex(protenixValidatorInputs)
+            validatorSummaryChannels << ProtenixFromComplex.out.canonical_structures
+                .map { producerMeta, producerCandidates, cifs -> producerMeta.candidate_id }
+                .collect()
+                .map { candidates -> [validator: 'protenix_v2', completed_candidates: candidates.size()] }
+                .ifEmpty { [validator: 'protenix_v2', completed_candidates: 0] }
+        }
+
+        def mergedValidatorSummaries = validatorSummaryChannels[0]
+        if (validatorSummaryChannels.size() > 1) {
+            mergedValidatorSummaries = mergedValidatorSummaries.mix(validatorSummaryChannels[1])
+        }
+        if (validatorSummaryChannels.size() > 2) {
+            mergedValidatorSummaries = mergedValidatorSummaries.mix(validatorSummaryChannels[2])
+        }
+        FinalizeProteinLocalValidatorSuite(
+            Channel.value(selectedValidators),
+            expectedCandidateCount,
+            mergedValidatorSummaries.collect()
+        )
+        EnforceProteinLocalValidatorSuite(
+            FinalizeProteinLocalValidatorSuite.out.receipt
+        )
+        StageProteinLocalValidatedCandidates(
+            finalDesignPdbs,
+            FinalizeProteinLocalValidatorSuite.out.receipt,
+            EnforceProteinLocalValidatorSuite.out.complete
+        )
 
         def shouldPauseAfterValidation = interactiveGateEnabled &&
             (params.interactive_gate_stage ?: 'post_structure_validation') == 'post_structure_validation' &&
             params.interactive_gate_continue != true
 
         if (shouldPauseAfterValidation) {
-            def validationGateDir = params.out_dir ? "${params.out_dir}/pdb_files/predictions" : null
+            def validationGateDir = params.out_dir ? "${params.out_dir}/validation" : null
+            def validationReviewDir = params.out_dir ? "${params.out_dir}/validation/review_candidates" : null
             OpenInteractiveGate(
                 params.job_id ?: "unknown",
                 "post_structure_validation",
-                ExportProteinLocalBoltzPredictions.out.pdbs.map { pdbs ->
-                    (pdbs instanceof Collection ? pdbs.size() : 0) as Integer
-                },
-                validationGateDir ?: "",
+                StageProteinLocalValidatedCandidates.out.candidates.map { 1 },
+                validationReviewDir ?: "",
                 validationGateDir ?: "",
                 "",
                 "protein_local_redesign",
                 params.plr_design_chains ?: "",
-                "boltz2"
+                selectedValidators.join(',')
             )
             return
         }
@@ -594,7 +815,7 @@ workflow {
     println("* Redesign mode: ${params.plr_redesign_mode ?: 'legacy_region_redesign'}")
     println("* Design chain: ${params.plr_design_chains ?: 'native request selection'}")
     println("* Sequence method: ${params.plr_seq_method ?: (nativeRfd3Request ? 'skip' : 'fampnn')}")
-    println("* Boltz validation: ${params.plr_run_boltz_validation != false}")
+    println("* Structure validators: ${nativeRfd3Request ? 'not in native contract' : parseProteinLocalValidators(params.plr_structure_validators).join(',')}")
 
     if (!params.plr_input_pdb && !params.rfd3_request_path) {
         error("Input structure required for protein_local_redesign mode")

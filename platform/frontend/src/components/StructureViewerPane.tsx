@@ -317,7 +317,9 @@ export default function StructureViewerPane({
         typeof window === 'undefined' ? 720 : window.innerHeight
     ));
     const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(true);
-    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(true);
+    // The molecular structure is the primary scientific result. Keep auxiliary
+    // metric/export controls collapsed until the operator asks for them.
+    const [metricWorkbenchOpen, setMetricWorkbenchOpen] = useState(false);
     const [overlayView, setOverlayView] = useState<OverlayView>('metrics');
     const [conforNetsOverlayIds, setConforNetsOverlayIds] = useState<string[]>([]);
     const [focusedMetricSection, setFocusedMetricSection] = useState<StructureViewerSectionId>('summary');
@@ -365,6 +367,7 @@ export default function StructureViewerPane({
         viewportHeight,
     }), [viewportWidth, viewportHeight]);
     const designOrigin = getDesignOriginLabel(selectedDesign);
+    const volumeViewerSupported = Boolean(selectedDesign?.viewer_capabilities?.includes('volume_viewer'));
     const governedVolumeInventoryQuery = useQuery({
         queryKey: ['viewer-volume-inventory', activeJob?.id],
         queryFn: () => fetchViewerVolumes(activeJob!.id).then((response) => response.data),
@@ -372,6 +375,7 @@ export default function StructureViewerPane({
             activeJob?.id
             && activeJob.status === 'completed'
             && selectedDesign?.review_profile_id !== 'shape_blueprint'
+            && volumeViewerSupported
         ),
         retry: false,
         staleTime: 30_000,
@@ -387,7 +391,8 @@ export default function StructureViewerPane({
     const awaitingGovernedWorkbenchIdentity = Boolean(
         activeJob?.status === 'completed'
         && activeJob.params?.ui_contract === 'generic_structure_viewer'
-        && governedVolumeInventoryQuery.isPending,
+        && volumeViewerSupported
+        && governedVolumeInventoryQuery.isFetching,
     );
     const designLens = selectedDesign ? inferDesignAnalysisLens(selectedDesign as UntypedApiValue) : null;
     const selectedDesignPpiflowRecord = asRecord(asRecord(selectedDesign?.provenance)?.ppiflow);
@@ -2940,8 +2945,8 @@ export default function StructureViewerPane({
                                 residueMetricLayer={residueMetricLayer}
                                 metricLayers={allMetricLayers}
                                 showComplexWorkbench={false}
-                                showM6Workbench={!shapeMetrics}
-                                showMeasurements={!shapeMetrics}
+                                showM6Workbench={!shapeMetrics && metricWorkbenchOpen}
+                                showMeasurements={!shapeMetrics && metricWorkbenchOpen}
                                 jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
                                 artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
                                 structureDocumentId={governedWorkbenchContext?.structureDocumentId}
@@ -2949,7 +2954,7 @@ export default function StructureViewerPane({
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}
                                 onMetricWorkbenchVisibilityChange={shapeMetrics ? undefined : setMetricWorkbenchOpen}
-                                showSequenceTrack={!shapeMetrics}
+                                showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
                                 height="100%"
                                 backgroundColor={themeColors.bgPrimary}
                             />
@@ -3000,7 +3005,7 @@ export default function StructureViewerPane({
                                             showM6Workbench={!shapeMetrics}
                                             showMeasurements={!shapeMetrics}
                                             showMetricWorkbench={!shapeMetrics}
-                                            showSequenceTrack={!shapeMetrics}
+                                            showSequenceTrack={!shapeMetrics && metricWorkbenchOpen}
                                             height="100%"
                                             backgroundColor={themeColors.bgSecondary}
                                             label={selectedReference.name}

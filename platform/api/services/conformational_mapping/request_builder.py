@@ -26,6 +26,7 @@ from .state_landscape_analysis import (
 )
 from services.frustrampnn.settings import (
     FrustraMPNNRequestedSettings,
+    FrustraMPNNSourceStructureSettings,
     default_settings as default_frustrampnn_settings,
     validate_complete_requested_settings,
     validate_persisted_requested_settings,
@@ -248,6 +249,9 @@ def _normalize_frustrampnn_settings(value: object) -> dict[str, Any]:
         raise ConformationalMappingRequestError(
             f"frustrampnn_settings must be a complete server-bound canonical object: {exc}"
         ) from exc
+    normalized = normalized.model_copy(
+        update={"source_structure": FrustraMPNNSourceStructureSettings()}
+    )
     return normalized.model_dump(mode="json", exclude_none=False)
 
 

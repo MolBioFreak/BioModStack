@@ -4,11 +4,12 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
@@ -25,7 +26,7 @@ from pydantic import (
     model_validator,
 )
 
-from .errors import RobotResponseError, RobotTransportError
+from .errors import RobotResponseError, RobotTimeoutError, RobotTransportError
 from .target_policy import ValidatedBioXpTarget
 
 
@@ -46,13 +47,48 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "camera_status": ("GET", "/camera/status", 5.0),
     "camera_latest": ("GET", "/camera/frame/latest", 5.0),
     "camera_snapshot": ("POST", "/camera/snapshot", 15.0),
+    "camera_stream_start": ("POST", "/camera/stream/start", 15.0),
+    "camera_stream_state": ("GET", "/camera/stream/state", 5.0),
+    "camera_mjpeg": ("GET", "/camera/mjpeg", 10.0),
+    "camera_stream_stop": ("POST", "/camera/stream/stop", 15.0),
     "operator_control_catalog": ("GET", "/operator/control-catalog", 10.0),
+    "operator_control_catalog_v2": ("GET", "/operator/v2/control-catalog", 5.0),
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
+    "operator_dashboard_v2": ("GET", "/operator/v2/dashboard", 5.0),
+    "pipette_readback": ("POST", "/liquid/readback", 120.0),
+    "pipette_application_status": ("GET", "/liquid/application/status", 10.0),
+    "pipette_application_plan": ("POST", "/liquid/application/plan", 10.0),
     "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
     "invoke_operator_action": ("POST", "/operator/actions/{action_id}", 900.0),
+    "invoke_operator_action_v2": ("POST", "/operator/v2/actions/{action_id}", 5.0),
+    "interrupt_operator_action_v1": ("POST", "/operator/v2/actions/{action_id}", 10.0),
+    "submit_operator_method_v1": ("POST", "/operator/v2/methods", 5.0),
+    "operator_method_status_v1": ("GET", "/operator/v2/methods/{method_id}", 5.0),
+    "operator_command_status_v2": ("GET", "/operator/v2/commands/{command_id}", 5.0),
     "operator_action_history": ("GET", "/operator/actions/history", 10.0),
+    "operator_action_history_v2": ("GET", "/operator/v2/actions/history", 5.0),
     "operator_action_receipt": ("GET", "/operator/actions/receipts/{command_id}", 10.0),
+    "operator_action_receipt_v2": ("GET", "/operator/v2/actions/receipts/{command_id}", 5.0),
     "assess_operator_action": ("POST", "/operator/actions/receipts/{command_id}/assessment", 15.0),
+    "operator_report_summary": ("GET", "/operator/reports/summary", 10.0),
+    "operator_report_commands": ("GET", "/operator/reports/commands", 10.0),
+    "operator_report_command_detail": ("GET", "/operator/reports/commands/{command_id}", 10.0),
+    "operator_report_command_transitions": ("GET", "/operator/reports/commands/{command_id}/transitions", 10.0),
+    "operator_report_command_evidence": ("GET", "/operator/reports/commands/{command_id}/evidence", 10.0),
+    "operator_report_pipette": ("GET", "/operator/reports/pipette", 10.0),
+    "operator_report_pipette_detail": ("GET", "/operator/reports/pipette/{pipette_operation_id}", 10.0),
+    "operator_report_pipette_channels": ("GET", "/operator/reports/pipette/{pipette_operation_id}/channels", 10.0),
+    "operator_report_pipette_exchanges": ("GET", "/operator/reports/pipette/{pipette_operation_id}/exchanges", 10.0),
+    "operator_report_events": ("GET", "/operator/reports/events", 10.0),
+    "operator_report_event_detail": ("GET", "/operator/reports/events/{event_id}", 10.0),
+    "operator_report_pressure_streams": ("GET", "/operator/reports/pressure-streams", 10.0),
+    "operator_report_pressure_detail": ("GET", "/operator/reports/pressure-streams/{stream_session_id}", 10.0),
+    "operator_report_pressure_samples": ("GET", "/operator/reports/pressure-streams/{stream_session_id}/samples", 10.0),
+    "operator_report_audit_health": ("GET", "/operator/audit-health", 10.0),
+    "operator_report_export_create": ("POST", "/operator/reports/exports", 30.0),
+    "operator_report_export_list": ("GET", "/operator/reports/exports", 10.0),
+    "operator_report_export_detail": ("GET", "/operator/reports/exports/{export_id}", 10.0),
+    "operator_report_export_download": ("GET", "/operator/reports/exports/{export_id}/download", 30.0),
 }
 
 _ROUTE_PARAMETER_RE = re.compile(r"\{([A-Za-z][A-Za-z0-9_]*)\}")
@@ -104,6 +140,42 @@ class _CameraStatusResponse(BaseModel):
         if not self.available and any(value is not None for value in frame_values):
             raise ValueError("unavailable camera status cannot claim frame metadata")
         return self
+
+
+class _CameraStreamResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = Field(pattern=r"^bioxp\.camera_stream\.v1$")
+    state: Literal["off", "starting", "live", "error"]
+    active: StrictBool
+    stream_id: str | None = None
+    stopped_session_id: str | None = None
+    camera_ownership_epoch: StrictInt = Field(ge=0)
+    device: str | None = None
+    fps: StrictInt | None = Field(default=None, ge=1, le=30)
+    quality: StrictInt | None = Field(default=None, ge=2, le=15)
+    width: StrictInt | None = Field(default=None, ge=160, le=1920)
+    height: StrictInt | None = Field(default=None, ge=120, le=1080)
+    frames_emitted: StrictInt = Field(ge=0)
+    dropped_frames: StrictInt = Field(ge=0)
+    latest_frame_at: str | None = None
+    last_error: str | None = Field(default=None, max_length=1000)
+    idempotent: StrictBool | None = None
+    ok: StrictBool | None = None
+    replacement: StrictBool | None = None
+    queue_max_frames: StrictInt | None = Field(default=None, ge=1, le=2)
+    mjpeg_url: str | None = None
+    session: dict[str, Any] | None = None
+    freshness: dict[str, Any] | None = None
+    provenance: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RobotBytesResponse:
+    content: bytes
+    content_type: str
+    content_disposition: str | None
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +377,73 @@ class BioXpRobotClient:
     async def camera_snapshot(self) -> CameraImage:
         return await self._camera_image("camera_snapshot")
 
+    async def _camera_stream_command(self, route_name: str) -> dict[str, Any]:
+        try:
+            method = self.routes[route_name][0]
+            payload = await self.request(route_name, json_data={} if method == "POST" else None)
+            stream = _CameraStreamResponse.model_validate(payload)
+            return stream.model_dump(
+                mode="json",
+                exclude={"device", "mjpeg_url", "session", "freshness", "provenance", "stopped_session_id"},
+            )
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except ValidationError as exc:
+            raise RobotTransportError("BioXP robot returned a malformed camera stream state") from exc
+
+    async def camera_stream_start(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_start")
+
+    async def camera_stream_state(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_state")
+
+    async def camera_stream_stop(self) -> dict[str, Any]:
+        return await self._camera_stream_command("camera_stream_stop")
+
+    @asynccontextmanager
+    async def camera_mjpeg_stream(self) -> AsyncIterator[AsyncIterator[bytes]]:
+        try:
+            method, path_template, timeout = self.routes["camera_mjpeg"]
+        except KeyError as exc:
+            raise RobotTransportError("Unknown BioXP robot route key: camera_mjpeg") from exc
+        path = _render_route_path(path_template, None)
+        stream_context = self._client.stream(
+            method,
+            path,
+            timeout=httpx.Timeout(connect=3.0, read=timeout, write=5.0, pool=3.0),
+        )
+        response: httpx.Response | None = None
+        entered = False
+        try:
+            response = await stream_context.__aenter__()
+            entered = True
+            if 300 <= response.status_code < 400:
+                raise RobotTransportError("BioXP target redirects are forbidden")
+            if response.is_error:
+                error_bytes = await _read_limited_body(
+                    response,
+                    limit=MAX_CAMERA_ERROR_BYTES,
+                    overflow_message="BioXP camera stream error response exceeded the size limit",
+                )
+                raise RobotResponseError(response.status_code, error_bytes.decode("utf-8", errors="replace"))
+            content_type = response.headers.get("content-type", "").lower()
+            if not content_type.startswith("multipart/x-mixed-replace") or "boundary=frame" not in content_type:
+                raise RobotTransportError("BioXP camera stream returned an invalid multipart content type")
+            yield response.aiter_bytes()
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP camera stream transport is unreachable or timed out") from exc
+        except httpx.HTTPError as exc:
+            raise RobotTransportError("BioXP camera stream returned an invalid transport response") from exc
+        finally:
+            if entered:
+                await stream_context.__aexit__(None, None, None)
+
     async def _camera_image(self, route_name: str) -> CameraImage:
         try:
             method, path_template, timeout_seconds = self.routes[route_name]
@@ -376,6 +515,57 @@ class BioXpRobotClient:
         except httpx.HTTPError as exc:
             raise RobotTransportError("BioXP camera returned an invalid transport response") from exc
 
+    async def request_bytes(
+        self,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse:
+        try:
+            method, path_template, timeout = self.routes[route_name]
+        except KeyError as exc:
+            raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
+        path = _render_route_path(path_template, path_params)
+        try:
+            response = await self._client.request(
+                method,
+                path,
+                json=json_data,
+                params=params,
+                timeout=_bounded_timeout(timeout),
+            )
+            if 300 <= response.status_code < 400:
+                raise RobotTransportError("BioXP target redirects are forbidden")
+            if response.is_error:
+                try:
+                    detail: object = response.json()
+                except ValueError:
+                    detail = response.text[:1000]
+                raise RobotResponseError(response.status_code, detail)
+            _required_bounded_content_length(response, limit=max_bytes, label="report export")
+            content = await _read_limited_body(response, limit=max_bytes, overflow_message="BioXP report export exceeded the size limit")
+            digest = sha256(content).hexdigest()
+            upstream_hash = response.headers.get("x-content-sha256")
+            if upstream_hash is not None and (not _SHA256_RE.fullmatch(upstream_hash) or upstream_hash != digest):
+                raise RobotTransportError("BioXP report export content hash did not match its body")
+            return RobotBytesResponse(
+                content=content,
+                content_type=response.headers.get("content-type", "application/octet-stream"),
+                content_disposition=response.headers.get("content-disposition"),
+                sha256=digest,
+            )
+        except RobotResponseError:
+            raise
+        except RobotTransportError:
+            raise
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout) as exc:
+            raise RobotTransportError("BioXP robot transport is unreachable or timed out") from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RobotTransportError("BioXP robot returned an invalid export response") from exc
+
     async def request(
         self,
         route_name: str,
@@ -412,10 +602,17 @@ class BioXpRobotClient:
                 return response.json()
             except RobotResponseError:
                 raise
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
                 if attempt + 1 < attempts:
                     continue
-                raise RobotTransportError("BioXP robot transport is unreachable or timed out") from exc
+                raise RobotTimeoutError(
+                    "BioXP robot request timed out before a response was received",
+                    dispatched=True,
+                ) from exc
+            except httpx.ConnectError as exc:
+                if attempt + 1 < attempts:
+                    continue
+                raise RobotTransportError("BioXP robot transport is unreachable") from exc
             except (httpx.HTTPError, ValueError) as exc:
                 raise RobotTransportError("BioXP robot returned an invalid transport response") from exc
         raise RobotTransportError("BioXP robot transport failed")

@@ -4,9 +4,11 @@ import type { FrustraMpnnStructureMap } from '../components/conformationalMappin
 import { parseFrustraMpnnMultidimensionalPage, type FrustraMpnnResultPage } from '../components/frustraMpnnMultidimensionalModel.js';
 import type { StructureCameraState, StructureLayerState, StructureRepresentationState } from '../structureViewer/contracts/scenePresentation.js';
 import {
+    hydrateFrustraMpnnSettings,
     parseFrustraMpnnRequestedSettings,
     type FrustraMpnnInspectableEntity,
     type FrustraMpnnInspectableResidue,
+    type FrustraMpnnRegionSelector,
     type FrustraMpnnRequestedSettings,
     type FrustraMpnnSourceInspection,
 } from '../components/frustrampnn/frustraMpnnSettingsState.js';
@@ -93,6 +95,10 @@ const FRUSTRAMPNN_INSPECTION_KEYS = [
     'protein_entities',
     'mapped_residues',
 ] as const;
+const FRUSTRAMPNN_INSPECTION_WITH_SEQUENCE_SPANS_KEYS = [
+    ...FRUSTRAMPNN_INSPECTION_KEYS,
+    'protein_sequence_spans',
+] as const;
 const FRUSTRAMPNN_INSPECTION_ENTITY_KEYS = [
     'entity_instance_id',
     'source_entity_id',
@@ -109,6 +115,14 @@ const FRUSTRAMPNN_INSPECTION_RESIDUE_KEYS = [
     'insertion_code',
     'sequence_index',
     'wt',
+] as const;
+const FRUSTRAMPNN_INSPECTION_SPAN_KEYS = [
+    'entity_instance_id',
+    'source_entity_id',
+    'label_asym_id',
+    'auth_asym_id',
+    'sequence_start',
+    'sequence_end',
 ] as const;
 const FRUSTRAMPNN_VALIDATION_KEYS = [
     'validation_scope',
@@ -270,7 +284,9 @@ const parseInspectableEntity = (value: unknown, label: string): FrustraMpnnInspe
     fmExactKeys(record, FRUSTRAMPNN_INSPECTION_ENTITY_KEYS, label);
     const parsed = parseFrustraMpnnRequestedSettings({
         schema_name: 'frustrampnn_settings',
-        schema_version: 1,
+        schema_version: 2,
+        batching_enabled: false,
+        structures_per_job: 1,
         protein_selection: {
             mode: 'selected_entities',
             entities: [{
@@ -279,14 +295,14 @@ const parseInspectableEntity = (value: unknown, label: string): FrustraMpnnInspe
                 label_asym_id: record.label_asym_id,
                 auth_asym_id: record.auth_asym_id,
             }],
+            regions: [],
             residues: [],
         },
         source_structure: { selected_model_number: 1, preferred_altloc: '' },
         classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.58 },
     });
     if (parsed.protein_selection.mode !== 'selected_entities') throw new Error(`${label} is invalid`);
-    const pdbChainId = fmString(record.pdb_chain_id, `${label}.pdb_chain_id`);
-    if (pdbChainId.length !== 1) throw new Error(`${label}.pdb_chain_id must be one character`);
+    const pdbChainId = fmNullableString(record.pdb_chain_id, `${label}.pdb_chain_id`);
     return { ...parsed.protein_selection.entities[0], pdb_chain_id: pdbChainId };
 };
 
@@ -295,10 +311,13 @@ const parseInspectableResidue = (value: unknown, label: string): FrustraMpnnInsp
     fmExactKeys(record, FRUSTRAMPNN_INSPECTION_RESIDUE_KEYS, label);
     const parsed = parseFrustraMpnnRequestedSettings({
         schema_name: 'frustrampnn_settings',
-        schema_version: 1,
+        schema_version: 2,
+        batching_enabled: false,
+        structures_per_job: 1,
         protein_selection: {
             mode: 'selected_residues',
             entities: [],
+            regions: [],
             residues: [{
                 entity_instance_id: record.entity_instance_id,
                 source_entity_id: record.source_entity_id,
@@ -318,9 +337,40 @@ const parseInspectableResidue = (value: unknown, label: string): FrustraMpnnInsp
     return { ...parsed.protein_selection.residues[0], wt };
 };
 
+const parseInspectableSequenceSpan = (
+    value: unknown,
+    label: string,
+): FrustraMpnnRegionSelector => {
+    const record = fmRecord(value, label);
+    fmExactKeys(record, FRUSTRAMPNN_INSPECTION_SPAN_KEYS, label);
+    const parsed = parseFrustraMpnnRequestedSettings({
+        schema_name: 'frustrampnn_settings',
+        schema_version: 2,
+        batching_enabled: false,
+        structures_per_job: 1,
+        protein_selection: {
+            mode: 'selected_regions',
+            entities: [],
+            regions: [record],
+            residues: [],
+        },
+        source_structure: { selected_model_number: 1, preferred_altloc: '' },
+        classification_policy: { mode: 'canonical', high_max: -1, minimal_min: 0.58 },
+    });
+    if (parsed.protein_selection.mode !== 'selected_regions') throw new Error(`${label} is invalid`);
+    return parsed.protein_selection.regions[0];
+};
+
 export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSourceInspection => {
     const payload = fmRecord(value, 'FrustraMPNN source inspection');
-    fmExactKeys(payload, FRUSTRAMPNN_INSPECTION_KEYS, 'FrustraMPNN source inspection');
+    const hasSequenceSpans = Object.prototype.hasOwnProperty.call(payload, 'protein_sequence_spans');
+    fmExactKeys(
+        payload,
+        hasSequenceSpans
+            ? FRUSTRAMPNN_INSPECTION_WITH_SEQUENCE_SPANS_KEYS
+            : FRUSTRAMPNN_INSPECTION_KEYS,
+        'FrustraMPNN source inspection',
+    );
     const sourceModels = Array.isArray(payload.source_models)
         ? payload.source_models.map((item, index) => fmInteger(item, `source_models[${index}]`, 1))
         : (() => { throw new Error('source_models must be an array'); })();
@@ -340,7 +390,9 @@ export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSou
     if (!observedAltlocs.includes(selectedAltloc)) {
         throw new Error('selected_altloc must be one of observed_altlocs');
     }
-    if (!Array.isArray(payload.protein_entities) || !Array.isArray(payload.mapped_residues)) {
+    if (!Array.isArray(payload.protein_entities)
+        || (hasSequenceSpans && !Array.isArray(payload.protein_sequence_spans))
+        || !Array.isArray(payload.mapped_residues)) {
         throw new Error('source inspection selectors must be arrays');
     }
     const proteinEntities = payload.protein_entities.map((item, index) => (
@@ -349,12 +401,18 @@ export const parseFrustraMpnnSourceInspection = (value: unknown): FrustraMpnnSou
     const mappedResidues = payload.mapped_residues.map((item, index) => (
         parseInspectableResidue(item, `mapped_residues[${index}]`)
     ));
+    const proteinSequenceSpans = hasSequenceSpans
+        ? (payload.protein_sequence_spans as unknown[]).map((item, index) => (
+            parseInspectableSequenceSpan(item, `protein_sequence_spans[${index}]`)
+        ))
+        : [];
     return {
         source_models: sourceModels,
         selected_source_model: selectedSourceModel,
         observed_altlocs: observedAltlocs,
         selected_altloc: selectedAltloc,
         protein_entities: proteinEntities,
+        protein_sequence_spans: proteinSequenceSpans,
         mapped_residues: mappedResidues,
     };
 };
@@ -383,9 +441,15 @@ export const parseFrustraMpnnSettingsValidationPreview = (
         configurationKeys,
         configurationKeys,
     );
-    if (configuration.configuration_id !== 'frustrampnn_execution_configuration_v2'
+    const configurationGenerationIsValid = (
+        configuration.configuration_id === 'frustrampnn_execution_configuration_v2'
+        && configuration.schema_version === 2
+    ) || (
+        configuration.configuration_id === 'frustrampnn_execution_configuration_v3'
+        && configuration.schema_version === 3
+    );
+    if (!configurationGenerationIsValid
         || configuration.schema_name !== 'frustrampnn_execution_configuration'
-        || configuration.schema_version !== 2
         || configuration.tool_id !== 'frustrampnn'
         || configuration.normalization_policy_id !== 'frustrampnn_structure_normalizer'
         || configuration.normalization_policy_version !== 1
@@ -618,6 +682,20 @@ export interface FrustraMpnnChildReceipt {
     handoff?: FrustraMpnnHandoffMetadata;
 }
 
+export interface FrustraMpnnFanoutChildReceipt extends FrustraMpnnChildReceipt {
+    structure_count: number;
+}
+
+export interface FrustraMpnnStructureDatasetFanout {
+    schema_name: 'bms.structure-dataset-fanout.v1';
+    fanout_id: string;
+    parent_job_id: string;
+    selected_structure_count: number;
+    structures_per_job: number;
+    replayed: boolean;
+    child_jobs: FrustraMpnnFanoutChildReceipt[];
+}
+
 export interface FrustraMpnnClassCounts {
     high: number;
     neutral: number;
@@ -760,9 +838,23 @@ export interface FrustraMpnnSummaryV2 extends FrustraMpnnSummaryCommon {
     threshold_policy: { mode: 'canonical' | 'custom'; high_max: number; minimal_min: number };
 }
 
-export type FrustraMpnnSummary = FrustraMpnnHistoricalSummaryV1 | FrustraMpnnSummaryV2;
+export interface FrustraMpnnSummaryV3 extends FrustraMpnnSummaryCommon {
+    schema_version: 3;
+    execution_configuration_id: 'frustrampnn_execution_configuration_v3';
+    execution_configuration_sha256: string;
+    requested_settings_sha256: string;
+    effective_settings_sha256: string;
+    runtime_identity_sha256: string;
+    source_artifact_sha256: string;
+    structure_map_sha256: string;
+    normalized_pdb_sha256: string;
+    threshold_policy_id: 'frustrampnn_class_v1';
+    threshold_policy: { mode: 'canonical' | 'custom'; high_max: number; minimal_min: number };
+}
 
-export type FrustraMpnnAuthorityVersion = 'v2' | 'historical_v1';
+export type FrustraMpnnSummary = FrustraMpnnHistoricalSummaryV1 | FrustraMpnnSummaryV2 | FrustraMpnnSummaryV3;
+
+export type FrustraMpnnAuthorityVersion = 'v3' | 'v2' | 'historical_v1';
 export type FrustraMpnnMissingField =
     | 'settings_sha256'
     | 'effective_settings_sha256'
@@ -774,7 +866,7 @@ export type FrustraMpnnMissingField =
 
 export interface FrustraMpnnEffectiveSettingsProjection {
     schema_name: 'frustrampnn_effective_settings';
-    schema_version: 1;
+    schema_version: 1 | 2;
     requested_settings: FrustraMpnnRequestedSettings;
     settings_value_origin: 'bms_default' | 'operator_request';
     resolved_chains: Array<{
@@ -803,7 +895,14 @@ export interface FrustraMpnnEffectiveSettingsProjection {
         normalized_pdb_sha256: string;
     };
     value_sources: {
-        protein_selection: { mode: 'bms_default' | 'operator_request'; entities: 'bms_default' | 'operator_request'; residues: 'bms_default' | 'operator_request' };
+        batching_enabled: 'bms_default' | 'operator_request';
+        structures_per_job: 'bms_default' | 'operator_request';
+        protein_selection: {
+            mode: 'bms_default' | 'operator_request';
+            entities: 'bms_default' | 'operator_request';
+            regions: 'bms_default' | 'operator_request';
+            residues: 'bms_default' | 'operator_request';
+        };
         source_structure: { selected_model_number: 'bms_default' | 'operator_request'; preferred_altloc: 'bms_default' | 'operator_request' };
         classification_policy: { mode: 'bms_default' | 'operator_request'; high_max: 'bms_default' | 'operator_request'; minimal_min: 'bms_default' | 'operator_request' };
     };
@@ -910,9 +1009,42 @@ export interface FrustraMpnnRankedAlternative extends FrustraMpnnStatisticsResid
     rank: number;
 }
 
+export interface FrustraMpnnStatisticsAnalysisReceipt {
+    schema_name: 'frustrampnn_statistics_analysis_receipt';
+    schema_version: 1;
+    analysis_id: string;
+    core_artifact_id: string;
+    core_bundle_relative_path: string;
+    core_landscape_sha256: string;
+    core_manifest_sha256: string;
+    formula_version: string;
+    policy_version: string;
+    package_version: string;
+    statistics_schema_version: 2;
+    attempt_count: number;
+}
+
+export interface FrustraMpnnStatisticsAnalysis {
+    analysis_id: string;
+    parent_job_id: string;
+    invocation_id: string;
+    state: 'queued' | 'running' | 'completed' | 'failed';
+    attempt_count: number;
+    core_artifact_id: string;
+    core_landscape_sha256: string;
+    core_manifest_sha256: string;
+    formula_version: string;
+    policy_version: string;
+    package_version: string;
+    schema_version: 1;
+    artifact_sha256: string | null;
+    statistics_sha256: string | null;
+    diagnostic: string | null;
+}
+
 export interface FrustraMpnnStatistics {
     schema_name: 'frustrampnn_statistics';
-    schema_version: 1;
+    schema_version: 1 | 2;
     hash_semantics: 'sha256(rfc8785(document_without_top_level_statistics_sha256))';
     invocation_id: string;
     parent_job_id: string;
@@ -932,7 +1064,8 @@ export interface FrustraMpnnStatistics {
     comparison_compatibility_id: string;
     statistics_sha256: string;
     structure_map: { schema_name: 'frustrampnn_structure_map'; schema_version: 1; sha256: string };
-    output_contract_version: '2.0';
+    output_contract_version: '2.0' | '3.0';
+    analysis_receipt?: FrustraMpnnStatisticsAnalysisReceipt;
     canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY';
     comparison_compatibility_basis: {
         schema_name: 'frustrampnn_comparison_compatibility_basis';
@@ -970,6 +1103,13 @@ export interface FrustraMpnnResultListItem {
     parent_job_id: string;
     parent_workflow_id: string;
     candidate_id: string;
+    operator_label: string;
+    source_identity: {
+        design_id: string | null;
+        artifact_id: string | null;
+        artifact_sha256: string;
+        candidate_id: string;
+    };
     design_id: string | null;
     requiredness: string;
     source_artifact_id: string | null;
@@ -990,7 +1130,7 @@ export interface FrustraMpnnResultListItem {
     statistics_json: FrustraMpnnStatistics | null;
     comparison_compatibility_id: string | null;
     status: FrustraMpnnTerminalStatus;
-    component_contract_version: '1.0' | '2.0';
+    component_contract_version: '1.0' | '2.0' | '3.0';
     runtime_identity: FrustraMpnnRuntimeIdentity;
     runtime_identity_sha256: string | null;
     gpu_provenance: FrustraMpnnGpuProvenance | null;
@@ -1427,19 +1567,37 @@ const parsePersistedRequestedSettingsProjection = (
     value: unknown,
     label: string,
 ): FrustraMpnnRequestedSettings => {
+    const wire = fmRecord(value, label);
+    const historical = wire.schema_version === 1;
+    const keys = [
+        'schema_name', 'schema_version', 'settings_value_origin',
+        ...(historical ? [] : ['batching_enabled', 'structures_per_job']),
+        'protein_selection', 'source_structure', 'classification_policy',
+    ];
     const payload = fmClosedProjection(
-        value,
+        wire,
         label,
-        ['schema_name', 'schema_version', 'settings_value_origin', 'protein_selection', 'source_structure', 'classification_policy'],
-        ['schema_name', 'schema_version', 'settings_value_origin', 'protein_selection', 'source_structure', 'classification_policy'],
+        keys,
+        keys,
     );
     if (payload.settings_value_origin !== 'bms_default' && payload.settings_value_origin !== 'operator_request') {
         throw new Error(`${label}.settings_value_origin is invalid`);
     }
-    return parseFrustraMpnnRequestedSettings({
+    const persistedSelection = fmRecord(
+        payload.protein_selection,
+        `${label}.protein_selection`,
+    );
+    const proteinSelection = Object.hasOwn(persistedSelection, 'regions')
+        ? persistedSelection
+        : { ...persistedSelection, regions: [] };
+    return hydrateFrustraMpnnSettings({
         schema_name: payload.schema_name,
         schema_version: payload.schema_version,
-        protein_selection: payload.protein_selection,
+        ...(historical ? {} : {
+            batching_enabled: payload.batching_enabled,
+            structures_per_job: payload.structures_per_job,
+        }),
+        protein_selection: proteinSelection,
         source_structure: payload.source_structure,
         classification_policy: payload.classification_policy,
     });
@@ -1460,7 +1618,8 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
         'resolution_identity', 'value_sources', 'effective_settings_sha256',
     ] as const;
     const payload = fmClosedProjection(value, 'effective_settings', keys, keys);
-    if (payload.schema_name !== 'frustrampnn_effective_settings' || payload.schema_version !== 1
+    if (payload.schema_name !== 'frustrampnn_effective_settings'
+        || (payload.schema_version !== 1 && payload.schema_version !== 2)
         || payload.normalization_policy_id !== 'frustrampnn_structure_normalizer'
         || payload.normalization_policy_version !== 1
         || payload.threshold_policy_id !== 'frustrampnn_class_v1') {
@@ -1516,15 +1675,28 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             }),
         };
     });
-    const valueSources = fmClosedProjection(payload.value_sources, 'effective_settings.value_sources', ['protein_selection', 'source_structure', 'classification_policy'], ['protein_selection', 'source_structure', 'classification_policy']);
-    const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'residues'], ['mode', 'entities', 'residues']);
+    const valueSourceKeys = [
+        ...(payload.schema_version === 2 ? ['batching_enabled', 'structures_per_job'] : []),
+        'protein_selection', 'source_structure', 'classification_policy',
+    ];
+    const valueSources = fmClosedProjection(
+        payload.value_sources,
+        'effective_settings.value_sources',
+        valueSourceKeys,
+        valueSourceKeys,
+    );
+    const proteinSources = fmClosedProjection(valueSources.protein_selection, 'effective_settings.value_sources.protein_selection', ['mode', 'entities', 'regions', 'residues'], ['mode', 'entities', 'residues']);
     const structureSources = fmClosedProjection(valueSources.source_structure, 'effective_settings.value_sources.source_structure', ['selected_model_number', 'preferred_altloc'], ['selected_model_number', 'preferred_altloc']);
     const classificationSources = fmClosedProjection(valueSources.classification_policy, 'effective_settings.value_sources.classification_policy', ['mode', 'high_max', 'minimal_min'], ['mode', 'high_max', 'minimal_min']);
+    const settingsValueOrigin = fmValueOrigin(
+        payload.settings_value_origin,
+        'effective_settings.settings_value_origin',
+    );
     return {
         schema_name: 'frustrampnn_effective_settings',
-        schema_version: 1,
+        schema_version: payload.schema_version,
         requested_settings: parsePersistedRequestedSettingsProjection(payload.requested_settings, 'effective_settings.requested_settings'),
-        settings_value_origin: fmValueOrigin(payload.settings_value_origin, 'effective_settings.settings_value_origin'),
+        settings_value_origin: settingsValueOrigin,
         resolved_chains: resolvedChains,
         normalization_policy_id: 'frustrampnn_structure_normalizer',
         normalization_policy_version: 1,
@@ -1540,9 +1712,18 @@ export const parseFrustraMpnnEffectiveSettingsProjection = (
             normalized_pdb_sha256: fmSha256(resolution.normalized_pdb_sha256, 'effective_settings.resolution_identity.normalized_pdb_sha256'),
         },
         value_sources: {
+            batching_enabled: payload.schema_version === 1
+                ? settingsValueOrigin
+                : fmValueOrigin(valueSources.batching_enabled, 'effective_settings.value_sources.batching_enabled'),
+            structures_per_job: payload.schema_version === 1
+                ? settingsValueOrigin
+                : fmValueOrigin(valueSources.structures_per_job, 'effective_settings.value_sources.structures_per_job'),
             protein_selection: {
                 mode: fmValueOrigin(proteinSources.mode, 'effective_settings.value_sources.protein_selection.mode'),
                 entities: fmValueOrigin(proteinSources.entities, 'effective_settings.value_sources.protein_selection.entities'),
+                regions: proteinSources.regions === undefined
+                    ? settingsValueOrigin
+                    : fmValueOrigin(proteinSources.regions, 'effective_settings.value_sources.protein_selection.regions'),
                 residues: fmValueOrigin(proteinSources.residues, 'effective_settings.value_sources.protein_selection.residues'),
             },
             source_structure: {
@@ -1686,6 +1867,60 @@ export const parseFrustraMpnnChildReceipt = (
                 producer_id: fmString(handoff.producer_id, 'child receipt.handoff.producer_id'),
             },
         } : {}),
+    };
+};
+
+const STRUCTURE_DATASET_FANOUT_KEYS = [
+    'schema_name', 'fanout_id', 'parent_job_id', 'selected_structure_count',
+    'structures_per_job', 'replayed', 'child_jobs',
+] as const;
+
+export const parseFrustraMpnnStructureDatasetFanout = (
+    value: unknown,
+): FrustraMpnnStructureDatasetFanout => {
+    const payload = fmClosedProjection(
+        value,
+        'FrustraMPNN structure dataset fan-out',
+        STRUCTURE_DATASET_FANOUT_KEYS,
+        STRUCTURE_DATASET_FANOUT_KEYS,
+    );
+    if (payload.schema_name !== 'bms.structure-dataset-fanout.v1') {
+        throw new Error('FrustraMPNN structure dataset fan-out schema_name is invalid');
+    }
+    if (!Array.isArray(payload.child_jobs) || payload.child_jobs.length === 0) {
+        throw new Error('FrustraMPNN structure dataset fan-out child_jobs must be non-empty');
+    }
+    const childJobs = payload.child_jobs.map((value, index): FrustraMpnnFanoutChildReceipt => {
+        const child = fmClosedProjection(
+            value,
+            `FrustraMPNN structure dataset fan-out child_jobs[${index}]`,
+            [...CHILD_RECEIPT_KEYS, 'structure_count'],
+            [...CHILD_RECEIPT_KEYS, 'structure_count'],
+        );
+        const { structure_count: structureCount, ...receipt } = child;
+        const parsed = parseFrustraMpnnChildReceipt(receipt);
+        const count = fmInteger(structureCount, `fan-out child_jobs[${index}].structure_count`, 1);
+        return { ...parsed, structure_count: count };
+    });
+    const selectedCount = fmInteger(payload.selected_structure_count, 'fan-out.selected_structure_count', 1);
+    const structuresPerJob = fmInteger(payload.structures_per_job, 'fan-out.structures_per_job', 1);
+    const expectedCounts = Array(Math.floor(selectedCount / structuresPerJob)).fill(structuresPerJob) as number[];
+    const remainder = selectedCount % structuresPerJob;
+    if (remainder > 0) expectedCounts.push(remainder);
+    if (
+        childJobs.length !== expectedCounts.length
+        || childJobs.some((child, index) => child.structure_count !== expectedCounts[index])
+    ) {
+        throw new Error('FrustraMPNN structure dataset fan-out is not the canonical partition');
+    }
+    return {
+        schema_name: payload.schema_name,
+        fanout_id: fmSha256(payload.fanout_id, 'fan-out.fanout_id'),
+        parent_job_id: fmString(payload.parent_job_id, 'fan-out.parent_job_id'),
+        selected_structure_count: selectedCount,
+        structures_per_job: structuresPerJob,
+        replayed: fmBoolean(payload.replayed, 'fan-out.replayed'),
+        child_jobs: childJobs,
     };
 };
 
@@ -1930,8 +2165,72 @@ const parseRankedAlternative = (value: unknown, index: number, direction: string
     };
 };
 
-export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistics => {
+const parseStatisticsAnalysisReceipt = (value: unknown): FrustraMpnnStatisticsAnalysisReceipt => {
     const keys = [
+        'schema_name', 'schema_version', 'analysis_id', 'core_artifact_id', 'core_bundle_relative_path',
+        'core_landscape_sha256', 'core_manifest_sha256', 'formula_version', 'policy_version', 'package_version',
+        'statistics_schema_version', 'attempt_count',
+    ] as const;
+    const payload = fmClosedProjection(value, 'statistics.analysis_receipt', keys, keys);
+    if (payload.schema_name !== 'frustrampnn_statistics_analysis_receipt'
+        || payload.schema_version !== 1
+        || payload.statistics_schema_version !== 2) {
+        throw new Error('statistics.analysis_receipt schema identity is invalid');
+    }
+    return {
+        schema_name: 'frustrampnn_statistics_analysis_receipt',
+        schema_version: 1,
+        analysis_id: fmString(payload.analysis_id, 'statistics.analysis_receipt.analysis_id'),
+        core_artifact_id: fmString(payload.core_artifact_id, 'statistics.analysis_receipt.core_artifact_id'),
+        core_bundle_relative_path: fmString(payload.core_bundle_relative_path, 'statistics.analysis_receipt.core_bundle_relative_path'),
+        core_landscape_sha256: fmSha256(payload.core_landscape_sha256, 'statistics.analysis_receipt.core_landscape_sha256'),
+        core_manifest_sha256: fmSha256(payload.core_manifest_sha256, 'statistics.analysis_receipt.core_manifest_sha256'),
+        formula_version: fmString(payload.formula_version, 'statistics.analysis_receipt.formula_version'),
+        policy_version: fmString(payload.policy_version, 'statistics.analysis_receipt.policy_version'),
+        package_version: fmString(payload.package_version, 'statistics.analysis_receipt.package_version'),
+        statistics_schema_version: 2,
+        attempt_count: fmInteger(payload.attempt_count, 'statistics.analysis_receipt.attempt_count', 1),
+    };
+};
+
+export const parseFrustraMpnnStatisticsAnalysis = (
+    value: unknown,
+    expectedParentJobId: string,
+    expectedInvocationId: string,
+): FrustraMpnnStatisticsAnalysis => {
+    const keys = [
+        'analysis_id', 'parent_job_id', 'invocation_id', 'state', 'attempt_count', 'core_artifact_id',
+        'core_landscape_sha256', 'core_manifest_sha256', 'formula_version', 'policy_version', 'package_version',
+        'schema_version', 'artifact_sha256', 'statistics_sha256', 'diagnostic',
+    ] as const;
+    const payload = fmClosedProjection(value, 'statistics analysis', keys, keys);
+    if (payload.parent_job_id !== expectedParentJobId) throw new Error('statistics analysis parent_job_id does not match the requested owner');
+    if (payload.invocation_id !== expectedInvocationId) throw new Error('statistics analysis invocation_id does not match the requested owner');
+    if (payload.state !== 'queued' && payload.state !== 'running' && payload.state !== 'completed' && payload.state !== 'failed') {
+        throw new Error('statistics analysis state is invalid');
+    }
+    if (payload.schema_version !== 1) throw new Error('statistics analysis schema_version is invalid');
+    return {
+        analysis_id: fmString(payload.analysis_id, 'statistics analysis.analysis_id'),
+        parent_job_id: expectedParentJobId,
+        invocation_id: expectedInvocationId,
+        state: payload.state,
+        attempt_count: fmInteger(payload.attempt_count, 'statistics analysis.attempt_count', 0),
+        core_artifact_id: fmString(payload.core_artifact_id, 'statistics analysis.core_artifact_id'),
+        core_landscape_sha256: fmSha256(payload.core_landscape_sha256, 'statistics analysis.core_landscape_sha256'),
+        core_manifest_sha256: fmSha256(payload.core_manifest_sha256, 'statistics analysis.core_manifest_sha256'),
+        formula_version: fmString(payload.formula_version, 'statistics analysis.formula_version'),
+        policy_version: fmString(payload.policy_version, 'statistics analysis.policy_version'),
+        package_version: fmString(payload.package_version, 'statistics analysis.package_version'),
+        schema_version: 1,
+        artifact_sha256: fmOptionalSha256(payload.artifact_sha256, 'statistics analysis.artifact_sha256'),
+        statistics_sha256: fmOptionalSha256(payload.statistics_sha256, 'statistics analysis.statistics_sha256'),
+        diagnostic: fmNullableString(payload.diagnostic, 'statistics analysis.diagnostic'),
+    };
+};
+
+export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistics => {
+    const baseKeys = [
         'schema_name', 'schema_version', 'hash_semantics', 'invocation_id', 'parent_job_id', 'candidate_id',
         'target_id', 'landscape_sha256', 'source_artifact_sha256', 'normalized_pdb_sha256', 'settings_sha256',
         'effective_settings_sha256', 'capability_inventory_content_sha256', 'capability_inventory_byte_sha256',
@@ -1941,11 +2240,20 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         'per_mutation_amino_acid', 'per_chain', 'per_entity', 'native_vs_alternative',
         'contiguous_native_class_regions', 'ranked_non_native_alternatives', 'class_burden',
     ] as const;
-    const payload = fmClosedProjection(value, 'statistics', keys, keys);
-    if (payload.schema_name !== 'frustrampnn_statistics' || payload.schema_version !== 1
+    const rawPayload = fmRecord(value, 'statistics');
+    const schemaVersion = rawPayload.schema_version;
+    const keys = schemaVersion === 2 ? [...baseKeys, 'analysis_receipt'] as const : baseKeys;
+    const payload = fmClosedProjection(rawPayload, 'statistics', keys, keys);
+    const outputContractVersion = payload.output_contract_version;
+    if (payload.schema_name !== 'frustrampnn_statistics'
+        || (schemaVersion !== 1 && schemaVersion !== 2)
         || payload.hash_semantics !== 'sha256(rfc8785(document_without_top_level_statistics_sha256))'
-        || payload.output_contract_version !== '2.0'
+        || (schemaVersion === 1 && outputContractVersion !== '2.0')
+        || (schemaVersion === 2 && outputContractVersion !== '3.0')
         || payload.canonical_amino_acid_order !== 'ACDEFGHIKLMNPQRSTVWY') throw new Error('statistics schema identity is invalid');
+    const analysisReceipt = schemaVersion === 2
+        ? parseStatisticsAnalysisReceipt(payload.analysis_receipt)
+        : undefined;
     const structureMap = fmClosedProjection(payload.structure_map, 'statistics.structure_map', ['schema_name', 'schema_version', 'sha256'], ['schema_name', 'schema_version', 'sha256']);
     if (structureMap.schema_name !== 'frustrampnn_structure_map' || structureMap.schema_version !== 1) throw new Error('statistics.structure_map schema identity is invalid');
     const distributions = fmClosedProjection(payload.distributions, 'statistics.distributions', ['overall', 'native', 'non_native'], ['overall', 'native', 'non_native']);
@@ -2012,7 +2320,7 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
     const ranked = fmClosedProjection(payload.ranked_non_native_alternatives, 'statistics.ranked_non_native_alternatives', ['support_count', 'omitted_count', 'best_to_worst', 'worst_to_best'], ['support_count', 'omitted_count', 'best_to_worst', 'worst_to_best']);
     if (!Array.isArray(ranked.best_to_worst) || !Array.isArray(ranked.worst_to_best)) throw new Error('statistics ranked alternatives must be arrays');
     return {
-        schema_name: 'frustrampnn_statistics', schema_version: 1,
+        schema_name: 'frustrampnn_statistics', schema_version: schemaVersion,
         hash_semantics: 'sha256(rfc8785(document_without_top_level_statistics_sha256))',
         invocation_id: fmString(payload.invocation_id, 'statistics.invocation_id'), parent_job_id: fmString(payload.parent_job_id, 'statistics.parent_job_id'),
         candidate_id: fmString(payload.candidate_id, 'statistics.candidate_id'), target_id: fmString(payload.target_id, 'statistics.target_id'),
@@ -2023,7 +2331,9 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
         runtime_identity_sha256: fmSha256(payload.runtime_identity_sha256, 'statistics.runtime_identity_sha256'), classification_policy_sha256: fmSha256(payload.classification_policy_sha256, 'statistics.classification_policy_sha256'),
         execution_plan_sha256: fmSha256(payload.execution_plan_sha256, 'statistics.execution_plan_sha256'), comparison_compatibility_id: fmSha256(payload.comparison_compatibility_id, 'statistics.comparison_compatibility_id'),
         statistics_sha256: fmSha256(payload.statistics_sha256, 'statistics.statistics_sha256'), structure_map: { schema_name: 'frustrampnn_structure_map', schema_version: 1, sha256: fmSha256(structureMap.sha256, 'statistics.structure_map.sha256') },
-        output_contract_version: '2.0', canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY', comparison_compatibility_basis: parseStatisticsBasis(payload.comparison_compatibility_basis),
+        output_contract_version: outputContractVersion as '2.0' | '3.0',
+        ...(analysisReceipt ? { analysis_receipt: analysisReceipt } : {}),
+        canonical_amino_acid_order: 'ACDEFGHIKLMNPQRSTVWY', comparison_compatibility_basis: parseStatisticsBasis(payload.comparison_compatibility_basis),
         support: parseStatisticsSupport(payload.support, 'statistics.support'),
         distributions: { overall: parseDistribution(distributions.overall, 'statistics.distributions.overall'), native: parseDistribution(distributions.native, 'statistics.distributions.native'), non_native: parseDistribution(distributions.non_native, 'statistics.distributions.non_native') },
         class_burden: { all: parseClassBurden(burdens.all, 'statistics.class_burden.all'), native: parseClassBurden(burdens.native, 'statistics.class_burden.native'), non_native: parseClassBurden(burdens.non_native, 'statistics.class_burden.non_native') },
@@ -2045,7 +2355,8 @@ export const parseFrustraMpnnStatistics = (value: unknown): FrustraMpnnStatistic
 };
 
 const RESULT_ITEM_KEYS = [
-    'invocation_id', 'parent_job_id', 'parent_workflow_id', 'candidate_id', 'design_id',
+    'invocation_id', 'parent_job_id', 'parent_workflow_id', 'candidate_id', 'operator_label',
+    'source_identity', 'design_id',
     'requiredness', 'source_artifact_id', 'source_artifact_sha256', 'request_sha256',
     'manifest_sha256', 'summary_sha256', 'created_at', 'authority_version', 'availability',
     'statistics_available', 'missing_fields', 'settings_sha256', 'effective_settings_sha256',
@@ -2063,11 +2374,11 @@ const MISSING_FIELDS = new Set<FrustraMpnnMissingField>([
 const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultListItem => {
     const payload = fmClosedProjection(value, 'FrustraMPNN result', detail ? RESULT_DETAIL_KEYS : RESULT_ITEM_KEYS, detail ? RESULT_DETAIL_KEYS : RESULT_ITEM_KEYS);
     const authority = payload.authority_version;
-    if (authority !== 'v2' && authority !== 'historical_v1') throw new Error('result authority_version is invalid');
+    if (authority !== 'v3' && authority !== 'v2' && authority !== 'historical_v1') throw new Error('result authority_version is invalid');
     const status = payload.status;
     if (status !== 'succeeded' && status !== 'failed' && status !== 'not_run') throw new Error('result status is invalid');
     const contract = payload.component_contract_version;
-    if (contract !== '1.0' && contract !== '2.0') throw new Error('result component contract is invalid');
+    if (contract !== '1.0' && contract !== '2.0' && contract !== '3.0') throw new Error('result component contract is invalid');
     if (!Array.isArray(payload.missing_fields)) throw new Error('result missing_fields must be an array');
     const missingFields = payload.missing_fields.map((field) => {
         if (!MISSING_FIELDS.has(field as FrustraMpnnMissingField)) throw new Error(`result missing_fields contains unsupported field ${String(field)}`);
@@ -2077,11 +2388,19 @@ const parseResultItem = (value: unknown, detail: boolean): FrustraMpnnResultList
     const reopen = fmClosedProjection(payload.reopen_destination, 'result.reopen_destination', ['surface', 'params'], ['surface', 'params']);
     if (reopen.surface !== 'frustrampnn-workbench') throw new Error('result reopen surface is invalid');
     const reopenParams = fmClosedProjection(reopen.params, 'result.reopen_destination.params', ['job_id', 'invocation_id'], ['job_id', 'invocation_id']);
+    const sourceIdentity = fmClosedProjection(payload.source_identity, 'result.source_identity', ['design_id', 'artifact_id', 'artifact_sha256', 'candidate_id'], ['design_id', 'artifact_id', 'artifact_sha256', 'candidate_id']);
     return {
         invocation_id: fmString(payload.invocation_id, 'result.invocation_id'),
         parent_job_id: fmString(payload.parent_job_id, 'result.parent_job_id'),
         parent_workflow_id: fmString(payload.parent_workflow_id, 'result.parent_workflow_id'),
         candidate_id: fmString(payload.candidate_id, 'result.candidate_id'),
+        operator_label: fmString(payload.operator_label, 'result.operator_label'),
+        source_identity: {
+            design_id: fmNullableString(sourceIdentity.design_id, 'result.source_identity.design_id'),
+            artifact_id: fmNullableString(sourceIdentity.artifact_id, 'result.source_identity.artifact_id'),
+            artifact_sha256: fmSha256(sourceIdentity.artifact_sha256, 'result.source_identity.artifact_sha256'),
+            candidate_id: fmString(sourceIdentity.candidate_id, 'result.source_identity.candidate_id'),
+        },
         design_id: fmNullableString(payload.design_id, 'result.design_id'),
         requiredness: fmString(payload.requiredness, 'result.requiredness'),
         source_artifact_id: fmNullableString(payload.source_artifact_id, 'result.source_artifact_id'),
@@ -2151,7 +2470,10 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         'requested_settings_sha256', 'effective_settings_sha256', 'runtime_identity_sha256',
         'source_artifact_sha256', 'structure_map_sha256', 'normalized_pdb_sha256', 'threshold_policy_id',
     ] as const;
-    if (payload.schema_name !== 'frustrampnn_summary' || (payload.schema_version !== 1 && payload.schema_version !== 2)) {
+    if (
+        payload.schema_name !== 'frustrampnn_summary'
+        || (payload.schema_version !== 1 && payload.schema_version !== 2 && payload.schema_version !== 3)
+    ) {
         throw new Error('result summary schema identity is invalid');
     }
     fmClosedProjection(payload, 'result.summary', payload.schema_version === 1 ? v1Keys : v2Keys, payload.schema_version === 1 ? v1Keys : v2Keys);
@@ -2162,21 +2484,21 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
     for (const [reason, count] of Object.entries(missingnessWire)) {
         missingness[fmString(reason, 'result.summary missingness reason')] = fmInteger(count, `result.summary.missingness_by_reason.${reason}`, 1);
     }
-    if (payload.schema_version === 2 && Object.keys(missingness).length !== 0) throw new Error('v2 result summary missingness must be empty');
+    if (payload.schema_version !== 1 && Object.keys(missingness).length !== 0) throw new Error('current result summary missingness must be empty');
     if (!Array.isArray(payload.support_by_entity_chain)) throw new Error('result.summary.support_by_entity_chain must be an array');
-    if (payload.schema_version === 2 && payload.support_by_entity_chain.length < 1) throw new Error('result.summary.support_by_entity_chain must contain at least one chain');
+    if (payload.schema_version !== 1 && payload.support_by_entity_chain.length < 1) throw new Error('result.summary.support_by_entity_chain must contain at least one chain');
     const support = payload.support_by_entity_chain.map((item, index) => {
         const label = `result.summary.support_by_entity_chain[${index}]`;
         const row = fmClosedProjection(item, label, ['entity_instance_id', 'auth_asym_id', 'expected_residues', 'mapped_residues', 'scoreable_residues', 'expected_slots', 'observed_slots', 'scoreable_slots'], ['entity_instance_id', 'auth_asym_id', 'expected_residues', 'mapped_residues', 'scoreable_residues', 'expected_slots', 'observed_slots', 'scoreable_slots']);
         return {
             entity_instance_id: fmString(row.entity_instance_id, `${label}.entity_instance_id`),
             auth_asym_id: fmString(row.auth_asym_id, `${label}.auth_asym_id`),
-            expected_residues: fmInteger(row.expected_residues, `${label}.expected_residues`, payload.schema_version === 2 ? 1 : 0),
-            mapped_residues: fmInteger(row.mapped_residues, `${label}.mapped_residues`, payload.schema_version === 2 ? 1 : 0),
-            scoreable_residues: fmInteger(row.scoreable_residues, `${label}.scoreable_residues`, payload.schema_version === 2 ? 1 : 0),
-            expected_slots: fmInteger(row.expected_slots, `${label}.expected_slots`, payload.schema_version === 2 ? 20 : 0),
-            observed_slots: fmInteger(row.observed_slots, `${label}.observed_slots`, payload.schema_version === 2 ? 20 : 0),
-            scoreable_slots: fmInteger(row.scoreable_slots, `${label}.scoreable_slots`, payload.schema_version === 2 ? 20 : 0),
+            expected_residues: fmInteger(row.expected_residues, `${label}.expected_residues`, payload.schema_version !== 1 ? 1 : 0),
+            mapped_residues: fmInteger(row.mapped_residues, `${label}.mapped_residues`, payload.schema_version !== 1 ? 1 : 0),
+            scoreable_residues: fmInteger(row.scoreable_residues, `${label}.scoreable_residues`, payload.schema_version !== 1 ? 1 : 0),
+            expected_slots: fmInteger(row.expected_slots, `${label}.expected_slots`, payload.schema_version !== 1 ? 20 : 0),
+            observed_slots: fmInteger(row.observed_slots, `${label}.observed_slots`, payload.schema_version !== 1 ? 20 : 0),
+            scoreable_slots: fmInteger(row.scoreable_slots, `${label}.scoreable_slots`, payload.schema_version !== 1 ? 20 : 0),
         };
     });
     const policyLabel = 'result.summary.threshold_policy';
@@ -2185,7 +2507,7 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         : fmClosedProjection(payload.threshold_policy, policyLabel, ['mode', 'high_max', 'minimal_min'], ['mode', 'high_max', 'minimal_min']);
     if (payload.schema_version === 1 && policy.id !== 'frustrampnn_class_v1') throw new Error('v1 result summary threshold policy is invalid');
     if (payload.schema_version === 1 && (fmFinite(policy.high_max, `${policyLabel}.high_max`) !== -1 || fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) !== 0.58)) throw new Error('v1 result summary threshold_policy values are invalid');
-    if (payload.schema_version === 2 && policy.mode !== 'canonical' && policy.mode !== 'custom') throw new Error('v2 result summary threshold policy is invalid');
+    if (payload.schema_version !== 1 && policy.mode !== 'canonical' && policy.mode !== 'custom') throw new Error('current result summary threshold policy is invalid');
     const common = {
         schema_name: 'frustrampnn_summary' as const,
         schema_version: payload.schema_version,
@@ -2194,16 +2516,16 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         candidate_id: fmString(payload.candidate_id, 'result.summary.candidate_id'),
         landscape_sha256: fmSha256(payload.landscape_sha256, 'result.summary.landscape_sha256'),
         residue_support: {
-            expected: fmInteger(residue.expected, 'result.summary.residue_support.expected', payload.schema_version === 2 ? 1 : 0),
-            mapped: fmInteger(residue.mapped, 'result.summary.residue_support.mapped', payload.schema_version === 2 ? 1 : 0),
-            scoreable: fmInteger(residue.scoreable, 'result.summary.residue_support.scoreable', payload.schema_version === 2 ? 1 : 0),
+            expected: fmInteger(residue.expected, 'result.summary.residue_support.expected', payload.schema_version !== 1 ? 1 : 0),
+            mapped: fmInteger(residue.mapped, 'result.summary.residue_support.mapped', payload.schema_version !== 1 ? 1 : 0),
+            scoreable: fmInteger(residue.scoreable, 'result.summary.residue_support.scoreable', payload.schema_version !== 1 ? 1 : 0),
             excluded: fmInteger(residue.excluded, 'result.summary.residue_support.excluded', 0),
             ambiguous: fmInteger(residue.ambiguous, 'result.summary.residue_support.ambiguous', 0),
         },
         slot_support: {
-            expected: fmInteger(slots.expected, 'result.summary.slot_support.expected', payload.schema_version === 2 ? 20 : 0),
-            observed: fmInteger(slots.observed, 'result.summary.slot_support.observed', payload.schema_version === 2 ? 20 : 0),
-            scoreable: fmInteger(slots.scoreable, 'result.summary.slot_support.scoreable', payload.schema_version === 2 ? 20 : 0),
+            expected: fmInteger(slots.expected, 'result.summary.slot_support.expected', payload.schema_version !== 1 ? 20 : 0),
+            observed: fmInteger(slots.observed, 'result.summary.slot_support.observed', payload.schema_version !== 1 ? 20 : 0),
+            scoreable: fmInteger(slots.scoreable, 'result.summary.slot_support.scoreable', payload.schema_version !== 1 ? 20 : 0),
         },
         missingness_by_reason: missingness,
         native_slot_counts: parseSummaryCounts(payload.native_slot_counts, 'result.summary.native_slot_counts'),
@@ -2216,17 +2538,16 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
             : { mode: policy.mode as 'canonical' | 'custom', high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) },
         threshold_policy_sha256: fmSha256(payload.threshold_policy_sha256, 'result.summary.threshold_policy_sha256'),
     };
-    return payload.schema_version === 1 ? {
+    if (payload.schema_version === 1) return {
         ...common,
         schema_version: 1,
         threshold_policy: { id: 'frustrampnn_class_v1' as const, high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) },
         configuration_id: (() => { if (payload.configuration_id !== 'frustrampnn_global_v1') throw new Error('v1 result summary configuration is invalid'); return 'frustrampnn_global_v1' as const; })(),
         configuration_sha256: fmSha256(payload.configuration_sha256, 'result.summary.configuration_sha256'),
-    } : {
+    };
+    const current = {
         ...common,
-        schema_version: 2,
         threshold_policy: { mode: policy.mode as 'canonical' | 'custom', high_max: fmFinite(policy.high_max, `${policyLabel}.high_max`), minimal_min: fmFinite(policy.minimal_min, `${policyLabel}.minimal_min`) },
-        execution_configuration_id: (() => { if (payload.execution_configuration_id !== 'frustrampnn_execution_configuration_v2') throw new Error('v2 result summary execution configuration is invalid'); return 'frustrampnn_execution_configuration_v2' as const; })(),
         execution_configuration_sha256: fmSha256(payload.execution_configuration_sha256, 'result.summary.execution_configuration_sha256'),
         requested_settings_sha256: fmSha256(payload.requested_settings_sha256, 'result.summary.requested_settings_sha256'),
         effective_settings_sha256: fmSha256(payload.effective_settings_sha256, 'result.summary.effective_settings_sha256'),
@@ -2234,8 +2555,14 @@ const parseFrustraMpnnSummary = (value: unknown): FrustraMpnnSummary => {
         source_artifact_sha256: fmSha256(payload.source_artifact_sha256, 'result.summary.source_artifact_sha256'),
         structure_map_sha256: fmSha256(payload.structure_map_sha256, 'result.summary.structure_map_sha256'),
         normalized_pdb_sha256: fmSha256(payload.normalized_pdb_sha256, 'result.summary.normalized_pdb_sha256'),
-        threshold_policy_id: (() => { if (payload.threshold_policy_id !== 'frustrampnn_class_v1') throw new Error('v2 result summary threshold policy id is invalid'); return 'frustrampnn_class_v1' as const; })(),
+        threshold_policy_id: (() => { if (payload.threshold_policy_id !== 'frustrampnn_class_v1') throw new Error('current result summary threshold policy id is invalid'); return 'frustrampnn_class_v1' as const; })(),
     };
+    if (payload.schema_version === 2) {
+        if (payload.execution_configuration_id !== 'frustrampnn_execution_configuration_v2') throw new Error('v2 result summary execution configuration is invalid');
+        return { ...current, schema_version: 2, execution_configuration_id: 'frustrampnn_execution_configuration_v2' };
+    }
+    if (payload.execution_configuration_id !== 'frustrampnn_execution_configuration_v3') throw new Error('v3 result summary execution configuration is invalid');
+    return { ...current, schema_version: 3, execution_configuration_id: 'frustrampnn_execution_configuration_v3' };
 };
 
 const parseTerminalResultProjection = (value: unknown): FrustraMpnnTerminalResult => {
@@ -2352,7 +2679,7 @@ const STATISTICS_RESPONSE_KEYS = [
 export const parseFrustraMpnnStatisticsResponse = (value: unknown): FrustraMpnnStatisticsResponse => {
     const payload = fmClosedProjection(value, 'FrustraMPNN statistics response', STATISTICS_RESPONSE_KEYS, STATISTICS_RESPONSE_KEYS);
     const authority = payload.authority_version;
-    if (authority !== 'v2' && authority !== 'historical_v1') throw new Error('statistics authority_version is invalid');
+    if (authority !== 'v3' && authority !== 'v2' && authority !== 'historical_v1') throw new Error('statistics authority_version is invalid');
     if (!Array.isArray(payload.missing_fields)) throw new Error('statistics missing_fields must be an array');
     const missingFields = payload.missing_fields.map((field) => {
         if (!MISSING_FIELDS.has(field as FrustraMpnnMissingField)) throw new Error(`statistics missing_fields contains unsupported field ${String(field)}`);
@@ -3161,12 +3488,12 @@ export const analyzeFrustraMpnnDesigns = async (
     parentJobId: string,
     payload: FrustraMpnnAnalyzeRequest,
     signal?: AbortSignal,
-): Promise<FrustraMpnnChildReceipt> => {
+): Promise<FrustraMpnnStructureDatasetFanout> => {
     const normalizedPayload = {
         selections: payload.selections,
         frustrampnn_settings: parseFrustraMpnnRequestedSettings(payload.frustrampnn_settings),
     };
-    return parseFrustraMpnnChildReceipt((
+    return parseFrustraMpnnStructureDatasetFanout((
     await api.post<unknown>(
         `/api/frustrampnn/jobs/${encodeURIComponent(parentJobId)}/analyze`,
         normalizedPayload,
@@ -3216,6 +3543,28 @@ export const fetchFrustraMpnnResult = async (
         { params: { job_id: jobId }, signal },
     );
     return parseFrustraMpnnResultDetail(response.data);
+};
+
+export const fetchFrustraMpnnStatisticsAnalysis = async (
+    parentJobId: string,
+    invocationId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnStatisticsAnalysis> => {
+    const response = await api.get<unknown>(
+        `/api/frustrampnn/results/${encodeURIComponent(parentJobId)}/${encodeURIComponent(invocationId)}/statistics/analysis`,
+        { signal },
+    );
+    return parseFrustraMpnnStatisticsAnalysis(response.data, parentJobId, invocationId);
+};
+
+export const retryFrustraMpnnStatisticsAnalysis = async (
+    parentJobId: string,
+    invocationId: string,
+): Promise<FrustraMpnnStatisticsAnalysis> => {
+    const response = await api.post<unknown>(
+        `/api/frustrampnn/results/${encodeURIComponent(parentJobId)}/${encodeURIComponent(invocationId)}/statistics/retry`,
+    );
+    return parseFrustraMpnnStatisticsAnalysis(response.data, parentJobId, invocationId);
 };
 
 export const fetchFrustraMpnnStatistics = async (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import math
 from collections import Counter
@@ -8,10 +9,10 @@ from typing import Any, Literal, Mapping, Sequence
 
 import rfc8785
 from fastapi import HTTPException
-from sqlalchemy import Float, case, cast, func, select
+from sqlalchemy import and_, exists, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import Design, FrustraMPNNLandscapeRow, FrustraMPNNResult, Job
+from database import FrustraMPNNResult, Job, ScientificArtifactReceipt
 from .contracts import (
     AA_ORDER,
     ContractValidationError,
@@ -19,6 +20,7 @@ from .contracts import (
     canonical_sha256,
     validate_schema,
 )
+from .persistence import landscape_page
 
 AnalyticsLevel = Literal["result", "residue", "mutation"]
 
@@ -149,107 +151,263 @@ async def multidimensional_points(
     }
 
 
-async def _result_points(session: AsyncSession, dataset_ids: list[str], limit: int, offset: int):
-    L = FrustraMPNNLandscapeRow
-    residue_key = L.target_id + "|" + L.entity_instance_id + "|" + L.auth_asym_id + "|" + L.auth_seq_id + "|" + L.insertion_code + "|" + cast(L.sequence_index, type_=Float)
-    scoreable = case((L.scoreable.is_(True), 1), else_=0)
-    native_score = case((L.mutation_aa == L.wt, L.score), else_=None)
-    aggregate_columns = (
-        func.count(L.id).label("slot_count"),
-        func.count(func.distinct(residue_key)).label("residue_count"),
-        func.sum(scoreable).label("scoreable_count"),
-        func.avg(case((L.scoreable.is_(True), L.score), else_=None)).label("mean_score"),
-        func.avg(native_score).label("native_score"),
-        func.sum(case((L.scoreable.is_(True) & (L.score_class == "high"), 1), else_=0)).label("high_count"),
-        func.sum(case((L.scoreable.is_(True) & (L.score_class == "minimal"), 1), else_=0)).label("minimal_count"),
+def _artifact_backed_results(dataset_ids: list[str]):
+    receipt = ScientificArtifactReceipt
+    owner_id = (
+        FrustraMPNNResult.parent_job_id
+        + literal(":")
+        + FrustraMPNNResult.invocation_id
     )
-    group_columns = _joined_columns()
-    base = select(*group_columns, *aggregate_columns).join(L, (L.parent_job_id == FrustraMPNNResult.parent_job_id) & (L.invocation_id == FrustraMPNNResult.invocation_id)).join(Job, Job.id == FrustraMPNNResult.parent_job_id).group_by(*group_columns)
-    base = _apply_datasets(base, dataset_ids)
-    total = int((await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one())
-    rows = (await session.execute(base.order_by(FrustraMPNNResult.parent_job_id, FrustraMPNNResult.invocation_id).offset(offset).limit(limit))).all()
+    has_landscape = exists(
+        select(receipt.artifact_id).where(
+            receipt.owner_id == owner_id,
+            receipt.availability == "available",
+            or_(
+                and_(
+                    receipt.owner_kind == "frustrampnn_result",
+                    receipt.role == "landscape",
+                ),
+                and_(
+                    receipt.owner_kind == "frustrampnn_landscape",
+                    receipt.role == "rows",
+                ),
+            ),
+        )
+    )
+    statement = (
+        select(*_joined_columns())
+        .join(Job, Job.id == FrustraMPNNResult.parent_job_id)
+        .where(has_landscape)
+    )
+    return _apply_datasets(statement, dataset_ids)
+
+
+async def _selected_results(
+    session: AsyncSession, dataset_ids: list[str]
+) -> list[Any]:
+    return (
+        await session.execute(
+            _artifact_backed_results(dataset_ids).order_by(
+                FrustraMPNNResult.parent_job_id,
+                FrustraMPNNResult.invocation_id,
+            )
+        )
+    ).all()
+
+
+async def _artifact_rows_for_result(
+    session: AsyncSession, result: Any
+) -> list[dict[str, Any]]:
+    page = await landscape_page(
+        session,
+        result.parent_job_id,
+        result.invocation_id,
+        limit=500,
+    )
+    rows = list(page["items"])
+    total = int(page["total"])
+    while len(rows) < total:
+        next_page = await landscape_page(
+            session,
+            result.parent_job_id,
+            result.invocation_id,
+            limit=500,
+            offset=len(rows),
+        )
+        if not next_page["items"]:
+            raise HTTPException(
+                status_code=503,
+                detail="FrustraMPNN landscape artifact paging is incomplete",
+            )
+        rows.extend(next_page["items"])
+    return rows
+
+
+def _mean(values: Sequence[float]) -> float | None:
+    return math.fsum(values) / len(values) if values else None
+
+
+def _finite_score(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+async def _result_points(
+    session: AsyncSession, dataset_ids: list[str], limit: int, offset: int
+):
+    results = await _selected_results(session, dataset_ids)
+    total = len(results)
     items = []
-    for row in rows:
-        identity = _base_identity(row)
+    for result in results[offset:offset + limit]:
+        rows = await _artifact_rows_for_result(session, result)
+        scoreable_rows = [row for row in rows if row["scoreable"] is True]
+        scoreable_scores = [
+            score
+            for row in scoreable_rows
+            if (score := _finite_score(row["score"])) is not None
+        ]
+        native_scores = [
+            score
+            for row in rows
+            if row["mutation_aa"] == row["wt"]
+            and (score := _finite_score(row["score"])) is not None
+        ]
+        residue_count = len({
+            (
+                row["target_id"],
+                row["entity_instance_id"],
+                row["auth_asym_id"],
+                row["auth_seq_id"],
+                row["insertion_code"],
+                row["sequence_index"],
+            )
+            for row in rows
+        })
+        high_count = sum(
+            row["score_class"] == "high" for row in scoreable_rows
+        )
+        minimal_count = sum(
+            row["score_class"] == "minimal" for row in scoreable_rows
+        )
+        identity = _base_identity(result)
         identity.update({
-            "point_id": f"{row.parent_job_id}:{row.invocation_id}",
+            "point_id": f"{result.parent_job_id}:{result.invocation_id}",
             "metrics": {
-                "mean_score": row.mean_score,
-                "native_score": row.native_score,
-                "high_fraction": _ratio(row.high_count, row.scoreable_count),
-                "minimal_fraction": _ratio(row.minimal_count, row.scoreable_count),
-                "scoreable_fraction": _ratio(row.scoreable_count, row.slot_count),
-                "slot_count": row.slot_count,
-                "residue_count": row.residue_count,
+                "mean_score": _mean(scoreable_scores),
+                "native_score": _mean(native_scores),
+                "high_fraction": _ratio(high_count, len(scoreable_rows)),
+                "minimal_fraction": _ratio(minimal_count, len(scoreable_rows)),
+                "scoreable_fraction": _ratio(len(scoreable_rows), len(rows)),
+                "slot_count": len(rows),
+                "residue_count": residue_count,
             },
         })
         items.append(identity)
     return items, total
 
 
-async def _residue_points(session: AsyncSession, dataset_ids: list[str], limit: int, offset: int):
-    L = FrustraMPNNLandscapeRow
-    exact_columns = (L.target_id, L.entity_instance_id, L.auth_asym_id, L.auth_seq_id, L.insertion_code, L.sequence_index, L.wt)
-    alt = (L.mutation_aa != L.wt) & L.scoreable.is_(True)
-    native = L.mutation_aa == L.wt
-    aggregates = (
-        func.max(case((native, L.score), else_=None)).label("native_score"),
-        func.avg(case((alt, L.score), else_=None)).label("alternative_mean_score"),
-        func.max(case((alt, L.score), else_=None)).label("best_alternative_score"),
-        func.min(case((alt, L.score), else_=None)).label("worst_alternative_score"),
-        func.sum(case((alt, 1), else_=0)).label("alternative_count"),
-        func.sum(case((alt & (L.score_class == "high"), 1), else_=0)).label("high_count"),
-        func.sum(case((alt & (L.score_class == "minimal"), 1), else_=0)).label("minimal_count"),
-    )
-    group_columns = _joined_columns() + exact_columns
-    base = select(*group_columns, *aggregates).join(L, (L.parent_job_id == FrustraMPNNResult.parent_job_id) & (L.invocation_id == FrustraMPNNResult.invocation_id)).join(Job, Job.id == FrustraMPNNResult.parent_job_id).group_by(*group_columns)
-    base = _apply_datasets(base, dataset_ids)
-    total = int((await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one())
-    rows = (await session.execute(base.order_by(FrustraMPNNResult.parent_job_id, FrustraMPNNResult.invocation_id, L.target_id, L.entity_instance_id, L.auth_asym_id, L.sequence_index, L.insertion_code).offset(offset).limit(limit))).all()
-    items = []
-    for row in rows:
-        identity = _base_identity(row)
-        residue_parts = [row.target_id, row.entity_instance_id, row.auth_asym_id, row.auth_seq_id, row.insertion_code, str(row.sequence_index)]
-        identity.update({
-            "point_id": ":".join([row.parent_job_id, row.invocation_id, *residue_parts]),
-            "target_id": row.target_id, "entity_instance_id": row.entity_instance_id,
-            "auth_asym_id": row.auth_asym_id, "auth_seq_id": row.auth_seq_id,
-            "insertion_code": row.insertion_code, "sequence_index": row.sequence_index, "wt": row.wt,
-            "metrics": {
-                "native_score": row.native_score,
-                "alternative_mean_score": row.alternative_mean_score,
-                "best_alternative_delta": row.best_alternative_score - row.native_score if row.best_alternative_score is not None and row.native_score is not None else None,
-                "worst_alternative_delta": row.worst_alternative_score - row.native_score if row.worst_alternative_score is not None and row.native_score is not None else None,
-                "high_alternative_fraction": _ratio(row.high_count, row.alternative_count),
-                "minimal_alternative_fraction": _ratio(row.minimal_count, row.alternative_count),
-                "alternative_count": row.alternative_count,
-            },
-        })
-        items.append(identity)
-    return items, total
+async def _residue_points(
+    session: AsyncSession, dataset_ids: list[str], limit: int, offset: int
+):
+    items: list[dict[str, Any]] = []
+    for result in await _selected_results(session, dataset_ids):
+        rows = await _artifact_rows_for_result(session, result)
+        grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for row in rows:
+            key = (
+                row["target_id"], row["entity_instance_id"], row["auth_asym_id"],
+                row["auth_seq_id"], row["insertion_code"], row["sequence_index"],
+                row["wt"],
+            )
+            grouped.setdefault(key, []).append(row)
+        for key, residue_rows in grouped.items():
+            target_id, entity_instance_id, auth_asym_id, auth_seq_id, insertion_code, sequence_index, wt = key
+            native_scores = [
+                score
+                for row in residue_rows
+                if row["mutation_aa"] == row["wt"]
+                and (score := _finite_score(row["score"])) is not None
+            ]
+            alternatives = [
+                row
+                for row in residue_rows
+                if row["mutation_aa"] != row["wt"] and row["scoreable"] is True
+            ]
+            alternative_scores = [
+                score
+                for row in alternatives
+                if (score := _finite_score(row["score"])) is not None
+            ]
+            native_score = max(native_scores) if native_scores else None
+            best = max(alternative_scores) if alternative_scores else None
+            worst = min(alternative_scores) if alternative_scores else None
+            high_count = sum(row["score_class"] == "high" for row in alternatives)
+            minimal_count = sum(row["score_class"] == "minimal" for row in alternatives)
+            identity = _base_identity(result)
+            residue_parts = [
+                target_id, entity_instance_id, auth_asym_id, auth_seq_id,
+                insertion_code, str(sequence_index),
+            ]
+            identity.update({
+                "point_id": ":".join([
+                    result.parent_job_id, result.invocation_id, *residue_parts,
+                ]),
+                "target_id": target_id,
+                "entity_instance_id": entity_instance_id,
+                "auth_asym_id": auth_asym_id,
+                "auth_seq_id": auth_seq_id,
+                "insertion_code": insertion_code,
+                "sequence_index": sequence_index,
+                "wt": wt,
+                "metrics": {
+                    "native_score": native_score,
+                    "alternative_mean_score": _mean(alternative_scores),
+                    "best_alternative_delta": (
+                        best - native_score
+                        if best is not None and native_score is not None else None
+                    ),
+                    "worst_alternative_delta": (
+                        worst - native_score
+                        if worst is not None and native_score is not None else None
+                    ),
+                    "high_alternative_fraction": _ratio(high_count, len(alternatives)),
+                    "minimal_alternative_fraction": _ratio(minimal_count, len(alternatives)),
+                    "alternative_count": len(alternatives),
+                },
+            })
+            items.append(identity)
+    items.sort(key=lambda item: (
+        item["dataset_id"], item["invocation_id"], item["target_id"],
+        item["entity_instance_id"], item["auth_asym_id"], item["sequence_index"],
+        item["insertion_code"],
+    ))
+    total = len(items)
+    return items[offset:offset + limit], total
 
 
-async def _mutation_points(session: AsyncSession, dataset_ids: list[str], limit: int, offset: int):
-    L = FrustraMPNNLandscapeRow
-    base = select(*_joined_columns(), L.target_id, L.entity_instance_id, L.auth_asym_id, L.auth_seq_id, L.insertion_code, L.sequence_index, L.wt, L.mutation_aa, L.score, L.score_class, L.scoreable, L.status, L.reason).join(L, (L.parent_job_id == FrustraMPNNResult.parent_job_id) & (L.invocation_id == FrustraMPNNResult.invocation_id)).join(Job, Job.id == FrustraMPNNResult.parent_job_id)
-    base = _apply_datasets(base, dataset_ids)
-    total = int((await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one())
-    rows = (await session.execute(base.order_by(FrustraMPNNResult.parent_job_id, FrustraMPNNResult.invocation_id, L.target_id, L.entity_instance_id, L.auth_asym_id, L.sequence_index, L.insertion_code, L.mutation_aa, L.id).offset(offset).limit(limit))).all()
-    items = []
-    for row in rows:
-        identity = _base_identity(row)
-        residue_parts = [row.target_id, row.entity_instance_id, row.auth_asym_id, row.auth_seq_id, row.insertion_code, str(row.sequence_index), row.mutation_aa]
-        identity.update({
-            "point_id": ":".join([row.parent_job_id, row.invocation_id, *residue_parts]),
-            "target_id": row.target_id, "entity_instance_id": row.entity_instance_id,
-            "auth_asym_id": row.auth_asym_id, "auth_seq_id": row.auth_seq_id,
-            "insertion_code": row.insertion_code, "sequence_index": row.sequence_index,
-            "wt": row.wt, "mutation_aa": row.mutation_aa, "score_class": row.score_class,
-            "status": row.status, "reason": row.reason,
-            "metrics": {"score": row.score, "scoreable": row.scoreable},
-        })
-        items.append(identity)
-    return items, total
+async def _mutation_points(
+    session: AsyncSession, dataset_ids: list[str], limit: int, offset: int
+):
+    items: list[dict[str, Any]] = []
+    for result in await _selected_results(session, dataset_ids):
+        for row in await _artifact_rows_for_result(session, result):
+            identity = _base_identity(result)
+            residue_parts = [
+                row["target_id"], row["entity_instance_id"], row["auth_asym_id"],
+                row["auth_seq_id"], row["insertion_code"],
+                str(row["sequence_index"]), row["mutation_aa"],
+            ]
+            identity.update({
+                "point_id": ":".join([
+                    result.parent_job_id, result.invocation_id, *residue_parts,
+                ]),
+                "target_id": row["target_id"],
+                "entity_instance_id": row["entity_instance_id"],
+                "auth_asym_id": row["auth_asym_id"],
+                "auth_seq_id": row["auth_seq_id"],
+                "insertion_code": row["insertion_code"],
+                "sequence_index": row["sequence_index"],
+                "wt": row["wt"],
+                "mutation_aa": row["mutation_aa"],
+                "score_class": row["score_class"],
+                "status": row["status"],
+                "reason": row["reason"],
+                "metrics": {"score": row["score"], "scoreable": row["scoreable"]},
+                "_row_id": row["id"],
+            })
+            items.append(identity)
+    items.sort(key=lambda item: (
+        item["dataset_id"], item["invocation_id"], item["target_id"],
+        item["entity_instance_id"], item["auth_asym_id"], item["sequence_index"],
+        item["insertion_code"], item["mutation_aa"], item["_row_id"],
+    ))
+    total = len(items)
+    page = items[offset:offset + limit]
+    for item in page:
+        item.pop("_row_id", None)
+    return page, total
 
 
 _STATISTIC_CLASSES = ("high", "neutral", "minimal")
@@ -441,6 +599,7 @@ def _validate_statistics_inputs(
     *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
     landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
     capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    allow_legacy_external_authority: bool = False,
 ) -> None:
     for name, value in (
         ("request", request), ("execution receipt", execution_receipt),
@@ -451,9 +610,28 @@ def _validate_statistics_inputs(
             raise ContractValidationError(f"{name} must be an object")
     if not isinstance(capability_inventory_bytes, bytes):
         raise ContractValidationError("capability inventory bytes must be exact bytes")
-    validate_schema("workflow_component_request_v2", request)
-    validate_schema("frustrampnn_execution_receipt_v2", execution_receipt)
-    validate_schema("frustrampnn_landscape_v2", landscape)
+    schema_request = request
+    if (
+        allow_legacy_external_authority
+        and request.get("identity_authority") in {"producer_manifest", "cm_complex_snapshot"}
+        and "bytes" not in request.get("identity_authority_artifact", {})
+    ):
+        schema_request = dict(request)
+        envelope = dict(request["identity_authority_artifact"])
+        envelope["bytes"] = len(base64.b64decode(envelope["canonical_json_base64"], validate=True))
+        schema_request["identity_authority_artifact"] = envelope
+    request_generation = request.get("schema_version")
+    if request_generation not in {2, 3}:
+        raise ContractValidationError("statistics require a modern request generation")
+    validate_schema(
+        f"workflow_component_request_v{request_generation}", schema_request
+    )
+    validate_schema(
+        f"frustrampnn_execution_receipt_v{request_generation}", execution_receipt
+    )
+    validate_schema(
+        f"frustrampnn_landscape_v{request_generation}", landscape
+    )
     validate_schema("frustrampnn_structure_map_v1", structure_map)
     validate_schema("capability_inventory_v1", capability_inventory)
 
@@ -481,7 +659,7 @@ def _validate_statistics_inputs(
         "pdb_coordinates": "pdb_self_identity_v1",
         "mmcif_atom_site": "mmcif_atom_site_v1",
         "producer_manifest": "producer_manifest_v1",
-        "cm_complex_snapshot": "cm_complex_snapshot_v1",
+        "cm_complex_snapshot": "producer_manifest_v1",
     }[request["identity_authority"]]
     if structure_map["identity_authority"] != expected_map_authority:
         raise ContractValidationError("request/structure-map identity authority binding mismatch")
@@ -538,7 +716,7 @@ def _validate_statistics_inputs(
     expected_slots = len(selected) * len(AA_ORDER)
     observed_slots = sum(len(row["slots"]) for row in landscape["residues"])
     if observed_slots != expected_slots:
-        raise ContractValidationError("successful v2 landscape must have exact 20-slot support")
+        raise ContractValidationError("successful landscape must have exact 20-slot support")
     for residue in landscape["residues"]:
         if residue["wt"] not in AA_ORDER:
             raise ContractValidationError("landscape contains unknown WT amino acid")
@@ -590,7 +768,7 @@ def _compatibility_basis(
                 "component_id": request["component_id"],
                 "component_contract_version": request["component_contract_version"],
                 "landscape_schema_name": "frustrampnn_landscape",
-                "landscape_schema_version": 2,
+                "landscape_schema_version": request["schema_version"],
                 "score_field": "score",
             },
             "canonical_amino_acid_order": AA_ORDER,
@@ -620,12 +798,15 @@ def build_statistics_receipt(
     *, request: Mapping[str, Any], execution_receipt: Mapping[str, Any],
     landscape: Mapping[str, Any], structure_map: Mapping[str, Any],
     capability_inventory: Mapping[str, Any], capability_inventory_bytes: bytes,
+    analysis_receipt: Mapping[str, Any] | None = None,
+    allow_legacy_external_authority: bool = False,
 ) -> dict[str, Any]:
     """Build immutable statistics from complete physical v2 authority."""
     _validate_statistics_inputs(
         request=request, execution_receipt=execution_receipt, landscape=landscape,
         structure_map=structure_map, capability_inventory=capability_inventory,
         capability_inventory_bytes=capability_inventory_bytes,
+        allow_legacy_external_authority=allow_legacy_external_authority,
     )
     residues = list(landscape["residues"])
     all_slots = [slot for residue in residues for slot in residue["slots"]]
@@ -869,8 +1050,18 @@ def build_statistics_receipt(
         deltas, denominator_kind="paired_native_non_native_slots",
         denominator_count=count * (len(AA_ORDER) - 1),
     )
+    statistics_schema_version = 2 if request["schema_version"] == 3 else 1
+    if statistics_schema_version == 2 and not isinstance(analysis_receipt, Mapping):
+        raise ContractValidationError(
+            "v3 core statistics require an immutable analysis receipt"
+        )
+    if statistics_schema_version == 1 and analysis_receipt is not None:
+        raise ContractValidationError(
+            "historical statistics cannot carry successor analysis authority"
+        )
     payload: dict[str, Any] = {
-        "schema_name": "frustrampnn_statistics", "schema_version": 1,
+        "schema_name": "frustrampnn_statistics",
+        "schema_version": statistics_schema_version,
         "hash_semantics": "sha256(rfc8785(document_without_top_level_statistics_sha256))",
         "invocation_id": request["invocation_id"], "parent_job_id": request["parent_job_id"],
         "candidate_id": request["candidate_id"], "target_id": landscape["target_id"],
@@ -935,6 +1126,8 @@ def build_statistics_receipt(
             ),
         },
     }
+    if statistics_schema_version == 2:
+        payload["analysis_receipt"] = copy.deepcopy(dict(analysis_receipt or {}))
     payload["statistics_sha256"] = _rfc8785_sha256(payload)
     validate_statistics_receipt(payload)
     return payload
@@ -944,7 +1137,10 @@ def validate_statistics_receipt(receipt: Mapping[str, Any]) -> None:
     if not isinstance(receipt, Mapping):
         raise ContractValidationError("statistics receipt must be an object")
     payload = copy.deepcopy(dict(receipt))
-    validate_schema("frustrampnn_statistics_v1", payload)
+    schema_version = payload.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise ContractValidationError("statistics schema version is unsupported")
+    validate_schema(f"frustrampnn_statistics_v{schema_version}", payload)
     recorded = payload.pop("statistics_sha256")
     if recorded != _rfc8785_sha256(payload):
         raise ContractValidationError("statistics SHA-256 does not match receipt content")

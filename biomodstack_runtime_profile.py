@@ -16,6 +16,7 @@ BMS_PORT_REGISTRY: dict[str, int] = {
     "development_workflow_adapter": 18001,
     "production_workflow_adapter": 18101,
     "development_api": 18002,
+    "mobile_update_publisher": 18003,
     "production_web": 18080,
     "production_tailnet_proxy": 18081,
     "development_web": 18082,
@@ -31,6 +32,7 @@ DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT = BMS_PORT_REGISTRY["production_workflo
 # one of the explicit Development or Production constants above.
 DEFAULT_WORKFLOW_ADAPTER_PORT = DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT
 DEFAULT_DEV_API_HOST_PORT = BMS_PORT_REGISTRY["development_api"]
+DEFAULT_MOBILE_UPDATE_PUBLISHER_PORT = BMS_PORT_REGISTRY["mobile_update_publisher"]
 DEFAULT_WEB_HOST_PORT = BMS_PORT_REGISTRY["production_web"]
 DEFAULT_TAILNET_PROXY_PORT = BMS_PORT_REGISTRY["production_tailnet_proxy"]
 DEFAULT_DEV_WEB_HOST_PORT = BMS_PORT_REGISTRY["development_web"]
@@ -109,6 +111,7 @@ _INT_FIELDS = ("api_host_port", "dev_api_host_port", "dev_web_host_port", "web_h
 RESERVED_AUXILIARY_PORTS: dict[int, str] = {
     DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_PORT: "Development workflow adapter",
     DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_PORT: "Production workflow adapter",
+    DEFAULT_MOBILE_UPDATE_PUBLISHER_PORT: "Mobile update publisher",
     DEFAULT_TAILNET_PROXY_PORT: "Production Tailnet proxy",
     DEFAULT_STATS_WEB_PORT: "Stats web",
     DEFAULT_STATS_API_PORT: "Stats API",

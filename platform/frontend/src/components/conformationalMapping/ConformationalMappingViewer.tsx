@@ -12,9 +12,11 @@ import {
     cmApiError,
     cmArtifactUrl,
     getCmFailureReceipts,
-
+    getCmLandscape,
+    parseCmLegacyLandscapePage,
     getCmLogs,
     getCmProgress,
+    getCmRecordPage,
     getCmResults,
     getCmStateLandscapeAnalysis,
     getCmStateLandscapeAnalysisRows,
@@ -26,6 +28,7 @@ import {
 } from './conformationalMappingApi';
 import {
     APPROVED_CM_CONTRACTS,
+    CANONICAL_AMINO_ACIDS,
     candidateLabel,
     candidateStructureArtifact,
     candidateStructureMap,
@@ -33,10 +36,13 @@ import {
     canonicalEnsemble,
     CM_SCIENTIFIC_LIMIT,
     formatCoordinate,
-
+    groupLegacyExact20Landscape,
     recordsByType,
     requireApprovedCmResults,
     type CmAnalysisResult,
+    type CmStructureMapRow,
+    validateCanonicalAnalysisRows,
+    validateStructureMapRows,
 } from './conformationalMappingSemantics';
 import { canonicalStateLandscapeAnalysis } from './stateLandscapeSemantics';
 import { StateLandscapeStatusAlert, StateLandscapeWorkspacePanel, type StateLandscapeMetricName } from './StateLandscapeWorkspacePanel';
@@ -65,7 +71,7 @@ interface Props {
         getFailureReceipts?: typeof getCmFailureReceipts;
         getResults?: typeof getCmResults;
         getLogs?: typeof getCmLogs;
-
+        getLandscape?: typeof getCmLandscape;
         artifactUrl?: typeof cmArtifactUrl;
         cancelRequest?: typeof cancelCmRequest;
         retryRequest?: typeof retryCmRequest;
@@ -75,6 +81,7 @@ interface Props {
 }
 type DetailTab = StateLandscapeWorkspaceTab;
 type LifecycleTab = 'progress' | 'logs' | 'failures';
+type ModelDataView = 'producer' | 'frustrampnn';
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const pct = (value: unknown): string => typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '—';
@@ -88,6 +95,77 @@ const analysisIdentity = (row: CmAnalysisResult): string => {
     const identity = row.identity;
     return `${String(identity.target_id)} · ${String(identity.auth_asym_id)}:${String(identity.auth_seq_id)}${String(identity.insertion_code || '')} · ${String(identity.validated_wt)}→${String(identity.substitution)}`;
 };
+
+interface LegacyCmFrustraMpnnViewProps {
+    requestId: string;
+    candidateId: string;
+    getLandscape: typeof getCmLandscape;
+}
+
+function LegacyCmFrustraMpnnView({
+    requestId,
+    candidateId,
+    getLandscape,
+}: LegacyCmFrustraMpnnViewProps) {
+    const [offset, setOffset] = useState(0);
+    const landscape = useQuery({
+        queryKey: ['cm-legacy-frustrampnn-landscape', requestId, candidateId, offset],
+        queryFn: () => getLandscape(requestId, candidateId, offset, 1000),
+        retry: false,
+    });
+    const parsed = useMemo(() => {
+        if (!landscape.data) return {
+            residues: [],
+            provenance: null as Record<string, unknown> | null,
+            error: null as string | null,
+        };
+        try {
+            const page = parseCmLegacyLandscapePage(landscape.data);
+            const expectedNextOffset = page.rows.length === page.limit
+                ? page.offset + page.rows.length
+                : null;
+            if (page.request_id !== requestId || page.candidate_id !== candidateId
+                || page.entity_instance_id !== null || page.sequence_start !== null
+                || page.sequence_end !== null || page.offset !== offset || page.limit !== 1000
+                || page.rows.length > page.limit || page.next_offset !== expectedNextOffset) {
+                throw new Error('Landscape page identity does not match the selected candidate');
+            }
+            const residues = groupLegacyExact20Landscape(page.rows, candidateId);
+            return {
+                residues,
+                provenance: residues[0]?.provenance ?? null,
+                error: null as string | null,
+            };
+        } catch (value) {
+            return {
+                residues: [],
+                provenance: null,
+                error: value instanceof Error ? value.message : 'Landscape validation failed',
+            };
+        }
+    }, [candidateId, landscape.data, offset, requestId]);
+    const displayReady = !landscape.isLoading && !landscape.isError && !parsed.error;
+
+    return (
+        <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4">
+                <div>
+                    <h2 className="font-semibold text-white">Persisted exact-20 FrustraMPNN landscape</h2>
+                    <p className="mt-1 text-xs text-slate-500">Historical read-only compatibility view. Scores, missingness, classification, and provenance come from the bounded canonical CM API.</p>
+                    <p className="mt-1 font-mono text-[10px] text-slate-600">{candidateId}</p>
+                </div>
+                <div className="flex gap-2">
+                    <button type="button" disabled={offset === 0 || landscape.isFetching || landscape.isError || Boolean(parsed.error)} onClick={() => setOffset(Math.max(0, offset - 1000))} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Previous 50 residues</button>
+                    <button type="button" disabled={landscape.data?.next_offset == null || landscape.isFetching || landscape.isError || Boolean(parsed.error)} onClick={() => setOffset(landscape.data!.next_offset!)} className="rounded border border-slate-700 px-3 py-1.5 text-xs disabled:opacity-30">Next 50 residues</button>
+                </div>
+            </div>
+            {(landscape.isError || parsed.error) && <div role="alert" className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{parsed.error || cmApiError(landscape.error, 'Landscape page is unavailable.')}</div>}
+            {landscape.isLoading && <p className="p-4 text-sm text-slate-500">Loading bounded landscape page…</p>}
+            {displayReady && <div className="max-h-[650px] overflow-auto"><table className="min-w-[1500px] text-left text-[10px]"><thead className="sticky top-0 z-10 bg-slate-900 text-slate-400"><tr><th className="sticky left-0 z-20 bg-slate-900 p-2">Residue</th>{CANONICAL_AMINO_ACIDS.map((aminoAcid) => <th key={aminoAcid} className="p-2 text-center">{aminoAcid}</th>)}</tr></thead><tbody>{parsed.residues.map((residue) => <tr key={residue.key} className="border-t border-slate-800"><th className="sticky left-0 bg-slate-900 p-2 font-medium text-white">{residue.auth_asym_id}:{residue.auth_seq_id}{residue.insertion_code}<span className="ml-1 text-slate-500">{residue.wt}</span></th>{residue.slots.map((slot) => <td key={slot.mutation_aa} title={`${slot.status}${slot.reason ? ` · ${slot.reason}` : ''}`} className={`p-2 text-center font-mono ${slot.status !== 'ok' ? 'bg-slate-800/50 text-slate-500' : slot.class === 'high' ? 'bg-red-500/10 text-red-200' : slot.class === 'minimally_frustrated' ? 'bg-sky-500/10 text-sky-200' : 'bg-amber-500/10 text-amber-100'}`}>{slot.score == null ? 'missing' : scalar(slot.score)}{slot.mutation_aa === residue.wt && <span className="block text-[8px] text-slate-500">native</span>}</td>)}</tr>)}</tbody></table></div>}
+            {displayReady && parsed.provenance && <details className="border-t border-slate-800 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Landscape provenance identity</summary><div className="mt-3">{json(parsed.provenance)}</div></details>}
+        </section>
+    );
+}
 
 export function ConformationalMappingViewer({
     requestId,
@@ -105,6 +183,7 @@ export function ConformationalMappingViewer({
     const [overlayIds, setOverlayIds] = useState<string[]>([]);
     const [detailTab, setDetailTab] = useState<DetailTab>('ensemble');
     const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>('progress');
+    const [modelDataView, setModelDataView] = useState<ModelDataView>('producer');
 
 
     const [mappingFilter, setMappingFilter] = useState<'all' | 'mapped' | 'issues'>('all');
@@ -119,6 +198,11 @@ export function ConformationalMappingViewer({
     const [stateAnalysisResidueSelections, setStateAnalysisResidueSelections] = useState<ResidueRef[]>([]);
     const [pendingStateResidue, setPendingStateResidue] = useState<{ candidateId: string; row: CmStateLandscapeRow } | null>(null);
     const [stateResidueSelectionReason, setStateResidueSelectionReason] = useState<string | null>(null);
+    const [analysisRows, setAnalysisRows] = useState<CmAnalysisResult[]>([]);
+    const [analysisNextOffset, setAnalysisNextOffset] = useState<number | null>(null);
+    const [analysisPageRequested, setAnalysisPageRequested] = useState(false);
+    const [structureMapRows, setStructureMapRows] = useState<CmStructureMapRow[]>([]);
+    const [structureMapNextOffset, setStructureMapNextOffset] = useState<number | null>(null);
 
     const [isViewerFullscreen, setIsViewerFullscreen] = useState(false);
     const viewerShellRef = useRef<HTMLElement | null>(null);
@@ -200,6 +284,49 @@ export function ConformationalMappingViewer({
             return { data: null, error: value instanceof Error ? value.message : 'Canonical response validation failed.' };
         }
     }, [results.data]);
+    const hasGlobalFrustraMpnnData = Boolean(
+        parsed.data && recordsByType(parsed.data.value, 'frustrampnn_result_references').length
+    );
+    const hasLegacyFrustraMpnnData = Boolean(
+        parsed.data && recordsByType(parsed.data.value, 'landscape').length
+    );
+    const hasFrustraMpnnData = hasGlobalFrustraMpnnData || hasLegacyFrustraMpnnData;
+    const producerModelLabel = parsed.data?.ensemble.backend === 'confornets'
+        ? 'ConforNets'
+        : parsed.data?.ensemble.backend === 'protenix_v2_ensemble'
+            ? 'Protenix V2'
+            : parsed.data?.ensemble.backend === 'external_import'
+                ? 'Imported structures'
+                : 'Structural producer';
+    useEffect(() => setModelDataView('producer'), [requestId]);
+    useEffect(() => {
+        if (!hasFrustraMpnnData && modelDataView === 'frustrampnn') setModelDataView('producer');
+    }, [hasFrustraMpnnData, modelDataView]);
+
+    const analysisRecord = parsed.data?.value.records.find((record) => record.type === 'analysis') || null;
+    useEffect(() => {
+        setAnalysisRows(parsed.data?.analysis.results || []);
+        setAnalysisNextOffset(analysisRecord?.pages?.results?.next_offset ?? null);
+        setAnalysisPageRequested(false);
+    }, [analysisRecord, parsed.data]);
+    const analysisPage = useQuery({
+        queryKey: ['cm-analysis-results-page', requestId, analysisRecord?.key, analysisNextOffset],
+        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'results', analysisNextOffset!, 100),
+        enabled: detailTab === 'analysis' && analysisPageRequested && Boolean(analysisRecord && analysisNextOffset != null),
+        retry: false,
+    });
+    useEffect(() => {
+        if (!analysisPage.data) return;
+        try {
+            const rows = validateCanonicalAnalysisRows(analysisPage.data.rows);
+            setAnalysisRows((current) => [...current, ...rows]);
+            setAnalysisNextOffset(analysisPage.data.next_offset);
+            setAnalysisPageRequested(false);
+        } catch {
+            setAnalysisPageRequested(false);
+            setAnalysisNextOffset(null);
+        }
+    }, [analysisPage.data]);
 
     const stateLandscapeAuthority = useMemo(() => {
         if (!parsed.data) return { data: null, error: null as string | null };
@@ -214,10 +341,13 @@ export function ConformationalMappingViewer({
         retry: false,
     });
     const stateAnalysisSummaryParsed = useMemo(() => {
+        if (stateAnalysisSummary.isError) {
+            return { data: null, error: cmApiError(stateAnalysisSummary.error, 'State-analysis summary is unavailable.') };
+        }
         if (!stateAnalysisSummary.data || stateLandscapeAuthority.error) return { data: null, error: stateLandscapeAuthority.error };
         try { return { data: validateStateLandscapeWorkspaceSummary(stateAnalysisSummary.data, stateLandscapeAuthority.data), error: null as string | null }; }
         catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis projection is malformed.' }; }
-    }, [stateAnalysisSummary.data, stateLandscapeAuthority.data, stateLandscapeAuthority.error]);
+    }, [stateAnalysisSummary.data, stateAnalysisSummary.error, stateAnalysisSummary.isError, stateLandscapeAuthority.data, stateLandscapeAuthority.error]);
     const stateAnalysisSummaryError = stateAnalysisSummaryParsed.error
         || (stateAnalysisSummary.isError ? cmApiError(stateAnalysisSummary.error, 'State-analysis summary is unavailable.') : null);
     const stateAnalysisPage = useQuery({
@@ -227,13 +357,54 @@ export function ConformationalMappingViewer({
         retry: false,
     });
     const stateAnalysisPageParsed = useMemo(() => {
+        if (stateAnalysisPage.isError) {
+            return { data: null, error: cmApiError(stateAnalysisPage.error, 'Bounded state-analysis rows are unavailable.') };
+        }
         if (!stateAnalysisPage.data || !stateAnalysisSummaryParsed.data || !selectedPairId) return { data: null, error: null as string | null };
         try { return { data: validateStateLandscapeWorkspaceRowsPage(stateAnalysisPage.data, stateAnalysisSummaryParsed.data, selectedPairId, stateAnalysisOffset), error: null as string | null }; }
         catch (value) { return { data: null, error: value instanceof Error ? value.message : 'State-analysis rows are malformed.' }; }
-    }, [selectedPairId, stateAnalysisOffset, stateAnalysisPage.data, stateAnalysisSummaryParsed.data]);
+    }, [selectedPairId, stateAnalysisOffset, stateAnalysisPage.data, stateAnalysisPage.error, stateAnalysisPage.isError, stateAnalysisSummaryParsed.data]);
 
     const selected = parsed.data?.candidates.find((candidate) => candidate.candidate_id === selectedCandidateId)
         || parsed.data?.candidates[0] || null;
+    const selectedStructureMapRecord = selected && parsed.data
+        ? parsed.data.value.records.find((record) => record.type === 'structure_map' && record.key === selected.candidate_id) || null
+        : null;
+    const selectedStructureMapBase = selected && parsed.data ? candidateStructureMap(parsed.data.value, selected.candidate_id) : null;
+    useEffect(() => {
+        setStructureMapRows(selectedStructureMapBase?.rows || []);
+        setStructureMapNextOffset(selectedStructureMapRecord?.pages?.rows?.next_offset ?? null);
+    }, [selected?.candidate_id, selectedStructureMapBase, selectedStructureMapRecord]);
+    const structureMapPage = useQuery({
+        queryKey: ['cm-structure-map-page', requestId, selectedStructureMapRecord?.key, structureMapNextOffset],
+        queryFn: () => getCmRecordPage(
+            requestId,
+            'structure_map',
+            selectedStructureMapRecord!.key,
+            'rows',
+            structureMapNextOffset!,
+            100,
+        ),
+        enabled: Boolean(
+            selectedStructureMapRecord
+            && structureMapNextOffset != null
+            && (detailTab === 'mapping' || pendingStateResidue?.candidateId === selected?.candidate_id),
+        ),
+        retry: false,
+    });
+    useEffect(() => {
+        if (!structureMapPage.data) return;
+        try {
+            const rows = validateStructureMapRows(structureMapPage.data.rows);
+            setStructureMapRows((current) => [...current, ...rows]);
+            setStructureMapNextOffset(structureMapPage.data.next_offset);
+        } catch {
+            setStructureMapNextOffset(null);
+        }
+    }, [structureMapPage.data]);
+    const structureMap = selectedStructureMapBase
+        ? { ...selectedStructureMapBase, rows: structureMapRows.length ? structureMapRows : selectedStructureMapBase.rows }
+        : null;
     const clearStateAnalysisResidueSelection = (candidateId: string) => {
         const reset = clearStateLandscapeResidueSelectionForCandidate(candidateId);
         setStateAnalysisResidueSelections(reset.residueSelections);
@@ -280,16 +451,19 @@ export function ConformationalMappingViewer({
         setStateResidueSelectionReason(null);
     }, [stateAnalysisSummaryParsed.data]);
     useEffect(() => {
+        if (stateAnalysisPage.isError || stateAnalysisPageParsed.error) {
+            setStateAnalysisRows(null);
+            return;
+        }
         const page = stateAnalysisPageParsed.data;
         if (!page) return;
         setStateAnalysisRows((current) => {
             if (page.offset === 0 || !current || current.selected_analysis_id !== page.selected_analysis_id || current.applied_filters.pair_id !== page.applied_filters.pair_id) return page;
             return { ...page, rows: [...current.rows, ...page.rows] };
         });
-    }, [stateAnalysisPageParsed.data]);
+    }, [stateAnalysisPage.isError, stateAnalysisPageParsed.data, stateAnalysisPageParsed.error]);
 
     const selectedArtifact = selected && parsed.data ? candidateStructureArtifact(selected, parsed.data.value.artifacts) : null;
-    const structureMap = selected && parsed.data ? candidateStructureMap(parsed.data.value, selected.candidate_id) : null;
     useEffect(() => {
         if (!pendingStateResidue || selected?.candidate_id !== pendingStateResidue.candidateId) return;
         const residue = resolveStateLandscapeResidueRef(pendingStateResidue.row.identity, structureMap);
@@ -344,22 +518,51 @@ export function ConformationalMappingViewer({
     ];
     const supportRecords = parsed.data ? recordsByType(parsed.data.value, 'support') : [];
     const missingnessRecords = parsed.data ? recordsByType(parsed.data.value, 'missingness') : [];
+    const supportRecord = supportRecords[0] || null;
+    const missingnessRecord = missingnessRecords[0] || null;
+    const evidenceSupportPage = useQuery({
+        queryKey: ['cm-evidence-support-page', requestId, supportRecord?.key],
+        queryFn: () => getCmRecordPage(requestId, 'support', supportRecord!.key, 'records', 0, 100),
+        enabled: detailTab === 'evidence' && Boolean(supportRecord),
+        retry: false,
+    });
+    const evidenceAnalysisSupportPage = useQuery({
+        queryKey: ['cm-evidence-analysis-support-page', requestId, analysisRecord?.key],
+        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'support_records', 0, 100),
+        enabled: detailTab === 'evidence' && Boolean(analysisRecord),
+        retry: false,
+    });
+    const evidenceAnalysisClashPage = useQuery({
+        queryKey: ['cm-evidence-analysis-clash-page', requestId, analysisRecord?.key],
+        queryFn: () => getCmRecordPage(requestId, 'analysis', analysisRecord!.key, 'clash_records', 0, 100),
+        enabled: detailTab === 'evidence' && Boolean(analysisRecord),
+        retry: false,
+    });
+    const evidenceMissingnessPage = useQuery({
+        queryKey: ['cm-evidence-missingness-page', requestId, missingnessRecord?.key],
+        queryFn: () => getCmRecordPage(requestId, 'missingness', missingnessRecord!.key, 'result_records', 0, 100),
+        enabled: detailTab === 'evidence' && Boolean(missingnessRecord),
+        retry: false,
+    });
     const filteredMapRows = structureMap?.rows.filter((row) => mappingFilter === 'all' || (mappingFilter === 'mapped' ? row.status === 'mapped' : row.status !== 'mapped')) || [];
     const projectAdapterId = status.data?.backend === 'confornets'
         ? 'bms.cm.confornets.adapter.v1'
         : 'bms.cm.protenix_v2.adapter.v1';
-    const frustraMpnnJob: Job = job ?? {
-        id: requestId,
-        name: title,
-        status: statusLabel === 'failed' || statusLabel === 'cancelled' || statusLabel === 'running' || statusLabel === 'queued'
-            ? statusLabel
-            : 'completed',
-        model_id: 'conformational_mapping',
-        mode: 'analysis',
-        params: { run_frustrampnn: true },
-        created_at: '',
-        design_count: 0,
-        output_dir: null,
+    const frustraMpnnJob: Job = {
+        ...(job ?? {
+            id: requestId,
+            name: title,
+            status: statusLabel === 'failed' || statusLabel === 'cancelled' || statusLabel === 'running' || statusLabel === 'queued'
+                ? statusLabel
+                : 'completed',
+            model_id: 'conformational_mapping',
+            mode: 'analysis',
+            params: { run_frustrampnn: true },
+            created_at: '',
+            design_count: 0,
+            output_dir: null,
+        }),
+        id: status.data?.job_id || job?.id || requestId,
     };
 
     return (
@@ -390,6 +593,11 @@ export function ConformationalMappingViewer({
                 {!statusContractError && parsed.data && parsed.data.candidates.length === 0 && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100"><div className="font-semibold">No canonical structural candidates were published</div><p className="mt-1 text-sm">This completed request has no governed candidate structure to display or overlay.</p></div>}
 
                 {!statusContractError && parsed.data && selected && selectedArtifact && <>
+                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Workflow model data views">
+                        <button type="button" aria-pressed={modelDataView === 'producer'} onClick={() => setModelDataView('producer')} className={tabClass(modelDataView === 'producer')}>{producerModelLabel} data</button>
+                        {hasFrustraMpnnData && <button type="button" aria-pressed={modelDataView === 'frustrampnn'} onClick={() => setModelDataView('frustrampnn')} className={tabClass(modelDataView === 'frustrampnn')}>FrustraMPNN data</button>}
+                    </nav>
+                    {modelDataView === 'producer' && <>
                     <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
                         <aside className="max-h-[760px] overflow-auto rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Canonical structural hypotheses in API order"><div className="sticky top-0 z-10 mb-2 bg-slate-900 pb-2"><h2 className="text-sm font-semibold text-white">Structural hypotheses in API order</h2><p className="mt-1 text-[11px] text-slate-500">Choose the primary coordinate set, then compare immutable alternative candidate coordinates as overlays. These are predicted hypotheses, not time-resolved sampling or state populations.</p></div>{parsed.data.candidates.map((candidate, index) => <div key={candidate.candidate_id} className={`mb-2 rounded-lg border p-2 ${candidate.candidate_id === selected.candidate_id ? 'border-orange-400/60 bg-orange-500/10' : 'border-slate-800'}`}><button type="button" onClick={() => selectCandidateForStateAnalysis(candidate.candidate_id)} className="w-full text-left"><div className="text-xs font-medium text-white">{candidate.candidate_id === selected.candidate_id ? `Primary hypothesis · Candidate ${index + 1}` : `Candidate ${index + 1}`}</div><div className="mt-1 text-[11px] leading-4 text-slate-400">{candidateLabel(candidate)}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{candidate.candidate_id}</div></button><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><input type="checkbox" checked={overlayIds.includes(candidate.candidate_id)} disabled={candidate.candidate_id === selected.candidate_id || (!overlayIds.includes(candidate.candidate_id) && overlayIds.length >= 5)} onChange={(event) => setOverlayIds((current) => event.target.checked ? [...current, candidate.candidate_id] : current.filter((id) => id !== candidate.candidate_id))} />Compare as structural overlay</label></div>)}</aside>
                         <div className="space-y-3">
@@ -429,14 +637,14 @@ export function ConformationalMappingViewer({
                         </div>
                     </section>
 
-                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'landscape' ? 'Exact-20 landscape' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
+                    <nav className="flex flex-wrap gap-2 rounded-2xl border border-slate-800 bg-slate-900/70 p-3" aria-label="Conformational mapping result lenses">{stateLandscapeWorkspaceTabs(stateLandscapeWorkspaceEnabled(stateAnalysisSummaryParsed.data)).map((tab) => <button type="button" key={tab} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)} className={tabClass(detailTab === tab)}>{tab === 'mapping' ? 'Residue mapping' : tab === 'state-analysis' ? 'State analysis' : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
                     {stateAnalysisSummaryError && <StateLandscapeStatusAlert error={stateAnalysisSummaryError} />}
 
                     {detailTab === 'ensemble' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Canonical ensemble and provenance</h2><div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Backend</span><div className="mt-1 font-mono text-white">{parsed.data.ensemble.backend}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Runtime identity</span><div className="mt-1 break-words text-white">{parsed.data.ensemble.runtime_identity}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Expected candidates</span><div className="mt-1 text-white">{parsed.data.ensemble.expected_cardinality}</div></div><div className="rounded-lg border border-slate-800 p-3"><span className="text-slate-500">Terminal contract state</span><div className="mt-1 text-white">{parsed.data.ensemble.terminal_status}</div></div>{[['Request SHA-256', parsed.data.ensemble.request_sha256], ['Snapshot SHA-256', parsed.data.ensemble.source_snapshot_sha256], ['Feature policy SHA-256', parsed.data.ensemble.feature_policy_sha256], ['Native manifest SHA-256', parsed.data.ensemble.native_manifest_sha256], ['Container digest', parsed.data.ensemble.container_digest], ['Checkpoint SHA-256', parsed.data.ensemble.checkpoint_sha256]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-800 p-3" title={value}><span className="text-slate-500">{label}</span><div className="mt-1 font-mono text-white">{shortHash(value)}</div></div>)}</div><div className="mt-4 grid gap-3 lg:grid-cols-2"><div className="rounded-xl border border-amber-500/20 p-3"><h3 className="text-sm font-medium text-amber-100">Producer warnings</h3>{parsed.data.ensemble.warnings.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-200">{parsed.data.ensemble.warnings.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No producer warning recorded.</p>}</div><div className="rounded-xl border border-slate-800 p-3"><h3 className="text-sm font-medium text-white">Explicit omissions</h3>{parsed.data.ensemble.omissions.length ? <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-400">{parsed.data.ensemble.omissions.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="mt-2 text-xs text-slate-500">No omission recorded.</p>}</div></div></section>}
 
                     {detailTab === 'state-analysis' && stateAnalysisSummaryParsed.data && <StateLandscapeWorkspacePanel
                         summary={stateAnalysisSummaryParsed.data}
-                        page={stateAnalysisRows}
+                        page={stateAnalysisPage.isError || stateAnalysisPageParsed.error ? null : stateAnalysisRows}
                         selectedPairId={selectedPairId}
                         selectedStateRowKey={selectedStateRowKey}
                         selectedMetric={selectedStateMetric}
@@ -468,23 +676,31 @@ export function ConformationalMappingViewer({
 
                     {detailTab === 'mapping' && structureMap && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><h2 className="font-semibold text-white">Structure-map identity and residue mapping</h2><p className="mt-1 text-xs text-slate-500">{structureMap.source_format} · source model {structureMap.selected_source_model} · {structureMap.normalizer_version} · {structureMap.altloc_policy}</p></div><select value={mappingFilter} onChange={(event) => setMappingFilter(event.target.value as typeof mappingFilter)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs"><option value="all">All rows</option><option value="mapped">Mapped</option><option value="issues">Issues only</option></select></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Original CIF: <span className="font-mono">{shortHash(structureMap.original_cif_sha256)}</span></div><div>Source: <span className="font-mono">{shortHash(structureMap.source_sha256)}</span></div><div>Normalized PDB: <span className="font-mono">{shortHash(structureMap.normalized_pdb_sha256)}</span></div></div><div className="max-h-[560px] overflow-auto"><table className="w-full text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Sequence</th><th className="p-2">Source identity</th><th className="p-2">Author identity</th><th className="p-2">Normalized PDB</th><th className="p-2">Backbone</th><th className="p-2">Status / reason</th></tr></thead><tbody>{filteredMapRows.map((row) => <tr key={`${row.entity_instance_id}:${row.sequence_index}`} className="border-t border-slate-800 align-top"><td className="p-2">{row.sequence_index} · {row.residue_name}</td><td className="p-2">{row.source_entity_id} · {row.label_asym_id}:{row.label_seq_id}</td><td className="p-2">{row.auth_asym_id}:{row.auth_seq_id}{row.insertion_code}</td><td className="p-2">{row.pdb_chain_id}:{row.pdb_residue_id}{row.pdb_insertion_code}</td><td className="p-2 font-mono text-[10px]">{Object.entries(row.backbone_atoms).map(([atom, value]) => `${atom}:${value || 'missing'}`).join(' ')}</td><td className="p-2"><span className={row.status === 'mapped' ? 'text-emerald-300' : 'text-amber-200'}>{row.status}</span>{row.reason && <div className="mt-1 text-slate-500">{row.reason}</div>}</td></tr>)}</tbody></table></div>{!filteredMapRows.length && <p className="p-4 text-sm text-slate-500">No mapping rows match this filter.</p>}</section>}
 
-                    {detailTab === 'landscape' && (
-                        <FrustraWorkbench
-                            job={frustraMpnnJob}
-                            preferredInvocationId={selected ? `frustrampnn:${frustraMpnnJob.id}:${selected.candidate_id}` : undefined}
-                            onBack={() => setDetailTab('ensemble')}
-                            backLabel="CM ensemble"
-                            onOpenJob={(jobId) => navigate(`/results/${jobId}`)}
-                        />
-                    )}
-
-                    {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{parsed.data.analysis.results.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div>{!parsed.data.analysis.results.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
+                    {detailTab === 'analysis' && <section className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold text-white">Canonical analysis ranking</h2><p className="mt-1 text-xs text-slate-500">Server-persisted ranking order. Each row retains its reconstructable components, sort keys, support, and robustness status.</p></div><div className="grid gap-2 border-b border-slate-800 p-3 text-[11px] sm:grid-cols-3"><div>Analysis: <span className="font-mono">{parsed.data.analysis.analysis_id}</span></div><div>Formula: <span className="font-mono">{parsed.data.analysis.formula_version}</span></div><div>Expected strata: {parsed.data.analysis.expected_strata.length}</div></div><div className="max-h-[680px] overflow-auto"><table className="w-full min-w-[1100px] text-left text-xs"><thead className="sticky top-0 bg-slate-900 text-slate-400"><tr><th className="p-2">Rank / identity</th><th className="p-2">Robustness</th><th className="p-2">Valid support</th><th className="p-2">Outer</th><th className="p-2">Coordinate</th><th className="p-2">Hierarchical mean</th><th className="p-2">Hotspot</th><th className="p-2">Switch</th><th className="p-2">Components</th></tr></thead><tbody>{analysisRows.map((row, index) => <><tr key={row.source_row_key} className="border-t border-slate-800 align-top"><td className="p-2"><div className="font-medium text-white">{index + 1}. {analysisIdentity(row)}</div><div className="mt-1 max-w-64 truncate font-mono text-[10px] text-slate-600">{row.source_row_key}</div>{row.failure_reason && <div className="mt-1 text-red-300">{row.failure_reason}</div>}</td><td className={`p-2 ${row.status === 'robust' ? 'text-emerald-300' : row.status === 'conditional' ? 'text-amber-200' : 'text-red-200'}`}>{row.status}</td><td className="p-2">{row.valid_coordinate_count}/{row.expected_coordinate_count}</td><td className="p-2">{pct(row.outer_support_fraction)}</td><td className="p-2">{pct(row.coordinate_support_fraction)}</td><td className="p-2 font-mono">{scalar(row.hierarchical_mean)}</td><td className="p-2 font-mono">{scalar(row.hotspot_score)}</td><td className="p-2 font-mono">{scalar(row.switch_score)}</td><td className="p-2"><button type="button" onClick={() => setExpandedAnalysis((current) => current === row.source_row_key ? null : row.source_row_key)} className="rounded border border-slate-700 px-2 py-1 text-[10px]">{expandedAnalysis === row.source_row_key ? 'Hide' : 'Inspect'}</button></td></tr>{expandedAnalysis === row.source_row_key && <tr key={`${row.source_row_key}:detail`} className="border-t border-slate-800 bg-slate-950/40"><td colSpan={9} className="p-3"><div className="grid gap-3 lg:grid-cols-3"><div><div className="mb-1 text-[11px] text-slate-500">Persisted components</div>{json(row.components)}</div><div><div className="mb-1 text-[11px] text-slate-500">Persisted sort keys</div>{json(row.sort_keys)}</div><div><div className="mb-1 text-[11px] text-slate-500">Identity</div>{json(row.identity)}</div></div></td></tr>}</>)}</tbody></table></div><div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 p-3 text-xs text-slate-400"><span>Showing {analysisRows.length.toLocaleString()} of {(analysisRecord?.pages?.results?.total_count ?? analysisRows.length).toLocaleString()} ranking rows. Dense analysis data remains artifact-backed.</span>{analysisNextOffset != null && <button type="button" disabled={analysisPageRequested || analysisPage.isFetching} onClick={() => setAnalysisPageRequested(true)} className="rounded border border-slate-700 px-3 py-1.5 text-slate-200 disabled:opacity-40">{analysisPageRequested || analysisPage.isFetching ? 'Loading…' : 'Load next ranking page'}</button>}</div>{!analysisRows.length && <p className="p-4 text-sm text-slate-500">Canonical analysis is explicitly unavailable.</p>}<details className="border-t border-slate-800 p-4"><summary className="cursor-pointer text-sm font-medium text-slate-300">Ranking policy and exclusions</summary><div className="mt-3 grid gap-3 lg:grid-cols-2"><div>{json(parsed.data.analysis.ranking_policy)}</div><div>{json(parsed.data.analysis.exclusions)}</div></div></details></section>}
 
                     {detailTab === 'ensemble' && <section className="grid gap-3 lg:grid-cols-2"><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Selected candidate artifact provenance</summary><div className="mt-3">{json({ artifact_id: selectedArtifact.artifact_id, sha256: selectedArtifact.sha256, bytes: selectedArtifact.bytes, media_type: selectedArtifact.media_type, metadata: selectedArtifact.metadata })}</div></details><details className="rounded-xl border border-slate-800 bg-slate-900/70 p-3"><summary className="cursor-pointer text-sm font-medium text-white">Authoritative sidecar identities</summary><div className="mt-3">{json(selected.sidecar_paths)}</div></details></section>}
 
-                    {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json(item.payload)}</div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json(parsed.data.analysis.support_records)}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json(item.payload)}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json(parsed.data.analysis.clash_records)}</div></details></div></section>}
+                    {detailTab === 'evidence' && <section className="grid gap-4 xl:grid-cols-2"><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Support authorities</h2><p className="mt-1 text-xs text-slate-500">Persisted canonical records; no support is reconstructed from metric shape or provenance text.</p><div className="mt-3 space-y-3">{supportRecords.length ? supportRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate support record was persisted. Analysis-row support fields remain authoritative.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Analysis support records ({analysisRecord?.pages?.support_records?.total_count ?? parsed.data.analysis.support_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisSupportPage.data?.rows || [], total_count: evidenceAnalysisSupportPage.data?.total_count ?? parsed.data.analysis.support_records.length })}</div></details><details className="mt-3 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Pair ledger ({parsed.data.analysis.pair_ledger.length})</summary><div className="mt-2">{json(parsed.data.analysis.pair_ledger)}</div></details></div><div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Missingness and clash evidence</h2><p className="mt-1 text-xs text-slate-500">Missing values remain explicit and are never imputed in the browser.</p><div className="mt-3 space-y-3">{missingnessRecords.length ? missingnessRecords.map((item) => <details key={`${item.type}:${item.key}`} className="rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">{item.key} · <span className="font-mono text-slate-500">{shortHash(item.sha256)}</span></summary><div className="mt-2">{json({ artifact: item.artifact, payload: item.payload, page_rows: item.type === 'support' ? evidenceSupportPage.data?.rows || [] : evidenceMissingnessPage.data?.rows || [], total_count: item.type === 'support' ? evidenceSupportPage.data?.total_count ?? item.pages?.records?.total_count ?? 0 : evidenceMissingnessPage.data?.total_count ?? item.pages?.result_records?.total_count ?? 0 })}</div></details>) : <p className="text-sm text-slate-500">No separate missingness record was persisted. Landscape slot statuses and mapping reasons remain explicit.</p>}</div><details className="mt-4 rounded-lg border border-slate-800 p-3"><summary className="cursor-pointer text-xs">Clash records ({analysisRecord?.pages?.clash_records?.total_count ?? parsed.data.analysis.clash_records.length})</summary><div className="mt-2">{json({ rows: evidenceAnalysisClashPage.data?.rows || [], total_count: evidenceAnalysisClashPage.data?.total_count ?? parsed.data.analysis.clash_records.length })}</div></details></div></section>}
 
                     {detailTab === 'downloads' && <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4"><h2 className="font-semibold text-white">Native and canonical content-addressed downloads</h2><p className="mt-1 text-xs text-slate-500">Every link uses the authenticated artifact identity returned by the canonical API. Hash, byte count, role, and candidate binding are shown verbatim.</p><div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">{parsed.data.value.artifacts.map((artifact) => <a key={artifact.artifact_id} href={cmArtifactUrl(requestId, artifact.artifact_id)} className="rounded-lg border border-slate-800 p-3 text-xs hover:border-slate-600 focus:border-orange-400"><div className="truncate font-medium text-slate-200">{artifact.relative_path}</div><div className="mt-1 text-slate-500">{artifact.role} · {artifact.bytes.toLocaleString()} bytes</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600" title={artifact.sha256}>{artifact.sha256}</div><div className="mt-1 truncate font-mono text-[10px] text-slate-600">{artifact.candidate_id || 'request-level'}</div></a>)}</div></section>}
+                    </>}
+                    {modelDataView === 'frustrampnn' && hasGlobalFrustraMpnnData && (
+                        <FrustraWorkbench
+                            job={frustraMpnnJob}
+                            preferredInvocationId={selected ? `frustrampnn:${frustraMpnnJob.id}:${selected.candidate_id}` : undefined}
+                            onBack={() => setModelDataView('producer')}
+                            backLabel={`${producerModelLabel} data`}
+                            onOpenJob={(jobId) => navigate(`/results/${jobId}`)}
+                        />
+                    )}
+                    {modelDataView === 'frustrampnn' && !hasGlobalFrustraMpnnData && hasLegacyFrustraMpnnData && selected && (
+                        <LegacyCmFrustraMpnnView
+                            key={`${requestId}:${selected.candidate_id}`}
+                            requestId={requestId}
+                            candidateId={selected.candidate_id}
+                            getLandscape={services?.getLandscape || getCmLandscape}
+                        />
+                    )}
                 </>}
             </div>
             <ProjectAttachmentDialog

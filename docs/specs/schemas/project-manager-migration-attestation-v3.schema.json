@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.migration-attestation.v3",
+  "title": "Five-store migration and runtime authority attestation v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "migration_attestation_id",
+    "store_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation",
+    "store_binding",
+    "schema_evidence",
+    "trigger_evidence",
+    "migration_ledger_evidence",
+    "required_authorities",
+    "integrity_check",
+    "foreign_key_violation_count",
+    "writer_assertion",
+    "self_digest_algorithm",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.migration-attestation.v3"
+    },
+    "migration_attestation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "store_id": {
+      "enum": [
+        "global-experiments",
+        "molbio-domain",
+        "molbio-ngs-domain",
+        "core-ngs",
+        "biomodstack-native"
+      ]
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/rawArtifact"
+    },
+    "store_binding": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "schema_evidence": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "trigger_evidence": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "migration_ledger_evidence": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/canonicalJsonArtifact"
+    },
+    "required_authorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$"
+      }
+    },
+    "integrity_check": {
+      "const": "ok"
+    },
+    "foreign_key_violation_count": {
+      "const": 0
+    },
+    "writer_assertion": {
+      "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only receipt_sha256 omitted."
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "store_id": {
+            "const": "global-experiments"
+          }
+        },
+        "required": [
+          "store_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_authorities": {
+            "const": [
+              "aggregate-heads",
+              "immutable-revisions",
+              "connector-commands",
+              "inbox-acknowledgements",
+              "idempotency-claims"
+            ]
+          }
+        },
+        "required": [
+          "required_authorities"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_id": {
+            "const": "molbio-domain"
+          }
+        },
+        "required": [
+          "store_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_authorities": {
+            "const": [
+              "molecular-revisions",
+              "constructs",
+              "primers",
+              "pcr-operations",
+              "domain-receipts"
+            ]
+          }
+        },
+        "required": [
+          "required_authorities"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_id": {
+            "const": "molbio-ngs-domain"
+          }
+        },
+        "required": [
+          "store_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_authorities": {
+            "const": [
+              "bindings",
+              "state-revisions",
+              "samples",
+              "references",
+              "evidence",
+              "outbox"
+            ]
+          }
+        },
+        "required": [
+          "required_authorities"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_id": {
+            "const": "core-ngs"
+          }
+        },
+        "required": [
+          "store_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_authorities": {
+            "const": [
+              "instrument-runs",
+              "ngs-jobs",
+              "result-manifests",
+              "reference-sets",
+              "analysis-results"
+            ]
+          }
+        },
+        "required": [
+          "required_authorities"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "store_id": {
+            "const": "biomodstack-native"
+          }
+        },
+        "required": [
+          "store_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "required_authorities": {
+            "const": [
+              "launch-fences",
+              "launch-fence-immutability-triggers",
+              "canonical-jobs",
+              "native-submission-receipts",
+              "native-cancellation-tombstones"
+            ]
+          }
+        },
+        "required": [
+          "required_authorities"
+        ]
+      }
+    }
+  ]
+}

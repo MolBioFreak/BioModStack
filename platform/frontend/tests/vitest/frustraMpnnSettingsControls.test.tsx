@@ -56,6 +56,26 @@ const inspection: FrustraMpnnSourceInspection = {
             sequence_index: 2,
             wt: 'G',
         },
+        {
+            entity_instance_id: 'entity-1',
+            source_entity_id: '1',
+            label_asym_id: 'AA',
+            auth_asym_id: 'A',
+            auth_seq_id: 11,
+            insertion_code: '',
+            sequence_index: 2,
+            wt: 'A',
+        },
+        {
+            entity_instance_id: 'entity-1',
+            source_entity_id: '1',
+            label_asym_id: 'AA',
+            auth_asym_id: 'A',
+            auth_seq_id: 12,
+            insertion_code: '',
+            sequence_index: 3,
+            wt: 'V',
+        },
     ],
 };
 
@@ -68,7 +88,11 @@ const dispatchChange = (element: HTMLInputElement | HTMLSelectElement, value: st
     element.dispatchEvent(new Event('change', { bubbles: true }));
 };
 
-function PanelHarness(props: { sourceInspection?: FrustraMpnnSourceInspection }) {
+function PanelHarness(props: {
+    sourceInspection?: FrustraMpnnSourceInspection;
+    sourceStructurePolicy?: 'operator' | 'derived';
+    allowIndividualResidues?: boolean;
+}) {
     const sourceInspection = Object.prototype.hasOwnProperty.call(props, 'sourceInspection')
         ? props.sourceInspection
         : inspection;
@@ -79,6 +103,8 @@ function PanelHarness(props: { sourceInspection?: FrustraMpnnSourceInspection })
                 value={settings}
                 onChange={setSettings}
                 inspection={sourceInspection}
+                sourceStructurePolicy={props.sourceStructurePolicy}
+                allowIndividualResidues={props.allowIndividualResidues}
             />
             <output data-settings-state>{JSON.stringify(settings)}</output>
         </>
@@ -86,15 +112,18 @@ function PanelHarness(props: { sourceInspection?: FrustraMpnnSourceInspection })
 }
 
 describe('typed FrustraMPNN settings controls', () => {
-    it('renders all typed controls and supports all selection modes from inspected stable identity', async () => {
+    it('renders a compact analysis summary and supports inspected chain, region, and advanced residue scope', async () => {
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
         await act(async () => root.render(<PanelHarness />));
 
-        expect(container.textContent).toContain('Protein selection');
-        expect(container.textContent).toContain('Source structure policy');
-        expect(container.textContent).toContain('Classification policy');
+        expect(container.textContent).toContain('FrustraMPNN analysis');
+        expect(container.textContent).toContain('Scope: All mapped protein residues');
+        expect(container.textContent).toContain('Classification: Canonical');
+        expect(container.textContent).toContain('Model execution scope');
+        expect(container.textContent).toContain('Result classification');
+        expect(container.querySelector<HTMLDetailsElement>('[data-frustrampnn-settings-details]')?.open).toBe(false);
 
         const selectionMode = container.querySelector<HTMLSelectElement>('[data-frustrampnn-selection-mode]');
         expect(selectionMode).toBeTruthy();
@@ -103,13 +132,92 @@ describe('typed FrustraMPNN settings controls', () => {
         expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"mode":"selected_entities"');
         expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"entity_instance_id":"entity-1"');
 
+        await act(async () => dispatchChange(selectionMode!, 'selected_regions'));
+        expect(container.querySelectorAll('[data-frustrampnn-region-row]')).toHaveLength(1);
+        const start = container.querySelector<HTMLInputElement>('[data-frustrampnn-region-start]');
+        await act(async () => dispatchChange(start!, '3'));
+        expect(selectionMode?.value).toBe('selected_regions');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"sequence_start":3');
+        const updatedStart = container.querySelector<HTMLInputElement>('[data-frustrampnn-region-start]');
+        await act(async () => dispatchChange(updatedStart!, '2'));
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"sequence_start":2');
+        const addRegion = container.querySelector<HTMLButtonElement>('[data-frustrampnn-add-region]');
+        await act(async () => addRegion!.click());
+        expect(container.querySelectorAll('[data-frustrampnn-region-row]')).toHaveLength(2);
+
         await act(async () => dispatchChange(selectionMode!, 'selected_residues'));
-        expect(container.querySelectorAll('[data-frustrampnn-residue-option]')).toHaveLength(2);
+        expect(container.querySelectorAll('[data-frustrampnn-residue-option]')).toHaveLength(4);
+        expect(selectionMode?.querySelector('option[value="selected_residues"]')?.textContent).toContain('advanced');
         expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"mode":"selected_residues"');
         expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"sequence_index":1');
 
         await act(async () => dispatchChange(selectionMode!, 'all_protein_entities'));
         expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"mode":"all_protein_entities"');
+
+        await act(async () => root.unmount());
+    });
+
+    it('keeps batching checkbox, slider, numeric input, and canonical state synchronized', async () => {
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => root.render(<PanelHarness />));
+
+        const enabled = container.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]');
+        const slider = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]');
+        const numeric = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]');
+        expect(enabled?.checked).toBe(false);
+        expect(slider?.min).toBe('1');
+        expect(slider?.max).toBe('250');
+        expect(slider?.value).toBe('1');
+        expect(slider?.disabled).toBe(true);
+        expect(numeric?.value).toBe('1');
+        expect(numeric?.disabled).toBe(true);
+
+        await act(async () => enabled!.click());
+        expect(slider?.disabled).toBe(false);
+        expect(numeric?.disabled).toBe(false);
+        await act(async () => dispatchChange(slider!, '250'));
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.value).toBe('250');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"batching_enabled":true');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"structures_per_job":250');
+
+        const currentNumeric = container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]');
+        await act(async () => dispatchChange(currentNumeric!, '17'));
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]')?.value).toBe('17');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"structures_per_job":17');
+
+        await act(async () => container.querySelector<HTMLInputElement>('[data-frustrampnn-batching-enabled]')!.click());
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-slider]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.disabled).toBe(true);
+        expect(container.querySelector<HTMLInputElement>('[data-frustrampnn-structures-number]')?.value).toBe('17');
+
+        await act(async () => root.unmount());
+    });
+
+    it('derives generated-conformer normalization and exposes safe advanced sequence positions', async () => {
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => root.render(
+            <PanelHarness
+                sourceStructurePolicy="derived"
+                allowIndividualResidues={false}
+            />,
+        ));
+
+        expect(container.querySelector('[data-frustrampnn-source-model]')).toBeNull();
+        expect(container.querySelector('[data-frustrampnn-altloc]')).toBeNull();
+        expect(container.textContent).toContain('Derived from each canonical generated conformer');
+
+        const mode = container.querySelector<HTMLSelectElement>('[data-frustrampnn-selection-mode]');
+        const advanced = mode?.querySelector<HTMLOptionElement>('option[value="selected_sequence_positions"]');
+        expect(advanced?.textContent).toContain('Individual residues (advanced)');
+        expect(advanced?.disabled).toBe(false);
+        await act(async () => dispatchChange(mode!, 'selected_sequence_positions'));
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"mode":"selected_regions"');
+        expect(container.querySelector('[data-settings-state]')?.textContent).toContain('"sequence_start":1,"sequence_end":1');
+        expect(container.textContent).toContain('Scope: 1 individual sequence position');
 
         await act(async () => root.unmount());
     });
@@ -160,8 +268,9 @@ describe('typed FrustraMPNN settings controls', () => {
         const selectionMode = container.querySelector<HTMLSelectElement>('[data-frustrampnn-selection-mode]');
         expect(selectionMode?.value).toBe('all_protein_entities');
         expect(selectionMode?.querySelector<HTMLOptionElement>('option[value="selected_entities"]')?.disabled).toBe(true);
+        expect(selectionMode?.querySelector<HTMLOptionElement>('option[value="selected_regions"]')?.disabled).toBe(true);
         expect(selectionMode?.querySelector<HTMLOptionElement>('option[value="selected_residues"]')?.disabled).toBe(true);
-        expect(container.textContent).toContain('Exact source entity and residue selectors are unavailable until source inspection is produced.');
+        expect(container.textContent).toContain('Exact source entity, sequence-region, and residue selectors are unavailable until source inspection is produced.');
         expect(container.querySelector('[data-frustrampnn-source-model]')).toBeTruthy();
         expect(container.querySelector('[data-frustrampnn-altloc]')).toBeTruthy();
         expect(container.querySelector('[data-frustrampnn-classification-mode]')).toBeTruthy();

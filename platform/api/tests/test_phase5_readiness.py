@@ -7,6 +7,17 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
+@pytest.fixture(autouse=True)
+def _fresh_telemetry_readiness(monkeypatch):
+    readiness = importlib.import_module("readiness")
+    monkeypatch.setattr(
+        readiness,
+        "telemetry_collection_readiness",
+        lambda: _async_telemetry_result(True, "fresh"),
+        raising=False,
+    )
+
+
 @pytest.mark.asyncio
 async def test_native_readiness_does_not_require_workflow_adapter(monkeypatch) -> None:
     readiness = importlib.import_module("readiness")
@@ -91,6 +102,42 @@ async def _async_migration_result(ready: bool, status: str):
         "expected_version": 27, "expected_name": "add_frustrampnn_reviews",
         "applied_version": 27 if ready else 26,
         "applied_name": "add_frustrampnn_reviews" if ready else "add_frustrampnn_statistics",
+    }
+
+
+async def _async_telemetry_result(ready: bool, status: str):
+    return ready, status, {
+        "latest_timestamp_ms": 1_700_000_000_000,
+        "age_ms": 1_000 if ready else 15_001,
+        "stale_after_ms": 15_000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_readiness_degrades_when_telemetry_collection_is_stale(monkeypatch) -> None:
+    readiness = importlib.import_module("readiness")
+    monkeypatch.setenv("BMS_CORE_RUNTIME_MODE", "0")
+    monkeypatch.delenv("BMS_WORKFLOW_ADAPTER_URL", raising=False)
+    monkeypatch.delenv("BMS_FRONTEND_HEALTH_URL", raising=False)
+    monkeypatch.setattr(readiness, "core_database_readiness", lambda: _async_result(True, "ready"))
+    monkeypatch.setattr(readiness, "core_migration_readiness", lambda: _async_migration_result(True, "at_head"))
+    monkeypatch.setattr(
+        readiness,
+        "telemetry_collection_readiness",
+        lambda: _async_telemetry_result(False, "stale"),
+        raising=False,
+    )
+
+    result = await readiness.collect_runtime_readiness(molbio={"status": "healthy", "ready": True})
+
+    assert result["ready"] is False
+    assert result["checks"]["telemetry_collection"] == {
+        "required": True,
+        "ready": False,
+        "status": "stale",
+        "latest_timestamp_ms": 1_700_000_000_000,
+        "age_ms": 15_001,
+        "stale_after_ms": 15_000,
     }
 
 

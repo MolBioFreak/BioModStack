@@ -27,6 +27,7 @@ from database import (
     ConformationalMappingRequest,
     Design,
     FrustraMPNNResult,
+    FrustraMPNNStatisticsAnalysis,
     FrustraMPNNComparison,
     FrustraMPNNGuidancePlan,
     Job,
@@ -173,7 +174,6 @@ class AdapterRegistry:
                 "display_name": item.display_name,
                 "entity_kind": item.entity_kind,
                 "domain_kind": item.domain_kind,
-                "store_id": item.store_id,
             }
             for item in self._items.values()
         ]
@@ -1037,6 +1037,16 @@ class FrustraMpnnResultAdapter:
         job = await core_session.get(Job, row.parent_job_id)
         if job is None:
             raise AdapterError("source_contract_invalid", "FrustraMPNN result has no native parent job")
+        design = await core_session.get(Design, row.design_id) if row.design_id else None
+        statistics_analysis = await core_session.scalar(
+            select(FrustraMPNNStatisticsAnalysis)
+            .where(
+                FrustraMPNNStatisticsAnalysis.parent_job_id == row.parent_job_id,
+                FrustraMPNNStatisticsAnalysis.invocation_id == row.invocation_id,
+            )
+            .order_by(FrustraMPNNStatisticsAnalysis.created_at.desc())
+            .limit(1)
+        )
         manifest_sha = hashlib.sha256(frustrampnn_canonical_bytes(row.manifest_json)).hexdigest()
         summary_sha = hashlib.sha256(frustrampnn_canonical_bytes(row.summary_json)).hexdigest()
         if manifest_sha != _sha256(row.manifest_sha256, "FrustraMPNN manifest digest"):
@@ -1046,13 +1056,18 @@ class FrustraMpnnResultAdapter:
         request_sha = _sha256(row.request_sha256, "FrustraMPNN request digest")
         source_sha = _sha256(row.source_artifact_sha256, "FrustraMPNN source artifact digest")
         manifest = row.manifest_json
+        source_manifest_field = (
+            "source_artifact_sha256"
+            if manifest.get("schema_version") in {2, 3}
+            else "source_sha256"
+        ) if isinstance(manifest, dict) else "source_sha256"
         if not isinstance(manifest, dict) or any(
             (
                 manifest.get("parent_job_id") != row.parent_job_id,
                 manifest.get("invocation_id") != row.invocation_id,
                 manifest.get("candidate_id") != row.candidate_id,
                 manifest.get("request_sha256") != request_sha,
-                manifest.get("source_sha256") != source_sha,
+                manifest.get(source_manifest_field) != source_sha,
             )
         ):
             raise AdapterError("source_digest_mismatch", "FrustraMPNN manifest identity is not bound to native result")
@@ -1072,9 +1087,31 @@ class FrustraMpnnResultAdapter:
                 "parent_job_id": row.parent_job_id,
                 "invocation_id": row.invocation_id,
                 "candidate_id": row.candidate_id,
+                "operator_label": _bounded_label(
+                    design.name if design is not None else row.candidate_id,
+                    row.candidate_id,
+                ),
+                "design_id": row.design_id,
+                "source_artifact_id": row.source_artifact_id,
+                "source_artifact_sha256": source_sha,
+                "canonical_state": str(terminal.get("status") or "completed"),
+                "diagnostic": (
+                    str(terminal.get("failure_detail"))[:240]
+                    if terminal.get("failure_detail")
+                    else None
+                ),
+                "statistics_analysis_state": (
+                    str(statistics_analysis.state)
+                    if statistics_analysis is not None
+                    else "not_started"
+                ),
+                "statistics_analysis_diagnostic": (
+                    str(statistics_analysis.diagnostic)[:240]
+                    if statistics_analysis is not None and statistics_analysis.diagnostic
+                    else None
+                ),
                 "manifest_sha256": manifest_sha,
                 "summary_sha256": summary_sha,
-                "source_artifact_sha256": source_sha,
                 "result_contract_id": "frustrampnn_result_v1",
             },
         )
@@ -1633,11 +1670,15 @@ def _sequence_qc_manifest_path(job: Job) -> Path:
         root = resolve_persisted_job_result_root(job)
     except ValueError as exc:
         raise AdapterError("source_contract_invalid", "NGS job result root is invalid") from exc
-    for relative in (
-        Path("verification/qc_manifest.json"),
+    params = job.params if isinstance(job.params, dict) else {}
+    workflow_id = params.get("ont_workflow_id") or params.get("ont_request_workflow_id") or params.get("workflow_id")
+    input_mode = params.get("ont_input_mode") or params.get("input_mode")
+    canonical_fastq = str(workflow_id or "").strip() == "ont_fastq_qc" and str(input_mode or "").strip() == "fastq"
+    relatives = (Path("fastq_qc/qc_manifest.json"),) if canonical_fastq else (
         Path("fastq_qc/qc_manifest.json"),
         Path("qc_manifest.json"),
-    ):
+    )
+    for relative in relatives:
         candidate = root / relative
         if candidate.is_symlink():
             raise AdapterError("source_contract_invalid", "sequence-QC manifest is unsafe")
@@ -2261,8 +2302,9 @@ async def _exact_member_domain_owner(
     session: AsyncSession,
     *,
     receipt_id: str,
+    expected_domain_id: str | None = None,
 ) -> str:
-    rows = list((await session.execute(
+    statement = (
         select(MolBioNGSDomainStateRevision.global_domain_experiment_id)
         .join(
             MolBioNGSDomainStateMember,
@@ -2271,11 +2313,18 @@ async def _exact_member_domain_owner(
         .where(MolBioNGSDomainStateMember.receipt_id == receipt_id)
         .distinct()
         .limit(2)
-    )).scalars().all())
+    )
+    if expected_domain_id is not None:
+        statement = statement.where(
+            MolBioNGSDomainStateRevision.global_domain_experiment_id == expected_domain_id
+        )
+    rows = list((await session.execute(statement)).scalars().all())
     if len(rows) != 1:
         raise AdapterError(
             "source_contract_invalid",
-            "exact member receipt does not resolve to one Domain owner",
+            "exact member receipt is not attached to the selected Domain"
+            if expected_domain_id is not None
+            else "exact member receipt does not resolve to one Domain owner",
         )
     return str(rows[0])
 
@@ -2284,6 +2333,7 @@ async def _exact_local_member_authority(
     session: AsyncSession,
     *,
     member: ExternalMemberReceipt,
+    expected_domain_id: str | None = None,
 ) -> tuple[str, str]:
     """Resolve one persisted native receipt and its sole Domain owner.
 
@@ -2372,6 +2422,7 @@ async def _exact_local_member_authority(
     domain_id = await _exact_member_domain_owner(
         session,
         receipt_id=canonical_receipt_id,
+        expected_domain_id=expected_domain_id,
     )
     return domain_id, canonical_receipt_id
 
@@ -2413,15 +2464,29 @@ class ExactMolecularRevisionMemberAdapter:
 
     async def verify(self, core_session: AsyncSession, entity_id: str) -> dict[str, Any]:
         del core_session
-        identity = _parse_composite_identity(entity_id, ("sequence_id", "revision_id"))
+        try:
+            parsed = parse_qs(entity_id, strict_parsing=True, keep_blank_values=True)
+        except ValueError as exc:
+            raise AdapterError("source_contract_invalid", "molecular revision identity is malformed") from exc
+        required = frozenset({"sequence_id", "revision_id"})
+        keys = frozenset(parsed)
+        if keys not in {required, required | {"domain_experiment_id"}} or any(
+            len(values) != 1 or not values[0] for values in parsed.values()
+        ):
+            raise AdapterError("source_contract_invalid", "molecular revision identity has an invalid key shape")
+        identity = {key: parsed[key][0] for key in required}
+        expected_domain_id = parsed.get("domain_experiment_id", [None])[0]
         async with self._sessions() as session:
             member = await _resolve_exact_member(resolve_molecular_revision_receipt(session, **identity))
         async with self._domain_sessions() as domain_session:
             domain_id, native_receipt_id = await _exact_local_member_authority(
-                domain_session, member=member
+                domain_session, member=member, expected_domain_id=expected_domain_id
             )
         return _exact_member_receipt(
-            self, requested_entity_id=entity_id, member=member,
+            self, requested_entity_id=urlencode({
+                "sequence_id": identity["sequence_id"],
+                "revision_id": identity["revision_id"],
+            }), member=member,
             reopen_uri=_query_uri("/designer", **identity),
             metadata={
                 "sequence_id": identity["sequence_id"],

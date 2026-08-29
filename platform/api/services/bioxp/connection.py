@@ -4,20 +4,21 @@ import asyncio
 import copy
 import secrets
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from .errors import ConnectionStateError, ProfileStoreError, TargetPolicyError
+from .errors import ConnectionStateError, ProfileStoreError, RobotTimeoutError, TargetPolicyError
 from .models import (
     DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS,
     BioXpProfile,
     BioXpSnapshot,
 )
 from .profile_store import BioXpProfileStore
-from .robot_client import BioXpRobotClient, CameraImage
+from .robot_client import BioXpRobotClient, CameraImage, RobotBytesResponse
 from .target_policy import BioXpTargetPolicy, ValidatedBioXpTarget
 
 
@@ -33,7 +34,18 @@ class RobotClientProtocol(Protocol):
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
+        timeout_override: float | None = None,
     ) -> dict[str, Any]: ...
+
+    async def request_bytes(
+        self,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse: ...
 
     async def camera_status(self) -> dict[str, Any]: ...
 
@@ -41,11 +53,35 @@ class RobotClientProtocol(Protocol):
 
     async def camera_snapshot(self) -> CameraImage: ...
 
+    async def camera_stream_start(self) -> dict[str, Any]: ...
+
+    async def camera_stream_state(self) -> dict[str, Any]: ...
+
+    async def camera_stream_stop(self) -> dict[str, Any]: ...
+
+    def camera_mjpeg_stream(self) -> Any: ...
+
     async def close(self) -> None: ...
 
 
 ClientFactory = Callable[[ValidatedBioXpTarget], RobotClientProtocol]
 Clock = Callable[[], datetime]
+
+
+def _is_exact_xz_action(action_id: str | None) -> bool:
+    return isinstance(action_id, str) and action_id.startswith(("oem.x.", "oem.z."))
+
+
+@dataclass(slots=True)
+class _GenerationLease:
+    generation: int
+    client: RobotClientProtocol
+    state: str = "OPEN"
+    lease_count: int = 0
+    zero_lease_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def __post_init__(self) -> None:
+        self.zero_lease_event.set()
 
 
 def _utcnow() -> datetime:
@@ -77,6 +113,8 @@ class BioXpConnectionService:
         active_probe_interval_seconds: float | None = None,
         clock: Clock | None = None,
         initial_generation: int | None = None,
+        v2_enqueue_timeout_seconds: float = 5.0,
+        interrupt_timeout_seconds: float = 10.0,
     ) -> None:
         self.profile_store = profile_store
         self.target_policy = target_policy
@@ -84,10 +122,17 @@ class BioXpConnectionService:
         self.freshness_budget_seconds = freshness_budget_seconds
         if active_probe_interval_seconds is not None and active_probe_interval_seconds <= 0:
             raise ValueError("active probe interval must be positive")
+        if v2_enqueue_timeout_seconds <= 0 or interrupt_timeout_seconds <= 0:
+            raise ValueError("BioXP request timeouts must be positive")
         self.active_probe_interval_seconds = active_probe_interval_seconds
+        self.v2_enqueue_timeout_seconds = v2_enqueue_timeout_seconds
+        self.interrupt_timeout_seconds = interrupt_timeout_seconds
         self.clock = clock or _utcnow
         self._transition_lock = asyncio.Lock()
-        self._safety_interrupt_lock = asyncio.Lock()
+        self._v1_workflow_lock = asyncio.Lock()
+        self._v2_enqueue_lock = asyncio.Lock()
+        self._v2_query_lock = asyncio.Lock()
+        self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
         # Opaque per-process epoch: delayed requests from a previous process
@@ -107,6 +152,11 @@ class BioXpConnectionService:
         self._ownership: dict[str, Any] | None = None
         self._last_error: str | None = None
         self._active_probe_task: asyncio.Task[None] | None = None
+        self._snapshot_refresh_task: asyncio.Task[None] | None = None
+        self._generation_leases: dict[int, _GenerationLease] = {}
+        self._drain_tasks: set[asyncio.Task[None]] = set()
+        self._remote_request_tasks: set[asyncio.Task[dict[str, Any]]] = set()
+        self._profile_revision = 0
 
     async def save_profile(self, profile: BioXpProfile) -> BioXpSnapshot:
         canonical = self.target_policy.validate(profile.api_url)
@@ -123,6 +173,7 @@ class BioXpConnectionService:
             })
             await self._deactivate_locked(increment=bool(self._client or self._active_target))
             self.profile_store.save(normalized)
+            self._profile_revision += 1
             self.freshness_budget_seconds = normalized.freshness_budget_seconds
         return self.snapshot()
 
@@ -130,6 +181,7 @@ class BioXpConnectionService:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)
             self.profile_store.forget()
+            self._profile_revision += 1
             self.freshness_budget_seconds = DEFAULT_BIOXP_FRESHNESS_BUDGET_SECONDS
         return self.snapshot()
 
@@ -141,76 +193,159 @@ class BioXpConnectionService:
                 raise ConnectionStateError("Save a BioXP profile before changing freshness policy")
             updated = profile.model_copy(update={"freshness_budget_seconds": value})
             self.profile_store.save(updated)
+            self._profile_revision += 1
             self.freshness_budget_seconds = value
         return self.snapshot()
 
     async def connect(self) -> BioXpSnapshot:
         async with self._transition_lock:
             profile = self.profile_store.load()
-            if profile is None:
-                raise ConnectionStateError("Save a BioXP saved profile before connecting")
-            try:
-                target = await self.target_policy.validate_for_connection(profile.api_url)
-            except TargetPolicyError as exc:
-                await self._deactivate_locked(increment=bool(self._client or self._active_target))
-                self._last_error = str(exc)
-                raise
-            await self._stop_active_probe_locked()
-            async with self._safety_interrupt_lock:
-                if self._client is not None:
-                    await self._client.close()
-                self.freshness_budget_seconds = profile.freshness_budget_seconds
+            profile_revision = self._profile_revision
+            starting_client = self._client
+            starting_generation = self._generation
+        if profile is None:
+            raise ConnectionStateError("Save a BioXP saved profile before connecting")
+        try:
+            target = await self.target_policy.validate_for_connection(profile.api_url)
+        except TargetPolicyError as exc:
+            async with self._transition_lock:
+                if self._connect_context_matches_locked(
+                    profile,
+                    profile_revision,
+                    starting_client,
+                    starting_generation,
+                ):
+                    await self._deactivate_locked(increment=bool(self._client or self._active_target))
+                    self._last_error = str(exc)
+            raise
+        candidate = self.client_factory(target)
+        try:
+            payload = await candidate.probe_status_only()
+        except Exception as exc:
+            await candidate.close()
+            async with self._transition_lock:
+                if not self._connect_context_matches_locked(
+                    profile,
+                    profile_revision,
+                    starting_client,
+                    starting_generation,
+                ):
+                    raise ConnectionStateError("BioXP profile or connection changed during connect") from exc
+                await self._deactivate_locked(increment=True)
+                self._last_error = str(exc) or exc.__class__.__name__
+            raise ConnectionStateError(str(exc) or "BioXP robot probe failed") from exc
+        async with self._transition_lock:
+            if not self._connect_context_matches_locked(
+                profile,
+                profile_revision,
+                starting_client,
+                starting_generation,
+            ):
+                stale_candidate = True
+            else:
+                self._stop_active_probe_locked()
+                self._stop_snapshot_refresh_locked()
+                self._mark_current_draining_locked(increment=False)
                 self._generation += 1
-                self._clear_observation()
+                self.freshness_budget_seconds = profile.freshness_budget_seconds
                 self._active_target = target
-                self._client = self.client_factory(target)
-            if not await self._probe_locked(status_only=True):
-                error = self._last_error or "BioXP robot probe failed"
-                await self._deactivate_locked(increment=False)
-                self._last_error = error
-                raise ConnectionStateError(error)
-            self._start_active_probe_locked()
+                self._client = candidate
+                self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
+                self._apply_probe_payload(payload)
+                self._start_active_probe_locked()
+                self._start_snapshot_refresh_locked()
+                stale_candidate = False
+        if stale_candidate:
+            await candidate.close()
+            raise ConnectionStateError("BioXP profile or connection changed during connect")
         return self.snapshot()
+
+    def _connect_context_matches_locked(
+        self,
+        profile: BioXpProfile,
+        profile_revision: int,
+        starting_client: RobotClientProtocol | None,
+        starting_generation: int,
+    ) -> bool:
+        return (
+            self._profile_revision == profile_revision
+            and self._client is starting_client
+            and self._generation == starting_generation
+            and self.profile_store.load() == profile
+        )
 
     async def probe(self) -> BioXpSnapshot:
-        async with self._transition_lock:
-            if self._client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            # Rebind only after every current DNS answer still passes policy.
-            try:
-                validated = await self.target_policy.validate_for_connection(self._active_target.api_url)
-            except TargetPolicyError as exc:
-                await self._deactivate_locked(increment=True)
-                self._last_error = str(exc)
-                raise
-            if validated != self._active_target:
-                async with self._safety_interrupt_lock:
-                    await self._client.close()
-                    self._client = self.client_factory(validated)
-                    self._active_target = validated
-                    self._generation += 1
-                    self._clear_observation()
-            await self._probe_locked()
-        return self.snapshot()
+        return await self._probe_and_rebind(status_only=False)
 
     async def probe_status_only(self) -> BioXpSnapshot:
+        return await self._probe_and_rebind(status_only=True)
+
+    async def _probe_and_rebind(self, *, status_only: bool) -> BioXpSnapshot:
         async with self._transition_lock:
-            if self._client is None or self._active_target is None:
+            client = self._client
+            target = self._active_target
+            generation = self._generation
+            if client is None or target is None:
                 raise ConnectionStateError("BioXP saved profile is not actively connected")
+        try:
+            validated = await self.target_policy.validate_for_connection(target.api_url)
+        except TargetPolicyError as exc:
+            async with self._transition_lock:
+                if client is self._client and generation == self._generation:
+                    await self._deactivate_locked(increment=True)
+                    self._last_error = str(exc)
+            raise
+
+        if validated != target:
+            candidate = self.client_factory(validated)
             try:
-                validated = await self.target_policy.validate_for_connection(self._active_target.api_url)
-            except TargetPolicyError as exc:
-                await self._deactivate_locked(increment=True)
-                self._last_error = str(exc)
-                raise
-            if validated != self._active_target:
-                async with self._safety_interrupt_lock:
-                    await self._client.close()
-                    self._client = self.client_factory(validated)
-                    self._active_target = validated
+                payload = (
+                    await candidate.probe_status_only()
+                    if status_only
+                    else await candidate.probe()
+                )
+            except Exception as exc:
+                await candidate.close()
+                async with self._transition_lock:
+                    if client is self._client and generation == self._generation:
+                        await self._deactivate_locked(increment=True)
+                        self._record_probe_failure(exc)
+                return self.snapshot()
+            async with self._transition_lock:
+                if client is not self._client or generation != self._generation:
+                    close_candidate = True
+                else:
+                    self._stop_active_probe_locked()
+                    self._stop_snapshot_refresh_locked()
+                    self._mark_current_draining_locked(increment=False)
                     self._generation += 1
-                    self._clear_observation()
-            await self._probe_locked(status_only=True)
+                    self._client = candidate
+                    self._active_target = validated
+                    self._generation_leases[self._generation] = _GenerationLease(self._generation, candidate)
+                    self._apply_probe_payload(payload)
+                    self._start_active_probe_locked()
+                    self._start_snapshot_refresh_locked()
+                    close_candidate = False
+            if close_candidate:
+                await candidate.close()
+            return self.snapshot()
+
+        async with self._transition_lock:
+            if client is not self._client or generation != self._generation:
+                raise ConnectionStateError("BioXP connection generation changed during probe")
+            lease = self._acquire_lease_locked(generation, require_fresh=False)
+        try:
+            payload = await client.probe_status_only() if status_only else await client.probe()
+        except Exception as exc:
+            async with self._transition_lock:
+                if client is self._client and generation == self._generation:
+                    self._record_probe_failure(exc)
+            return self.snapshot()
+        finally:
+            await self._release_lease(lease)
+        async with self._transition_lock:
+            if client is self._client and generation == self._generation:
+                self._apply_probe_payload(payload)
         return self.snapshot()
 
     async def request_active(
@@ -228,14 +363,79 @@ class BioXpConnectionService:
             expected_generation=expected_generation,
             require_fresh=require_fresh,
         ) as client:
-            kwargs: dict[str, Any] = {}
-            if json_data is not None:
-                kwargs["json_data"] = json_data
-            if params is not None:
-                kwargs["params"] = params
-            if path_params is not None:
-                kwargs["path_params"] = path_params
-            return await client.request(route_name, **kwargs)
+            async with self._v1_workflow_lock:
+                return await self._request_client(
+                    client,
+                    route_name,
+                    json_data=json_data,
+                    params=params,
+                    path_params=path_params,
+                )
+
+    async def request_active_oem_action(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        json_data: dict[str, Any],
+        path_params: dict[str, str],
+    ) -> dict[str, Any]:
+        """Dispatch one exact X/Z OEM action without the BMS workflow lock."""
+        action_id = path_params.get("action_id")
+        if route_name != "invoke_operator_action" or not _is_exact_xz_action(action_id):
+            raise ValueError("BioXP direct OEM action transport is reserved for exact X/Z actions")
+        async with self.active_request_lease(
+            expected_generation=expected_generation,
+            require_fresh=False,
+        ) as client:
+            return await self._request_client(
+                client,
+                route_name,
+                json_data=json_data,
+                path_params=path_params,
+            )
+
+    async def request_active_v2_enqueue(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        json_data: dict[str, Any],
+        path_params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        return await self._request_with_retained_timeout(
+            lane_lock=self._v2_enqueue_lock,
+            timeout_seconds=self.v2_enqueue_timeout_seconds,
+            timeout_label="BioXP v2 enqueue lane",
+            route_name=route_name,
+            expected_generation=expected_generation,
+            require_fresh=True,
+            json_data=json_data,
+            path_params=path_params,
+        )
+
+    async def request_active_bytes(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        require_fresh: bool = True,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        max_bytes: int = 64 * 1024 * 1024,
+    ) -> RobotBytesResponse:
+        async with self.active_request_lease(
+            expected_generation=expected_generation,
+            require_fresh=require_fresh,
+        ) as client:
+            return await client.request_bytes(
+                route_name,
+                json_data=json_data,
+                params=params,
+                path_params=path_params,
+                max_bytes=max_bytes,
+            )
 
     async def request_active_query(
         self,
@@ -261,6 +461,34 @@ class BioXpConnectionService:
                 kwargs["path_params"] = path_params
             return await client.request(route_name, **kwargs)
 
+    async def request_active_v2_query(
+        self,
+        route_name: str,
+        *,
+        expected_generation: int,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        async with self.active_query_lease(
+            expected_generation=expected_generation,
+            require_fresh=True,
+        ) as client:
+            try:
+                async with asyncio.timeout(15.0):
+                    async with self._v2_query_lock:
+                        return await self._request_client(
+                            client,
+                            route_name,
+                            params=params,
+                            path_params=path_params,
+                            timeout_override=12.0,
+                        )
+            except TimeoutError as exc:
+                raise RobotTimeoutError(
+                    "BioXP v2 query lane timed out before a robot response was received",
+                    dispatched=False,
+                ) from exc
+
     @asynccontextmanager
     async def active_query_lease(
         self,
@@ -269,17 +497,11 @@ class BioXpConnectionService:
         require_fresh: bool = True,
     ) -> AsyncIterator[RobotClientProtocol]:
         async with self._transition_lock:
-            client = self._client
-            if client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            if self._generation != expected_generation:
-                raise ConnectionStateError("Expected connection generation does not match the active generation")
-            if require_fresh and self.snapshot().observation_fresh is not True:
-                raise ConnectionStateError("A fresh process-local BioXP status observation is required")
-        yield client
-        async with self._transition_lock:
-            if client is not self._client or self._generation != expected_generation:
-                raise ConnectionStateError("BioXP connection generation changed during query")
+            lease = self._acquire_lease_locked(expected_generation, require_fresh=require_fresh)
+        try:
+            yield lease.client
+        finally:
+            await self._release_lease(lease)
 
     async def request_active_safety_interrupt(
         self,
@@ -289,22 +511,99 @@ class BioXpConnectionService:
         json_data: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Dispatch an exact X/Z interrupt without waiting behind an active motion lease."""
+        """Dispatch an exact interrupt without waiting behind normal request owners."""
         action_id = path_params.get("action_id") if path_params else None
-        safety_actions = {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort"}
-        if route_name != "invoke_operator_action" or action_id not in safety_actions:
-            raise ValueError("BioXP safety-interrupt transport is reserved for exact X/Z stop and abort actions")
-        async with self._safety_interrupt_lock:
-            client = self._client
-            if client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            if self._generation != expected_generation:
-                raise ConnectionStateError("Expected connection generation does not match the active generation")
-            return await client.request(
-                route_name,
-                json_data=json_data,
-                path_params=path_params,
+        safety_actions = {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort", "oem.y.stop"}
+        if route_name not in {"invoke_operator_action", "interrupt_operator_action_v1"} or action_id not in safety_actions:
+            raise ValueError("BioXP safety-interrupt transport is reserved for exact axis stop and aggregate abort actions")
+        return await self._request_with_retained_timeout(
+            lane_lock=self._interrupt_lock,
+            timeout_seconds=self.interrupt_timeout_seconds,
+            timeout_label="BioXP interrupt lane",
+            route_name=route_name,
+            expected_generation=expected_generation,
+            require_fresh=False,
+            json_data=json_data,
+            path_params=path_params,
+        )
+
+    async def _request_with_retained_timeout(
+        self,
+        *,
+        lane_lock: asyncio.Lock,
+        timeout_seconds: float,
+        timeout_label: str,
+        route_name: str,
+        expected_generation: int,
+        require_fresh: bool,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        async with self._transition_lock:
+            lease = self._acquire_lease_locked(expected_generation, require_fresh=require_fresh)
+        dispatched = asyncio.Event()
+
+        async def owned_request() -> dict[str, Any]:
+            try:
+                async with lane_lock:
+                    dispatched.set()
+                    return await self._request_client(
+                        lease.client,
+                        route_name,
+                        json_data=json_data,
+                        params=params,
+                        path_params=path_params,
+                    )
+            finally:
+                await self._release_lease(lease)
+
+        task = asyncio.create_task(owned_request(), name=f"bioxp-retained-{route_name}")
+        self._remote_request_tasks.add(task)
+
+        def consume_late_result(done: asyncio.Task[dict[str, Any]]) -> None:
+            self._remote_request_tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(consume_late_result)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+        except TimeoutError as exc:
+            was_dispatched = dispatched.is_set()
+            if not was_dispatched:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            guidance = (
+                "delivery and outcome are ambiguous; do not retry until current v2 dashboard and receipt status are queried"
+                if was_dispatched
+                else "timed out before dispatch; no robot request was started"
             )
+            raise RobotTimeoutError(
+                f"{timeout_label} timed out: {guidance}",
+                dispatched=was_dispatched,
+            ) from exc
+
+    @staticmethod
+    async def _request_client(
+        client: RobotClientProtocol,
+        route_name: str,
+        *,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        path_params: dict[str, str] | None = None,
+        timeout_override: float | None = None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if json_data is not None:
+            kwargs["json_data"] = json_data
+        if params is not None:
+            kwargs["params"] = params
+        if path_params is not None:
+            kwargs["path_params"] = path_params
+        if timeout_override is not None:
+            kwargs["timeout_override"] = timeout_override
+        return await client.request(route_name, **kwargs)
 
     @asynccontextmanager
     async def active_request_lease(
@@ -315,27 +614,53 @@ class BioXpConnectionService:
     ) -> AsyncIterator[RobotClientProtocol]:
         """Hold one active connection generation across a remote transaction."""
         async with self._transition_lock:
-            if self._client is None or self._active_target is None:
-                raise ConnectionStateError("BioXP saved profile is not actively connected")
-            if self._generation != expected_generation:
-                raise ConnectionStateError("Expected connection generation does not match the active generation")
-            if require_fresh and self.snapshot().observation_fresh is not True:
-                raise ConnectionStateError("A fresh process-local BioXP status observation is required")
-            yield self._client
-
-    async def _probe_locked(self, *, status_only: bool = False) -> bool:
-        assert self._client is not None
+            lease = self._acquire_lease_locked(expected_generation, require_fresh=require_fresh)
         try:
-            payload = (
-                await self._client.probe_status_only()
-                if status_only
-                else await self._client.probe()
-            )
-        except Exception as exc:
-            self._record_probe_failure(exc)
-            return False
-        self._apply_probe_payload(payload)
-        return True
+            yield lease.client
+        finally:
+            await self._release_lease(lease)
+
+    def _acquire_lease_locked(self, expected_generation: int, *, require_fresh: bool) -> _GenerationLease:
+        if self._client is None or self._active_target is None:
+            raise ConnectionStateError("BioXP saved profile is not actively connected")
+        if self._generation != expected_generation:
+            raise ConnectionStateError("Expected connection generation does not match the active generation")
+        if require_fresh:
+            snapshot = self.snapshot()
+            if snapshot.observation_fresh is not True or snapshot.reachable is not True:
+                raise ConnectionStateError("A fresh reachable process-local BioXP status observation is required")
+        lease = self._generation_leases.get(self._generation)
+        if lease is None or lease.client is not self._client or lease.state != "OPEN":
+            lease = _GenerationLease(self._generation, self._client)
+            self._generation_leases[self._generation] = lease
+        lease.lease_count += 1
+        lease.zero_lease_event.clear()
+        return lease
+
+    async def _release_lease(self, lease: _GenerationLease) -> None:
+        async with self._transition_lock:
+            if lease.lease_count > 0:
+                lease.lease_count -= 1
+            if lease.lease_count == 0:
+                lease.zero_lease_event.set()
+
+    def _schedule_drain_locked(self, lease: _GenerationLease) -> None:
+        task = asyncio.create_task(self._close_drained_lease(lease), name=f"bioxp-close-generation-{lease.generation}")
+        self._drain_tasks.add(task)
+        task.add_done_callback(self._drain_tasks.discard)
+
+    async def _close_drained_lease(self, lease: _GenerationLease) -> None:
+        await lease.zero_lease_event.wait()
+        await lease.client.close()
+        async with self._transition_lock:
+            lease.state = "CLOSED"
+            if self._generation_leases.get(lease.generation) is lease:
+                self._generation_leases.pop(lease.generation, None)
+
+    async def _wait_for_drains(self) -> None:
+        tasks = tuple(self._drain_tasks)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=False)
 
     def _apply_probe_payload(self, payload: dict[str, Any]) -> None:
         automatic_snapshot_refresh = payload.get("automatic_snapshot_refresh")
@@ -383,10 +708,12 @@ class BioXpConnectionService:
         self._observed_at = self.clock()
 
     async def _active_status_probe(self) -> None:
-        client = self._client
-        generation = self._generation
-        if client is None or self._active_target is None:
-            raise ConnectionStateError("BioXP saved profile is not actively connected")
+        async with self._transition_lock:
+            client = self._client
+            generation = self._generation
+            if client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            lease = self._acquire_lease_locked(generation, require_fresh=False)
         try:
             payload = await client.probe_status_only()
         except Exception as exc:
@@ -394,6 +721,8 @@ class BioXpConnectionService:
                 if client is self._client and generation == self._generation:
                     self._record_probe_failure(exc)
             return
+        finally:
+            await self._release_lease(lease)
         async with self._transition_lock:
             if client is self._client and generation == self._generation:
                 self._apply_probe_payload(payload)
@@ -401,32 +730,40 @@ class BioXpConnectionService:
     @asynccontextmanager
     async def workflow_lease(self, expected_generation: int):
         """Hold connection authority stable across one admitted robot workflow."""
-        async with self._transition_lock:
-            if self._client is None or self._active_target is None:
-                raise ConnectionStateError("An active BioXP target connection is required")
-            if int(expected_generation) != self._generation:
-                raise ConnectionStateError("Expected connection generation does not match the active generation")
-            yield self._client
+        async with self.active_request_lease(expected_generation=expected_generation, require_fresh=False) as client:
+            async with self._v1_workflow_lock:
+                yield client
 
     async def disconnect(self) -> BioXpSnapshot:
         async with self._transition_lock:
             await self._deactivate_locked(increment=True)
+        await self._wait_for_drains()
         return self.snapshot()
 
     async def close(self) -> None:
         async with self._transition_lock:
             await self._deactivate_locked(increment=False)
+        await self._wait_for_drains()
+
+    def _mark_current_draining_locked(self, *, increment: bool) -> None:
+        client = self._client
+        if client is not None:
+            lease = self._generation_leases.get(self._generation)
+            if lease is None or lease.client is not client:
+                lease = _GenerationLease(self._generation, client)
+                self._generation_leases[self._generation] = lease
+            lease.state = "DRAINING"
+            self._schedule_drain_locked(lease)
+        self._client = None
+        self._active_target = None
+        if increment:
+            self._generation += 1
+        self._clear_observation()
 
     async def _deactivate_locked(self, *, increment: bool) -> None:
-        await self._stop_active_probe_locked()
-        async with self._safety_interrupt_lock:
-            if self._client is not None:
-                await self._client.close()
-            self._client = None
-            self._active_target = None
-            if increment:
-                self._generation += 1
-            self._clear_observation()
+        self._stop_active_probe_locked()
+        self._stop_snapshot_refresh_locked()
+        self._mark_current_draining_locked(increment=increment)
 
     def _start_active_probe_locked(self) -> None:
         if self.active_probe_interval_seconds is None or self._client is None:
@@ -436,19 +773,12 @@ class BioXpConnectionService:
             name="bioxp-active-connection-probe",
         )
 
-    async def _stop_active_probe_locked(self) -> None:
+    def _stop_active_probe_locked(self) -> None:
         task = self._active_probe_task
         self._active_probe_task = None
         if task is None or task is asyncio.current_task():
             return
         task.cancel()
-        try:
-            same_loop = task.get_loop() is asyncio.get_running_loop()
-        except RuntimeError:
-            same_loop = False
-        if same_loop:
-            with suppress(asyncio.CancelledError):
-                await task
 
     async def _active_probe_loop(self) -> None:
         assert self.active_probe_interval_seconds is not None
@@ -460,6 +790,55 @@ class BioXpConnectionService:
             raise
         except (ConnectionStateError, TargetPolicyError):
             return
+
+    def _start_snapshot_refresh_locked(self) -> None:
+        if self.active_probe_interval_seconds is None or self._client is None:
+            return
+        self._snapshot_refresh_task = asyncio.create_task(
+            self._snapshot_refresh_loop(),
+            name="bioxp-canonical-snapshot-refresh",
+        )
+
+    def _stop_snapshot_refresh_locked(self) -> None:
+        task = self._snapshot_refresh_task
+        self._snapshot_refresh_task = None
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+
+    async def _snapshot_refresh_loop(self) -> None:
+        assert self.active_probe_interval_seconds is not None
+        try:
+            while True:
+                await asyncio.sleep(self.active_probe_interval_seconds)
+                await self._snapshot_refresh_once()
+        except asyncio.CancelledError:
+            raise
+        except (ConnectionStateError, TargetPolicyError):
+            return
+
+    async def _snapshot_refresh_once(self) -> None:
+        async with self._transition_lock:
+            client = self._client
+            generation = self._generation
+            if client is None or self._active_target is None:
+                raise ConnectionStateError("BioXP saved profile is not actively connected")
+            lease = self._acquire_lease_locked(generation, require_fresh=False)
+        try:
+            # Full probe: robot-owned canonical snapshot is auto-collected by the
+            # client when its cached evidence is missing or stale, keeping the
+            # operator admission gate (door, axes, gripper) continuously fresh.
+            payload = await client.probe()
+        except Exception as exc:
+            async with self._transition_lock:
+                if client is self._client and generation == self._generation:
+                    self._record_probe_failure(exc)
+            return
+        finally:
+            await self._release_lease(lease)
+        async with self._transition_lock:
+            if client is self._client and generation == self._generation:
+                self._apply_probe_payload(payload)
 
     def _clear_observation(self) -> None:
         self._observed_at = None

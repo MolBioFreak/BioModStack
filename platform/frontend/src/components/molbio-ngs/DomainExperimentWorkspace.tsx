@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     fetchFullJob,
@@ -14,11 +14,23 @@ import {
     fetchMolBioNgsStateRevisions,
     fetchOntInstrumentRunGeneration,
     fetchPcrExperimentRevision,
+    fetchProjectHub,
+    updateProjectHubPlasmidInfo,
     type DomainStateMember,
+    type ProjectHubPlasmidInfoDraft,
+    type ProjectHubPlasmidSummary,
 } from '../../lib/api';
+import { getProject } from '../../lib/projectManager';
 import { useGlobalExperimentContext } from '../experiments/GlobalExperimentContext';
 import DomainDatasetOperator from './DomainDatasetOperator';
 import DomainWorkflowOperator from './DomainWorkflowOperator';
+import ExperimentReferenceLibrary from './ExperimentReferenceLibrary';
+import ProjectHubShell from './project-hub/ProjectHubShell';
+import {
+    DomainEvidenceMutationPanel,
+    DomainReferenceMutationPanel,
+    DomainSampleMutationPanel,
+} from './DomainScientificMutationPanels';
 
 const SECTIONS = [
     ['overview', 'Overview'],
@@ -156,6 +168,7 @@ function MemberAuthority({ member }: { member: DomainStateMember }) {
 }
 
 export default function DomainExperimentWorkspace() {
+    const queryClient = useQueryClient();
     const context = useGlobalExperimentContext();
     const {
         workspaceId,
@@ -182,11 +195,22 @@ export default function DomainExperimentWorkspace() {
         updateQueryParams({ dataset_revision_ids: exactRevisionIds.length ? exactRevisionIds.join(',') : null });
     }, [updateQueryParams]);
 
+    const exactDomainId = selectedDomainExperiment?.domain_experiment_id ?? null;
+    const hasProjectHubContext = Boolean(workspaceId && globalExperimentId && exactDomainId);
+    const projectAuthorityQuery = useQuery({
+        queryKey: ['ngs-molbio-project-authority', workspaceId],
+        enabled: Boolean(workspaceId) && !hasProjectHubContext,
+        queryFn: ({ signal }) => {
+            if (!workspaceId) throw new Error('workspace_id is required');
+            return getProject(workspaceId, signal);
+        },
+        retry: false,
+    });
     const requestedSection = new URLSearchParams(window.location.search).get('section');
+    const isLocalProject = projectAuthorityQuery.data?.payload?.project_scope === 'ngs_molbio_local';
     const activeSection: SectionKey = SECTIONS.some(([key]) => key === requestedSection)
         ? requestedSection as SectionKey
         : 'overview';
-    const exactDomainId = selectedDomainExperiment?.domain_experiment_id ?? null;
 
     const stateQuery = useQuery({
         queryKey: ['molbio-ngs-domain-state', exactDomainId],
@@ -197,25 +221,25 @@ export default function DomainExperimentWorkspace() {
     const historyQuery = useQuery({
         queryKey: ['molbio-ngs-state-revisions', exactDomainId],
         queryFn: () => fetchMolBioNgsStateRevisions(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const samplesQuery = useQuery({
         queryKey: ['molbio-ngs-samples', exactDomainId],
         queryFn: () => fetchMolBioNgsSamples(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const referencesQuery = useQuery({
         queryKey: ['molbio-ngs-references', exactDomainId],
         queryFn: () => fetchMolBioNgsReferences(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
     const evidenceQuery = useQuery({
         queryKey: ['molbio-ngs-evidence', exactDomainId],
         queryFn: () => fetchMolBioNgsEvidence(exactDomainId as string),
-        enabled: exactDomainId !== null,
+        enabled: exactDomainId !== null && !hasProjectHubContext,
         retry: false,
     });
 
@@ -233,8 +257,80 @@ export default function DomainExperimentWorkspace() {
     const selectedRevisionQuery = useQuery({
         queryKey: ['molbio-ngs-state-revision', exactDomainId, selectedStateRevisionId],
         queryFn: () => fetchMolBioNgsStateRevision(exactDomainId as string, selectedStateRevisionId as string),
-        enabled: exactDomainId !== null && selectedStateRevisionId !== null,
+        enabled: exactDomainId !== null && selectedStateRevisionId !== null && !hasProjectHubContext,
         retry: false,
+    });
+
+    const projectHubQuery = useQuery({
+        queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId, selectedStateRevisionId],
+        queryFn: ({ signal }) => fetchProjectHub(
+            workspaceId as string,
+            globalExperimentId as string,
+            exactDomainId as string,
+            selectedStateRevisionId as string,
+            signal,
+        ),
+        enabled: hasProjectHubContext && selectedStateRevisionId !== null,
+        retry: false,
+    });
+    const [projectHubConflictMessage, setProjectHubConflictMessage] = useState<string | null>(null);
+    const plasmidInfoMutation = useMutation({
+        mutationFn: async ({ plasmid, draft }: { plasmid: ProjectHubPlasmidSummary; draft: ProjectHubPlasmidInfoDraft }) => {
+            const model = projectHubQuery.data;
+            if (!model || !workspaceId || !globalExperimentId || !exactDomainId) {
+                throw new Error('The exact project context is unavailable.');
+            }
+            const idempotencyKey = typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${Date.now()}-${plasmid.sequence_id}`;
+            return updateProjectHubPlasmidInfo(workspaceId, globalExperimentId, exactDomainId, plasmid.sequence_id, {
+                expected_molecular_revision_id: plasmid.revision_id,
+                expected_state_revision_id: model.identity.current_state_revision_id,
+                expected_state_head_generation: model.identity.state_head_generation,
+                idempotency_key: idempotencyKey,
+                molecular_fields: {
+                    name: draft.name,
+                    molecule_type: draft.molecule_type,
+                    topology: draft.topology,
+                    description: draft.description,
+                    organism_host_context: draft.organism_host_context,
+                },
+                project_metadata: {
+                    project_tags: draft.project_tags,
+                    project_notes: draft.project_notes,
+                },
+            });
+        },
+        onMutate: () => setProjectHubConflictMessage(null),
+        onSuccess: (model) => {
+            setProjectHubConflictMessage(null);
+            queryClient.setQueryData(
+                ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId, model.identity.selected_state_revision_id],
+                model,
+            );
+            void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
+            if (model.identity.selected_state_revision_id !== selectedStateRevisionId) {
+                setStateRevisionId(model.identity.selected_state_revision_id);
+            }
+        },
+        onError: async (error) => {
+            const response = (error as { response?: { status?: number; data?: { detail?: { code?: string } } } }).response;
+            const code = response?.data?.detail?.code;
+            if (response?.status === 409 && (code === 'stale_generation' || code === 'stale_molecular_revision')) {
+                setProjectHubConflictMessage('Project state advanced. Review the refreshed state before retrying.');
+                await queryClient.invalidateQueries({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    exact: true,
+                    refetchType: 'none',
+                });
+                const refreshedState = await queryClient.fetchQuery({
+                    queryKey: ['molbio-ngs-domain-state', exactDomainId],
+                    queryFn: () => fetchMolBioNgsDomainState(exactDomainId as string),
+                });
+                setStateRevisionId(refreshedState.current_state_revision_id);
+                void queryClient.invalidateQueries({ queryKey: ['molbio-project-hub', workspaceId, globalExperimentId, exactDomainId] });
+            }
+        },
     });
 
     const sampleRevisionQueries = useQueries({
@@ -257,6 +353,14 @@ export default function DomainExperimentWorkspace() {
             retry: false,
         })),
     });
+    const sampleRows = (samplesQuery.data ?? []).map((sample, index) => ({
+        sample,
+        revision: sampleRevisionQueries[index]?.data,
+    }));
+    const referenceRows = (referencesQuery.data ?? []).map((reference, index) => ({
+        reference,
+        revision: referenceRevisionQueries[index]?.data,
+    }));
 
     const members = selectedRevisionQuery.data?.members ?? [];
     const molecularMembers = members.filter((member) => member.entity_kind === 'molecular_revision');
@@ -325,9 +429,7 @@ export default function DomainExperimentWorkspace() {
         stateQuery.error,
     ]);
 
-    const disabledMutationReason = availability.canMutateDomain
-        ? 'Reference mutation forms are intentionally not exposed in this read/reopen foundation.'
-        : availability.reason;
+    const mutationBlocker = availability.canMutateDomain ? null : availability.reason;
 
     const renderOverview = () => (
         <div className="grid gap-4 xl:grid-cols-3">
@@ -381,6 +483,12 @@ export default function DomainExperimentWorkspace() {
 
     const renderSamples = () => (
         <Panel title="Domain samples">
+            <DomainSampleMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                rows={sampleRows}
+            />
             <ErrorNotice error={samplesQuery.error} />
             {(samplesQuery.data ?? []).length === 0 ? <Empty>No samples belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -422,65 +530,66 @@ export default function DomainExperimentWorkspace() {
     );
 
     const renderMolecularInputs = () => (
-        <Panel title="Exact molecular revision inputs">
-            {molecularMembers.length === 0 ? <Empty>No molecular revision receipts are members of the selected state revision.</Empty> : (
-                <div className="grid gap-3 xl:grid-cols-2">
-                    {molecularMembers.map((member, index) => {
-                        const destination = molecularDestinations[index];
-                        const revisionQuery = molecularQueries[index];
-                        const revision = revisionQuery?.data;
-                        return (
-                            <div key={member.receipt_id} className="space-y-3 rounded-lg border border-border-primary bg-surface p-3">
-                                <ErrorNotice error={destination.error} />
-                                <ErrorNotice error={revisionQuery?.error} />
-                                <MemberAuthority member={member} />
-                                {revision && destination.error === null && (
-                                    <>
-                                        <div className="grid gap-2 sm:grid-cols-3">
-                                            <Identifier label="Document" value={revision.document_name} />
-                                            <Identifier label="Revision ID" value={revision.revision_id} />
-                                            <Identifier label="Relation" value={revision.relation} />
-                                        </div>
-                                        <Digest label="Molecular content digest" value={revision.content_sha256} />
-                                        <Link
-                                            className="inline-flex text-xs font-semibold text-info hover:underline"
-                                            to={contextHref('/designer', {
-                                                section: 'molecular-inputs',
-                                                molbio_sequence_id: destination.aggregateId,
-                                                molbio_revision_id: destination.revisionId,
-                                            })}
-                                        >
-                                            Reopen exact molecular revision in MolBio
-                                        </Link>
-                                    </>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+        <>
+            {exactDomainId && selectedDomainExperiment && (
+                <ExperimentReferenceLibrary
+                    domainExperimentId={exactDomainId}
+                    globalDomainExperimentRevisionId={selectedDomainExperiment.global_domain_experiment_revision_id}
+                    currentStateRevisionId={stateQuery.data?.current_state_revision_id ?? null}
+                    stateHeadGeneration={stateQuery.data?.head_generation ?? 0}
+                    canMutate={availability.canMutateDomain}
+                    mutationBlocker={availability.canMutateDomain ? null : availability.reason}
+                />
             )}
-        </Panel>
+            <Panel title="Experiment reference sequences">
+                {molecularMembers.length === 0 ? <Empty>No shared reference revision is attached to the selected scientific-state revision.</Empty> : (
+                    <div className="grid gap-3 xl:grid-cols-2">
+                        {molecularMembers.map((member, index) => {
+                            const destination = molecularDestinations[index];
+                            const revisionQuery = molecularQueries[index];
+                            const revision = revisionQuery?.data;
+                            return (
+                                <div key={member.receipt_id} className="space-y-3 rounded-lg border border-border-primary bg-surface p-3">
+                                    <ErrorNotice error={destination.error} />
+                                    <ErrorNotice error={revisionQuery?.error} />
+                                    <MemberAuthority member={member} />
+                                    {revision && destination.error === null && (
+                                        <>
+                                            <div className="grid gap-2 sm:grid-cols-3">
+                                                <Identifier label="Reference sequence" value={revision.document_name} />
+                                                <Identifier label="Exact revision ID" value={revision.revision_id} />
+                                                <Identifier label="Experiment role" value={member.role} />
+                                            </div>
+                                            <Digest label="Molecular content digest" value={revision.content_sha256} />
+                                            <Link
+                                                className="inline-flex text-xs font-semibold text-info hover:underline"
+                                                to={contextHref('/designer', {
+                                                    section: 'molecular-inputs',
+                                                    molbio_sequence_id: destination.aggregateId,
+                                                    molbio_revision_id: destination.revisionId,
+                                                })}
+                                            >
+                                                Reopen exact reference in molecular viewer
+                                            </Link>
+                                        </>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </Panel>
+        </>
     );
 
     const renderReferences = () => (
-        <Panel
-            title="Managed reference revisions"
-            action={(
-                <div className="flex flex-wrap gap-2" title={disabledMutationReason}>
-                    {['Create', 'Import', 'Archive'].map((label) => (
-                        <button
-                            key={label}
-                            type="button"
-                            disabled
-                            className="cursor-not-allowed rounded-md border border-border-primary bg-surface px-2.5 py-1.5 text-xs text-content-muted opacity-60"
-                        >
-                            {label}
-                        </button>
-                    ))}
-                </div>
-            )}
-        >
-            <p className="mb-3 text-xs text-content-muted">Reference mutations disabled: {disabledMutationReason}</p>
+        <Panel title="Managed reference revisions">
+            <DomainReferenceMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                rows={referenceRows}
+            />
             <ErrorNotice error={referencesQuery.error} />
             {(referencesQuery.data ?? []).length === 0 ? <Empty>No managed references belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -636,6 +745,15 @@ export default function DomainExperimentWorkspace() {
 
     const renderEvidence = () => (
         <Panel title="Immutable scientific evidence assessments">
+            <DomainEvidenceMutationPanel
+                domainExperimentId={exactDomainId as string}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={mutationBlocker}
+                stateRevisionId={selectedStateRevisionId}
+                stateRevisions={historyQuery.data ?? []}
+                members={members}
+                sampleRows={sampleRows}
+            />
             <ErrorNotice error={evidenceQuery.error} />
             {(evidenceQuery.data ?? []).length === 0 ? <Empty>No evidence assessments belong to this exact Domain Experiment.</Empty> : (
                 <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
@@ -735,6 +853,7 @@ export default function DomainExperimentWorkspace() {
                 domainExperimentId={domainExperimentId}
                 canMutate={datasetMutationBlocker === null}
                 mutationBlocker={datasetMutationBlocker}
+                currentStateRevisionId={stateQuery.data?.current_state_revision_id ?? null}
                 selectedRevisionIds={selectedDatasetRevisionIds}
                 onSelectedRevisionIdsChange={updateSelectedDatasetRevisionIds}
             />
@@ -775,17 +894,45 @@ export default function DomainExperimentWorkspace() {
         history: renderHistory,
     };
 
+    if (hasProjectHubContext) {
+        if (projectHubQuery.isLoading || selectedStateRevisionId === null) {
+            return <div className="px-6 py-10 text-sm text-content-secondary" role="status">Loading project hub…</div>;
+        }
+        if (projectHubQuery.error || !projectHubQuery.data) {
+            return (
+                <div className="px-6 py-6">
+                    <div className="rounded-xl border border-error/40 bg-error/10 p-4 text-sm text-error" role="alert">
+                        <strong className="block">Project hub is unavailable</strong>
+                        <span className="mt-1 block">{errorText(projectHubQuery.error) ?? 'The project summary response was empty.'}</span>
+                    </div>
+                </div>
+            );
+        }
+        return (
+            <ProjectHubShell
+                model={projectHubQuery.data}
+                canMutate={availability.canMutateDomain}
+                mutationBlocker={availability.canMutateDomain ? null : availability.reason}
+                selectedSection={requestedSection}
+                selectedPlasmidId={new URLSearchParams(window.location.search).get('plasmid')}
+                onNavigate={(updates) => updateQueryParams(updates)}
+                onSavePlasmidInfo={async (plasmid, draft) => {
+                    plasmidInfoMutation.reset();
+                    await plasmidInfoMutation.mutateAsync({ plasmid, draft });
+                }}
+                saveError={projectHubConflictMessage ?? errorText(plasmidInfoMutation.error)}
+                saving={plasmidInfoMutation.isPending}
+            />
+        );
+    }
+
     return (
-        <div className="w-full max-w-none border-b border-border-primary bg-surface px-3 py-4 sm:px-5 lg:px-6">
-            <div className="mx-0 w-full max-w-none space-y-4">
+        <div className="w-full max-w-none px-4 pb-4 sm:px-5 lg:px-6">
+            <div className="mx-0 w-full max-w-none space-y-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Project-owned MolBio / NGS context</p>
-                        <h2 className="text-xl font-bold text-content">Domain Experiment workspace</h2>
-                        <p className="mt-1 max-w-4xl text-sm text-content-secondary">
-                            Inspect immutable scientific state, prepare and launch governed Workflow Plans, and reopen exact results.
-                            Project Manager owns the Project hierarchy. This workspace retains the exact selected hierarchy while the domain store owns local scientific state.
-                        </p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">{isLocalProject ? 'Local NGS/MolBio-owned context' : 'Broader Project-owned NGS/MolBio context'}</p>
+                        <h2 className="mt-0.5 text-lg font-bold text-content" title="Inspect immutable scientific state, prepare and launch governed Workflow Plans, reopen Workflow Receipts, and inspect data-bearing Results.">Domain Experiment workspace</h2>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                         {selectedDomainExperiment && (
@@ -802,12 +949,14 @@ export default function DomainExperimentWorkspace() {
                                 >
                                     NGS Toolkit
                                 </Link>
-                                <Link
-                                    className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
-                                    to={projectReturnUri}
-                                >
-                                    Return to Project
-                                </Link>
+                                {!isLocalProject && (
+                                    <Link
+                                        className="rounded-lg border border-border-primary bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-secondary hover:text-content"
+                                        to={projectReturnUri}
+                                    >
+                                        Return to broader Project
+                                    </Link>
+                                )}
                             </>
                         )}
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -824,7 +973,7 @@ export default function DomainExperimentWorkspace() {
 
                 {hasProjectOwnedContext ? (
                     <div className="grid gap-3 lg:grid-cols-4">
-                        <Identifier label="Project-owned context" value={workspaceId} />
+                        <Identifier label={isLocalProject ? 'Local NGS/MolBio Project' : 'Broader BMS Project'} value={workspaceId} />
                         <Identifier label="Global Experiment" value={globalExperimentId} />
                         <Identifier label="NGS/MolBio Domain Experiment" value={domainExperimentId} />
                         <label className="text-xs font-semibold text-content-secondary">
@@ -846,16 +995,13 @@ export default function DomainExperimentWorkspace() {
                     </div>
                 ) : (
                     <div className="rounded-xl border border-warning/40 bg-warning/10 p-4" role="status">
-                        <p className="text-sm font-semibold text-content">Project-owned Domain context required</p>
+                        <p className="text-sm font-semibold text-content">Choose an NGS/MolBio Project and Experiment</p>
                         <p className="mt-1 text-sm text-content-secondary">
-                            Open an NGS/MolBio Domain Experiment from Project Manager. The toolkit no longer owns a separate Project hierarchy selection.
+                            Create or open a local NGS/MolBio Project above. For cross-domain work, create an NGS/MolBio Experiment inside a broader Project or open one from Project Manager.
                         </p>
-                        <Link
-                            to="/projects"
-                            className="mt-3 inline-flex rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent"
-                        >
-                            Open Project Manager
-                        </Link>
+                        <p className="mt-3 text-xs text-content-secondary">
+                            Open the <strong>Projects</strong> control in the NGS Toolkit header to create or open a local NGS/MolBio Project, or to use the broader Project Manager.
+                        </p>
                     </div>
                 )}
 

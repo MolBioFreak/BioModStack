@@ -16,10 +16,11 @@ import stat
 import uuid
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Optional, Dict, List, Any, Mapping
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -55,9 +56,15 @@ from .conformational_mapping.persistence import (
     get_request as get_cm_request,
     ingest_result_bundle as ingest_cm_result_bundle,
 )
-from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads
+from .frustrampnn.contracts import canonical_json_bytes, canonical_json_loads, validate_schema
 from .frustrampnn.identity import deterministic_candidate_id
-from .frustrampnn.manifests import MANIFEST_PATH, V2_MANIFEST_PATH
+from .frustrampnn.manifests import (
+    MANIFEST_PATH,
+    V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
+    _read_regular as read_frustrampnn_regular,
+    result_manifest_path,
+)
 from .frustrampnn.structure import StructureNormalizationError, read_structure_bytes
 from .frustrampnn.persistence import (
     FrustraMPNNPersistenceError,
@@ -1137,6 +1144,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
             stage_family = "fampnn"
         elif "antibody" in model_id or "antibody" in mode:
             stage_family = "antibody"
+        elif model_id == "protein_modification_experimental" and mode == "region_redesign":
+            stage_family = "protein_local_redesign_validation"
+            stage_mode = "region_redesign"
         elif mode == "shape_blueprint":
             stage_family = "shape_blueprint"
             stage_mode = stage_mode or "shape_blueprint"
@@ -1239,6 +1249,9 @@ def _job_stage_context(job: Optional[Job]) -> Dict[str, Any]:
         infer_antibody_artifact_class_from_stage(stage_family, stage_mode)
     )
     artifact_schema_version = ANTIBODY_PIPELINE_CONTRACT_VERSION if artifact_class else None
+    if stage_family == "protein_local_redesign_validation" and stage_mode == "region_redesign":
+        artifact_class = "validated_local_redesign_structure"
+        artifact_schema_version = REVIEW_CONTRACT_VERSION
 
     inferred_review_contract = resolve_result_contract(
         model_type=getattr(job, "model_id", None),
@@ -3268,12 +3281,19 @@ async def _ingest_rfd3_local_redesign_manifest(
 _FRUSTRAMPNN_TERMINAL_STAGES = frozenset({"frustrampnn", "canonical_frustrampnn"})
 _FRUSTRAMPNN_TERMINAL_RESULT = "workflow_component_result_v1.json"
 _FRUSTRAMPNN_TERMINAL_RESULTS = frozenset(
-    {_FRUSTRAMPNN_TERMINAL_RESULT, "workflow_component_result_v2.json"}
+    {
+        _FRUSTRAMPNN_TERMINAL_RESULT,
+        "workflow_component_result_v2.json",
+        "workflow_component_result_v3.json",
+    }
 )
-_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset({MANIFEST_PATH, V2_MANIFEST_PATH})
+_FRUSTRAMPNN_RESULT_MANIFESTS = frozenset(
+    {MANIFEST_PATH, V2_MANIFEST_PATH, V3_MANIFEST_PATH}
+)
 _FRUSTRAMPNN_RESULT_PAIRS = {
     MANIFEST_PATH: _FRUSTRAMPNN_TERMINAL_RESULT,
     V2_MANIFEST_PATH: "workflow_component_result_v2.json",
+    V3_MANIFEST_PATH: "workflow_component_result_v3.json",
 }
 
 
@@ -3808,7 +3828,7 @@ def _assert_protein_design_metadata_replay(
 
 
 async def _ingest_explicit_frustrampnn_results(
-    current_job: Job | None,
+    current_job: Job | SimpleNamespace | None,
     output_path: Path,
     session: AsyncSession,
     *,
@@ -3884,9 +3904,9 @@ async def _ingest_explicit_frustrampnn_results(
     terminal_paths = [
         path for path in paths if path.name in _FRUSTRAMPNN_TERMINAL_RESULTS
     ]
-    if not manifests:
+    if not terminal_paths:
         raise FrustraMPNNPersistenceError(
-            "FrustraMPNN terminal stage output has no explicit canonical manifest"
+            "FrustraMPNN terminal stage output has no explicit terminal result"
         )
     manifest_roots = [os.fspath(path.parent.absolute()) for path in manifests]
     terminal_roots_list = [
@@ -3899,9 +3919,9 @@ async def _ingest_explicit_frustrampnn_results(
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN terminal stage output contains duplicate bundle roots"
         )
-    if set(manifest_roots) != set(terminal_roots_list):
+    if not set(manifest_roots).issubset(set(terminal_roots_list)):
         raise FrustraMPNNPersistenceError(
-            "FrustraMPNN canonical manifest and terminal envelope roots are not exact pairs"
+            "FrustraMPNN canonical manifest lacks its terminal envelope root"
         )
 
     roots: list[Path] = []
@@ -3916,6 +3936,46 @@ async def _ingest_explicit_frustrampnn_results(
     if any(os.fspath(root) not in terminal_roots for root in roots):
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN canonical manifest lacks its explicit terminal envelope output"
+        )
+
+    failed_terminal_roots = set(terminal_roots_list) - set(manifest_roots)
+    failed_terminal_count = 0
+    failed_identities: set[tuple[str, str]] = set()
+    for root_value in sorted(failed_terminal_roots):
+        root = Path(root_value)
+        terminal = _read_explicit_terminal_envelope(root, "workflow_component_result_v3.json")
+        request = canonical_json_loads(
+            read_frustrampnn_regular(root, "workflow_component_request_v3.json")
+        )
+        try:
+            validate_schema("workflow_component_result_v3", terminal)
+            validate_schema("workflow_component_request_v3", request)
+        except Exception as exc:
+            raise FrustraMPNNPersistenceError(
+                "classified FrustraMPNN failure terminal/request contract is invalid"
+            ) from exc
+        if (
+            terminal["status"] != "failed"
+            or terminal["result_manifest"] is not None
+            or terminal["result_payload"] is not None
+            or terminal["parent_job_id"] != str(current_job.id)
+            or request["parent_job_id"] != str(current_job.id)
+            or terminal["request_sha256"] != hashlib.sha256(canonical_json_bytes(request)).hexdigest()
+            or terminal["candidate_id"] != request["candidate_id"]
+            or terminal["invocation_id"] != request["invocation_id"]
+        ):
+            raise FrustraMPNNPersistenceError(
+                "classified FrustraMPNN failure does not bind immutable request authority"
+            )
+        identity = (terminal["invocation_id"], terminal["candidate_id"])
+        if identity in failed_identities:
+            raise FrustraMPNNPersistenceError("classified FrustraMPNN failure identity is duplicated")
+        failed_identities.add(identity)
+        failed_terminal_count += 1
+
+    if failed_terminal_count:
+        raise FrustraMPNNPersistenceError(
+            f"FrustraMPNN terminal stage contains {failed_terminal_count} failed candidate(s)"
         )
 
     validated_candidates = []
@@ -4212,9 +4272,14 @@ async def ingest_job_results(
     if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
         return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":
-        cm_request = await get_cm_request(session, job_id)
+        canonical_request_id = str(current_job.lineage_root_job_id or job_id)
+        cm_request = await get_cm_request(session, canonical_request_id)
         if cm_request is None:
             raise ConformationalPersistenceError("canonical job has no typed request record")
+        if str(cm_request.job_id) != str(current_job.id):
+            raise ConformationalPersistenceError(
+                "canonical typed request is not bound to the current job attempt"
+            )
         backend_directory = {
             "protenix_v2_ensemble": "canonical_protenix",
             "confornets": "canonical_confornets",
@@ -4332,6 +4397,7 @@ async def ingest_job_results(
                         )
                     global_maps: list[dict[str, Any]] = []
                     global_landscapes: list[dict[str, Any]] = []
+                    referenced_stage_paths: list[str] = []
                     for reference in references["results"]:
                         if not isinstance(reference, dict):
                             raise ConformationalPersistenceError(
@@ -4349,24 +4415,47 @@ async def ingest_job_results(
                                 "canonical FrustraMPNN result reference path is unsafe"
                             )
                         unresolved_bundle_root = result_root / relative
-                        if unresolved_bundle_root.is_symlink():
+                        current_bundle_path = result_root
+                        try:
+                            for part in relative.parts:
+                                current_bundle_path = current_bundle_path / part
+                                if stat.S_ISLNK(os.lstat(current_bundle_path).st_mode):
+                                    raise ConformationalPersistenceError(
+                                        "canonical FrustraMPNN result bundle path is unsafe: contains a symlink"
+                                    )
+                        except OSError as exc:
                             raise ConformationalPersistenceError(
-                                "canonical FrustraMPNN result bundle is unsafe"
-                            )
+                                "canonical FrustraMPNN result bundle is unavailable"
+                            ) from exc
                         bundle_root = unresolved_bundle_root.resolve(strict=True)
                         bundle_root.relative_to(result_root.resolve())
                         if not bundle_root.is_dir():
                             raise ConformationalPersistenceError(
                                 "canonical FrustraMPNN result bundle is unsafe"
                             )
-                        manifest_path = bundle_root / "frustrampnn_result_manifest_v2.json"
-                        landscape_path = bundle_root / "frustrampnn_landscape_v2.json"
+                        manifest_name = result_manifest_path(bundle_root)
+                        if manifest_name not in {V2_MANIFEST_PATH, V3_MANIFEST_PATH}:
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN result generation is unsupported"
+                            )
+                        generation = 3 if manifest_name == V3_MANIFEST_PATH else 2
+                        manifest_path = bundle_root / manifest_name
+                        landscape_path = bundle_root / (
+                            f"frustrampnn_landscape_v{generation}.json"
+                        )
                         structure_map_path = bundle_root / "frustrampnn_structure_map_v1.json"
                         for artifact_path in (manifest_path, landscape_path, structure_map_path):
                             if artifact_path.is_symlink() or not artifact_path.is_file():
                                 raise ConformationalPersistenceError(
                                     "canonical FrustraMPNN result artifact is unsafe"
                                 )
+                        terminal_path = bundle_root / (
+                            f"workflow_component_result_v{generation}.json"
+                        )
+                        if terminal_path.is_symlink() or not terminal_path.is_file():
+                            raise ConformationalPersistenceError(
+                                "canonical FrustraMPNN terminal result is unsafe"
+                            )
                         if (
                             hashlib.sha256(manifest_path.read_bytes()).hexdigest()
                             != reference.get("result_manifest_sha256")
@@ -4390,6 +4479,44 @@ async def ingest_job_results(
                             )
                         global_landscapes.append(landscape)
                         global_maps.append(structure_map)
+                        referenced_stage_paths.extend(
+                            (os.fspath(manifest_path), os.fspath(terminal_path))
+                        )
+                    await _ingest_explicit_frustrampnn_results(
+                        SimpleNamespace(
+                            id=current_job.id,
+                            provenance=current_job.provenance,
+                            stage_outputs={"frustrampnn": referenced_stage_paths},
+                        ),
+                        result_root,
+                        session,
+                        commit=False,
+                    )
+                    referenced_invocation_ids = {
+                        str(reference.get("invocation_id") or "")
+                        for reference in references["results"]
+                    }
+                    if "" in referenced_invocation_ids or len(referenced_invocation_ids) != len(
+                        references["results"]
+                    ):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN referenced result identities are incomplete"
+                        )
+                    referenced_count = int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(FrustraMPNNResult)
+                            .where(
+                                FrustraMPNNResult.parent_job_id == str(current_job.id),
+                                FrustraMPNNResult.invocation_id.in_(referenced_invocation_ids),
+                            )
+                        )
+                        or 0
+                    )
+                    if referenced_count != len(referenced_invocation_ids):
+                        raise ConformationalPersistenceError(
+                            "canonical FrustraMPNN referenced result persistence is incomplete"
+                        )
                     bundle["cm_frustrampnn_result_references"] = references
                     bundle["cm_complex_snapshots"] = snapshots
                     bundle["frustrampnn_structure_maps"] = global_maps

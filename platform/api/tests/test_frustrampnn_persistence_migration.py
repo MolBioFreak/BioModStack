@@ -288,15 +288,16 @@ def test_migration_is_idempotent_and_preserves_legacy_frustration_data(tmp_path:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_runner_registers_frustrampnn_reviews_as_version_27_last() -> None:
+def test_runner_registers_frustrampnn_migration_identities_and_latest_statistics_child() -> None:
     identities = [(migration.version, migration.name) for migration in runner.MIGRATIONS]
-    assert identities[-5:] == [
+    assert identities[22:27] == [
         (23, "add_frustrampnn_persistence"),
         (24, "add_ngs_reference_sets"),
         (25, "add_pooled_ont_reference_assignment"),
         (26, "add_frustrampnn_statistics"),
         (27, "add_frustrampnn_reviews"),
     ]
+    assert identities[-1] == (42, "add_frustrampnn_statistics_claim_leases")
     assert [version for version, _name in identities] == sorted(
         version for version, _name in identities
     )
@@ -411,6 +412,7 @@ def test_fresh_sqlalchemy_schema_matches_nullable_v26_columns(tmp_path: Path) ->
 
 def test_runner_retries_v26_when_columns_exist_but_ledger_row_is_missing(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_path = tmp_path / "frustrampnn-ledger-gap.db"
     _v23_database(database_path)
@@ -432,13 +434,17 @@ def test_runner_retries_v26_when_columns_exist_but_ledger_row_is_missing(
             "SELECT MAX(version) FROM schema_migrations"
         ).fetchone() == (23,)
 
+    v26_migrations = tuple(
+        migration for migration in runner.MIGRATIONS if migration.version <= 26
+    )
+    monkeypatch.setattr(runner, "MIGRATIONS", v26_migrations)
     runner.run_all(str(database_path))
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version, name FROM schema_migrations ORDER BY version"
         ).fetchall() == [
-            (migration.version, migration.name) for migration in runner.MIGRATIONS
+            (migration.version, migration.name) for migration in v26_migrations
         ]
         assert connection.execute(
             """

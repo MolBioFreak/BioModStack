@@ -17,13 +17,61 @@ from services.frustrampnn.settings import (
 )
 
 
+def _fanout_child(structure_count: int):
+    return frustrampnn_router.FrustraMPNNFanoutChildResponse.model_construct(
+        structure_count=structure_count
+    )
+
+
+@pytest.mark.parametrize(
+    "counts",
+    ([1, 2], [1, 1, 1], [2, 1, 1]),
+)
+def test_fanout_response_rejects_noncanonical_grouping(counts: list[int]) -> None:
+    with pytest.raises(ValidationError, match="canonical partition"):
+        frustrampnn_router.FrustraMPNNStructureDatasetFanoutResponse.model_validate(
+            {
+                "schema_name": "bms.structure-dataset-fanout.v1",
+                "fanout_id": "f" * 64,
+                "parent_job_id": "parent-1",
+                "selected_structure_count": sum(counts),
+                "structures_per_job": 2,
+                "effective_structures_per_job": 2,
+                "replayed": False,
+                "child_jobs": [_fanout_child(count) for count in counts],
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "mode", "expected_workflow"),
+    [
+        ("boltz2", "structure_prediction", "structure_prediction"),
+        ("boltz2", "complex_prediction", "complex_prediction"),
+        ("proteinmpnn", "protein_design", "protein_design"),
+        ("antibody_denovo", "antibody_denovo_pipeline", "antibody_denovo"),
+        ("conformational_mapping", "map", "conformational_mapping"),
+    ],
+)
+def test_all_frustrampnn_consumers_resolve_to_one_generic_api_fanout_topology(
+    model_id: str,
+    mode: str,
+    expected_workflow: str,
+) -> None:
+    parent = SimpleNamespace(model_id=model_id, mode=mode)
+    assert frustrampnn_router._frustrampnn_consumer_workflow(parent) == expected_workflow
+
+
 def _complete_settings_payload() -> dict[str, object]:
     return {
         "schema_name": "frustrampnn_settings",
-        "schema_version": 1,
+        "schema_version": 2,
+        "batching_enabled": False,
+        "structures_per_job": 1,
         "protein_selection": {
             "mode": "all_protein_entities",
             "entities": [],
+            "regions": [],
             "residues": [],
         },
         "source_structure": {
@@ -73,12 +121,18 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
     async def fake_selections(*_args, **_kwargs):
         return [SimpleNamespace(candidate_id="candidate-1")]
 
-    async def fake_create(*_args, requested_settings, **_kwargs):
+    async def fake_fanout(*_args, requested_settings, **_kwargs):
         captured["settings"] = requested_settings
-        return SimpleNamespace(id="child-1", output_dir="/tmp/child-1")
+        return SimpleNamespace(
+            fanout_id="f" * 64,
+            child_jobs=(
+                SimpleNamespace(id="child-1", output_dir="/tmp/child-1"),
+                SimpleNamespace(id="child-2", output_dir="/tmp/child-2"),
+            ),
+        )
 
-    async def fake_get_job(_job_id, _session):
-        return {"id": "child-1"}
+    async def fake_get_job(job_id, _session):
+        return {"id": job_id}
 
     monkeypatch.setattr(jobs_router, "_resolve_antibody_root_job", fake_root)
     monkeypatch.setattr(jobs_router, "_resolve_saved_review_filter_set", lambda *_args: None)
@@ -86,7 +140,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
     monkeypatch.setattr(jobs_router, "get_job", fake_get_job)
     monkeypatch.setattr(jobs_router, "AntibodyIterationLaunchResponse", lambda **payload: payload)
     monkeypatch.setattr(frustrampnn_jobs, "design_selections", fake_selections)
-    monkeypatch.setattr(frustrampnn_jobs, "create_child_job", fake_create)
+    monkeypatch.setattr(frustrampnn_router, "_fanout_design_selections", fake_fanout)
 
     payload: dict[str, object] = {
         "source_job_id": "source-job",
@@ -97,7 +151,7 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
         payload["frustrampnn_settings"] = _complete_settings_payload()
     request = jobs_router.AntibodyIterationLaunchRequest.model_validate(payload)
 
-    await jobs_router.launch_antibody_iteration_from_designs(
+    response = await jobs_router.launch_antibody_iteration_from_designs(
         request,
         BackgroundTasks(),
         _IterationSession(),
@@ -110,6 +164,8 @@ async def test_antibody_iteration_frustrampnn_passes_validated_requested_setting
         else default_settings()
     )
     assert captured["settings"] == expected
+    assert response["fanout_id"] == "f" * 64
+    assert response["launched_jobs"] == [{"id": "child-1"}, {"id": "child-2"}]
 
 
 def test_antibody_iteration_frustrampnn_rejects_partial_settings_before_launch() -> None:

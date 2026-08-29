@@ -1,14 +1,14 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "37c3ff50004fcf33768c3368a01a8f862394bdfd4895149596ac1d745ce7efba",
+  "content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
   "environment": {
-    "git": "not invoked during deterministic reseal",
+    "git": "git version 2.34.1",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
     "python": "3.12.13",
-    "uv": "project environment used for deterministic reseal only"
+    "uv": "uv 0.11.26 (x86_64-unknown-linux-gnu)"
   },
-  "executed_at": "2026-08-13T21:03:36.667136Z",
+  "executed_at": "2026-08-22T02:41:14.447281Z",
   "payload_files": [
     {
       "path": "docs/reports/ngs-molbio-phase-n0-contract-freeze.md",
@@ -17,8 +17,8 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/adapter_registry_v1.json",
-      "sha256": "1eeb3cfb2252bbc5378b94d8bbae9e1465a2db5ee756bc7593538dffea6742ca",
-      "size_bytes": 41881
+      "sha256": "0cd4555c38165f78977dc3b5273de1fea753d77902f884d2974a8cac1e151f15",
+      "size_bytes": 42647
     },
     {
       "path": "platform/api/config/ngs_molbio/branch_closure_v1.json",
@@ -27,7 +27,7 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "d4a873eb3fbfc456822d2c09ca6cec3073414c099b7f803a9507f251467a8332",
+      "sha256": "cf31febd8936549ca91cb4efc8c2c6853888cdc3665c81c96478793e2919ba04",
       "size_bytes": 100169
     },
     {
@@ -37,8 +37,8 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
-      "sha256": "cb11b1b780376e9d6e5093057dbd8e6fe64a33df37988679b9d0f52530114aff",
-      "size_bytes": 19202
+      "sha256": "1ff6d5621f47a1e0b607348efe1c693b3bca8794d09c46d022b42542deaa1e84",
+      "size_bytes": 19201
     },
     {
       "path": "platform/api/config/ngs_molbio/event_registry_v1.json",
@@ -52,8 +52,8 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "d4b9d141a105f770cf832bee6d96a98e80c3078d109262cf5200c2f949b22e2f",
-      "size_bytes": 24249
+      "sha256": "c51f58078dc62b2532f99f66e8115a7027141a726887296fe300e3d35c76e120",
+      "size_bytes": 26539
     },
     {
       "path": "platform/api/config/ngs_molbio/source_pin_v1.json",
@@ -62,8 +62,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "1cbee7f935a987341ff8d5ace3cbfd12ddcd60b74b93f3587f1b872b7c263894",
-      "size_bytes": 33605
+      "sha256": "bb5ff3a9780aeb6b7ba2c8cf1ad7d843dea2ee998423f62971a011574f4c8d59",
+      "size_bytes": 41371
     },
     {
       "path": "schemas/ngs_molbio/adapter-registry-v1.schema.json",
@@ -82,8 +82,8 @@
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
-      "sha256": "d43414628c01471ce4ae8e46b7de48fa9e170fb49014f15a4f189aa70b7f12ac",
-      "size_bytes": 3035
+      "sha256": "cc13a8076ebcb1199f8540d16ef8b88b3eb54397176ef978c078ae3b8a69f6cf",
+      "size_bytes": 3372
     },
     {
       "path": "schemas/ngs_molbio/branch-closure-v1.schema.json",
@@ -131,6 +131,16 @@
       "size_bytes": 2761
     },
     {
+      "path": "schemas/ngs_molbio/domain-experiment-v3.schema.json",
+      "sha256": "7401fbcf47225f798e9e017eabf6885379f408615cdf3fda8934d5abc11b5eec",
+      "size_bytes": 3353
+    },
+    {
+      "path": "schemas/ngs_molbio/domain-experiment-v4.schema.json",
+      "sha256": "d23b14f740cbdba948d9c8d11f3c251fedd7d2eecb413a729411a38fb540a401",
+      "size_bytes": 5638
+    },
+    {
       "path": "schemas/ngs_molbio/domain-state-initialized-v1.schema.json",
       "sha256": "3bd27870118da30eef5e8912726bee69196dc6f67ea5aebbedc1296f9f097f8f",
       "size_bytes": 1508
@@ -171,9 +181,14 @@
       "size_bytes": 2865
     },
     {
+      "path": "schemas/ngs_molbio/evidence-requirement-v2.schema.json",
+      "sha256": "7807803e4010b767ad81ede5638cf37dc12caada2d408daa241169e676bda3ed",
+      "size_bytes": 3252
+    },
+    {
       "path": "schemas/ngs_molbio/global-binding-receipt-v1.schema.json",
-      "sha256": "4fba59277cd7a7e1b6d9c25e1f9ee6616967e473c0cafb441f930fc9f344db1a",
-      "size_bytes": 3890
+      "sha256": "ebd2c7a4909855c3255371f43283cf8d02dadc038dbda62ca12d5bd163200653",
+      "size_bytes": 3896
     },
     {
       "path": "schemas/ngs_molbio/instrument-run-evidence-attached-v1.schema.json",
@@ -252,7 +267,7 @@
     },
     {
       "path": "schemas/ngs_molbio/ngs-molbio-experiment-v2.schema.json",
-      "sha256": "c56e4536b7024d4865786dacc06ba860130dc69c3db8f2877e850aef22bb92b5",
+      "sha256": "2ea3f77497191331e440359a7ba94f64fe435b0904936776cc6d5c3e521a605f",
       "size_bytes": 1603
     },
     {
@@ -346,6 +361,11 @@
       "size_bytes": 449
     },
     {
+      "path": "schemas/ngs_molbio/protein-entity-map-reference-v1.schema.json",
+      "sha256": "6cd41648654559805df30b6a5803d54edc3d5c708887109adcbe55285626f45d",
+      "size_bytes": 2329
+    },
+    {
       "path": "schemas/ngs_molbio/protein-entity-map-v1.schema.json",
       "sha256": "4cb4276a5e3e926bf09b8064292fee578c8f0a3c394e8e2d8bd6536a1e87117b",
       "size_bytes": 2653
@@ -356,9 +376,19 @@
       "size_bytes": 2501
     },
     {
+      "path": "schemas/ngs_molbio/protein-in-silico-experiment-v3.schema.json",
+      "sha256": "729887e07857d51b09cef9fa3c0a286f246aa8528c50d32000fdcd591e85cfb8",
+      "size_bytes": 2067
+    },
+    {
       "path": "schemas/ngs_molbio/protein-target-v2.schema.json",
       "sha256": "df6a205106b1c24bdcc13737f3bb8c3a2a8f92af95d54e764f4f5632e5c02e58",
       "size_bytes": 1694
+    },
+    {
+      "path": "schemas/ngs_molbio/protein-target-v3.schema.json",
+      "sha256": "a3eddcfa89d1c4d30b0dd65c95a8bb76be066d292649aafaa9be9f02e72f6a41",
+      "size_bytes": 1840
     },
     {
       "path": "schemas/ngs_molbio/reference-archived-v1.schema.json",
@@ -411,17 +441,22 @@
       "size_bytes": 2604
     },
     {
+      "path": "schemas/ngs_molbio/scientific-criterion-v2.schema.json",
+      "sha256": "3d629379925203ee50568d0f59548473cea4781b927e7a6e2b4054843c981948",
+      "size_bytes": 2991
+    },
+    {
       "path": "schemas/ngs_molbio/source-pin-v1.schema.json",
       "sha256": "e6bdc976195c14318328072bb031fd7476a125417695c5d88ca12a0a3e1eb054",
       "size_bytes": 1148
     },
     {
       "path": "scripts/verify_ngs_molbio_phase_n0.py",
-      "sha256": "c36d78c139975796213b39593e629edc365a66b2693f3f22341f4b2f5b085d91",
+      "sha256": "92a3f92a405accb14573002cc3ffc8682de8d6f1ae2497b8b3c87e4d1974f703",
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
+  "payload_fingerprint_sha256": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
   "result": {
     "adapters": 27,
     "capabilities": 21,
@@ -429,7 +464,10 @@
     "events": 12,
     "n0_status": "static_contract_freeze_complete",
     "negative_cases": [
-      "not_run_after_owner_denominator_harmonization"
+      "binding_adapter_identity",
+      "ngs_dataset_wrong_domain",
+      "protein_requires_target",
+      "unavailable_dataset_enabled"
     ],
     "open_contract_gates": [
       "n1_binding_persistence",
@@ -440,11 +478,16 @@
       "n6_runtime_release_acceptance"
     ],
     "plannable": 0,
-    "schemas": 70,
+    "schemas": 77,
     "verification": "not_run_by_operator_instruction"
   },
   "schema": "bms.ngs-molbio.phase-n0-verification-receipt.v1",
   "verification_command": [
-    "not run after harmonization by operator instruction"
+    "uv",
+    "run",
+    "--project",
+    "platform/api",
+    "python",
+    "scripts/verify_ngs_molbio_phase_n0.py"
   ]
 }

@@ -278,6 +278,7 @@ def main() -> None:
     parser.add_argument("--context_chains", default="", help="Optional context chains for interface-shell mode")
     parser.add_argument("--region_mode", choices=["manual_ranges", "interface_shell"], default="manual_ranges")
     parser.add_argument("--redesign_ranges", default="", help="Manual ranges like A26-35,A95-115 or 26-35,95-115")
+    parser.add_argument("--sequence_redesign_ranges", default="", help="Optional subset whose amino-acid identities may change downstream")
     parser.add_argument("--interface_cutoff", type=float, default=6.0, help="Distance cutoff for interface-shell mode")
     parser.add_argument("--region_padding", type=int, default=2, help="Residue padding around interface hits")
     parser.add_argument("--output_seed_pdb", required=True, help="Output seed PDB containing only the design chain")
@@ -317,7 +318,19 @@ def main() -> None:
         )
         movable_resnums = residue_numbers_from_indices(design_residues, movable_indices)
 
+    sequence_redesign_resnums = set(movable_resnums)
+    if str(args.sequence_redesign_ranges or "").strip():
+        sequence_redesign_resnums = parse_manual_ranges(
+            args.sequence_redesign_ranges,
+            design_chain,
+            available_resnums,
+        )
+        outside_movable = sequence_redesign_resnums - movable_resnums
+        if outside_movable:
+            raise ValueError("Sequence-redesign ranges must be a subset of coordinate-edit ranges")
+
     fixed_by_chain: Dict[str, Set[int]] = OrderedDict()
+    sequence_fixed_by_chain: Dict[str, Set[int]] = OrderedDict()
     movable_by_chain: Dict[str, Set[int]] = OrderedDict()
     movable_by_chain[design_chain] = set(movable_resnums)
 
@@ -325,8 +338,10 @@ def main() -> None:
         residue_numbers = {residue.key.resnum for residue in residues}
         if chain_id == design_chain:
             fixed_by_chain[chain_id] = residue_numbers - movable_resnums
+            sequence_fixed_by_chain[chain_id] = residue_numbers - sequence_redesign_resnums
         else:
             fixed_by_chain[chain_id] = residue_numbers
+            sequence_fixed_by_chain[chain_id] = residue_numbers
 
     contig = build_contig(design_chain, design_residues, movable_indices)
     movable_spec = build_spec(design_chain, movable_resnums)
@@ -336,6 +351,12 @@ def main() -> None:
         if resnums
     ]
     fixed_spec = ",".join(token for token in fixed_tokens if token)
+    sequence_fixed_tokens = [
+        build_spec(chain_id, resnums)
+        for chain_id, resnums in sequence_fixed_by_chain.items()
+        if resnums
+    ]
+    sequence_fixed_spec = ",".join(token for token in sequence_fixed_tokens if token)
 
     output_seed_pdb = Path(args.output_seed_pdb)
     output_manifest = Path(args.output_manifest)
@@ -349,6 +370,8 @@ def main() -> None:
         "region_mode": args.region_mode,
         "movable_positions_spec": movable_spec,
         "fixed_positions_spec": fixed_spec,
+        "sequence_redesign_positions_spec": build_spec(design_chain, sequence_redesign_resnums),
+        "sequence_fixed_positions_spec": sequence_fixed_spec,
         "contig_spec": contig,
         "movable_residue_count": len(movable_resnums),
         "fixed_residue_count": sum(len(values) for values in fixed_by_chain.values()),

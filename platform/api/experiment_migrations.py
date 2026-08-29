@@ -47,7 +47,13 @@ MIGRATION_V16_VERSION = 16
 MIGRATION_V16_NAME = "run_control_cancellation_authority"
 MIGRATION_V17_VERSION = 17
 MIGRATION_V17_NAME = "resource_admission_operational_receipt_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V17_VERSION
+MIGRATION_V18_VERSION = 18
+MIGRATION_V18_NAME = "resource_usage_operational_receipt_authority"
+MIGRATION_V19_VERSION = 19
+MIGRATION_V19_NAME = "log_stream_attempt_foreign_key_authority"
+MIGRATION_V20_VERSION = 20
+MIGRATION_V20_NAME = "domain_parent_global_revision_authority"
+LATEST_MIGRATION_VERSION = MIGRATION_V20_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2100,6 +2106,103 @@ PRAGMA foreign_key_check;
 
 MIGRATION_V17_CHECKSUM = hashlib.sha256(MIGRATION_V17_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V18_SQL = r'''
+DROP TRIGGER IF EXISTS trg_experiment_operational_receipt_immutable_update;
+DROP TRIGGER IF EXISTS trg_experiment_operational_receipt_immutable_delete;
+DROP INDEX IF EXISTS ix_experiment_operational_receipts_kind_time;
+ALTER TABLE operational_receipts RENAME TO operational_receipts_v17;
+CREATE TABLE operational_receipts (
+    receipt_id TEXT PRIMARY KEY NOT NULL,
+    operation_kind TEXT NOT NULL CHECK(operation_kind IN ('backup','export','restoration','payload_audit','package_acceptance','resource_admission','resource_usage')),
+    workspace_id TEXT REFERENCES resources(id),
+    native_identity TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('created','verified','failed','sealed','complete')),
+    receipt_json TEXT NOT NULL,
+    receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 64),
+    source_revision TEXT,
+    occurred_at TEXT NOT NULL,
+    verified_at TEXT,
+    CHECK(sha256(receipt_json) = lower(receipt_sha256))
+);
+INSERT INTO operational_receipts(
+    receipt_id, operation_kind, workspace_id, native_identity, state,
+    receipt_json, receipt_sha256, source_revision, occurred_at, verified_at
+)
+SELECT receipt_id, operation_kind, workspace_id, native_identity, state,
+       receipt_json, receipt_sha256, source_revision, occurred_at, verified_at
+FROM operational_receipts_v17;
+DROP TABLE operational_receipts_v17;
+CREATE INDEX ix_experiment_operational_receipts_kind_time
+    ON operational_receipts(operation_kind, occurred_at, receipt_id);
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_update
+BEFORE UPDATE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+CREATE TRIGGER trg_experiment_operational_receipt_immutable_delete
+BEFORE DELETE ON operational_receipts
+BEGIN SELECT RAISE(ABORT, 'operational receipt is immutable'); END;
+PRAGMA foreign_key_check;
+'''
+
+MIGRATION_V18_CHECKSUM = hashlib.sha256(MIGRATION_V18_SQL.encode("utf-8")).hexdigest()
+
+MIGRATION_V19_SQL = r'''
+ALTER TABLE log_streams RENAME TO log_streams_v19;
+CREATE TABLE log_streams (
+    resource_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    attempt_id TEXT NOT NULL REFERENCES run_attempts(resource_id),
+    stream_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('open', 'closed', 'unavailable')),
+    created_at TEXT NOT NULL,
+    closed_at TEXT,
+    UNIQUE(attempt_id, stream_name)
+);
+INSERT INTO log_streams(resource_id, attempt_id, stream_name, state, created_at, closed_at)
+SELECT resource_id, attempt_id, stream_name, state, created_at, closed_at
+FROM log_streams_v19;
+DROP TABLE log_streams_v19;
+'''.strip()
+MIGRATION_V19_CHECKSUM = hashlib.sha256(MIGRATION_V19_SQL.encode("utf-8")).hexdigest()
+
+MIGRATION_V20_INDEX_SQL = r'''CREATE UNIQUE INDEX ux_experiment_domain_parent_global_revision
+    ON revision_edges(revision_id)
+    WHERE role = 'parent_global_revision' '''.strip()
+MIGRATION_V20_TRIGGER_SQL = r'''CREATE TRIGGER trg_experiment_domain_parent_global_revision_insert
+BEFORE INSERT ON revision_edges
+WHEN NEW.role = 'parent_global_revision' AND NOT EXISTS (
+    SELECT 1
+    FROM revisions domain_revision
+    JOIN resources domain_revision_resource
+      ON domain_revision_resource.id = domain_revision.resource_id
+    JOIN aggregate_heads domain_head
+      ON domain_head.aggregate_id = domain_revision.subject_id
+     AND domain_head.aggregate_kind = 'domain_experiment'
+    JOIN aggregate_heads global_head
+      ON global_head.aggregate_id = domain_head.parent_id
+     AND global_head.aggregate_kind = 'experiment'
+     AND global_head.workspace_id = domain_head.workspace_id
+    JOIN revisions global_revision
+      ON global_revision.resource_id = NEW.target_resource_id
+     AND global_revision.subject_id = global_head.aggregate_id
+    JOIN resources global_revision_resource
+      ON global_revision_resource.id = global_revision.resource_id
+    WHERE domain_revision.resource_id = NEW.revision_id
+      AND domain_revision_resource.kind = 'revision'
+      AND domain_revision_resource.workspace_id = domain_head.workspace_id
+      AND domain_revision_resource.lifecycle_owner_id = domain_head.aggregate_id
+      AND global_revision_resource.kind = 'revision'
+      AND global_revision_resource.workspace_id = global_head.workspace_id
+      AND global_revision_resource.lifecycle_owner_id = global_head.aggregate_id
+      AND NEW.ordinal = 0
+      AND NEW.expected_sha256 = global_revision.payload_sha256
+      AND sha256(global_revision.canonical_payload) = global_revision.payload_sha256
+      AND NEW.metadata_json = '{"authority":"server_resolved"}'
+)
+BEGIN
+    SELECT RAISE(ABORT, 'invalid Domain parent Global revision authority');
+END'''.strip()
+MIGRATION_V20_SQL = MIGRATION_V20_INDEX_SQL + ";\n" + MIGRATION_V20_TRIGGER_SQL + ";"
+MIGRATION_V20_CHECKSUM = hashlib.sha256(MIGRATION_V20_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2109,6 +2212,7 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_revision_immutable_delete",
     "trg_experiment_revision_edge_immutable_update",
     "trg_experiment_revision_edge_immutable_delete",
+    "trg_experiment_domain_parent_global_revision_insert",
     "trg_experiment_lineage_same_workspace",
     "trg_experiment_lineage_owns_no_cycle",
     "trg_experiment_preparation_digest_insert",
@@ -2211,6 +2315,18 @@ def _migration_v16_checksum() -> str:
 
 def _migration_v17_checksum() -> str:
     return MIGRATION_V17_CHECKSUM
+
+
+def _migration_v18_checksum() -> str:
+    return MIGRATION_V18_CHECKSUM
+
+
+def _migration_v19_checksum() -> str:
+    return MIGRATION_V19_CHECKSUM
+
+
+def _migration_v20_checksum() -> str:
+    return MIGRATION_V20_CHECKSUM
 
 
 def _migration_v9_checksum() -> str:
@@ -2323,6 +2439,7 @@ _REQUIRED_INDEXES = {
     "ix_experiment_workflow_plan_authority_scope",
     "ix_experiment_run_control_commands_ready",
     "ix_experiment_run_control_commands_group",
+    "ux_experiment_domain_parent_global_revision",
 }
 
 
@@ -2343,10 +2460,13 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v15 = (MIGRATION_V15_VERSION, MIGRATION_V15_NAME, _migration_v15_checksum())
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
     v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
+    v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
+    v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
+    v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
     )
 
 
@@ -2513,6 +2633,9 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         _apply_idempotency_response_digest_upgrade(expected)
         _apply_run_control_upgrade(expected)
         _apply_operational_receipt_upgrade(expected)
+        _apply_resource_usage_receipt_upgrade(expected)
+        _apply_log_stream_attempt_fk_upgrade(expected)
+        _apply_domain_parent_revision_authority_upgrade(expected)
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -3323,6 +3446,193 @@ def _apply_operational_receipt_upgrade(connection: sqlite3.Connection) -> None:
         connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
 
 
+def _apply_resource_usage_receipt_upgrade(connection: sqlite3.Connection) -> None:
+    """Allow terminal resource-usage receipts in durable operations authority."""
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter_table = int(connection.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.executescript("BEGIN IMMEDIATE;\n" + MIGRATION_V18_SQL)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(f"V18 foreign-key violations: {violations!r}")
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V18_VERSION,
+                MIGRATION_V18_NAME,
+                _migration_v18_checksum(),
+                "Terminal resource-usage operational receipt authority",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA legacy_alter_table = {legacy_alter_table}")
+        connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
+
+
+def _apply_log_stream_attempt_fk_upgrade(connection: sqlite3.Connection) -> None:
+    """Restore log-stream ownership to the canonical run-attempt table."""
+    foreign_keys = int(connection.execute("PRAGMA foreign_keys").fetchone()[0])
+    legacy_alter_table = int(connection.execute("PRAGMA legacy_alter_table").fetchone()[0])
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.executescript("BEGIN IMMEDIATE;\n" + MIGRATION_V19_SQL)
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise sqlite3.IntegrityError(f"V19 foreign-key violations: {violations!r}")
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V19_VERSION,
+                MIGRATION_V19_NAME,
+                _migration_v19_checksum(),
+                "Canonical run-attempt ownership for log streams",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA legacy_alter_table = {legacy_alter_table}")
+        connection.execute(f"PRAGMA foreign_keys = {foreign_keys}")
+
+
+def _apply_domain_parent_revision_authority_upgrade(connection: sqlite3.Connection) -> None:
+    """Backfill and seal exact Domain-to-Global revision authority."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        domain_revisions = connection.execute(
+            """
+            SELECT d.resource_id, d.created_at, dh.aggregate_id, dh.parent_id,
+                   dh.workspace_id, dr.kind, dr.workspace_id, dr.lifecycle_owner_id
+            FROM revisions AS d
+            JOIN aggregate_heads AS dh ON dh.aggregate_id = d.subject_id
+            JOIN resources AS dr ON dr.id = d.resource_id
+            WHERE dh.aggregate_kind = 'domain_experiment'
+            ORDER BY d.created_at, d.revision_number, d.resource_id
+            """
+        ).fetchall()
+        for (
+            domain_revision_id,
+            domain_created_at,
+            domain_id,
+            global_experiment_id,
+            workspace_id,
+            domain_resource_kind,
+            domain_resource_workspace_id,
+            domain_resource_owner_id,
+        ) in domain_revisions:
+            if (
+                domain_resource_kind != "revision"
+                or domain_resource_workspace_id != workspace_id
+                or domain_resource_owner_id != domain_id
+                or global_experiment_id is None
+            ):
+                raise RuntimeError(
+                    f"cannot backfill Domain revision {domain_revision_id!r}: resource ownership is invalid"
+                )
+            parent = connection.execute(
+                """
+                SELECT g.resource_id, g.payload_sha256, gr.kind, gr.workspace_id,
+                       gr.lifecycle_owner_id, gh.workspace_id
+                FROM revisions AS g
+                JOIN aggregate_heads AS gh ON gh.aggregate_id = g.subject_id
+                JOIN resources AS gr ON gr.id = g.resource_id
+                WHERE gh.aggregate_id = ?
+                  AND gh.aggregate_kind = 'experiment'
+                  AND g.created_at <= ?
+                ORDER BY g.created_at DESC, g.revision_number DESC, g.resource_id DESC
+                LIMIT 1
+                """,
+                (global_experiment_id, domain_created_at),
+            ).fetchone()
+            if (
+                parent is None
+                or parent[2] != "revision"
+                or parent[3] != workspace_id
+                or parent[4] != global_experiment_id
+                or parent[5] != workspace_id
+            ):
+                raise RuntimeError(
+                    f"cannot backfill Domain revision {domain_revision_id!r}: historical parent Global revision is unavailable"
+                )
+            expected_edge = (
+                str(parent[0]),
+                0,
+                str(parent[1]),
+                '{"authority":"server_resolved"}',
+            )
+            existing = connection.execute(
+                """
+                SELECT target_resource_id, ordinal, expected_sha256, metadata_json
+                FROM revision_edges
+                WHERE revision_id = ? AND role = 'parent_global_revision'
+                ORDER BY ordinal, target_resource_id
+                """,
+                (domain_revision_id,),
+            ).fetchall()
+            if existing:
+                if existing != [expected_edge]:
+                    raise RuntimeError(
+                        f"cannot backfill Domain revision {domain_revision_id!r}: conflicting parent Global revision authority"
+                    )
+                continue
+            connection.execute(
+                """
+                INSERT INTO revision_edges(
+                    revision_id, target_resource_id, role, ordinal,
+                    expected_sha256, metadata_json
+                ) VALUES (?, ?, 'parent_global_revision', 0, ?, ?)
+                """,
+                (
+                    domain_revision_id,
+                    expected_edge[0],
+                    expected_edge[2],
+                    expected_edge[3],
+                ),
+            )
+        connection.execute(MIGRATION_V20_INDEX_SQL)
+        connection.execute(MIGRATION_V20_TRIGGER_SQL)
+        connection.execute(
+            """
+            INSERT INTO experiment_schema_migrations(
+                version, name, checksum, description, applied_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                MIGRATION_V20_VERSION,
+                MIGRATION_V20_NAME,
+                _migration_v20_checksum(),
+                "Immutable Domain revision to exact parent Global revision authority",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        connection.commit()
+    except Exception:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
 def run_all(db_path: str | Path) -> None:
     _verify_frozen_migration_sources()
     path = Path(db_path).expanduser().resolve()
@@ -3344,6 +3654,9 @@ def run_all(db_path: str | Path) -> None:
     v15 = (MIGRATION_V15_VERSION, MIGRATION_V15_NAME, _migration_v15_checksum())
     v16 = (MIGRATION_V16_VERSION, MIGRATION_V16_NAME, _migration_v16_checksum())
     v17 = (MIGRATION_V17_VERSION, MIGRATION_V17_NAME, _migration_v17_checksum())
+    v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
+    v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
+    v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
     try:
         connection.execute(
             """
@@ -3513,6 +3826,33 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17],
+        ):
+            _apply_resource_usage_receipt_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18],
+        ):
+            _apply_log_stream_attempt_fk_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19],
+        ):
+            _apply_domain_parent_revision_authority_upgrade(connection)
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
@@ -3584,6 +3924,10 @@ __all__ = [
     "MIGRATION_V16_VERSION",
     "MIGRATION_V16_NAME",
     "MIGRATION_V16_CHECKSUM",
+    "MIGRATION_V20_VERSION",
+    "MIGRATION_V20_NAME",
+    "MIGRATION_V20_SQL",
+    "MIGRATION_V20_CHECKSUM",
     "LATEST_MIGRATION_VERSION",
     "MIGRATION_V4_VERSION",
     "MIGRATION_V4_NAME",

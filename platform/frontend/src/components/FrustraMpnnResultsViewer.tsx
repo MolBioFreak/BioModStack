@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import type { Job } from '../lib/api.js';
 import {
@@ -8,10 +8,13 @@ import {
     fetchFrustraMpnnLandscape,
     fetchFrustraMpnnReceipt,
     fetchFrustraMpnnResult,
+    fetchFrustraMpnnStatistics,
+    fetchFrustraMpnnStatisticsAnalysis,
     fetchFrustraMpnnStructureMap,
     listFrustraMpnnArtifacts,
     listFrustraMpnnResults,
     reanalyzeFrustraMpnn,
+    retryFrustraMpnnStatisticsAnalysis,
     selectFrustraMpnnArtifactByIdentity,
     validateFrustraMpnnOwnedSettings,
     type FrustraMpnnClassCounts,
@@ -35,14 +38,24 @@ import type { StructureScenePresentation } from '../structureViewer/contracts/sc
 import { getFrustraMpnnResultContext } from './frustraMpnnResultSurface.js';
 import FrustraMpnnLandscapeOverview from './FrustraMpnnLandscapeOverview.js';
 import FrustraMpnnPlotlyAnalytics from './FrustraMpnnPlotlyAnalytics.js';
-import FrustraMpnnCrossDatasetExplorer from './FrustraMpnnCrossDatasetExplorer.js';
-import FrustraMpnnComparisonWorkbench from './FrustraMpnnComparisonWorkbench.js';
 
 import { buildFrustraMpnnCoverageReadiness } from './frustraMpnnCoverageModel.js';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { CANONICAL_FRUSTRAMPNN_SETTINGS } from './frustrampnn/frustraMpnnSettingsState.js';
-import { FrustraMpnnResultAuthoritySurface } from './FrustraMpnnResultAuthoritySurface.js';
+import {
+    FrustraMpnnResultAuthoritySurface,
+    FrustraMpnnStatisticsAnalysisPanel,
+} from './FrustraMpnnResultAuthoritySurface.js';
 import FrustraMpnnReviewExportPanel from './frustrampnn/FrustraMpnnReviewExportPanel.js';
+import { FrustraMpnnStructureSelector } from './frustrampnn/FrustraMpnnStructureSelector.js';
+import { FrustraMpnnExperimentResults } from './frustrampnn/FrustraMpnnExperimentResults.js';
+import type {
+    FrustraMpnnExperimentContext,
+    FrustraMpnnResultScope,
+} from './frustrampnn/workflowResultViewState.js';
+import {
+    fetchDomainFrustraMpnnResults,
+} from '../lib/projectManager.js';
 
 const PAGE_SIZE = 500;
 const terminalJob = new Set(['completed', 'failed', 'cancelled']);
@@ -86,14 +99,21 @@ export default function FrustraMpnnResultsViewer({
     onBack,
     backLabel = 'Jobs',
     onOpenJob,
+    scope = 'this-job',
+    onScopeChange,
+    experimentContext = null,
 }: {
     job: Job;
     preferredInvocationId?: string;
     onBack: () => void;
     backLabel?: string;
     onOpenJob: (jobId: string) => void;
+    scope?: FrustraMpnnResultScope;
+    onScopeChange?: (scope: FrustraMpnnResultScope) => void;
+    experimentContext?: FrustraMpnnExperimentContext | null;
 }) {
     const resultContext = getFrustraMpnnResultContext(job)!;
+    const queryClient = useQueryClient();
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedInvocation = searchParams.get('frustrampnn_invocation_id') ?? searchParams.get('invocation_id') ?? preferredInvocationId ?? null;
     const requestedComparisonId = searchParams.get('frustrampnn_comparison_id');
@@ -125,6 +145,45 @@ export default function FrustraMpnnResultsViewer({
         queryFn: ({ signal }) => listFrustraMpnnResults(job.id, 50, resultOffset, signal),
         refetchInterval: () => terminalJob.has(resultContext.usesChildReceipt ? (receipt.data?.status ?? job.status) : job.status) ? false : 3000,
     });
+    const wantsExperimentScope = scope === 'whole-experiment' && experimentContext !== null;
+    const hierarchyAuthorityReady = wantsExperimentScope;
+    const experimentResults = useQuery({
+        queryKey: [
+            'frustrampnn-experiment-results',
+            experimentContext?.projectId,
+            experimentContext?.globalExperimentId,
+            experimentContext?.domainExperimentId,
+            experimentContext?.globalExperimentRevisionId,
+            experimentContext?.domainRevisionId,
+        ],
+        queryFn: ({ signal }) => fetchDomainFrustraMpnnResults(
+            experimentContext!.projectId,
+            experimentContext!.globalExperimentId,
+            experimentContext!.domainExperimentId,
+            experimentContext!.globalExperimentRevisionId,
+            experimentContext!.domainRevisionId,
+            signal,
+        ),
+        enabled: hierarchyAuthorityReady,
+    });
+    const experimentResultLinks = useMemo(() => (
+        (experimentResults.data?.items ?? []).map((item) => {
+            if (!item.reopen_uri || !item.parent_job_id || !item.invocation_id) {
+                return { item, href: null };
+            }
+            const separator = item.reopen_uri.includes('?') ? '&' : '?';
+            const contextQuery = new URLSearchParams({
+                workspace_id: experimentContext!.projectId,
+                global_experiment_id: experimentContext!.globalExperimentId,
+                domain_experiment_id: experimentContext!.domainExperimentId,
+                global_experiment_revision_id: experimentContext!.globalExperimentRevisionId,
+                domain_revision_id: experimentContext!.domainRevisionId,
+                result_model: 'frustrampnn',
+                frustrampnn_scope: 'whole-experiment',
+            });
+            return { item, href: `${item.reopen_uri}${separator}${contextQuery.toString()}` };
+        })
+    ), [experimentContext, experimentResults.data?.items]);
     useEffect(() => {
         const items = results.data?.items ?? [];
         setSelectedInvocation((current) => (
@@ -179,6 +238,44 @@ export default function FrustraMpnnResultsViewer({
         const persisted = detail.data?.effective_settings_json?.requested_settings;
         if (persisted) setFrustrampnnSettings(persisted);
     }, [detail.data?.invocation_id]);
+    const hasExactV3AnalysisOwner = Boolean(
+        detail.data
+        && selectedInvocation
+        && detail.data.parent_job_id === job.id
+        && detail.data.invocation_id === selectedInvocation
+        && detail.data.component_contract_version === '3.0'
+        && detail.data.terminal_result.component_contract_version === '3.0'
+        && detail.data.terminal_result.parent_job_id === job.id
+        && detail.data.terminal_result.invocation_id === selectedInvocation
+    );
+    const statisticsAnalysis = useQuery({
+        queryKey: ['frustrampnn-statistics-analysis', job.id, selectedInvocation],
+        queryFn: ({ signal }) => fetchFrustraMpnnStatisticsAnalysis(job.id, selectedInvocation!, signal),
+        enabled: hasExactV3AnalysisOwner,
+        refetchInterval: (query) => {
+            const analysis = query.state.data;
+            if (!analysis) return false;
+            return analysis.state === 'queued' || analysis.state === 'running' ? 3000 : false;
+        },
+        refetchIntervalInBackground: false,
+    });
+    const statistics = useQuery({
+        queryKey: ['frustrampnn-statistics', job.id, selectedInvocation],
+        queryFn: ({ signal }) => fetchFrustraMpnnStatistics(job.id, selectedInvocation!, signal),
+        enabled: hasExactV3AnalysisOwner && statisticsAnalysis.data?.state === 'completed',
+    });
+    const retryStatistics = useMutation({
+        mutationFn: () => retryFrustraMpnnStatisticsAnalysis(job.id, selectedInvocation!),
+        onSuccess: async () => {
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['frustrampnn-statistics-analysis', job.id, selectedInvocation] }),
+                queryClient.invalidateQueries({ queryKey: ['frustrampnn-statistics', job.id, selectedInvocation] }),
+            ]);
+        },
+    });
+    const fetchedStatistics = hasExactV3AnalysisOwner
+        ? statistics.data?.statistics ?? statistics.data?.statistics_json ?? null
+        : undefined;
     const artifacts = useQuery({
         queryKey: ['frustrampnn-artifacts', job.id, selectedInvocation],
         queryFn: ({ signal }) => listFrustraMpnnArtifacts(job.id, selectedInvocation!, signal),
@@ -365,6 +462,41 @@ export default function FrustraMpnnResultsViewer({
                 </div>
             </header>
             <main className="mx-auto max-w-[1800px] space-y-4 p-6">
+                <section aria-label="FrustraMPNN data scope" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                    <div><h2 className="text-sm font-semibold">Data scope</h2><p className="mt-1 text-xs text-slate-500">This job is the default. Whole experiment requires exact Project Manager lineage.</p></div>
+                    <div className="flex gap-2" role="group" aria-label="FrustraMPNN data scope choices">
+                        <button type="button" aria-pressed={scope === 'this-job'} onClick={() => onScopeChange?.('this-job')} className={`rounded-lg border px-3 py-1.5 text-xs ${scope === 'this-job' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>This job</button>
+                        <button type="button" aria-pressed={scope === 'whole-experiment'} disabled={!onScopeChange} onClick={() => onScopeChange?.('whole-experiment')} className={`rounded-lg border px-3 py-1.5 text-xs disabled:opacity-40 ${scope === 'whole-experiment' ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100' : 'border-slate-700 text-slate-300'}`}>Whole experiment</button>
+                    </div>
+                </section>
+                {results.data && results.data.items.length > 0 && <FrustraMpnnStructureSelector
+                    items={results.data.items}
+                    selectedInvocationId={selectedInvocation}
+                    onSelect={setSelectedInvocation}
+                />}
+                {scope === 'whole-experiment' && experimentContext === null && (
+                    <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                        Whole-experiment results require Project, Global Experiment, and Domain Experiment context from Project Manager.
+                    </div>
+                )}
+                {wantsExperimentScope && experimentResults.isLoading && (
+                    <div role="status" className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">Whole-experiment results are loading for the selected Project Manager revisions…</div>
+                )}
+                {hierarchyAuthorityReady && experimentResults.isError && (
+                    <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-100">
+                        {errorMessage(experimentResults.error, 'Whole-experiment results could not be loaded.')}
+                    </div>
+                )}
+                {hierarchyAuthorityReady && experimentResults.isSuccess && experimentResultLinks.length === 0 && (
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-300">No FrustraMPNN results are attached to this Domain Experiment.</div>
+                )}
+                {hierarchyAuthorityReady && experimentResultLinks.length > 0 && experimentContext && (
+                    <FrustraMpnnExperimentResults
+                        items={experimentResultLinks}
+                        globalRevisionId={experimentContext.globalExperimentRevisionId}
+                        domainRevisionId={experimentContext.domainRevisionId}
+                    />
+                )}
                 {(requestedInvocation || requestedComparisonId || requestedGuidanceId) && (
                     <aside className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-100" aria-label="Exact FrustraMPNN source context">
                         {requestedInvocation && <span className="mr-3">Invocation <code>{requestedInvocation}</code> <strong>{selectedInvocation === requestedInvocation ? 'loaded' : 'unavailable'}</strong></span>}
@@ -388,7 +520,16 @@ export default function FrustraMpnnResultsViewer({
                 </section>
                 {detail.data?.failure_class && <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100"><span className="font-semibold">Failure class persisted:</span> {detail.data.failure_class}. Unsafe runtime internals are not exposed by this response.</div>}
 
-                {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} />}
+                {statisticsAnalysis.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statisticsAnalysis.error, 'Derived statistics lifecycle is unavailable.')}</div>}
+                {statistics.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(statistics.error, 'Completed derived statistics are unavailable.')}</div>}
+                {retryStatistics.isError && <div role="alert" className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">{errorMessage(retryStatistics.error, 'Statistics analysis retry failed.')}</div>}
+                {statisticsAnalysis.data && <FrustraMpnnStatisticsAnalysisPanel
+                    analysis={statisticsAnalysis.data}
+                    canRetry={resultContext.canRetryStatisticsAnalysis}
+                    retryPending={retryStatistics.isPending}
+                    onRetry={() => retryStatistics.mutate()}
+                />}
+                {detail.data && <FrustraMpnnResultAuthoritySurface detail={detail.data} statisticsOverride={fetchedStatistics} />}
 
                 {detail.data && <section aria-label="FrustraMPNN reanalysis settings" className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
                     <h2 className="font-semibold">Reanalysis settings</h2>
@@ -396,7 +537,7 @@ export default function FrustraMpnnResultsViewer({
                     <FrustraMpnnSettingsPanel
                         value={frustrampnnSettings}
                         onChange={setFrustrampnnSettings}
-                        governedSource={selectedInvocation ? {
+                        governedSource={selectedInvocation && (job.model_id === 'frustrampnn' || job.model_id === 'conformational_mapping') ? {
                             kind: 'owned',
                             reference: { job_id: job.id, invocation_id: selectedInvocation },
                         } : undefined}
@@ -404,13 +545,7 @@ export default function FrustraMpnnResultsViewer({
                 </section>}
 
                 {results.data && results.data.total > 1 && (
-                    <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300" aria-label="Persisted invocation history">
-                        <label>Persisted invocation
-                        <select value={results.data.items.some((item) => item.invocation_id === selectedInvocation) ? selectedInvocation ?? '' : ''} onChange={(event) => setSelectedInvocation(event.target.value)} className="ml-3 rounded border border-slate-700 bg-slate-950 px-3 py-2">
-                            {!results.data.items.some((item) => item.invocation_id === selectedInvocation) && <option value="">URL-selected invocation</option>}
-                            {results.data.items.map((item) => <option key={item.invocation_id} value={item.invocation_id}>{item.candidate_id} · {item.status}</option>)}
-                        </select>
-                        </label>
+                    <section className="flex flex-wrap items-center justify-end gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300" aria-label="Persisted invocation history pagination">
                         <div className="flex items-center gap-2"><span>{resultOffset + 1}–{Math.min(resultOffset + results.data.items.length, results.data.total)} of {results.data.total}</span><button type="button" disabled={resultOffset === 0 || results.isFetching} onClick={() => setResultOffset(Math.max(0, resultOffset - 50))} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Previous</button><button type="button" disabled={resultOffset + results.data.items.length >= results.data.total || results.isFetching} onClick={() => setResultOffset(resultOffset + 50)} className="rounded border border-slate-700 px-3 py-1.5 disabled:opacity-30">Next</button></div>
                     </section>
                 )}
@@ -436,21 +571,14 @@ export default function FrustraMpnnResultsViewer({
                             </div>
                         </section>
 
-                        <FrustraMpnnCrossDatasetExplorer currentDatasetId={job.id} />
-
-                        {selectedInvocation && <FrustraMpnnComparisonWorkbench
-                            referenceJobId={job.id}
-                            referenceInvocationId={selectedInvocation}
-                        />}
-
 
                         {allResidues.length > 0 && <FrustraMpnnPlotlyAnalytics
                             residues={allResidues}
                             highMax={detail.data.summary.threshold_policy.high_max}
                             minimalMin={detail.data.summary.threshold_policy.minimal_min}
-                            thresholdPolicyId={detail.data.summary.schema_version === 2
-                                ? detail.data.summary.threshold_policy_id
-                                : detail.data.summary.threshold_policy.id}
+                            thresholdPolicyId={detail.data.summary.schema_version === 1
+                                ? detail.data.summary.threshold_policy.id
+                                : detail.data.summary.threshold_policy_id}
                             sourceSha256={detail.data.source_artifact_sha256}
                         />}
 

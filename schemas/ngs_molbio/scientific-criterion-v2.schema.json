@@ -1,0 +1,132 @@
+{
+  "$id": "bms.scientific-criterion.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "bms.scientific-criterion.artifact-presence.v1"
+        },
+        "schema_id": {
+          "const": "bms.scientific-criterion.artifact-presence.v1"
+        },
+        "schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "subject_role": {
+          "enum": [
+            "input",
+            "sample",
+            "reference",
+            "target",
+            "panel",
+            "control",
+            "result",
+            "comparison",
+            "evidence",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "criterion_id",
+        "schema_id",
+        "schema_sha256",
+        "subject_role",
+        "payload"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "bms.scientific-criterion.manual-review.v1"
+        },
+        "schema_id": {
+          "const": "bms.scientific-criterion.manual-review.v1"
+        },
+        "schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "subject_role": {
+          "enum": [
+            "input",
+            "sample",
+            "reference",
+            "target",
+            "panel",
+            "control",
+            "result",
+            "comparison",
+            "evidence",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "criterion_id",
+        "schema_id",
+        "schema_sha256",
+        "subject_role",
+        "payload"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "criterion_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "bms.scientific-criterion.metric-threshold.v1"
+        },
+        "schema_id": {
+          "const": "bms.scientific-criterion.metric-threshold.v1"
+        },
+        "schema_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "subject_role": {
+          "enum": [
+            "input",
+            "sample",
+            "reference",
+            "target",
+            "panel",
+            "control",
+            "result",
+            "comparison",
+            "evidence",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "criterion_id",
+        "schema_id",
+        "schema_sha256",
+        "subject_role",
+        "payload"
+      ],
+      "type": "object"
+    }
+  ]
+}

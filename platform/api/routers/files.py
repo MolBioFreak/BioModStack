@@ -9,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 from datetime import datetime
 import mimetypes
+import hashlib
 import json
 import os
+import re
 import shutil
 import stat
+import tempfile
 from typing import Iterator
 
 from database import Job, get_session
@@ -24,6 +27,11 @@ from paths import (
 )
 
 router = APIRouter()
+IMMUTABLE_STRUCTURE_UPLOAD_PATH = "inputs/protein_local_redesign"
+IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024
+IMMUTABLE_STRUCTURE_FILENAME_RE = re.compile(
+    r"^[A-Za-z0-9_.-]{1,160}-([0-9a-f]{64})\.pdb$"
+)
 GOVERNED_NGS_MANIFEST_SCHEMAS = frozenset(
     {"sequence_qc.manifest.v1", "biomodstack.construct_verification.v2"}
 )
@@ -111,6 +119,39 @@ def _read_json_nofollow(path: Path, *, max_bytes: int = 10 * 1024 * 1024) -> dic
         return payload
     finally:
         os.close(descriptor)
+
+
+def _sha256_regular_file_nofollow(path: Path) -> tuple[str, int]:
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("immutable structure path is not a regular file")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest(), metadata.st_size
+    finally:
+        os.close(descriptor)
+
+
+def _immutable_structure_response(path: Path, expected_sha256: str, *, existing: bool) -> dict:
+    actual_sha256, size = _sha256_regular_file_nofollow(path)
+    if actual_sha256 != expected_sha256:
+        raise HTTPException(status_code=409, detail="immutable structure path contains different bytes")
+    return {
+        "filename": path.name,
+        "path": to_allowed_relative(path),
+        "size": size,
+        "sha256": actual_sha256,
+        "existing": existing,
+    }
 
 
 def _parse_byte_range(range_header: str, file_size: int) -> tuple[int, int]:
@@ -348,6 +389,12 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="Upload filename must be one plain basename")
     if filename.casefold() == "qc_manifest.json":
         raise HTTPException(status_code=403, detail="Canonical manifests cannot be written through the generic upload route")
+    immutable_dir = _allowed_lexical_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
+    if (
+        _lexical_absolute(target_dir) == immutable_dir
+        and IMMUTABLE_STRUCTURE_FILENAME_RE.fullmatch(filename)
+    ):
+        raise HTTPException(status_code=403, detail="Use the immutable structure upload route")
     file_path = target_dir / filename
     if (
         _under_persisted_ngs_root(_lexical_absolute(lexical_dir / filename), governed_roots)
@@ -367,6 +414,78 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
         
     return {"filename": filename, "path": to_allowed_relative(file_path), "size": file_path.stat().st_size}
+
+
+@router.post("/upload-immutable-structure")
+async def upload_immutable_structure(
+    path: str = Form(...),
+    sha256: str = Form(...),
+    file: UploadFile = File(...),
+    governed_roots: tuple[Path, ...] = Depends(get_governed_ngs_result_roots),
+):
+    """Atomically publish one SHA-256-addressed RFD3 structure input."""
+    if path.strip().strip("/") != IMMUTABLE_STRUCTURE_UPLOAD_PATH:
+        raise HTTPException(status_code=403, detail="Immutable structure uploads use the RFD3 input directory")
+    expected_sha256 = sha256.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise HTTPException(status_code=400, detail="sha256 must be 64 lowercase hexadecimal characters")
+    filename = str(file.filename or "")
+    match = IMMUTABLE_STRUCTURE_FILENAME_RE.fullmatch(filename)
+    if match is None or match.group(1) != expected_sha256:
+        raise HTTPException(status_code=400, detail="Upload filename must end with its SHA-256")
+
+    try:
+        lexical_dir = _allowed_lexical_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
+        if _under_persisted_ngs_root(lexical_dir, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+        target_dir = resolve_allowed_path(IMMUTABLE_STRUCTURE_UPLOAD_PATH)
+        if _under_persisted_ngs_root(target_dir, governed_roots):
+            raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied to this path")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if _is_governed_ngs_directory(target_dir):
+        raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
+    file_path = target_dir / filename
+    if file_path.exists():
+        return _immutable_structure_response(file_path, expected_sha256, existing=True)
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".rfd3-structure-", suffix=".tmp", dir=target_dir
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        digest = hashlib.sha256()
+        size = 0
+        with os.fdopen(descriptor, "wb") as buffer:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > IMMUTABLE_STRUCTURE_UPLOAD_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Structure upload exceeds 64 MiB")
+                digest.update(chunk)
+                buffer.write(chunk)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+        if digest.hexdigest() != expected_sha256:
+            raise HTTPException(status_code=400, detail="Upload content SHA-256 mismatch")
+        os.chmod(temporary_path, 0o444)
+        try:
+            os.link(temporary_path, file_path, follow_symlinks=False)
+            directory_descriptor = os.open(target_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+            existing = False
+        except FileExistsError:
+            existing = True
+        return _immutable_structure_response(file_path, expected_sha256, existing=existing)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 @router.get("/download/{file_path:path}")

@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.restart-reopen-acceptance.v2",
+  "title": "Managed Development restart and exact retained-version reopening v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "restart_reopen_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "historical_authority_denominator",
+    "restart_command",
+    "pre_restart_process_set",
+    "post_restart_process_set",
+    "health_after_restart_receipt",
+    "reopen_observations",
+    "restart_verifier_assertion",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.restart-reopen-acceptance.v2"
+    },
+    "restart_reopen_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "historical_authority_denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.historical-authority-denominator.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "restart_command": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "pre_restart_process_set": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "post_restart_process_set": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "health_after_restart_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.health-acceptance.v2"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "reopen_observations": {
+      "type": "object",
+      "minProperties": 7,
+      "maxProperties": 100000,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._:-]{1,255}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "denominator_case_id",
+          "schema_id",
+          "contract_version",
+          "stable_id",
+          "exact_revision_id",
+          "raw_persisted_bytes_sha256",
+          "route_template_id",
+          "route_parameters",
+          "expected_content_sha256",
+          "expected_response_size_bytes",
+          "observed_response"
+        ],
+        "properties": {
+          "denominator_case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "schema_id": {
+            "type": "string",
+            "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$"
+          },
+          "contract_version": {
+            "type": "string",
+            "pattern": "^v[0-9]+$"
+          },
+          "stable_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "exact_revision_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "raw_persisted_bytes_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "route_template_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "route_parameters": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 32,
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            }
+          },
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expected_response_size_bytes": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 1048576
+          },
+          "observed_response": {
+            "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+          }
+        }
+      }
+    },
+    "restart_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-development-restart-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

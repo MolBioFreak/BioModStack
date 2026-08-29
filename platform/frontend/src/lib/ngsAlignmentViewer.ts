@@ -169,6 +169,82 @@ export function resolveSessionAuxiliaryTracks(
     return tracks;
 }
 
+export interface LocalIgvConfigInput {
+    referenceId: string;
+    referenceName: string;
+    fastaUrl: string;
+    faiUrl?: string | null;
+    bamUrl?: string | null;
+    baiUrl?: string | null;
+    initialLocus?: string | null;
+    auxiliaryTracks: Array<Record<string, unknown>>;
+}
+
+const MAX_BROWSER_ALIGNMENT_BYTES = 536_870_912;
+
+export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | undefined): {
+    autoLoad: boolean;
+    reason: string | null;
+} {
+    if (!Number.isFinite(sizeBytes) || !sizeBytes || sizeBytes <= MAX_BROWSER_ALIGNMENT_BYTES) {
+        return { autoLoad: true, reason: null };
+    }
+    return {
+        autoLoad: false,
+        reason: `Alignment is ${(sizeBytes / 1_048_576).toFixed(1)} MiB; browser track loading is disabled. Use Inspect reads instead.`,
+    };
+}
+
+export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
+    const alignmentTracks = input.bamUrl && input.baiUrl
+        ? [{
+            name: 'Aligned Reads',
+            type: 'alignment',
+            format: 'bam',
+            url: input.bamUrl,
+            indexURL: input.baiUrl,
+            height: 420,
+            displayMode: 'EXPANDED',
+            colorBy: 'strand',
+        }]
+        : [];
+    return {
+        loadDefaultGenomes: false,
+        genomeList: [],
+        search: false,
+        queryParametersSupported: false,
+        reference: {
+            id: input.referenceId,
+            name: input.referenceName,
+            fastaURL: input.fastaUrl,
+            ...(input.faiUrl
+                ? { indexURL: input.faiUrl, indexed: true }
+                : { indexed: false }),
+        },
+        ...(input.initialLocus ? { locus: input.initialLocus } : {}),
+        tracks: [
+            ...alignmentTracks,
+            ...input.auxiliaryTracks,
+        ],
+    };
+}
+
+export function parseLocalIgvRange(
+    value: string,
+    referenceContig: string,
+    referenceLength: number,
+): string | null {
+    if (!referenceContig || !Number.isInteger(referenceLength) || referenceLength < 1) return null;
+    const match = /^([^:\s]+):(\d+)-(\d+)$/.exec(value.trim());
+    if (!match || match[1] !== referenceContig) return null;
+    const start = Number(match[2]);
+    const end = Number(match[3]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > referenceLength) {
+        return null;
+    }
+    return `${referenceContig}:${start}-${end}`;
+}
+
 export function resolveBoundSessionLocus(
     requestedSessionId: string,
     selectedSessionId: string,

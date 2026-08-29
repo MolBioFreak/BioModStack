@@ -1,0 +1,465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.operational-evidence.v2",
+  "title": "Closed operational evidence preimages and non-circular writer assertions v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "evidence_bundle_id",
+    "artifacts",
+    "bundle_algorithm",
+    "bundle_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.operational-evidence.v1"
+    },
+    "evidence_bundle_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "artifact_id",
+          "storage_identity",
+          "retrieval_method",
+          "media_type",
+          "size_bytes",
+          "digest_algorithm",
+          "content_sha256"
+        ],
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "storage_identity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "retrieval_method": {
+            "const": "confined-no-follow-raw-read-v1"
+          },
+          "media_type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1099511627776
+          },
+          "digest_algorithm": {
+            "const": "sha256-raw-bytes-v1"
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "uniqueItems": true
+    },
+    "bundle_algorithm": {
+      "const": "sha256-rfc8785-ordered-artifact-rows-v1"
+    },
+    "bundle_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "receiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "type": "string",
+          "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$",
+          "maxLength": 255
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "rawArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "storage_identity",
+        "retrieval_method",
+        "media_type",
+        "size_bytes",
+        "digest_algorithm",
+        "content_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "storage_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "retrieval_method": {
+          "const": "confined-no-follow-raw-read-v1"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1099511627776
+        },
+        "digest_algorithm": {
+          "const": "sha256-raw-bytes-v1"
+        },
+        "content_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "canonicalJsonArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "storage_identity",
+        "retrieval_method",
+        "document_schema_id",
+        "raw_size_bytes",
+        "raw_sha256",
+        "parse_algorithm",
+        "canonicalization_algorithm",
+        "omitted_fields",
+        "canonical_size_bytes",
+        "canonical_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "storage_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "retrieval_method": {
+          "const": "confined-no-follow-raw-read-v1"
+        },
+        "document_schema_id": {
+          "type": "string",
+          "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$",
+          "maxLength": 255
+        },
+        "raw_size_bytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1073741824
+        },
+        "raw_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "parse_algorithm": {
+          "const": "utf8-json-reject-duplicate-keys-v1"
+        },
+        "canonicalization_algorithm": {
+          "const": "rfc8785-utf8-v1"
+        },
+        "omitted_fields": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "canonical_size_bytes": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1073741824
+        },
+        "canonical_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "writerAssertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "issuer_id",
+        "authority_registry_id",
+        "authority_registry_sha256",
+        "key_object_id",
+        "key_object_sha256",
+        "asserted_document_schema_id",
+        "assertion_omission_pointers",
+        "self_digest_omission_pointer",
+        "unsigned_body_digest_algorithm",
+        "unsigned_body_sha256",
+        "signature_message_algorithm",
+        "signature_algorithm",
+        "signature_base64url",
+        "issued_at"
+      ],
+      "properties": {
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "issuer_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "authority_registry_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "authority_registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "key_object_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "key_object_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "asserted_document_schema_id": {
+          "type": "string",
+          "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$",
+          "maxLength": 255
+        },
+        "assertion_omission_pointers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:/(?:[^~/]|~0|~1)*)+$",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "description": "Exact lexicographically ordered RFC 6901 pointers to every writer-assertion object in the asserted document. Resolve all pointers against the original document and remove them simultaneously; reject a missing pointer, duplicate target, array-index alias, or ancestor/descendant overlap."
+        },
+        "self_digest_omission_pointer": {
+          "type": "string",
+          "pattern": "^(?:/(?:[^~/]|~0|~1)*)+$",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Exact RFC 6901 pointer to the document self-digest field. It must differ from and must not overlap any assertion omission pointer."
+        },
+        "unsigned_body_digest_algorithm": {
+          "const": "sha256-rfc8785-simultaneous-json-pointer-omission-v2",
+          "description": "Remove exactly the assertion omission pointers and the self-digest omission pointer simultaneously from the original complete document, serialize the remaining JSON with RFC 8785 as UTF-8, and SHA-256 those bytes."
+        },
+        "unsigned_body_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature_message_algorithm": {
+          "const": "rfc8785-writer-assertion-envelope-omit-signature-v2",
+          "description": "Serialize this complete writer-assertion object with only signature_base64url omitted using RFC 8785 UTF-8. Verify signature_base64url over exactly those bytes with the identified protected key and signature algorithm."
+        },
+        "signature_algorithm": {
+          "enum": [
+            "ES256",
+            "EdDSA"
+          ]
+        },
+        "signature_base64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16,2048}$"
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "httpObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "route_template_id",
+        "resolved_url_sha256",
+        "authorization_context_algorithm",
+        "authorization_context_sha256",
+        "status_code",
+        "response_headers_algorithm",
+        "response_headers_sha256",
+        "response_body"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH"
+          ]
+        },
+        "route_template_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "resolved_url_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "authorization_context_algorithm": {
+          "const": "sha256-rfc8785-authenticated-principal-roles-scope-v1"
+        },
+        "authorization_context_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "status_code": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "response_headers_algorithm": {
+          "const": "sha256-rfc8785-lowercase-selected-response-headers-v1"
+        },
+        "response_headers_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "response_body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifact_id",
+            "storage_identity",
+            "retrieval_method",
+            "document_schema_id",
+            "raw_size_bytes",
+            "raw_sha256",
+            "parse_algorithm",
+            "canonicalization_algorithm",
+            "omitted_fields",
+            "canonical_size_bytes",
+            "canonical_sha256"
+          ],
+          "properties": {
+            "artifact_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "storage_identity": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "retrieval_method": {
+              "const": "confined-no-follow-raw-read-v1"
+            },
+            "document_schema_id": {
+              "type": "string",
+              "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$",
+              "maxLength": 255
+            },
+            "raw_size_bytes": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 1073741824
+            },
+            "raw_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "parse_algorithm": {
+              "const": "utf8-json-reject-duplicate-keys-v1"
+            },
+            "canonicalization_algorithm": {
+              "const": "rfc8785-utf8-v1"
+            },
+            "omitted_fields": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "canonical_size_bytes": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 1073741824
+            },
+            "canonical_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -225,6 +226,59 @@ def upload_selection(*, filename: str, payload: bytes, expected_sha256: str | No
     )
 
 
+def workflow_selection(
+    *,
+    filename: str,
+    payload: bytes,
+    metadata: Mapping[str, Any],
+    parent_job_id: str,
+    parent_workflow_id: str,
+) -> SourceSelection:
+    """Bind one live parent workflow terminal structure to child-job authority."""
+
+    required = {
+        "candidate_id", "parent_job_id", "parent_workflow_id", "producer_stage",
+        "producer_candidate_key", "requiredness",
+    }
+    if set(metadata) != required:
+        raise FrustraMPNNChildError("workflow candidate metadata fields are not exact")
+    candidate_id = metadata.get("candidate_id")
+    if (
+        not isinstance(candidate_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate_id) is None
+        or metadata.get("parent_job_id") != parent_job_id
+        or metadata.get("parent_workflow_id") != parent_workflow_id
+        or metadata.get("requiredness") != "required"
+    ):
+        raise FrustraMPNNChildError("workflow candidate identity or requiredness is invalid")
+    producer_stage = metadata.get("producer_stage")
+    producer_key = metadata.get("producer_candidate_key")
+    if (
+        not isinstance(producer_stage, str) or not producer_stage.strip()
+        or not isinstance(producer_key, str) or not producer_key
+        or producer_key.startswith("/") or "\\" in producer_key
+        or any(part in {"", ".", ".."} for part in producer_key.split("/"))
+    ):
+        raise FrustraMPNNChildError("workflow candidate producer authority is invalid")
+    base = upload_selection(filename=filename, payload=payload, expected_sha256=None)
+    return SourceSelection(
+        design_id=None,
+        source_job_id=parent_job_id,
+        source_path=None,
+        source_bytes=base.source_bytes,
+        source_sha256=base.source_sha256,
+        media_type=base.media_type,
+        source_format=base.source_format,
+        producer_stage=producer_stage,
+        producer_coordinates={
+            "candidate_id": candidate_id,
+            "producer_stage": producer_stage,
+            "producer_candidate_key": producer_key,
+            "parent_workflow_id": parent_workflow_id,
+        },
+    )
+
+
 def handoff_selection(
     *,
     candidate_id: str,
@@ -284,6 +338,8 @@ async def create_child_job(
     idempotency_owner: Job | None = None,
     idempotency_marker_key: str | None = None,
     triggered_marker_key: str | None = None,
+    preallocated_job_id: str | None = None,
+    commit: bool = True,
 ) -> Job:
     """Atomically publish immutable launch authority and persist one queued child."""
 
@@ -293,12 +349,39 @@ async def create_child_job(
         raise FrustraMPNNChildError(
             "requested_settings must be one typed FrustraMPNN requested-settings object"
         )
-    if len(selections) > 1000:
-        raise FrustraMPNNChildError("FrustraMPNN child batches are limited to 1000 inputs")
+    if requested_settings.schema_version != 2:
+        raise FrustraMPNNChildError(
+            "new FrustraMPNN child writes require requested settings schema_version 2"
+        )
+    if not requested_settings.batching_enabled and len(selections) > 1:
+        raise FrustraMPNNChildError(
+            "FrustraMPNN batching is disabled; one structure is allowed per scheduler Job"
+        )
+    if len(selections) > requested_settings.structures_per_job:
+        raise FrustraMPNNChildError(
+            "FrustraMPNN selection count exceeds requested structures_per_job"
+        )
     if bool(idempotency_owner) != bool(idempotency_marker_key):
         raise FrustraMPNNChildError("idempotency owner and marker must be supplied together")
 
-    if idempotency_owner is not None and idempotency_marker_key is not None:
+    if preallocated_job_id is not None and (
+        idempotency_owner is not None or idempotency_marker_key is not None
+    ):
+        raise FrustraMPNNChildError(
+            "preallocated Job identity cannot be combined with legacy idempotency markers"
+        )
+    if preallocated_job_id is not None:
+        try:
+            job_id = str(uuid.UUID(preallocated_job_id))
+        except (TypeError, ValueError) as exc:
+            raise FrustraMPNNChildError(
+                "preallocated Job identity must be one canonical UUID"
+            ) from exc
+        if job_id != preallocated_job_id or await session.get(Job, job_id) is not None:
+            raise FrustraMPNNChildError(
+                "preallocated FrustraMPNN child Job already exists"
+            )
+    elif idempotency_owner is not None and idempotency_marker_key is not None:
         owner_params = dict(idempotency_owner.params or {})
         recorded_child_id = owner_params.get(idempotency_marker_key)
         if recorded_child_id:
@@ -421,14 +504,14 @@ async def create_child_job(
             _immutable_write(root / structure_map_relative, structure_map_payload)
 
             request_relative = (
-                f"inputs/requests/{ordinal:04d}/workflow_component_request_v2.json"
+                f"inputs/requests/{ordinal:04d}/workflow_component_request_v3.json"
             )
             request_path = root / request_relative
             request = {
                 "schema_name": "workflow_component_request",
-                "schema_version": 2,
+                "schema_version": 3,
                 "component_id": "frustrampnn",
-                "component_contract_version": "2.0",
+                "component_contract_version": "3.0",
                 "invocation_id": invocation_id,
                 "parent_job_id": job_id,
                 "parent_workflow_id": "frustrampnn_analysis",
@@ -470,7 +553,7 @@ async def create_child_job(
                 ],
                 "requested_outputs": list(_REQUESTED_OUTPUTS),
             }
-            validate_schema("workflow_component_request_v2", request)
+            validate_schema("workflow_component_request_v3", request)
             request_payload = canonical_json_bytes(request)
             request_sha256 = hashlib.sha256(request_payload).hexdigest()
             _immutable_write(request_path, request_payload)
@@ -492,8 +575,8 @@ async def create_child_job(
             })
             bundle = root / "frustrampnn" / "results" / candidate_id
             stage_outputs.extend([
-                os.fspath(bundle / "frustrampnn_result_manifest_v2.json"),
-                os.fspath(bundle / "workflow_component_result_v2.json"),
+                os.fspath(bundle / "frustrampnn_result_manifest_v3.json"),
+                os.fspath(bundle / "workflow_component_result_v3.json"),
             ])
             lineage.append({
                 "selection_ordinal": ordinal,
@@ -519,12 +602,16 @@ async def create_child_job(
 
         batch_manifest = {
             "schema_name": "bms_frustrampnn_scheduler_batch",
-            "schema_version": 2,
+            "schema_version": 3,
             "execution_owner_job_id": job_id,
+            "batching_enabled": requested_settings.batching_enabled,
+            "structures_per_job": requested_settings.structures_per_job,
+            "settings_sha256": settings_sha256,
+            "expected_cardinality": len(batch_records),
             "records": batch_records,
         }
         batch_payload = canonical_json_bytes(batch_manifest)
-        batch_path = root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+        batch_path = root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
         _immutable_write(batch_path, batch_payload)
         source_parent_id = str(source_parent.id) if source_parent else None
         prior = (supersedes.params or {}).get(ENVELOPE_KEY, {}) if supersedes else {}
@@ -535,7 +622,7 @@ async def create_child_job(
             "source_parent_job_id": source_parent_id,
             "source_batch_id": source_parent.batch_id if source_parent else None,
             "trigger": trigger,
-            "settings_contract_version": "typed_v1",
+            "settings_contract_version": "typed_v2",
             "settings_value_origin": requested_settings.settings_value_origin,
             "normalized_requested_settings": normalized_requested_settings,
             "settings_sha256": settings_sha256,
@@ -601,8 +688,9 @@ async def create_child_job(
             if triggered_marker_key:
                 owner_params[triggered_marker_key] = True
             idempotency_owner.params = owner_params
-        await session.commit()
-        committed = True
+        if commit:
+            await session.commit()
+            committed = True
         return job
     except (StructureNormalizationError, SourceResolutionError) as exc:
         if not committed:
@@ -620,6 +708,15 @@ async def create_child_job(
         raise
 
 
+def discard_uncommitted_child_artifacts(child: Job) -> None:
+    """Remove only the exact server-owned root of one rolled-back child."""
+
+    expected = _snapshot_root(str(child.id)).absolute()
+    actual = Path(str(child.output_dir or "")).absolute()
+    if actual == expected and actual.is_dir() and not actual.is_symlink():
+        shutil.rmtree(actual)
+
+
 async def create_reanalysis_child(
     session: AsyncSession,
     *,
@@ -632,7 +729,7 @@ async def create_reanalysis_child(
     if prior_child.queue_status not in {"completed", "failed"}:
         raise FrustraMPNNChildError("reanalyze requires a terminal prior child Job")
     contract_version = envelope.get("settings_contract_version")
-    if contract_version == "typed_v1":
+    if contract_version in {"typed_v1", "typed_v2"}:
         prior_payload = envelope.get("normalized_requested_settings")
         try:
             prior_settings = validate_persisted_requested_settings(prior_payload)
@@ -644,6 +741,8 @@ async def create_reanalysis_child(
             raise FrustraMPNNChildError("prior typed settings origin binding is invalid")
         if envelope.get("settings_sha256") != requested_settings_sha256(prior_settings):
             raise FrustraMPNNChildError("prior typed settings hash binding is invalid")
+        if not isinstance(prior_payload, Mapping):
+            raise FrustraMPNNChildError("prior typed settings payload is invalid")
         for item in envelope.get("selection") or []:
             authority = item.get("launch_authority") if isinstance(item, dict) else None
             if (
@@ -651,7 +750,7 @@ async def create_reanalysis_child(
                 or authority.get("settings_value_origin")
                 != prior_settings.settings_value_origin
                 or authority.get("normalized_requested_settings")
-                != prior_settings.model_dump(mode="json", exclude_none=False)
+                != prior_payload
                 or authority.get("settings_sha256")
                 != requested_settings_sha256(prior_settings)
             ):
@@ -664,6 +763,16 @@ async def create_reanalysis_child(
         raise FrustraMPNNChildError(
             "prior typed settings are missing; historical v1 compatibility requires an explicit tag"
         )
+    if prior_settings.schema_version == 1:
+        upgraded_payload = prior_settings.model_dump(mode="json", exclude_none=False)
+        upgraded_payload.update(
+            {
+                "schema_version": 2,
+                "batching_enabled": False,
+                "structures_per_job": 1,
+            }
+        )
+        prior_settings = FrustraMPNNRequestedSettings.model_validate(upgraded_payload)
     if replacement_settings is not None and not isinstance(
         replacement_settings, FrustraMPNNRequestedSettings
     ):
@@ -716,6 +825,84 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
     if child.model_id != MODEL_ID or ENVELOPE_KEY not in (child.params or {}):
         raise FrustraMPNNChildError("Job is not a persisted FrustraMPNN child")
     envelope = child.params[ENVELOPE_KEY]
+    root = Path(str(child.output_dir)).absolute()
+    configured_manifest = Path(
+        str((child.params or {}).get("frustrampnn_batch_manifest_path", ""))
+    ).absolute()
+    expected_manifest = root / str(envelope.get("batch_manifest_relative_path", ""))
+    if configured_manifest != expected_manifest or configured_manifest.is_symlink():
+        raise FrustraMPNNChildError("child batch manifest identity is invalid")
+    try:
+        manifest_payload = configured_manifest.read_bytes()
+        manifest = json.loads(manifest_payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FrustraMPNNChildError("child batch manifest is unavailable") from exc
+    if (
+        manifest_payload != canonical_json_bytes(manifest)
+        or len(manifest_payload) != envelope.get("batch_manifest_size_bytes")
+        or hashlib.sha256(manifest_payload).hexdigest() != envelope.get("batch_manifest_sha256")
+        or manifest.get("execution_owner_job_id") != str(child.id)
+        or manifest.get("expected_cardinality") != len(manifest.get("records") or [])
+    ):
+        raise FrustraMPNNChildError("child batch manifest authority is invalid")
+    manifest_identity = {
+        "schema_name": manifest.get("schema_name"),
+        "schema_version": manifest.get("schema_version"),
+        "sha256": envelope.get("batch_manifest_sha256"),
+        "size_bytes": envelope.get("batch_manifest_size_bytes"),
+        "expected_cardinality": manifest.get("expected_cardinality"),
+        "ordered_candidate_ids": [item.get("candidate_id") for item in manifest["records"]],
+        "ordered_invocation_ids": [item.get("invocation_id") for item in manifest["records"]],
+    }
+    grouped_terminal_artifact = None
+    grouped_path = (
+        root / "frustrampnn" / "batches" / "grouped_batch_terminal_receipt_v1.json"
+    )
+    if grouped_path.exists():
+        if grouped_path.is_symlink() or not grouped_path.is_file():
+            raise FrustraMPNNChildError("grouped terminal artifact identity is invalid")
+        try:
+            grouped_payload = grouped_path.read_bytes()
+            grouped = json.loads(grouped_payload)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FrustraMPNNChildError("grouped terminal artifact is unavailable") from exc
+        unsigned = {key: value for key, value in grouped.items() if key != "receipt_sha256"}
+        records = grouped.get("records")
+        if (
+            grouped_payload != canonical_json_bytes(grouped)
+            or grouped.get("schema_name") != "bms.frustrampnn.grouped-batch-terminal.v1"
+            or grouped.get("schema_version") != 1
+            or grouped.get("execution_owner_job_id") != str(child.id)
+            or grouped.get("batch_manifest") != manifest_identity
+            or not isinstance(records, list)
+            or grouped.get("record_count") != len(records)
+            or len(records) != manifest["expected_cardinality"]
+            or grouped.get("receipt_sha256")
+            != hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+        ):
+            raise FrustraMPNNChildError("grouped terminal artifact authority is invalid")
+        for ordinal, (source, terminal) in enumerate(
+            zip(manifest["records"], records, strict=True)
+        ):
+            if (
+                not isinstance(terminal, Mapping)
+                or terminal.get("ordinal") != ordinal
+                or terminal.get("candidate_id") != source.get("candidate_id")
+                or terminal.get("invocation_id") != source.get("invocation_id")
+                or terminal.get("source_sha256") != source.get("source_sha256")
+            ):
+                raise FrustraMPNNChildError("grouped terminal record order is invalid")
+            diagnostic = terminal.get("diagnostic")
+            if diagnostic is not None and (
+                not isinstance(diagnostic, str) or len(diagnostic) > 1024
+            ):
+                raise FrustraMPNNChildError("grouped terminal diagnostic is invalid")
+        grouped_terminal_artifact = {
+            "artifact_id": f"frustrampnn-grouped-terminal:{child.id}",
+            "content_sha256": hashlib.sha256(grouped_payload).hexdigest(),
+            "size_bytes": len(grouped_payload),
+            "records": copy.deepcopy(records),
+        }
     results = (await session.execute(
         select(FrustraMPNNResult).where(FrustraMPNNResult.parent_job_id == str(child.id))
     )).scalars().all()
@@ -804,6 +991,8 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
         "settings_value_origin": envelope.get("settings_value_origin"),
         "requested_settings": copy.deepcopy(envelope.get("normalized_requested_settings")),
         "requested_settings_sha256": envelope.get("settings_sha256"),
+        "batch_manifest": manifest_identity,
+        "grouped_terminal_artifact": grouped_terminal_artifact,
         "candidates": candidates,
         "results": public_results,
     }
@@ -811,5 +1000,6 @@ async def child_receipt(session: AsyncSession, *, child: Job) -> dict[str, Any]:
 
 __all__ = [
     "ENVELOPE_KEY", "FrustraMPNNChildError", "child_receipt", "create_child_job",
-    "create_reanalysis_child", "design_selections", "handoff_selection", "upload_selection",
+    "create_reanalysis_child", "design_selections", "discard_uncommitted_child_artifacts",
+    "handoff_selection", "upload_selection", "workflow_selection",
 ]

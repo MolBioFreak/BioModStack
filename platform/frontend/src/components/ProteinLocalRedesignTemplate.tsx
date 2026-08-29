@@ -1,47 +1,45 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadFile, type Design, type Job } from '../lib/api';
+import { completeCurrentLaunchContext, fetchDesigns, fetchJobById, submitJob, uploadImmutableFile, type Design, type Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
-import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
+import { Rfd3SourceSelector, type Rfd3SelectedSource } from './Rfd3SourceSelector';
 import { EpitopeSelector } from './EpitopeSelector';
 import EpitopeMolstarViewer from './EpitopeMolstarViewer';
 import { LigandSelector, type LigandEntry } from './LigandSelector';
 import { componentIdFromIndex } from './ligandSelectorData';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { getModelByNumber, parseStructureFile, type Chain, type ParsedPDB } from '../utils/pdbUtils';
-import { getProteinLocalRedesignUiState } from './proteinLocalRedesignUiState';
+import {
+    getProteinLocalRedesignUiState,
+    resolveProteinLocalRedesignSourcePath,
+    selectResidueKeysFromRanges,
+    summarizeChainsFromPdbContent,
+    type ProteinLocalChainType,
+} from './proteinLocalRedesignUiState';
+import {
+    PROTEIN_LOCAL_VALIDATORS,
+    normalizeProteinLocalValidators,
+    toggleProteinLocalValidator,
+    type ProteinLocalValidator,
+} from './proteinLocalRedesignValidators';
 import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 
 interface ProteinLocalRedesignTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
     submissionModelId?: string;
-    submissionMode?: string;
     requiredPinnedGpu?: number | null;
 }
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
 type SequenceMethod = 'skip' | 'fampnn' | 'mpnn';
 type NativeRedesignMode = 'partial_diffusion' | 'minimal_insertion';
+type ExecutionDepth = 'native' | 'validated';
+type ResidueRole = 'static' | 'coordinate' | 'recall';
 type SourcePredictor = 'boltz' | 'all';
-type ChainType = 'protein' | 'dna' | 'rna' | 'other';
+type ChainType = ProteinLocalChainType;
 type ReviewPauseStage = 'post_rfantibody' | 'post_fampnn' | 'post_structure_validation';
-
-interface ChainSummary {
-    id: string;
-    residueCount: number;
-    type: ChainType;
-}
-
-const PROTEIN_RESIDUES = new Set([
-    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-    'MSE', 'SEC', 'PYL', 'HYP',
-]);
-
-const DNA_RESIDUES = new Set(['DA', 'DC', 'DG', 'DT', 'DI', 'ADE', 'CYT', 'GUA', 'THY']);
-const RNA_RESIDUES = new Set(['A', 'C', 'G', 'U', 'I', 'URA', 'PSU', '1MA', '5MC']);
 
 const themedPanelStyle: CSSProperties = {
     backgroundColor: 'var(--bg-secondary)',
@@ -100,55 +98,6 @@ const normalizeChainList = (value: unknown): string[] => {
 
 const residueKey = (chain: Chain, residue: Chain['residues'][number]) => `${chain.id}${residue.resNum}${residue.iCode || ''}`;
 
-const summarizeChainsFromPdbContent = (content: string): ChainSummary[] => {
-    const chainMap = new Map<string, { residueKeys: Set<string>; counts: Record<ChainType, number> }>();
-
-    for (const rawLine of content.split(/\r?\n/)) {
-        if (!rawLine.startsWith('ATOM') && !rawLine.startsWith('HETATM')) continue;
-        const chainId = rawLine.slice(21, 22).trim() || 'A';
-        const resName = rawLine.slice(17, 20).trim().toUpperCase();
-        const resNum = rawLine.slice(22, 26).trim();
-        const iCode = rawLine.slice(26, 27).trim();
-        const residueId = `${resNum}${iCode}`;
-
-        if (!chainMap.has(chainId)) {
-            chainMap.set(chainId, {
-                residueKeys: new Set<string>(),
-                counts: { protein: 0, dna: 0, rna: 0, other: 0 },
-            });
-        }
-
-        const chain = chainMap.get(chainId)!;
-        const uniqueKey = `${chainId}:${residueId}`;
-        if (chain.residueKeys.has(uniqueKey)) continue;
-        chain.residueKeys.add(uniqueKey);
-
-        const type: ChainType = PROTEIN_RESIDUES.has(resName)
-            ? 'protein'
-            : DNA_RESIDUES.has(resName)
-                ? 'dna'
-                : RNA_RESIDUES.has(resName)
-                    ? 'rna'
-                    : 'other';
-        chain.counts[type] += 1;
-    }
-
-    const typePriority: ChainType[] = ['protein', 'dna', 'rna', 'other'];
-
-    return Array.from(chainMap.entries())
-        .map(([id, entry]) => {
-            const type = typePriority.reduce((best, candidate) => (
-                entry.counts[candidate] > entry.counts[best] ? candidate : best
-            ), 'other' as ChainType);
-            return {
-                id,
-                residueCount: entry.residueKeys.size,
-                type,
-            };
-        })
-        .sort((a, b) => a.id.localeCompare(b.id));
-};
-
 const buildManualRangeString = (chain: Chain | null, selectedResidues: Set<string>): string => {
     if (!chain) return '';
     const ordered = chain.residues.filter((residue) => selectedResidues.has(residueKey(chain, residue)));
@@ -193,12 +142,12 @@ const formatSelectionSummary = (count: number, rangeText: string): string => {
     return rangeText || `${count} residues selected`;
 };
 
-const getSelectionName = (target: SelectedTarget | null): string => {
+const getSelectionName = (target: Rfd3SelectedSource | null): string => {
     if (!target) return 'No structure selected';
     return target.name || target.path || target.pdbId || 'Selected structure';
 };
 
-const toSyntheticSelectedTarget = (inputPath: string): SelectedTarget | null => {
+const toSyntheticSelectedTarget = (inputPath: string): Rfd3SelectedSource | null => {
     const trimmed = inputPath.trim();
     if (!trimmed || trimmed.startsWith('/')) return null;
     return {
@@ -209,12 +158,20 @@ const toSyntheticSelectedTarget = (inputPath: string): SelectedTarget | null => 
     };
 };
 
-const canonicalStructureSourceName = (target: SelectedTarget): string => {
+const canonicalStructureSourceName = (target: Rfd3SelectedSource, sourceDigest?: string): string => {
     const base = (target.name || target.pdbId || 'protein_local_redesign_input')
         .replace(/[^\w.-]+/g, '_')
         .replace(/_+/g, '_')
         .replace(/^_+|_+$/g, '');
-    return /\.(pdb|cif|mmcif)$/i.test(base) ? base : `${base}.pdb`;
+    const stem = base.replace(/\.(pdb|cif|mmcif)$/i, '') || 'protein_local_redesign_input';
+    const boundedStem = stem.slice(0, 160);
+    const digestSuffix = sourceDigest ? `-${sourceDigest}` : '';
+    return `${boundedStem}${digestSuffix}.pdb`;
+};
+
+const sha256Text = async (value: string): Promise<string> => {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
 const sanitizeSequenceInput = (value: string) => value.toUpperCase().replace(/[^A-Z]/g, '');
@@ -295,7 +252,6 @@ export function ProteinLocalRedesignTemplate({
     onBack,
     initialValues,
     submissionModelId = 'protein_local_redesign',
-    submissionMode = 'local_redesign',
     requiredPinnedGpu = null,
 }: ProteinLocalRedesignTemplateProps) {
     const navigate = useNavigate();
@@ -305,10 +261,13 @@ export function ProteinLocalRedesignTemplate({
         isLoading: gpuCatalogLoading,
         isError: gpuCatalogError,
     } = useLiveGpuCatalog({ requireFresh: true });
-    const isNativeLocalRedesign = submissionModelId === 'protein_local_redesign';
+    const [executionDepth, setExecutionDepth] = useState<ExecutionDepth>(
+        submissionModelId === 'protein_local_redesign' ? 'native' : 'validated',
+    );
+    const isNativeLocalRedesign = executionDepth === 'native';
 
     const [jobName, setJobName] = useState('protein_local_redesign');
-    const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
+    const [selectedTarget, setSelectedTarget] = useState<Rfd3SelectedSource | null>(null);
     const [sourcePath, setSourcePath] = useState<string | null>(null);
     const [parsedStructure, setParsedStructure] = useState<ParsedPDB | null>(null);
     const [selectedModelNumber, setSelectedModelNumber] = useState<number | null>(null);
@@ -363,31 +322,34 @@ export function ProteinLocalRedesignTemplate({
     const [contextChains, setContextChains] = useState<string[]>([]);
     const [regionMode, setRegionMode] = useState<RegionMode>('manual_ranges');
     const [selectedEditableResidues, setSelectedEditableResidues] = useState<Set<string>>(new Set());
+    const [selectedSequenceRecallResidues, setSelectedSequenceRecallResidues] = useState<Set<string>>(new Set());
+    const [pendingRoleHydration, setPendingRoleHydration] = useState<{ editable: string; recall: string } | null>(null);
+    const [activeResidueRole, setActiveResidueRole] = useState<ResidueRole>('coordinate');
     const [manualRangesText, setManualRangesText] = useState('');
     const [interfaceCutoff, setInterfaceCutoff] = useState(6.0);
     const [regionPadding, setRegionPadding] = useState(2);
     const [numDesigns, setNumDesigns] = useState(8);
-    const [seqMethod, setSeqMethod] = useState<SequenceMethod>(isNativeLocalRedesign ? 'skip' : 'fampnn');
+    const [seqMethod, setSeqMethod] = useState<SequenceMethod>('fampnn');
     const [seqsPerDesign, setSeqsPerDesign] = useState(8);
     const [fixFixedSidechains, setFixFixedSidechains] = useState(true);
-    const [runBoltzValidation, setRunBoltzValidation] = useState(true);
+    const [selectedValidators, setSelectedValidators] = useState<ProteinLocalValidator[]>(['protenix_v2']);
     const [boltzSamplingSteps, setBoltzSamplingSteps] = useState(200);
     const [boltzRecyclingSteps, setBoltzRecyclingSteps] = useState(3);
     const [interactiveGating, setInteractiveGating] = useState(true);
     const [interactiveGateStage, setInteractiveGateStage] = useState<ReviewPauseStage>('post_structure_validation');
     const [showStructureViewer, setShowStructureViewer] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, seqMethod);
-    const workflowSteps = isNativeLocalRedesign
-        ? ['Source Complex', 'Visual Region Pick', 'Native RFD3', 'Optional Sequence Design']
-        : ['Source Complex', 'Visual Region Pick', 'Sequence Redesign', 'Boltz Validation'];
+    const effectiveSeqMethod: SequenceMethod = isNativeLocalRedesign ? 'skip' : seqMethod;
+    const proteinLocalRedesignUiState = getProteinLocalRedesignUiState(isNativeLocalRedesign, effectiveSeqMethod);
+    const workflowSteps = ['Source Complex', 'Mol* + Residue Roles', 'RFD3', isNativeLocalRedesign ? 'Native Results' : 'Sequence + Validation'];
 
     useEffect(() => {
         if (!initialValues) return;
         if (typeof initialValues.job_name === 'string' && initialValues.job_name.trim()) setJobName(initialValues.job_name);
-        if (typeof initialValues.input_pdb === 'string' && initialValues.input_pdb.trim()) {
-            setSourcePath(initialValues.input_pdb);
-            const synthetic = toSyntheticSelectedTarget(initialValues.input_pdb);
+        const initialSourcePath = resolveProteinLocalRedesignSourcePath(initialValues);
+        if (initialSourcePath) {
+            setSourcePath(initialSourcePath);
+            const synthetic = toSyntheticSelectedTarget(initialSourcePath);
             if (synthetic) {
                 setSelectedTarget(synthetic);
             }
@@ -399,13 +361,20 @@ export function ProteinLocalRedesignTemplate({
             setRegionMode(initialValues.region_mode);
         }
         if (typeof initialValues.redesign_ranges === 'string') setManualRangesText(initialValues.redesign_ranges);
+        const editableRanges = typeof initialValues.redesign_ranges === 'string' ? initialValues.redesign_ranges : '';
+        const recallRanges = typeof initialValues.select_unfixed_sequence === 'string'
+            ? initialValues.select_unfixed_sequence
+            : typeof initialValues.sequence_redesign_ranges === 'string'
+                ? initialValues.sequence_redesign_ranges
+                : '';
+        setPendingRoleHydration(editableRanges || recallRanges ? { editable: editableRanges, recall: recallRanges } : null);
         if (typeof initialValues.interface_cutoff === 'number') setInterfaceCutoff(initialValues.interface_cutoff);
         if (typeof initialValues.region_padding === 'number') setRegionPadding(initialValues.region_padding);
         if (typeof initialValues.num_designs === 'number') setNumDesigns(initialValues.num_designs);
         if (initialValues.seq_method === 'fampnn' || initialValues.seq_method === 'mpnn') setSeqMethod(initialValues.seq_method);
         if (typeof initialValues.seqs_per_design === 'number') setSeqsPerDesign(initialValues.seqs_per_design);
         if (typeof initialValues.fix_fixed_sidechains === 'boolean') setFixFixedSidechains(initialValues.fix_fixed_sidechains);
-        if (typeof initialValues.run_boltz_validation === 'boolean') setRunBoltzValidation(initialValues.run_boltz_validation);
+        setSelectedValidators(normalizeProteinLocalValidators(initialValues));
         if (typeof initialValues.boltz_sampling_steps === 'number') setBoltzSamplingSteps(initialValues.boltz_sampling_steps);
         if (typeof initialValues.boltz_recycling_steps === 'number') setBoltzRecyclingSteps(initialValues.boltz_recycling_steps);
         if (typeof initialValues.interactive_gating === 'boolean') setInteractiveGating(initialValues.interactive_gating);
@@ -447,13 +416,6 @@ export function ProteinLocalRedesignTemplate({
 
 
     useEffect(() => {
-        if (runBoltzValidation) return;
-        if (interactiveGateStage === 'post_structure_validation') {
-            setInteractiveGateStage('post_fampnn');
-        }
-    }, [interactiveGateStage, runBoltzValidation]);
-
-    useEffect(() => {
         let cancelled = false;
 
         const loadSelectedTarget = async () => {
@@ -491,12 +453,25 @@ export function ProteinLocalRedesignTemplate({
                 if (cancelled) return;
 
                 setParsedStructure(parsed);
-                setSelectedModelNumber((current) => {
-                    if (current != null && parsed.models.some((model) => model.modelNumber === current)) {
-                        return current;
-                    }
-                    return parsed.models[0]?.modelNumber ?? null;
-                });
+                const requestedModelNumber = selectedTarget.modelNumber;
+                const selectedModel = (
+                    requestedModelNumber != null
+                    && parsed.models.find((model) => model.modelNumber === requestedModelNumber)
+                ) || parsed.models[0] || null;
+                setSelectedModelNumber(selectedModel?.modelNumber ?? null);
+
+                const chainSummaries = selectedModel?.content
+                    ? summarizeChainsFromPdbContent(selectedModel.content)
+                    : parsed.chains.map((chain) => ({ id: chain.id, residueCount: chain.length, type: 'protein' as ChainType }));
+                const requestedDesignChain = selectedTarget.designChainId;
+                const nextDesignChain = (
+                    requestedDesignChain
+                    && chainSummaries.some((chain) => chain.id === requestedDesignChain && chain.type === 'protein')
+                )
+                    ? requestedDesignChain
+                    : chainSummaries.find((chain) => chain.type === 'protein')?.id || '';
+                setDesignChain(nextDesignChain);
+                setContextChains(chainSummaries.filter((chain) => chain.id !== nextDesignChain).map((chain) => chain.id));
             } catch (err: unknown) {
                 if (cancelled) return;
                 setParsedStructure(null);
@@ -612,33 +587,86 @@ export function ProteinLocalRedesignTemplate({
         setSelectedEditableResidues((current) =>
             new Set(Array.from(current).filter((key) => designResidueKeys.has(key)))
         );
+        setSelectedSequenceRecallResidues((current) =>
+            new Set(Array.from(current).filter((key) => designResidueKeys.has(key)))
+        );
     }, [designResidueKeys]);
+
+    useEffect(() => {
+        if (!pendingRoleHydration || !activeDesignChain) return;
+        const editable = selectResidueKeysFromRanges(
+            activeDesignChain.id,
+            activeDesignChain.residues,
+            pendingRoleHydration.editable,
+        );
+        const recalled = selectResidueKeysFromRanges(
+            activeDesignChain.id,
+            activeDesignChain.residues,
+            pendingRoleHydration.recall,
+        );
+        setSelectedEditableResidues(new Set([...editable, ...recalled]));
+        setSelectedSequenceRecallResidues(recalled);
+        setPendingRoleHydration(null);
+    }, [activeDesignChain, pendingRoleHydration]);
 
     const derivedManualRanges = useMemo(
         () => buildManualRangeString(activeDesignChain, selectedEditableResidues),
         [activeDesignChain, selectedEditableResidues],
     );
+    const rfd3SequenceRecallRanges = useMemo(
+        () => buildManualRangeString(activeDesignChain, selectedSequenceRecallResidues),
+        [activeDesignChain, selectedSequenceRecallResidues],
+    );
+    const activeRoleResidues = useMemo(() => {
+        if (activeResidueRole === 'recall') return selectedSequenceRecallResidues;
+        if (activeResidueRole === 'coordinate') {
+            return new Set(Array.from(selectedEditableResidues).filter((key) => !selectedSequenceRecallResidues.has(key)));
+        }
+        return new Set(Array.from(designResidueKeys).filter((key) => !selectedEditableResidues.has(key)));
+    }, [activeResidueRole, designResidueKeys, selectedEditableResidues, selectedSequenceRecallResidues]);
 
     useEffect(() => {
         if (regionMode !== 'manual_ranges') return;
-        if (selectedEditableResidues.size === 0) return;
-        setManualRangesText(derivedManualRanges);
+        setManualRangesText(selectedEditableResidues.size > 0 ? derivedManualRanges : '');
     }, [regionMode, selectedEditableResidues, derivedManualRanges]);
 
-    const handleResidueSelectionChange = (residues: Set<string>) => {
+    const handleResidueRoleSelectionChange = (residues: Set<string>) => {
         const filtered = new Set(Array.from(residues).filter((key) => designResidueKeys.has(key)));
-        setSelectedEditableResidues(filtered);
+        if (activeResidueRole === 'static') {
+            const editable = new Set(Array.from(designResidueKeys).filter((key) => !filtered.has(key)));
+            setSelectedEditableResidues(editable);
+            setSelectedSequenceRecallResidues((current) => new Set(Array.from(current).filter((key) => editable.has(key))));
+            if (editable.size === 0) setManualRangesText('');
+            return;
+        }
+        if (activeResidueRole === 'recall') {
+            setSelectedSequenceRecallResidues(filtered);
+            setSelectedEditableResidues((current) => new Set([...current, ...filtered]));
+            return;
+        }
+        setSelectedEditableResidues((current) => new Set([...filtered, ...Array.from(selectedSequenceRecallResidues), ...Array.from(current).filter((key) => selectedSequenceRecallResidues.has(key))]));
     };
 
     const handleViewerResidueClick = (residueKeyValue: string) => {
         if (!designResidueKeys.has(residueKeyValue)) return;
-        setSelectedEditableResidues((current) => {
-            const next = new Set(current);
-            if (next.has(residueKeyValue)) {
+        if (activeResidueRole === 'static') {
+            setSelectedEditableResidues((current) => {
+                const next = new Set(current);
                 next.delete(residueKeyValue);
-            } else {
-                next.add(residueKeyValue);
-            }
+                return next;
+            });
+            setSelectedSequenceRecallResidues((current) => {
+                const next = new Set(current);
+                next.delete(residueKeyValue);
+                return next;
+            });
+            return;
+        }
+        setSelectedEditableResidues((current) => new Set(current).add(residueKeyValue));
+        setSelectedSequenceRecallResidues((current) => {
+            const next = new Set(current);
+            if (activeResidueRole === 'recall') next.add(residueKeyValue);
+            else next.delete(residueKeyValue);
             return next;
         });
     };
@@ -657,30 +685,17 @@ export function ProteinLocalRedesignTemplate({
     );
 
     const resolveSourceStructurePath = async () => {
-        if (sourcePath) return sourcePath;
+        if (sourcePath?.toLowerCase().endsWith('.pdb') && !selectedTarget) return sourcePath;
         if (!selectedTarget) return null;
-        if (selectedTarget.path) {
-            setSourcePath(selectedTarget.path);
-            return selectedTarget.path;
-        }
-
-        let sourceFile = selectedTarget.file ?? null;
-        if (!sourceFile && selectedTarget.url) {
-            const response = await fetch(selectedTarget.url);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch structure source (${response.status})`);
-            }
-            const blob = await response.blob();
-            sourceFile = new File([blob], canonicalStructureSourceName(selectedTarget), {
-                type: blob.type || 'chemical/x-pdb',
-            });
-        }
-
-        if (!sourceFile) {
+        if (!activeModel?.content) {
             return null;
         }
 
-        const response = await uploadFile('inputs/protein_local_redesign', sourceFile);
+        const sourceDigest = await sha256Text(activeModel.content);
+        const sourceFile = new File([activeModel.content], canonicalStructureSourceName(selectedTarget, sourceDigest), {
+            type: 'chemical/x-pdb',
+        });
+        const response = await uploadImmutableFile('inputs/protein_local_redesign', sourceFile, sourceDigest);
         const uploadedPath = response.data?.path || `inputs/protein_local_redesign/${sourceFile.name}`;
         setSourcePath(uploadedPath);
         return uploadedPath;
@@ -799,6 +814,7 @@ export function ProteinLocalRedesignTemplate({
         setSourcePath(design.pdb_path || null);
         setParsedStructure(null);
         setSelectedEditableResidues(new Set());
+        setSelectedSequenceRecallResidues(new Set());
         setStructureError(null);
         setShowSourceSimulation(false);
     };
@@ -815,6 +831,10 @@ export function ProteinLocalRedesignTemplate({
         }
         if (!selectedTarget && !sourcePath) {
             setError('Choose a source complex before submitting.');
+            return;
+        }
+        if (selectedTarget && (!parsedStructure || structureError)) {
+            setError('The selected source must load successfully before submission.');
             return;
         }
         if (isNativeLocalRedesign) {
@@ -860,6 +880,10 @@ export function ProteinLocalRedesignTemplate({
                 setError('Minimal insertion requires a valid source-bound anchor and insertion length range.');
                 return;
             }
+            if (nativeRedesignMode === 'minimal_insertion' && rfd3SequenceRecallRanges) {
+                setError('Minimal insertion derives sequence freedom from the inserted segment. Clear RFD3 recall roles on source residues.');
+                return;
+            }
 
             const nativeParams: Record<string, unknown> = {
                 input_structure: resolvedPath,
@@ -877,7 +901,10 @@ export function ProteinLocalRedesignTemplate({
                     })),
                 })),
                 profile_id: nativeProfileId,
-                sequence_policy: 'skip',
+                sequence_policy: nativeRedesignMode === 'minimal_insertion'
+                    ? 'insert_only'
+                    : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
+                select_unfixed_sequence: rfd3SequenceRecallRanges || undefined,
                 insertion_anchor: nativeRedesignMode === 'minimal_insertion' ? nativeInsertionAnchor.trim() || undefined : undefined,
                 insertion_min_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMinLength, 10) : undefined,
                 insertion_max_length: nativeRedesignMode === 'minimal_insertion' ? Number.parseInt(nativeInsertionMaxLength, 10) : undefined,
@@ -901,10 +928,15 @@ export function ProteinLocalRedesignTemplate({
             return;
         }
 
+        if (!rfd3SequenceRecallRanges) {
+            setError('Validated depth requires at least one sequence-redesign residue for FA-MPNN.');
+            return;
+        }
+
         await submitMutation.mutateAsync({
             name: jobName.trim(),
-            model_id: submissionModelId,
-            mode: submissionMode,
+            model_id: 'protein_modification_experimental',
+            mode: 'region_redesign',
             params: {
                 input_pdb: resolvedPath,
                 model_number: selectedModelNumber ?? undefined,
@@ -912,15 +944,16 @@ export function ProteinLocalRedesignTemplate({
                 context_chains: contextChains.length > 0 ? contextChains.join(',') : null,
                 region_mode: regionMode,
                 redesign_ranges: regionMode === 'manual_ranges' ? effectiveRanges : null,
+                sequence_redesign_ranges: rfd3SequenceRecallRanges,
                 interface_cutoff: interfaceCutoff,
                 region_padding: regionPadding,
                 num_designs: numDesigns,
-                seq_method: seqMethod,
+                seq_method: effectiveSeqMethod,
                 seqs_per_design: seqsPerDesign,
                 fix_fixed_sidechains: fixFixedSidechains,
-                run_boltz_validation: runBoltzValidation,
-                boltz_sampling_steps: boltzSamplingSteps,
-                boltz_recycling_steps: boltzRecyclingSteps,
+                structure_validators: selectedValidators,
+                boltz_sampling_steps: selectedValidators.includes('boltz2') ? boltzSamplingSteps : undefined,
+                boltz_recycling_steps: selectedValidators.includes('boltz2') ? boltzRecyclingSteps : undefined,
                 interactive_gating: interactiveGating,
                 interactive_gate_stage: interactiveGateStage,
                 rfd3_batches_per_design: rfd3BatchesPerDesign,
@@ -938,7 +971,7 @@ export function ProteinLocalRedesignTemplate({
     };
 
     return (
-        <div className="space-y-6 text-[var(--text-primary)]">
+        <div className="w-full space-y-6 text-[var(--text-primary)]" data-bms-rfd3-layout="wide" data-bms-rfd3-iteration-workbench="unified">
             <div className="space-y-4 rounded-xl border p-5" style={themedPanelStyle}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -950,7 +983,7 @@ export function ProteinLocalRedesignTemplate({
                             Back
                         </button>
                         <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
-                            RFD3 Local Editing
+                            RFD3 Iteration Workbench
                         </span>
                         <span className="rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.18em]" style={themedTagStyle('var(--warning)')}>
                             Experimental Alpha
@@ -969,20 +1002,33 @@ export function ProteinLocalRedesignTemplate({
                     </div>
                 </div>
                 <div>
-                    <h1 className="text-3xl font-semibold">Protein Local Redesign</h1>
+                    <h1 className="text-3xl font-semibold">RFD3 Iteration Workbench</h1>
+                    <div className="mt-4 rounded-xl border p-4" style={themedInsetStyle}>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)]">Execution Depth</div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                            <button type="button" onClick={() => setExecutionDepth('native')} className="rounded-lg border p-3 text-left" style={isNativeLocalRedesign ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
+                                <span className="block text-sm font-semibold">Native RFD3 only</span>
+                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">RFD3 coordinate remodeling with explicit amino-acid hold or recall roles.</span>
+                            </button>
+                            <button type="button" onClick={() => setExecutionDepth('validated')} className="rounded-lg border p-3 text-left" style={!isNativeLocalRedesign ? themedSelectedStyle('var(--link)') : themedMutedInsetStyle}>
+                                <span className="block text-sm font-semibold">Continue through sequence design and validation</span>
+                                <span className="mt-1 block text-xs text-[var(--text-secondary)]">Use the same source and region, then run FA-MPNN or ProteinMPNN and selected structure validators.</span>
+                            </button>
+                        </div>
+                    </div>
                     {isNativeLocalRedesign && (
                         <div className="mt-4 space-y-4 rounded-xl border p-4" style={themedInsetStyle}>
                             <div>
-                                <div className="text-sm font-semibold">Native RFD3 redesign contract</div>
+                                <div className="text-sm font-semibold">Native RFD3 controls</div>
                                 <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                                    Sequence design is not requested in this lane. RFD3 receives a source-bound partial-diffusion or minimal-insertion contract.
+                                    RFD3 receives the source-bound coordinate and amino-acid roles selected in Mol* and the linked residue strip.
                                 </p>
                             </div>
                             <div className="grid gap-3 md:grid-cols-3">
                                 <label className="space-y-1 text-xs font-medium">
                                     Redesign mode
                                     <select className="w-full rounded-lg border px-3 py-2 text-sm" style={themedInputStyle} value={nativeRedesignMode} onChange={(event) => setNativeRedesignMode(event.target.value as NativeRedesignMode)}>
-                                        <option value="partial_diffusion">Fixed-sequence partial diffusion</option>
+                                        <option value="partial_diffusion">Partial diffusion</option>
                                         <option value="minimal_insertion">Minimal insertion</option>
                                     </select>
                                 </label>
@@ -1083,13 +1129,15 @@ export function ProteinLocalRedesignTemplate({
                                 </div>
                             </div>
                             <div className="rounded-lg border px-3 py-2 text-xs text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
-                                `select_unfixed_sequence` stays empty. Sequence design remains explicitly not requested in the native skip path.
+                                {selectedSequenceRecallResidues.size > 0
+                                    ? `${selectedSequenceRecallResidues.size} residue${selectedSequenceRecallResidues.size === 1 ? '' : 's'} may be recalled by RFD3.`
+                                    : 'Selected editable residues keep their source amino-acid identities.'}
                             </div>
                         </div>
                     )}
                     {!isNativeLocalRedesign && (
                         <p className="mt-2 max-w-4xl text-sm leading-6 text-[var(--text-secondary)]">
-                            Visual region pick → local remodeling → sequence redesign → optional validator.
+                            Visual region pick → RFD3 remodeling → sequence redesign → ESMFold2 and Protenix validation.
                         </p>
                     )}
                     <div className="mt-4 max-w-4xl space-y-3 rounded-xl border px-4 py-3" style={themedSelectedStyle('var(--warning)')}>
@@ -1365,8 +1413,8 @@ export function ProteinLocalRedesignTemplate({
                 )}
             </section>
 
-            <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.18fr)_minmax(20rem,0.82fr)]">
-                <div className="space-y-6">
+            <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.55fr)] 2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(20rem,0.75fr)]">
+                <div className="space-y-6 2xl:contents">
                     <section className="space-y-4 rounded-xl border p-4" style={themedPanelStyle}>
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -1381,15 +1429,17 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
 
-                        <TargetAntigenSelector
-                            label="Structure Source"
-                            initialTab={sourceSimulationJobId && !selectedTarget ? 'runs' : 'upload'}
-                            selectedTarget={selectedTarget}
+                        <Rfd3SourceSelector
+                            selectedSource={selectedTarget}
                             onSelect={(target) => {
                                 setSelectedTarget(target);
                                 setSourcePath(target?.path || null);
                                 setParsedStructure(null);
+                                setSelectedModelNumber(null);
+                                setDesignChain('');
+                                setContextChains([]);
                                 setSelectedEditableResidues(new Set());
+                                setSelectedSequenceRecallResidues(new Set());
                             }}
                         />
 
@@ -1544,6 +1594,27 @@ export function ProteinLocalRedesignTemplate({
                             </div>
                         </div>
 
+                        {regionMode === 'manual_ranges' && (
+                            <div className="grid gap-3 md:grid-cols-3" aria-label="Residue role assignment">
+                                <button type="button" onClick={() => setActiveResidueRole('static')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'static' ? themedSelectedStyle('var(--text-secondary)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">Hold structure and amino acid</span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">Assign selected residues to the fixed scaffold.</span>
+                                </button>
+                                <button type="button" onClick={() => setActiveResidueRole('coordinate')} className="rounded-lg border p-3 text-left" style={activeResidueRole === 'coordinate' ? themedSelectedStyle('var(--accent-primary)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">Remodel coordinates, hold amino acid</span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedEditableResidues.size - selectedSequenceRecallResidues.size} residues</span>
+                                </button>
+                                <button type="button" onClick={() => setActiveResidueRole('recall')} disabled={isNativeLocalRedesign && nativeRedesignMode === 'minimal_insertion'} className="rounded-lg border p-3 text-left disabled:opacity-40" style={activeResidueRole === 'recall' ? themedSelectedStyle('var(--warning)') : themedMutedInsetStyle}>
+                                    <span className="block text-sm font-semibold">
+                                        {isNativeLocalRedesign
+                                            ? 'Remodel coordinates and recall amino acid with RFD3'
+                                            : 'Remodel coordinates and redesign amino acid downstream'}
+                                    </span>
+                                    <span className="mt-1 block text-xs text-[var(--text-secondary)]">{selectedSequenceRecallResidues.size} residues</span>
+                                </button>
+                            </div>
+                        )}
+
                         {regionMode === 'manual_ranges' ? (
                             <div className="space-y-4">
                                 <div className="rounded-lg border p-3" style={themedInsetStyle}>
@@ -1568,9 +1639,15 @@ export function ProteinLocalRedesignTemplate({
                                     <EpitopeSelector
                                         chains={activeProteinChains}
                                         activeChain={designChain}
-                                        selectedResidues={selectedEditableResidues}
-                                        onSelectionChange={handleResidueSelectionChange}
-                                        selectedLabel="Selected redesign residues"
+                                        selectedResidues={activeRoleResidues}
+                                        onSelectionChange={handleResidueRoleSelectionChange}
+                                        selectedLabel={
+                                            activeResidueRole === 'static'
+                                                ? 'Fixed scaffold residues'
+                                                : activeResidueRole === 'recall'
+                                                    ? 'RFD3 sequence-recall residues'
+                                                    : 'Coordinate-only redesign residues'
+                                        }
                                     />
                                 ) : (
                                     <div className="rounded-lg border px-4 py-8 text-sm text-[var(--text-secondary)]" style={themedInsetStyle}>
@@ -1624,7 +1701,7 @@ export function ProteinLocalRedesignTemplate({
                             <h2 className="text-lg font-semibold">{proteinLocalRedesignUiState.sequenceSectionLabel}</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
                                 {isNativeLocalRedesign
-                                    ? 'Sequence design is not requested or run by the native RFD3 lane.'
+                                    ? 'Native RFD3 holds or recalls amino acids from the residue roles assigned above. No separate sequence model runs.'
                                     : 'Choose the redesign backend and sampling depth for the remodeled backbones.'}
                             </p>
                         </div>
@@ -1633,14 +1710,14 @@ export function ProteinLocalRedesignTemplate({
                             <div className="rounded-lg border p-3" style={themedInsetStyle}>
                                 <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Sequence Method</label>
                                 <select
-                                    value={seqMethod}
+                                    value={effectiveSeqMethod}
                                     onChange={(event) => setSeqMethod(event.target.value as SequenceMethod)}
                                     disabled={isNativeLocalRedesign}
                                     className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                                     style={themedInputStyle}
                                 >
                                     {isNativeLocalRedesign ? (
-                                        <option value="skip">Skip sequence redesign</option>
+                                        <option value="skip">Native RFD3 hold / recall roles</option>
                                     ) : (
                                         <>
                                             <option value="fampnn">FA-MPNN</option>
@@ -1683,12 +1760,12 @@ export function ProteinLocalRedesignTemplate({
                                     onChange={(event) => setFixFixedSidechains(event.target.checked)}
                                     className="mt-0.5"
                                 />
-                                <span>Keep sidechains fixed outside the editable region during FA-MPNN redesign.</span>
+                                <span>Keep sidechains fixed outside the selected sequence-redesign residues.</span>
                             </label>}
 
                             {!proteinLocalRedesignUiState.showSequenceSampling && (
                                 <div className="rounded-lg border p-3 text-sm text-[var(--text-secondary)]" style={themedMutedInsetStyle}>
-                                    Sequence redesign is not requested. Native RFD3 candidates keep the source amino-acid identities.
+                                    No separate sequence model runs. Native RFD3 uses the amino-acid hold and recall roles assigned above.
                                 </div>
                             )}
                         </div>
@@ -1725,15 +1802,10 @@ export function ProteinLocalRedesignTemplate({
                                 >
                                     <option value="post_rfantibody">RFD3 Remodel Backbones</option>
                                     <option value="post_fampnn">Sequence Redesign</option>
-                                    <option value="post_structure_validation" disabled={!runBoltzValidation}>
-                                        Boltz Validation
+                                    <option value="post_structure_validation">
+                                        Structure Validation
                                     </option>
                                 </select>
-                                {!runBoltzValidation && (
-                                    <p className="mt-2 text-xs text-[var(--text-secondary)]">
-                                        Validation pause is only available when Boltz validation is enabled.
-                                    </p>
-                                )}
                             </div>
                         </div>
                     </section>
@@ -1828,48 +1900,68 @@ export function ProteinLocalRedesignTemplate({
                         <div>
                             <h2 className="text-lg font-semibold">Validation</h2>
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                                Optionally pass the redesigned complexes through Boltz-2 after sequence optimization.
+                                Select one, two, or all three peer validators. Every selected validator receives the same redesigned candidates.
                             </p>
                         </div>
 
                         <div className="space-y-4">
-                            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm" style={themedInsetStyle}>
-                                <input
-                                    type="checkbox"
-                                    checked={runBoltzValidation}
-                                    onChange={(event) => setRunBoltzValidation(event.target.checked)}
-                                    className="mt-0.5"
-                                />
-                                <span>Run Boltz-2 on redesigned complexes after sequence design.</span>
-                            </label>
-
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
-                                <input
-                                    type="number"
-                                    min={50}
-                                    max={1000}
-                                    value={boltzSamplingSteps}
-                                    onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
-                                    disabled={!runBoltzValidation}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
-                                    style={themedInputStyle}
-                                />
+                            <div className="grid gap-3 md:grid-cols-3">
+                                {PROTEIN_LOCAL_VALIDATORS.map((validator) => {
+                                    const labels: Record<ProteinLocalValidator, string> = {
+                                        boltz2: 'Boltz-2',
+                                        esmfold2: 'ESMFold2',
+                                        protenix_v2: 'Protenix V2',
+                                    };
+                                    return (
+                                        <label
+                                            key={validator}
+                                            className="flex items-start gap-3 rounded-lg border p-3 text-sm"
+                                            style={selectedValidators.includes(validator) ? themedSelectedStyle('var(--accent-primary)') : themedInsetStyle}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedValidators.includes(validator)}
+                                                onChange={() => setSelectedValidators((current) => toggleProteinLocalValidator(current, validator))}
+                                                className="mt-0.5"
+                                            />
+                                            <span>{labels[validator]}</span>
+                                        </label>
+                                    );
+                                })}
                             </div>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                At least one validator is required. Protenix V2 is selected by default.
+                            </p>
 
-                            <div className="rounded-lg border p-3" style={themedInsetStyle}>
-                                <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
-                                <input
-                                    type="number"
-                                    min={1}
-                                    max={12}
-                                    value={boltzRecyclingSteps}
-                                    onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
-                                    disabled={!runBoltzValidation}
-                                    className="w-full rounded-lg border px-3 py-2 text-sm outline-none disabled:opacity-50"
-                                    style={themedInputStyle}
-                                />
-                            </div>
+                            {selectedValidators.includes('boltz2') && (
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Sampling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={50}
+                                            max={1000}
+                                            value={boltzSamplingSteps}
+                                            onChange={(event) => setBoltzSamplingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+
+                                    <div className="rounded-lg border p-3" style={themedInsetStyle}>
+                                        <label className="mb-2 block text-xs uppercase tracking-[0.18em] text-[var(--text-secondary)]">Boltz Recycling Steps</label>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            max={12}
+                                            value={boltzRecyclingSteps}
+                                            onChange={(event) => setBoltzRecyclingSteps(Number(event.target.value))}
+                                            className="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+                                            style={themedInputStyle}
+                                        />
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </section>
                     )}
@@ -1920,7 +2012,7 @@ export function ProteinLocalRedesignTemplate({
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Backend</dt>
                                 <dd className="text-right">
-                                    {seqMethod === 'skip' ? 'Sequence redesign skipped' : seqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}
+                                    {isNativeLocalRedesign ? 'Native RFD3 hold / recall' : effectiveSeqMethod === 'fampnn' ? 'FA-MPNN' : 'ProteinMPNN'}
                                 </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
@@ -1934,7 +2026,11 @@ export function ProteinLocalRedesignTemplate({
                             <div className="flex items-start justify-between gap-4">
                                 <dt className="text-[var(--text-secondary)]">Validation</dt>
                                 <dd className="text-right">
-                                    {isNativeLocalRedesign ? 'Not in native contract' : runBoltzValidation ? 'Boltz-2 enabled' : 'Skipped'}
+                                    {isNativeLocalRedesign
+                                        ? 'Not in native contract'
+                                        : selectedValidators.map((validator) => (
+                                            validator === 'boltz2' ? 'Boltz-2' : validator === 'esmfold2' ? 'ESMFold2' : 'Protenix V2'
+                                        )).join(', ')}
                                 </dd>
                             </div>
                             <div className="flex items-start justify-between gap-4">
@@ -1977,7 +2073,9 @@ export function ProteinLocalRedesignTemplate({
                     className="rounded-lg border px-5 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     style={themedSelectedStyle('var(--accent-primary)')}
                 >
-                    {submitMutation.isPending ? 'Submitting…' : 'Launch Local Redesign'}
+                    {submitMutation.isPending
+                        ? 'Submitting…'
+                        : isNativeLocalRedesign ? 'Launch Native RFD3' : 'Launch RFD3 + Sequence + Validation'}
                 </button>
             </div>
         </div>

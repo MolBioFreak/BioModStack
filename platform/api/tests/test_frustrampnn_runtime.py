@@ -67,6 +67,25 @@ def test_runtime_registry_is_canonical_immutable_and_projects_exact_cm_v1(tmp_pa
     }
 
 
+def test_apptainer_build_uses_one_verified_runtime_source_commit_for_install_and_weights() -> None:
+    definition = (
+        Path(__file__).resolve().parents[3] / "apptainer" / "frustrampnn.def"
+    ).read_text(encoding="utf-8")
+    commit = "bbae1d03edf33dbe6f645d45c5604eb4464962ca"
+    assert f"FRUSTRAMPNN_SOURCE_COMMIT={commit}" in definition
+    assert 'git checkout --detach "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
+    assert 'test "$(git rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"' in definition
+    assert "uv pip install --compile /opt/frustrampnn" in definition
+    assert "cp -r /opt/frustrampnn/weights/vanilla_model_weights" in definition
+    assert "frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" in definition
+    assert (
+        "-o /opt/frustrampnn_weights/megascale.ckpt\n"
+        f"    echo \"{CHECKPOINT_SHA256}  /opt/frustrampnn_weights/megascale.ckpt\" | sha256sum --check -"
+    ) in definition
+    assert "git+https://github.com/schoederlab/frustraMPNN.git" not in definition
+    assert "raw/main/weights" not in definition
+
+
 @pytest.mark.parametrize(
     "path_builder",
     [
@@ -227,6 +246,89 @@ def test_command_is_exact_gpu_safe_and_returns_receipt_metadata(tmp_path: Path) 
     }
 
 
+def test_predict_batch_command_is_exact_gpu_safe_and_product_owned(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime()
+    manifest = tmp_path / "batch.json"
+    adapter = tmp_path / "run_frustrampnn_predict_batch.py"
+    output = tmp_path / "output"
+    pdb_paths = [tmp_path / "staged" / "alpha.pdb", tmp_path / "staged" / "beta.pdb"]
+    pdb_paths[0].parent.mkdir()
+    for path in pdb_paths:
+        path.write_bytes(f"HEADER {path.stem}\nEND\n".encode("ascii"))
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_name": "frustrampnn_predict_batch_input",
+                "schema_version": 1,
+                "checkpoint_path": "/opt/frustrampnn_weights/megascale.ckpt",
+                "device": "cuda:0",
+                "records": [
+                    {
+                        "ordinal": ordinal,
+                        "candidate_id": f"candidate-{path.stem}",
+                        "invocation_id": f"invocation-{path.stem}",
+                        "staged_pdb_path": str(path),
+                        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                    for ordinal, path in enumerate(pdb_paths)
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    adapter.write_text("print('adapter')\n", encoding="utf-8")
+    output.mkdir()
+    container = Path("/proc/self/fd/41")
+
+    invocation = runtime.build_frustrampnn_predict_batch_command(
+        apptainer="/usr/bin/apptainer",
+        container=container,
+        manifest=manifest,
+        output_root=output,
+        adapter=adapter,
+        physical_gpu_id=5,
+    )
+
+    assert list(invocation.argv) == [
+        "/usr/bin/apptainer",
+        "exec",
+        "--containall",
+        "--writable-tmpfs",
+        "--nv",
+        "--env",
+        "CUDA_DEVICE_ORDER=PCI_BUS_ID",
+        "--env",
+        "CUDA_VISIBLE_DEVICES=5",
+        "--bind",
+        f"{manifest}:/bms/batch/input.json:ro",
+        "--bind",
+        f"{adapter}:/bms/adapter/run_frustrampnn_predict_batch.py:ro",
+        "--bind",
+        f"{pdb_paths[0]}:{pdb_paths[0]}:ro",
+        "--bind",
+        f"{pdb_paths[1]}:{pdb_paths[1]}:ro",
+        "--bind",
+        f"{output}:/bms/output:rw",
+        str(container),
+        "/opt/venv/bin/python",
+        "/bms/adapter/run_frustrampnn_predict_batch.py",
+        "--manifest",
+        "/bms/batch/input.json",
+        "--output-dir",
+        "/bms/output",
+    ]
+    assert invocation.receipt_metadata == {
+        "physical_gpu_id": 5,
+        "task_visible_gpu_id": 0,
+    }
+    assert invocation.argv.count("--bind") == 5
+
+
 def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
     settings = importlib.import_module("services.frustrampnn.settings")
     entities = []
@@ -247,9 +349,13 @@ def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
                 "auth_seq_id": position + 10,
                 "insertion_code": "",
                 "sequence_index": position + 1,
+                "label_seq_id": position + 1,
                 "wt": "G",
                 "pdb_chain_id": chain_id,
+                "pdb_residue_id": position + 10,
+                "pdb_insertion_code": "",
                 "model_position": position,
+                "residue_name": "GLY",
             }
             residues.append(residue)
             selectors.append({
@@ -266,11 +372,22 @@ def _effective_settings(mode: str, chain_positions: dict[str, tuple[int, ...]]):
                 "residues": residues,
             })
         )
-    selection = {"mode": mode, "entities": [], "residues": []}
+    selection = {"mode": mode, "entities": [], "residues": [], "regions": []}
     if mode == "selected_entities":
         selection["entities"] = entities
     elif mode == "selected_residues":
         selection["residues"] = selectors
+    elif mode == "selected_regions":
+        selection["regions"] = [
+            {
+                **entity,
+                "sequence_start": min(positions) + 1,
+                "sequence_end": max(positions) + 1,
+            }
+            for entity, positions in zip(
+                entities, chain_positions.values(), strict=True
+            )
+        ]
     requested = settings.FrustraMPNNRequestedSettings.model_validate({
         "protein_selection": selection,
     })
@@ -319,6 +436,35 @@ def test_command_plan_compiles_all_and_selected_entities_without_positions() -> 
     ]
 
 
+def test_selected_entity_plan_matches_source_only_intent_to_generated_chains() -> None:
+    runtime = _runtime()
+    settings = importlib.import_module("services.frustrampnn.settings")
+    exact_effective = _effective_settings("selected_entities", {"X": (0,)})
+    source_only_entities = tuple(
+        entity.model_copy(update={"label_asym_id": None, "auth_asym_id": None})
+        for entity in exact_effective.requested_settings.protein_selection.entities
+    )
+    requested = exact_effective.requested_settings.model_copy(
+        update={
+            "protein_selection": exact_effective.requested_settings.protein_selection.model_copy(
+                update={"entities": source_only_entities}
+            )
+        }
+    )
+    effective = settings._build_effective_settings(
+        requested,
+        resolved_chains=exact_effective.resolved_chains,
+        resolution_identity=exact_effective.resolution_identity,
+    )
+
+    plan = runtime.compile_frustrampnn_command_plan(effective)
+
+    assert [
+        (entry.ordinal, entry.chains, entry.positions)
+        for entry in plan.entries
+    ] == [(0, ("X",), None)]
+
+
 def test_selected_residue_plan_groups_only_identical_position_tuples_stably() -> None:
     runtime = _runtime()
     effective = _effective_settings(
@@ -336,6 +482,21 @@ def test_selected_residue_plan_groups_only_identical_position_tuples_stably() ->
         (1, ("B",), (1,), "raw_frustrampnn_shard_0001.csv"),
     ]
     assert plan == runtime.compile_frustrampnn_command_plan(effective)
+
+
+def test_selected_region_plan_compiles_contiguous_sequence_ranges_to_model_positions() -> None:
+    runtime = _runtime()
+    effective = _effective_settings(
+        "selected_regions",
+        {"B": (4, 5, 6), "A": (4, 5, 6)},
+    )
+
+    plan = runtime.compile_frustrampnn_command_plan(effective)
+
+    assert [
+        (entry.ordinal, entry.chains, entry.positions)
+        for entry in plan.entries
+    ] == [(0, ("A", "B"), (4, 5, 6))]
 
 
 def test_typed_selection_argv_preserves_base_and_binds_canonical_hash(tmp_path: Path) -> None:

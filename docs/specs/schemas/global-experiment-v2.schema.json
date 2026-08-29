@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.global-experiment.v2",
+  "title": "BioModStack Global Experiment v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "objective",
+    "scientific_question",
+    "hypothesis",
+    "description",
+    "status",
+    "priority",
+    "tags",
+    "shared_source_receipt_ids",
+    "shared_dataset_ids",
+    "comparison_plan",
+    "success_criteria",
+    "review_summary",
+    "conclusion",
+    "created_by",
+    "change_summary",
+    "needs_metadata_review"
+  ],
+  "properties": {
+    "schema": {"const": "bms.global-experiment.v2"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 255},
+    "objective": {"type": "string", "maxLength": 8192},
+    "scientific_question": {"type": "string", "maxLength": 8192},
+    "hypothesis": {
+      "anyOf": [
+        {"type": "string", "maxLength": 8192},
+        {"type": "null"}
+      ]
+    },
+    "description": {"type": "string", "maxLength": 8192},
+    "status": {"enum": ["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"]},
+    "priority": {"enum": ["low", "normal", "high", "critical"]},
+    "tags": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 64}
+    },
+    "shared_source_receipt_ids": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "shared_dataset_ids": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "comparison_plan": {
+      "anyOf": [
+        {"type": "string", "maxLength": 8192},
+        {"type": "null"}
+      ]
+    },
+    "success_criteria": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+    },
+    "review_summary": {
+      "anyOf": [
+        {"type": "string", "maxLength": 8192},
+        {"type": "null"}
+      ]
+    },
+    "conclusion": {
+      "anyOf": [
+        {"type": "string", "maxLength": 8192},
+        {"type": "null"}
+      ]
+    },
+    "created_by": {
+      "anyOf": [
+        {"type": "string", "minLength": 1, "maxLength": 255},
+        {"type": "null"}
+      ]
+    },
+    "change_summary": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "needs_metadata_review": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "active"}}, "required": ["status"]},
+      "then": {"properties": {"success_criteria": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"status": {"const": "completed"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "review_summary": {"type": "string", "minLength": 1, "maxLength": 8192},
+          "conclusion": {"type": "string", "minLength": 1, "maxLength": 8192}
+        }
+      }
+    }
+  ]
+}

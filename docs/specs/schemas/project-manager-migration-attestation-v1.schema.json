@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.migration-attestation.v1",
+  "title": "Project Manager migration and schema attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "migration_attestation_id",
+    "store_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_sha256",
+    "store_binding_sha256",
+    "schema_algorithm",
+    "schema_sha256",
+    "trigger_set_algorithm",
+    "trigger_set_sha256",
+    "migration_ledger_algorithm",
+    "migration_ledger_sha256",
+    "integrity_check",
+    "foreign_key_violation_count",
+    "outcome",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.migration-attestation.v1"
+    },
+    "migration_attestation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "store_id": {
+      "enum": [
+        "global-experiments",
+        "molbio-domain",
+        "molbio-ngs-domain",
+        "core-ngs"
+      ]
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "store_binding_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "schema_algorithm": {
+      "const": "sqlite-schema-rfc8785-v1"
+    },
+    "schema_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "trigger_set_algorithm": {
+      "const": "sqlite-trigger-set-rfc8785-v1"
+    },
+    "trigger_set_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "migration_ledger_algorithm": {
+      "const": "sqlite-attested-table-typed-rows-v1"
+    },
+    "migration_ledger_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "integrity_check": {
+      "const": "ok"
+    },
+    "foreign_key_violation_count": {
+      "const": 0
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  }
+}

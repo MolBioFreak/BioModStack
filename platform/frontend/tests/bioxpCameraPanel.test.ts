@@ -9,14 +9,22 @@ const panel = readFileSync(resolve('src/components/BioXpCameraPanel.tsx'), 'utf8
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
 
 test('camera keeps the finite same-origin endpoint allowlist', () => {
-    for (const endpoint of ['/api/bioxp/camera/status', '/api/bioxp/camera/frame/latest', '/api/bioxp/camera/snapshot']) {
+    for (const endpoint of [
+        '/api/bioxp/camera/status',
+        '/api/bioxp/camera/frame/latest',
+        '/api/bioxp/camera/snapshot',
+        '/api/bioxp/camera/stream/start',
+        '/api/bioxp/camera/stream/state',
+        '/api/bioxp/camera/mjpeg',
+        '/api/bioxp/camera/stream/stop',
+    ]) {
         assert.match(client, new RegExp(endpoint));
     }
 });
 
-test('camera UI is image plus refresh and capture only', () => {
-    for (const label of ['>Camera<', "'Refresh'", "'Capture'"]) assert.match(panel, new RegExp(label));
-    for (const rejected of ['frame sequence', 'provider generation', 'dropped frames', 'content sha256', 'Camera Observability']) {
+test('camera UI has an explicit video toggle and compact media well', () => {
+    for (const label of ['>Camera<', "'Video'", "'Refresh'", "'Capture'"]) assert.match(panel, new RegExp(label));
+    for (const rejected of ['min-h-64', 'max-h-[32rem]', 'automatic stream start', 'device:', 'quality:']) {
         assert.doesNotMatch(panel, new RegExp(rejected, 'i'));
     }
 });

@@ -1,0 +1,484 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.operator-visual-acceptance.v1",
+  "title": "Authenticated release-owner visual acceptance receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "visual_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "development_runtime_receipt",
+    "browser_acceptance_receipt",
+    "operator_principal_id",
+    "operator_authorization_receipt",
+    "operator_role",
+    "decision",
+    "viewport_evidence",
+    "viewport_evidence_sha256",
+    "decided_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.operator-visual-acceptance.v1"
+    },
+    "visual_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "development_runtime_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.development-runtime.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "browser_acceptance_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.browser-acceptance.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "operator_principal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "operator_authorization_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.authenticated-principal.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "operator_role": {
+      "const": "release_owner"
+    },
+    "decision": {
+      "const": "pass"
+    },
+    "viewport_evidence": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "width_px",
+                "height_px",
+                "designer_evidence",
+                "ngs_evidence"
+              ],
+              "properties": {
+                "width_px": {
+                  "type": "integer"
+                },
+                "height_px": {
+                  "type": "integer"
+                },
+                "designer_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/designer"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "ngs_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/ngs"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 1366
+                },
+                "height_px": {
+                  "const": 768
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "width_px",
+                "height_px",
+                "designer_evidence",
+                "ngs_evidence"
+              ],
+              "properties": {
+                "width_px": {
+                  "type": "integer"
+                },
+                "height_px": {
+                  "type": "integer"
+                },
+                "designer_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/designer"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "ngs_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/ngs"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 1920
+                },
+                "height_px": {
+                  "const": 1080
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "width_px",
+                "height_px",
+                "designer_evidence",
+                "ngs_evidence"
+              ],
+              "properties": {
+                "width_px": {
+                  "type": "integer"
+                },
+                "height_px": {
+                  "type": "integer"
+                },
+                "designer_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/designer"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                },
+                "ngs_evidence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "route",
+                    "screenshot_artifact_id",
+                    "screenshot_sha256",
+                    "geometry_receipt_id",
+                    "geometry_receipt_sha256"
+                  ],
+                  "properties": {
+                    "route": {
+                      "const": "/ngs"
+                    },
+                    "screenshot_artifact_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "screenshot_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "geometry_receipt_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 255
+                    },
+                    "geometry_receipt_sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "width_px": {
+                  "const": 2560
+                },
+                "height_px": {
+                  "const": 1440
+                }
+              },
+              "required": [
+                "width_px",
+                "height_px"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "viewport_evidence_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for viewport_evidence in required viewport order."
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only receipt_sha256 omitted."
+    }
+  }
+}

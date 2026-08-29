@@ -10,6 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+import rfc8785
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,8 @@ from molbio_ngs_models import MolBioNGSDomainState, MolBioNGSGlobalBinding
 from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
+    ExperimentExternalEntityReceipt,
+    ExperimentLineageEdge,
     ExperimentResource,
     ExperimentResearchRecord,
     ExperimentRevision,
@@ -32,13 +35,15 @@ from experiment_services import (
     ValidationFailure,
     add_audit_event,
     append_research_record,
+    archive_aggregate,
+    canonical_json,
     create_domain_experiment,
     create_global_experiment,
     create_project,
+    new_id,
     public_workflow_payload,
     restore_aggregate,
     save_hierarchy_revision,
-    archive_aggregate,
 )
 from routers.experiment_workspaces import _mutation_principal, _require_mutation_owner
 from services.global_experiments.worker import global_experiment_worker
@@ -65,7 +70,7 @@ class ExternalReference(StrictRequestModel):
     label: str = ""
 
 
-class ProjectCreateRequest(StrictRequestModel):
+class ProjectV1CreateRequest(StrictRequestModel):
     schema_: Literal["bms.project.v1"] = Field(default="bms.project.v1", alias="schema")
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
@@ -79,18 +84,43 @@ class ProjectCreateRequest(StrictRequestModel):
     external_references: list[ExternalReference] = Field(default_factory=list)
     created_by: str | None = None
     change_summary: str = "created"
+    project_scope: Literal["global", "ngs_molbio_local"] = "global"
+
+
+class ProjectV2CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.project.v2"] = Field(alias="schema")
+    project_scope: Literal["global", "ngs_molbio_local"]
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=8192)
+    research_objective: str = Field(default="", max_length=8192)
+    owner: str | None = None
+    contributors: list[str] = Field(default_factory=list, max_length=128)
+    tags: list[str] = Field(default_factory=list, max_length=64)
+    status: Literal["draft", "active", "on_hold", "completed", "archived"] = "draft"
+    start_date: date | None = None
+    target_end_date: date | None = None
+    external_references: list[ExternalReference] = Field(default_factory=list, max_length=128)
+    created_by: str | None = None
+    change_summary: str = Field(default="created", min_length=1, max_length=1024)
+
+
+class ProjectUpgradeRequest(ProjectV2CreateRequest):
+    expected_head_generation: int = Field(ge=0)
+
+
+ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest
 
 
 class ProjectPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.project.v1"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.project.v1", "bms.project.v2"] | None = Field(default=None, alias="schema")
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = None
     research_objective: str | None = None
     owner: str | None = None
     contributors: list[str] | None = None
     tags: list[str] | None = None
-    status: Literal["draft", "active", "on_hold", "completed"] | None = None
+    status: Literal["draft", "active", "on_hold", "completed", "archived"] | None = None
     start_date: date | None = None
     target_end_date: date | None = None
     external_references: list[ExternalReference] | None = None
@@ -98,7 +128,18 @@ class ProjectPatchRequest(StrictRequestModel):
     change_summary: str | None = None
 
 
-class GlobalExperimentCreateRequest(StrictRequestModel):
+class NgsMolBioProjectLinkRequest(StrictRequestModel):
+    local_project_id: str = Field(min_length=1, max_length=128)
+    experiment_ids: list[str] = Field(min_length=1, max_length=128)
+    result_ids: list[str] = Field(default_factory=list, max_length=256)
+    change_summary: str = Field(
+        default="Linked local NGS/MolBio Project",
+        min_length=1,
+        max_length=1000,
+    )
+
+
+class GlobalExperimentV1CreateRequest(StrictRequestModel):
     schema_: Literal["bms.global-experiment.v1"] = Field(default="bms.global-experiment.v1", alias="schema")
     name: str = Field(min_length=1, max_length=255)
     objective: str = ""
@@ -118,15 +159,42 @@ class GlobalExperimentCreateRequest(StrictRequestModel):
     change_summary: str = "created"
 
 
+class GlobalExperimentV2CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.global-experiment.v2"] = Field(alias="schema")
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(default="", max_length=8192)
+    scientific_question: str = Field(default="", max_length=8192)
+    hypothesis: str | None = Field(default=None, max_length=8192)
+    description: str = Field(default="", max_length=8192)
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"] = "draft"
+    priority: Literal["low", "normal", "high", "critical"] = "normal"
+    tags: list[str] = Field(default_factory=list, max_length=64)
+    shared_source_receipt_ids: list[str] = Field(default_factory=list, max_length=256)
+    shared_dataset_ids: list[str] = Field(default_factory=list, max_length=128)
+    comparison_plan: str | None = Field(default=None, max_length=8192)
+    success_criteria: list[str] = Field(default_factory=list, max_length=128)
+    review_summary: str | None = Field(default=None, max_length=8192)
+    conclusion: str | None = Field(default=None, max_length=8192)
+    created_by: str | None = None
+    change_summary: str = Field(default="created", min_length=1, max_length=1024)
+
+
+class GlobalExperimentUpgradeRequest(GlobalExperimentV2CreateRequest):
+    expected_head_generation: int = Field(ge=0)
+
+
+GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest
+
+
 class GlobalExperimentPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.global-experiment.v1"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.global-experiment.v1", "bms.global-experiment.v2"] | None = Field(default=None, alias="schema")
     name: str | None = Field(default=None, min_length=1, max_length=255)
     objective: str | None = None
     scientific_question: str | None = None
     hypothesis: str | None = None
     description: str | None = None
-    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"] | None = None
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked", "archived"] | None = None
     priority: Literal["low", "normal", "high", "critical"] | None = None
     tags: list[str] | None = None
     shared_source_receipt_ids: list[str] | None = None
@@ -230,12 +298,26 @@ class DomainExperimentV2CreateRequest(StrictRequestModel):
     domain_payload: ProteinInSilicoV2Payload | NgsMolBioV2Payload
 
 
-DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest
+class DomainExperimentV4CreateRequest(StrictRequestModel):
+    schema_: Literal["bms.domain-experiment.v4"] = Field(alias="schema")
+    domain_kind: Literal["protein_in_silico", "ngs_molbio"]
+    domain_contract_version: Literal["3"]
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(max_length=8192)
+    status: Literal["draft", "planned", "active", "analysis", "review", "completed", "blocked"]
+    tags: list[str] = Field(max_length=64)
+    source_receipt_ids: list[str] = Field(max_length=256)
+    dataset_revision_ids: list[str] = Field(max_length=128)
+    change_summary: str = Field(min_length=1, max_length=1024)
+    domain_payload: dict[str, Any]
+
+
+DomainExperimentCreateRequest = DomainExperimentV1CreateRequest | DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest
 
 
 class DomainExperimentPatchRequest(StrictRequestModel):
     expected_head_generation: int = Field(ge=0)
-    schema_: Literal["bms.domain-experiment.v1", "bms.domain-experiment.v2"] | None = Field(default=None, alias="schema")
+    schema_: Literal["bms.domain-experiment.v1", "bms.domain-experiment.v2", "bms.domain-experiment.v4"] | None = Field(default=None, alias="schema")
     domain_contract_version: str | None = Field(default=None, min_length=1)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     objective: str | None = None
@@ -245,7 +327,11 @@ class DomainExperimentPatchRequest(StrictRequestModel):
     dataset_ids: list[str] | None = None
     dataset_revision_ids: list[str] | None = None
     change_summary: str | None = None
-    domain_payload: ProteinInSilicoPayload | ProteinInSilicoV2Payload | NgsMolBioPayload | NgsMolBioV2Payload | None = None
+    domain_payload: ProteinInSilicoPayload | ProteinInSilicoV2Payload | NgsMolBioPayload | NgsMolBioV2Payload | dict[str, Any] | None = None
+
+
+class DomainExperimentUpgradeRequest(DomainExperimentV4CreateRequest):
+    expected_head_generation: int = Field(ge=0)
 
 
 class BindingInitializeRequest(StrictRequestModel):
@@ -344,6 +430,21 @@ async def _payload(session: AsyncSession, head: ExperimentAggregateHead) -> dict
         return {}
     revision = await session.get(ExperimentRevision, head.current_revision_id)
     return json.loads(revision.canonical_payload) if revision is not None else {}
+
+
+def _require_current_contract(payload: dict[str, Any], *, aggregate_kind: str) -> None:
+    expected = {
+        "workspace": "bms.project.v2",
+        "experiment": "bms.global-experiment.v2",
+        "domain_experiment": "bms.domain-experiment.v4",
+    }[aggregate_kind]
+    if payload.get("schema") != expected:
+        code = {
+            "workspace": "project_contract_upgrade_required",
+            "experiment": "global_experiment_contract_upgrade_required",
+            "domain_experiment": "domain_contract_upgrade_required",
+        }[aggregate_kind]
+        raise HTTPException(status_code=409, detail={"code": code, "message": f"{aggregate_kind} requires its successor contract before mutation"})
 
 
 async def _head_json(
@@ -636,10 +737,25 @@ async def _merge_patch(
     return current
 
 
+def _complete_domain_v4_attestations(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("schema") != "bms.domain-experiment.v4":
+        return payload
+    domain_payload = payload.get("domain_payload")
+    if not isinstance(domain_payload, dict):
+        raise ValidationFailure("Domain v4 domain_payload must be an object")
+    payload = dict(payload)
+    payload["domain_payload_canonical_size_bytes"] = len(rfc8785.dumps(domain_payload))
+    without_size = dict(payload)
+    without_size.pop("canonical_size_bytes", None)
+    payload["canonical_size_bytes"] = len(rfc8785.dumps(without_size))
+    return payload
+
+
 @router.get("")
 async def list_projects(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
+    project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     return await search_projects(
@@ -648,6 +764,7 @@ async def list_projects(
         archive="all",
         cursor=cursor,
         limit=limit,
+        project_scope=project_scope,
         session=session,
     )
 
@@ -688,9 +805,21 @@ async def search_projects(
     archive: Literal["active", "archived", "all"] = Query(default="active"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
+    project_scope: Literal["global", "ngs_molbio_local", "all"] = Query(default="all"),
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     filters = [ExperimentAggregateHead.aggregate_kind == "workspace"]
+    if project_scope == "global":
+        filters.append(
+            or_(
+                func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope").is_(None),
+                func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope") == "global",
+            )
+        )
+    elif project_scope == "ngs_molbio_local":
+        filters.append(
+            func.json_extract(ExperimentRevision.canonical_payload, "$.project_scope") == "ngs_molbio_local"
+        )
     if archive == "active":
         filters.append(ExperimentAggregateHead.lifecycle_state != "archived")
     elif archive == "archived":
@@ -702,7 +831,7 @@ async def search_projects(
         filters.append(ExperimentAggregateHead.lifecycle_state == status_filter)
     normalized = q.strip()
     cursor_scope = json.dumps(
-        [normalized, status_filter or "", archive],
+        [normalized, status_filter or "", archive, project_scope],
         separators=(",", ":"),
         ensure_ascii=True,
     )
@@ -804,6 +933,43 @@ async def get_project(project_id: str, session: AsyncSession = Depends(get_exper
         raise _error(exc) from exc
 
 
+@router.post("/{project_id}/upgrade")
+async def upgrade_project_route(
+    project_id: str,
+    payload: ProjectUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _mutation_principal(request)
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _project(session, project_id)
+        current = await _payload(session, head)
+        if current.get("schema") != "bms.project.v1":
+            raise HTTPException(status_code=409, detail={"code": "project_contract_upgrade_not_required", "message": "Project already uses the v2 contract"})
+        body = payload.model_dump(mode="json", by_alias=True)
+        expected_generation = int(body.pop("expected_head_generation"))
+        body["owner"] = actor
+        body["created_by"] = actor
+        body["needs_metadata_review"] = any(
+            field not in current
+            for field in ("project_scope", "contributors", "tags", "start_date", "target_end_date", "external_references")
+        )
+        await save_hierarchy_revision(
+            session,
+            project_id,
+            "workspace",
+            body,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="workspace_contract_upgrade",
+        )
+        await session.commit()
+        return await _head_json(session, await _project(session, project_id), exposed_kind="project", storage_kind="workspace")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}")
 async def patch_project(
     project_id: str,
@@ -814,6 +980,7 @@ async def patch_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         await save_hierarchy_revision(
             session,
             project_id,
@@ -839,6 +1006,7 @@ async def archive_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="project", storage_kind="workspace")
@@ -857,9 +1025,204 @@ async def restore_project(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _project(session, project_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="workspace")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="project", storage_kind="workspace")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
+def _project_link_json(edge: ExperimentLineageEdge) -> dict[str, Any]:
+    metadata = json.loads(edge.metadata_json)
+    return {
+        "schema": "bms.ngs-molbio-project-link.v1",
+        "link_id": edge.id,
+        "local_project_id": edge.target_resource_id,
+        "global_project_id": edge.source_resource_id,
+        "experiment_ids": metadata.get("experiment_ids", []),
+        "result_ids": metadata.get("result_ids", []),
+        "change_summary": metadata.get("change_summary", ""),
+        "created_at": edge.created_at,
+    }
+
+
+@router.get("/{project_id}/ngs-molbio-links")
+async def list_ngs_molbio_project_links(
+    project_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    project = await _project(session, project_id)
+    project_payload = await _payload(session, project)
+    selector = (
+        ExperimentLineageEdge.target_resource_id == project_id
+        if project_payload.get("project_scope") == "ngs_molbio_local"
+        else ExperimentLineageEdge.source_resource_id == project_id
+    )
+    rows = (
+        await session.execute(
+            select(ExperimentLineageEdge)
+            .where(
+                selector,
+                ExperimentLineageEdge.edge_mode == "references",
+                ExperimentLineageEdge.edge_key.like("ngs-molbio-project-link:%"),
+            )
+            .order_by(ExperimentLineageEdge.created_at.desc(), ExperimentLineageEdge.id.desc())
+        )
+    ).scalars().all()
+    return {
+        "schema": "bms.ngs-molbio-project-link-list.v1",
+        "items": [_project_link_json(row) for row in rows],
+    }
+
+
+@router.get("/{project_id}/ngs-molbio-shareable-results")
+async def list_ngs_molbio_shareable_results(
+    project_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    project = await _project(session, project_id)
+    project_payload = await _payload(session, project)
+    if project_payload.get("project_scope") != "ngs_molbio_local":
+        raise _error(ValidationFailure("Result sharing source must be an NGS/MolBio-local Project"))
+    rows = (
+        await session.execute(
+            select(ExperimentExternalEntityReceipt, ExperimentLineageEdge)
+            .join(
+                ExperimentLineageEdge,
+                ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+            )
+            .where(
+                ExperimentExternalEntityReceipt.workspace_id == project_id,
+                ExperimentLineageEdge.workspace_id == project_id,
+                ExperimentLineageEdge.edge_mode == "produced",
+            )
+            .order_by(
+                ExperimentExternalEntityReceipt.created_at.desc(),
+                ExperimentExternalEntityReceipt.id.desc(),
+            )
+            .limit(256)
+        )
+    ).all()
+    return {
+        "schema": "bms.ngs-molbio-shareable-result-list.v1",
+        "items": [
+            {
+                "result_receipt_id": receipt.id,
+                "experiment_id": edge.source_resource_id,
+                "store_id": receipt.store_id,
+                "entity_kind": receipt.entity_kind,
+                "entity_id": receipt.entity_id,
+                "generation_or_revision": receipt.generation_or_revision,
+                "content_digest": receipt.content_digest,
+                "availability": receipt.availability,
+                "created_at": receipt.created_at,
+            }
+            for receipt, edge in rows
+        ],
+    }
+
+
+@router.post("/{project_id}/ngs-molbio-links", status_code=status.HTTP_201_CREATED)
+async def create_ngs_molbio_project_link(
+    project_id: str,
+    payload: NgsMolBioProjectLinkRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        if project_id == payload.local_project_id:
+            raise ValidationFailure("local and global Project identities must differ")
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        await _require_mutation_owner(request, session, resource_id=payload.local_project_id)
+        global_project = await _project(session, project_id)
+        local_project = await _project(session, payload.local_project_id)
+        global_payload = await _payload(session, global_project)
+        local_payload = await _payload(session, local_project)
+        if local_payload.get("project_scope") != "ngs_molbio_local":
+            raise ValidationFailure("linked source must be an NGS/MolBio-local Project")
+        if global_payload.get("project_scope") == "ngs_molbio_local":
+            raise ValidationFailure("linked target must be a broader global Project")
+
+        experiment_ids = list(dict.fromkeys(payload.experiment_ids))
+        if len(experiment_ids) != len(payload.experiment_ids):
+            raise ValidationFailure("experiment_ids must be unique")
+        experiment_heads = (
+            await session.execute(
+                select(ExperimentAggregateHead).where(
+                    ExperimentAggregateHead.aggregate_id.in_(experiment_ids)
+                )
+            )
+        ).scalars().all()
+        if len(experiment_heads) != len(experiment_ids) or any(
+            head.workspace_id != payload.local_project_id
+            or head.aggregate_kind not in {"experiment", "domain_experiment"}
+            for head in experiment_heads
+        ):
+            raise ValidationFailure(
+                "every selected Experiment must be contained by the local NGS/MolBio Project"
+            )
+
+        result_ids = list(dict.fromkeys(payload.result_ids))
+        if len(result_ids) != len(payload.result_ids):
+            raise ValidationFailure("result_ids must be unique")
+        if result_ids:
+            produced_result_ids = set(
+                (
+                    await session.execute(
+                        select(ExperimentExternalEntityReceipt.id)
+                        .join(
+                            ExperimentLineageEdge,
+                            ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+                        )
+                        .where(
+                            ExperimentExternalEntityReceipt.id.in_(result_ids),
+                            ExperimentExternalEntityReceipt.workspace_id == payload.local_project_id,
+                            ExperimentLineageEdge.workspace_id == payload.local_project_id,
+                            ExperimentLineageEdge.edge_mode == "produced",
+                        )
+                    )
+                ).scalars().all()
+            )
+            if produced_result_ids != set(result_ids):
+                raise ValidationFailure(
+                    "every selected Result must be a governed produced native-Result receipt in the local NGS/MolBio Project"
+                )
+
+        link_id = new_id("ngs-molbio-project-link")
+        edge = ExperimentLineageEdge(
+            id=link_id,
+            workspace_id=project_id,
+            source_resource_id=project_id,
+            target_resource_id=payload.local_project_id,
+            edge_mode="references",
+            edge_key=f"ngs-molbio-project-link:{link_id}",
+            metadata_json=canonical_json(
+                {
+                    "schema": "bms.ngs-molbio-project-link.v1",
+                    "experiment_ids": experiment_ids,
+                    "result_ids": result_ids,
+                    "change_summary": payload.change_summary,
+                    "payload_ownership": "native-references-only",
+                }
+            ),
+        )
+        session.add(edge)
+        add_audit_event(
+            session,
+            workspace_id=project_id,
+            resource_id=project_id,
+            event_type="ngs_molbio_local_project_linked",
+            generation=0,
+            payload={
+                "local_project_id": payload.local_project_id,
+                "experiment_ids": experiment_ids,
+                "result_ids": result_ids,
+            },
+        )
+        await session.commit()
+        return _project_link_json(edge)
     except ExperimentServiceError as exc:
         await session.rollback()
         raise _error(exc) from exc
@@ -932,6 +1295,43 @@ async def get_global_experiment(
         raise _error(exc) from exc
 
 
+@router.post("/{project_id}/experiments/{experiment_id}/upgrade")
+async def upgrade_global_experiment_route(
+    project_id: str,
+    experiment_id: str,
+    payload: GlobalExperimentUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        actor = _mutation_principal(request)
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _global_experiment(session, experiment_id, project_id)
+        current = await _payload(session, head)
+        if current.get("schema") != "bms.global-experiment.v1":
+            raise HTTPException(status_code=409, detail={"code": "global_experiment_contract_upgrade_not_required", "message": "Global Experiment already uses the v2 contract"})
+        body = payload.model_dump(mode="json", by_alias=True)
+        expected_generation = int(body.pop("expected_head_generation"))
+        body["created_by"] = actor
+        body["needs_metadata_review"] = any(
+            field not in current
+            for field in ("hypothesis", "tags", "shared_source_receipt_ids", "shared_dataset_ids", "comparison_plan", "success_criteria", "review_summary", "conclusion")
+        )
+        await save_hierarchy_revision(
+            session,
+            experiment_id,
+            "experiment",
+            body,
+            expected_head_generation=expected_generation,
+            lifecycle_operation="experiment_contract_upgrade",
+        )
+        await session.commit()
+        return await _head_json(session, await _global_experiment(session, experiment_id, project_id), exposed_kind="global_experiment", storage_kind="global_experiment")
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}/experiments/{experiment_id}")
 async def patch_global_experiment(
     project_id: str,
@@ -943,6 +1343,7 @@ async def patch_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         await save_hierarchy_revision(
             session,
             experiment_id,
@@ -975,6 +1376,7 @@ async def archive_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         archived = await archive_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, archived, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -994,6 +1396,7 @@ async def restore_global_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _global_experiment(session, project_id, experiment_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="experiment")
         restored = await restore_aggregate(session, head.aggregate_id, expected_head_generation=payload.expected_head_generation)
         await session.commit()
         return await _head_json(session, restored, exposed_kind="global_experiment", storage_kind="experiment", parent_id=project_id)
@@ -1039,9 +1442,10 @@ async def create_domain_experiment_route(
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
         await _global_experiment(session, project_id, experiment_id)
         domain_payload = payload.model_dump(mode="json", by_alias=True)
-        if domain_payload.get("domain_contract_version") != "2":
-            raise ValidationFailure("new Domain Experiments require the frozen v2 contract")
+        if domain_payload.get("domain_contract_version") not in {"2", "3"}:
+            raise ValidationFailure("new Domain Experiments require the frozen v2 or v4 contract")
         domain_payload["created_by"] = actor
+        domain_payload = _complete_domain_v4_attestations(domain_payload)
         head = await create_domain_experiment(
             session,
             project_id,
@@ -1049,7 +1453,7 @@ async def create_domain_experiment_route(
             domain_payload,
         )
         command = None
-        if domain_payload.get("domain_kind") == "ngs_molbio":
+        if domain_payload.get("domain_kind") in {"ngs_molbio", "protein_in_silico"}:
             command = await issue_binding_command(
                 session, project_id=project_id, global_experiment_id=experiment_id,
                 domain_id=head.aggregate_id, expected_domain_revision_id=str(head.current_revision_id),
@@ -1280,6 +1684,63 @@ async def reverify_ngs_molbio_binding(
     )
 
 
+@router.post("/{project_id}/experiments/{experiment_id}/domains/{domain_id}/upgrade")
+async def upgrade_domain_experiment(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    payload: DomainExperimentUpgradeRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+    domain_session: AsyncSession = Depends(get_molbio_ngs_session),
+) -> dict[str, Any]:
+    try:
+        actor = await _require_mutation_owner(request, session, resource_id=project_id)
+        head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        current_payload = await _payload(session, head)
+        if current_payload.get("schema") not in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}:
+            raise HTTPException(status_code=409, detail={"code": "domain_contract_upgrade_not_required", "message": "Domain head is already on the current contract"})
+        if current_payload.get("domain_kind") != payload.domain_kind:
+            raise HTTPException(status_code=409, detail={"code": "domain_kind_mismatch", "message": "Domain kind is immutable"})
+        successor = payload.model_dump(mode="json", by_alias=True, exclude={"expected_head_generation"})
+        successor["created_by"] = actor
+        successor = _complete_domain_v4_attestations(successor)
+        revision = await save_hierarchy_revision(
+            session,
+            domain_id,
+            "domain_experiment",
+            successor,
+            expected_head_generation=payload.expected_head_generation,
+            lifecycle_operation="domain_contract_upgrade",
+        )
+        command = None
+        if successor.get("domain_kind") == "ngs_molbio":
+            command = await _issue_domain_revision_reverification(
+                session,
+                domain_session,
+                project_id=project_id,
+                experiment_id=experiment_id,
+                domain_id=domain_id,
+                domain_revision_id=revision.resource_id,
+                idempotency_key=f"domain-upgrade:{domain_id}:{revision.resource_id}",
+            )
+        await session.commit()
+        refreshed = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        result = await _head_json(
+            session,
+            refreshed,
+            exposed_kind="domain_experiment",
+            storage_kind="domain_experiment",
+            parent_id=experiment_id,
+        )
+        if command is not None:
+            result["binding"] = binding_status(command)
+        return result
+    except (ExperimentServiceError, ConnectorConflict, ConnectorUnavailable) as exc:
+        await session.rollback()
+        raise _error(exc) from exc
+
+
 @router.patch("/{project_id}/experiments/{experiment_id}/domains/{domain_id}")
 async def patch_domain_experiment(
     project_id: str,
@@ -1293,11 +1754,12 @@ async def patch_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         revision = await save_hierarchy_revision(
             session,
             domain_id,
             "domain_experiment",
-            await _merge_patch(session, head, payload),
+            _complete_domain_v4_attestations(await _merge_patch(session, head, payload)),
             expected_head_generation=payload.expected_head_generation,
         )
         command = None
@@ -1342,6 +1804,7 @@ async def archive_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         archived = await archive_aggregate(
             session,
@@ -1388,6 +1851,7 @@ async def restore_domain_experiment(
     try:
         await _require_mutation_owner(request, session, resource_id=project_id)
         head = await _domain_experiment(session, project_id, experiment_id, domain_id)
+        _require_current_contract(await _payload(session, head), aggregate_kind="domain_experiment")
         domain_payload = await _payload(session, head)
         restored = await restore_aggregate(
             session,

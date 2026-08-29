@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
-import { api, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchPooledAssignmentManifest, type Job, type JobLogs } from '../lib/api';
+import { api, createOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchOntSignalViewerSession, fetchPooledAssignmentManifest, type Job, type JobLogs, type OntSignalViewerAlignmentColorBy, type OntSignalViewerAlignmentDisplayMode, type OntSignalViewerAlignmentGroupBy, type OntSignalViewerSession } from '../lib/api';
 import {
     awaitCurrentGeneration,
+    alignmentTrackAutoLoadDisposition,
+    buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
     ownsIgvLoadTerminalState,
+    parseLocalIgvRange,
     removeIgvBrowser,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
@@ -19,9 +23,13 @@ import {
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
+    bindAlignmentSessionsToResultAuthority,
+    disposeAlignmentAccess,
+    describeNgsError,
     fetchAlignmentSessions,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
+    type AlignmentRead,
     type AlignmentSession,
 } from '../lib/ngsAlignmentSession';
 import {
@@ -36,16 +44,27 @@ import { jobPollingInterval } from '../lib/queryPolling';
 import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
+import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
+import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngs/ngsFullscreenOwner';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
+import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
 import { useGlobalExperimentContext } from './experiments/GlobalExperimentContext';
+import ExperimentReferenceLinks from './molbio-ngs/ExperimentReferenceLinks';
+import NgsMolBioProjectHub from './molbio-ngs/NgsMolBioProjectHub';
 
 type ToolkitView = NgsToolkitView;
 type LogTab = 'parsed' | 'command' | 'stderr' | 'nextflow';
 type StageOutputsMap = Record<string, string[]>;
+
+interface OwnedIgvNavigation {
+    requestId: number;
+    navigation: PendingSessionNavigation;
+}
 
 const NANOPORE_DOC_LINKS = [
     { label: 'Dorado docs', href: 'https://dorado-docs.readthedocs.io/en/latest/' },
@@ -521,6 +540,7 @@ function hasMeaningfulValue(value: unknown): boolean {
 function resolveFastqQcEnabled(params: Record<string, unknown>, hasFastq: boolean): boolean {
     if (!hasFastq) return false;
     if (typeof params.run_fastq_qc === 'boolean') return params.run_fastq_qc;
+    // Legacy persisted jobs only. New launches use run_fastq_qc.
     if (typeof params.run_multimer_qc === 'boolean') return params.run_multimer_qc;
     return false;
 }
@@ -1788,11 +1808,19 @@ function applyIgvAlignmentOptionsToTrack(
     }
 
     for (const target of targets) {
-        target.colorBy = nextColorBy;
+        try {
+            target.colorBy = nextColorBy;
+        } catch {
+            // IGV 3.x exposes colorBy as a getter on BAMTrack; config remains mutable authority.
+        }
         if (target.config) {
             target.config.colorBy = nextColorBy;
         }
-        target.groupBy = nextGroupBy;
+        try {
+            target.groupBy = nextGroupBy;
+        } catch {
+            // Keep load non-fatal when IGV exposes a read-only grouping accessor.
+        }
         if (target.config) {
             target.config.groupBy = nextGroupBy;
         }
@@ -1865,11 +1893,6 @@ function resizeIgvAlignmentTrackToContainer(browser: UntypedApiValue, container:
     }
     trackView.checkContentHeight?.();
     trackView.repaintViews?.();
-}
-
-async function requestDocumentFullscreen(): Promise<void> {
-    if (!document.fullscreenEnabled || document.fullscreenElement) return;
-    await document.documentElement.requestFullscreen();
 }
 
 async function exitDocumentFullscreen(): Promise<void> {
@@ -2093,9 +2116,49 @@ function formatParamValue(value: unknown): string {
     return String(value);
 }
 
+export function AlignmentAccessPageLifetime({
+    jobId,
+    queryClient,
+    recoveryGenerationRef,
+    dispose = disposeAlignmentAccess,
+}: {
+    jobId: string | null;
+    queryClient: QueryClient;
+    recoveryGenerationRef: { current: number };
+    dispose?: (jobId: string) => void | Promise<void>;
+}) {
+    const setupGenerationRef = useRef(0);
+    const activeJobIdRef = useRef<string | null>(jobId);
+    useEffect(() => {
+        activeJobIdRef.current = jobId;
+        if (!jobId) return undefined;
+        const ownedJobId = jobId;
+        const setupGeneration = setupGenerationRef.current + 1;
+        setupGenerationRef.current = setupGeneration;
+        return () => {
+            queueMicrotask(() => {
+                const sameJobWasRehearsed =
+                    setupGenerationRef.current !== setupGeneration
+                    && activeJobIdRef.current === ownedJobId;
+                if (sameJobWasRehearsed) return;
+                recoveryGenerationRef.current += 1;
+                void dispose(ownedJobId);
+                void queryClient.cancelQueries({
+                    predicate: (query) => query.queryKey.some((value) => value === ownedJobId),
+                });
+                queryClient.removeQueries({
+                    predicate: (query) => query.queryKey.some((value) => value === ownedJobId),
+                });
+            });
+        };
+    }, [dispose, jobId, queryClient, recoveryGenerationRef]);
+    return null;
+}
+
+
 export function NGSToolkit() {
     const queryClient = useQueryClient();
-    const { updateQueryParams, contextHref } = useGlobalExperimentContext();
+    const { updateQueryParams, contextHref, domainExperimentId, stateRevisionId } = useGlobalExperimentContext();
     const location = useLocation();
     const navigate = useNavigate();
     const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -2103,6 +2166,14 @@ export function NGSToolkit() {
     const requestedRunId = searchParams.get('run_id');
     const requestedReferenceSetId = searchParams.get('reference_set_id');
     const requestedAssignmentId = searchParams.get('assignment_id');
+    const requestedViewerSessionId = searchParams.get('viewer_session_id')?.trim() || null;
+    const signalWorkbenchRequested = searchParams.get('view') === 'workbench';
+    const requestedViewerSessionQuery = useQuery({
+        queryKey: ['ont-signal-viewer-session', requestedViewerSessionId],
+        queryFn: () => fetchOntSignalViewerSession(requestedViewerSessionId as string),
+        enabled: Boolean(requestedViewerSessionId),
+        retry: false,
+    });
     const requestedRunQuery = useQuery({
         queryKey: ['ont-run', requestedRunId],
         queryFn: () => api.get<Record<string, unknown>>(`/api/ont/runs/${encodeURIComponent(requestedRunId as string)}`),
@@ -2124,16 +2195,22 @@ export function NGSToolkit() {
     const [initialValues, setInitialValues] = useState<Record<string, unknown> | undefined>(undefined);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
-    const selectedJobId = useMemo(
-        () => new URLSearchParams(location.search).get('job_id')?.trim() || null,
-        [location.search],
-    );
+    const selectedJobId = requestedJobId?.trim()
+        || (signalWorkbenchRequested ? requestedViewerSessionQuery.data?.alignment_job_id : null)
+        || null;
+    useEffect(() => {
+        const viewerJobId = requestedViewerSessionQuery.data?.alignment_job_id;
+        if (signalWorkbenchRequested && !requestedJobId && viewerJobId) {
+            updateQueryParams({ job_id: viewerJobId }, { replace: true });
+        }
+    }, [requestedJobId, requestedViewerSessionQuery.data?.alignment_job_id, signalWorkbenchRequested, updateQueryParams]);
     const selectedJobIdRef = useRef<string | null>(selectedJobId);
     const alignmentAccessRecoveryGenerationRef = useRef(0);
-    if (selectedJobIdRef.current !== selectedJobId) {
+    useLayoutEffect(() => {
+        if (selectedJobIdRef.current === selectedJobId) return;
         selectedJobIdRef.current = selectedJobId;
         alignmentAccessRecoveryGenerationRef.current += 1;
-    }
+    }, [selectedJobId]);
     useEffect(() => {
         setView(ngsToolkitViewFromSearch(location.search));
     }, [location.search]);
@@ -2151,11 +2228,15 @@ export function NGSToolkit() {
     const [igvIsFullscreen, setIgvIsFullscreen] = useState(false);
     const [igvLoading, setIgvLoading] = useState(false);
     const [igvError, setIgvError] = useState<string | null>(null);
+    const [igvRangeInput, setIgvRangeInput] = useState('');
+    const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
+    const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
+    const [igvAuxTrackFailures, setIgvAuxTrackFailures] = useState<string[]>([]);
     const [igvVersion, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
-    const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<string>('EXPANDED');
-    const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<string>('strand');
-    const [igvAlignmentGroupBy, setIgvAlignmentGroupBy] = useState<string>('none');
+    const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<OntSignalViewerAlignmentDisplayMode>('EXPANDED');
+    const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<OntSignalViewerAlignmentColorBy>('strand');
+    const [igvAlignmentGroupBy, setIgvAlignmentGroupBy] = useState<OntSignalViewerAlignmentGroupBy>('none');
     const [igvSelectedBamPath, setIgvSelectedBamPath] = useState<string>('');
     const [igvSelectedReferencePath, setIgvSelectedReferencePath] = useState<string>('');
     const [selectedAlignmentSessionId, setSelectedAlignmentSessionId] = useState<string>('');
@@ -2171,47 +2252,74 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const igvFullscreenShellRef = useRef<HTMLDivElement | null>(null);
     const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
     const igvLibraryRef = useRef<UntypedApiValue | null>(null);
     const pendingIgvLocusRef = useRef<PendingSessionNavigation | null>(null);
+    const igvNavigationRequestIdRef = useRef(0);
+    const igvNavigationOwnerRef = useRef<OwnedIgvNavigation | null>(null);
     const selectedAlignmentSessionIdRef = useRef('');
     const igvLoadedSourceKeyRef = useRef('');
     const [igvCurrentLocus, setIgvCurrentLocus] = useState<AlignmentReadLocus | null>(null);
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
+    const [signalViewerSession, setSignalViewerSession] = useState<OntSignalViewerSession | null>(null);
     const themeColors = useThemeColors();
     const basePlotlyLayout = useThemePlotlyLayout();
 
-    const openIgvModal = useCallback(async () => {
+    useEffect(() => {
+        setSignalViewerSession(requestedViewerSessionQuery.data || null);
+    }, [requestedViewerSessionId, requestedViewerSessionQuery.data]);
+
+    const openIgvModal = useCallback(() => {
+        setIgvInspectorOpen(false);
         setIgvModalOpen(true);
-        try {
-            await requestDocumentFullscreen();
-        } catch {
-            // Fullscreen requests can be denied by browser policy; modal still opens.
-        }
     }, []);
+
+    const acceptSignalViewerSession = useCallback((session: OntSignalViewerSession) => {
+        setSignalViewerSession(session);
+        updateQueryParams({
+            view: 'workbench',
+            viewer_session_id: session.viewer_session_id,
+            job_id: session.alignment_job_id,
+        }, { replace: true });
+    }, [updateQueryParams]);
 
     const closeIgvModal = useCallback(async () => {
         setIgvModalOpen(false);
         setIgvError(null);
+        setIgvRangeError(null);
+        setIgvInspectorOpen(false);
         igvLoadedSourceKeyRef.current = '';
+        if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
         try {
             await exitDocumentFullscreen();
         } catch {
             // no-op
         }
+    }, [signalWorkbenchRequested, updateQueryParams]);
+
+    const toggleIgvFullscreen = useCallback(async () => {
+        try {
+            await toggleOwnedFullscreen(igvFullscreenShellRef.current);
+        } catch (fullscreenError: unknown) {
+            setIgvError(`Fullscreen request failed: ${fullscreenError instanceof Error ? fullscreenError.message : String(fullscreenError)}`);
+        }
     }, []);
 
     useEffect(() => {
         const handleFullscreenChange = () => {
-            setIgvIsFullscreen(Boolean(document.fullscreenElement));
+            setIgvIsFullscreen(isOwnedFullscreen(igvFullscreenShellRef.current));
         };
+        const handleFullscreenError = () => setIgvError('Fullscreen request failed: the browser rejected the viewer request.');
         document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('fullscreenerror', handleFullscreenError);
         handleFullscreenChange();
         return () => {
             document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            document.removeEventListener('fullscreenerror', handleFullscreenError);
         };
     }, []);
 
@@ -2322,8 +2430,9 @@ export function NGSToolkit() {
             : false,
     });
     const {
-        data: alignmentSessions = [],
-        error: alignmentSessionsError,
+        data: unboundAlignmentSessions = [],
+        error: alignmentSessionsQueryError,
+        isFetched: alignmentSessionsFetched,
         refetch: refetchAlignmentSessions,
     } = useQuery<AlignmentSession[]>({
         queryKey: ['ngs-alignment-sessions', selectedJobId],
@@ -2344,7 +2453,7 @@ export function NGSToolkit() {
     const alignmentAccessRecoveryError = alignmentAccessRecoveryState.jobId === selectedJobId
         ? alignmentAccessRecoveryState.error
         : null;
-    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsError);
+    const alignmentAccessDenied = isAlignmentAccessDenied(alignmentSessionsQueryError);
     const restoreAlignmentAccess = useCallback(async () => {
         if (!selectedJobId || alignmentAccessRecoveryPending) return;
         const recoveryJobId = selectedJobId;
@@ -2362,6 +2471,7 @@ export function NGSToolkit() {
             if (!recoveryIsCurrent()) return;
             if (refreshed.error) throw refreshed.error;
             await queryClient.invalidateQueries({ queryKey: ['sequence-qc-manifest', recoveryJobId] });
+            await queryClient.invalidateQueries({ queryKey: ['ont-fastq-qc-result', recoveryJobId] });
         } catch (reason: unknown) {
             if (!recoveryIsCurrent()) return;
             setAlignmentAccessRecoveryState({
@@ -2403,6 +2513,12 @@ export function NGSToolkit() {
         [selectedJob?.stage_outputs, stagePayload?.stage_outputs],
     );
     const selectedJobParams = (selectedJob?.params || {}) as Record<string, unknown>;
+    const signalDatasetId = typeof selectedJobParams.dataset_id === 'string' && selectedJobParams.dataset_id.trim()
+        ? selectedJobParams.dataset_id.trim()
+        : '';
+    const signalReferenceRevisionId = typeof selectedJobParams.ngs_reference_revision_id === 'string'
+        ? selectedJobParams.ngs_reference_revision_id.trim() || null
+        : null;
     const rawSignalRunId = typeof selectedJobParams.source_instrument_run_id === 'string'
         ? selectedJobParams.source_instrument_run_id.trim()
         : '';
@@ -2420,6 +2536,7 @@ export function NGSToolkit() {
     const rawSignalRepresentationId = rawSignalCapabilitiesQuery.data?.modes.raw_waveform.state === 'ready'
         ? rawSignalCapabilitiesQuery.data.modes.raw_waveform.representation_id
         : null;
+
     const selectedReferenceFastaPath = typeof selectedJobParams.reference_fasta === 'string'
         ? selectedJobParams.reference_fasta
         : null;
@@ -2427,7 +2544,47 @@ export function NGSToolkit() {
     const hasBamInput = hasMeaningfulValue(selectedJobParams.bam_path);
     const hasPod5Input = hasMeaningfulValue(selectedJobParams.pod5_dir);
     const isFastqOnlyRun = hasFastqInput && !hasBamInput && !hasPod5Input;
+    const selectedOntWorkflowId = typeof selectedJobParams.ont_workflow_id === 'string'
+        ? selectedJobParams.ont_workflow_id
+        : typeof selectedJobParams.ont_request_workflow_id === 'string'
+            ? selectedJobParams.ont_request_workflow_id
+            : typeof selectedJobParams.workflow_id === 'string'
+                ? selectedJobParams.workflow_id
+                : null;
+    const isCanonicalFastqQcRun = isFastqOnlyRun && selectedOntWorkflowId === 'ont_fastq_qc';
     const sequenceQcManifestState = useSequenceQcManifest(selectedJob?.id, selectedJob?.status);
+    const ontFastqQcResultState = useOntFastqQcResult(
+        selectedJob?.id,
+        selectedJob?.status,
+        selectedOntWorkflowId,
+    );
+    const alignmentAuthorityBinding = useMemo(() => {
+        const result = ontFastqQcResultState.result;
+        if (!isCanonicalFastqQcRun) {
+            return { sessions: unboundAlignmentSessions, error: null as Error | null };
+        }
+        if (!result) {
+            return {
+                sessions: [] as AlignmentSession[],
+                error: new Error('Scientific integrity error: canonical result authority is unavailable.'),
+            };
+        }
+        try {
+            return {
+                sessions: bindAlignmentSessionsToResultAuthority(
+                    unboundAlignmentSessions, result.authority, result.alignment_sessions,
+                ),
+                error: null as Error | null,
+            };
+        } catch (reason: unknown) {
+            return {
+                sessions: [] as AlignmentSession[],
+                error: reason instanceof Error ? reason : new Error(String(reason)),
+            };
+        }
+    }, [isCanonicalFastqQcRun, ontFastqQcResultState.result, unboundAlignmentSessions]);
+    const alignmentSessions = alignmentAuthorityBinding.sessions;
+    const alignmentSessionsError = alignmentSessionsQueryError ?? alignmentAuthorityBinding.error;
     const shouldShowMethylationInspector = !isFastqOnlyRun;
     const shouldShowMultimerInspector = hasFastqInput;
     const igvArtifacts = useMemo(
@@ -2491,29 +2648,151 @@ export function NGSToolkit() {
             };
         }).filter((source) => Boolean(source.fastaUrl));
     }, [igvSourcePaths, igvArtifacts.fastaPath, selectedReferenceFastaPath, selectedJob?.id]);
+    const persistedAlignmentSessionId = signalViewerSession?.alignment_session_id
+        || requestedViewerSessionQuery.data?.alignment_session_id
+        || '';
     const selectedAlignmentSession = useMemo(
         () => alignmentSessions.find((session) => session.session_id === selectedAlignmentSessionId)
+            || alignmentSessions.find((session) => session.session_id === persistedAlignmentSessionId)
             || alignmentSessions.find((session) => session.mode === 'primary')
             || alignmentSessions[0]
             || null,
-        [alignmentSessions, selectedAlignmentSessionId]
+        [alignmentSessions, persistedAlignmentSessionId, selectedAlignmentSessionId]
     );
+    const selectedViewerAlignmentSessionId = selectedAlignmentSession?.ready && signalReferenceRevisionId
+        ? selectedAlignmentSession.session_id
+        : null;
+    const selectedViewerReferenceRevisionId = selectedViewerAlignmentSessionId
+        ? signalReferenceRevisionId
+        : null;
+    const viewerSessionAuthority = signalViewerSession || requestedViewerSessionQuery.data || null;
+    const signalViewerSessionIsCompatible = Boolean(
+        alignmentSessionsFetched
+        && viewerSessionAuthority
+        && viewerSessionAuthority.dataset_id === signalDatasetId
+        && viewerSessionAuthority.run_id === rawSignalRunId
+        && viewerSessionAuthority.observed_generation === rawSignalObservedGeneration
+        && viewerSessionAuthority.alignment_job_id === selectedJob?.id
+        && viewerSessionAuthority.alignment_session_id === selectedViewerAlignmentSessionId
+        && viewerSessionAuthority.reference_revision_id === selectedViewerReferenceRevisionId
+    );
+    const compatibleSignalViewerSession = signalViewerSessionIsCompatible
+        ? viewerSessionAuthority
+        : null;
+    const requestedViewerSessionCompatibilityPending = Boolean(
+        requestedViewerSessionId
+        && (!requestedViewerSessionQuery.isFetched || !alignmentSessionsFetched)
+    );
+    const requestedViewerSessionReopenFailed = Boolean(
+        requestedViewerSessionId
+        && requestedViewerSessionQuery.isError
+    );
+    const openSignalWorkbench = useCallback((viewerSessionId?: string) => {
+        updateQueryParams({
+            view: 'workbench',
+            viewer_session_id: viewerSessionId
+                || (signalViewerSessionIsCompatible ? viewerSessionAuthority?.viewer_session_id : null),
+        });
+        void openIgvModal();
+    }, [openIgvModal, signalViewerSessionIsCompatible, updateQueryParams, viewerSessionAuthority?.viewer_session_id]);
     useEffect(() => {
-        const preferred = alignmentSessions.find((session) => session.mode === 'primary') || alignmentSessions[0] || null;
+        if (!alignmentSessionsFetched || !viewerSessionAuthority || signalViewerSessionIsCompatible) return;
+        setSignalViewerSession(null);
+        updateQueryParams({ viewer_session_id: null }, { replace: true });
+    }, [
+        alignmentSessionsFetched,
+        selectedJob?.id,
+        selectedViewerAlignmentSessionId,
+        selectedViewerReferenceRevisionId,
+        signalViewerSessionIsCompatible,
+        updateQueryParams,
+        viewerSessionAuthority,
+    ]);
+    const signalWorkbenchIdentityRef = useRef({ key: '', generation: 0 });
+    const signalWorkbenchIdentityKey = JSON.stringify([
+        selectedJob?.id || null,
+        signalDatasetId,
+        rawSignalRunId,
+        rawSignalObservedGeneration,
+        selectedAlignmentSession?.ready === true ? selectedAlignmentSession.session_id : null,
+        signalReferenceRevisionId,
+    ]);
+    useLayoutEffect(() => {
+        if (signalWorkbenchIdentityRef.current.key === signalWorkbenchIdentityKey) return;
+        signalWorkbenchIdentityRef.current = {
+            key: signalWorkbenchIdentityKey,
+            generation: signalWorkbenchIdentityRef.current.generation + 1,
+        };
+    }, [signalWorkbenchIdentityKey]);
+    const openSignalWorkbenchForRead = useCallback(async (read: AlignmentRead) => {
+        if (!selectedJob || !selectedAlignmentSession?.ready || !signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration) return;
+        const identityGeneration = signalWorkbenchIdentityRef.current.generation;
+        const identityKey = signalWorkbenchIdentityRef.current.key;
+        const identityIsCurrent = () => (
+            signalWorkbenchIdentityRef.current.generation === identityGeneration
+            && signalWorkbenchIdentityRef.current.key === identityKey
+        );
+        try {
+            const created = await createOntSignalViewerSession({
+                dataset_id: signalDatasetId,
+                run_id: rawSignalRunId,
+                observed_generation: rawSignalObservedGeneration,
+                alignment_job_id: selectedJob.id,
+                alignment_session_id: selectedAlignmentSession.session_id,
+                reference_revision_id: signalReferenceRevisionId,
+                contig: read.contig || igvCurrentLocus?.contig || null,
+                locus_start: read.start_1based || igvCurrentLocus?.start || null,
+                locus_end: read.start_1based
+                    ? read.start_1based + Math.max(1, read.length || 1) - 1
+                    : igvCurrentLocus?.end || null,
+                selected_read_id: read.read_id,
+                igv_state: {
+                    alignment_display_mode: igvAlignmentDisplayMode,
+                    alignment_color_by: igvAlignmentColorBy,
+                    alignment_group_by: igvAlignmentGroupBy,
+                    reads_track_loaded: igvReadsTrackLoaded,
+                },
+                signal_state: {
+                    mode: 'read',
+                    render_params: DEFAULT_ONT_SIGNAL_RENDER_PARAMS,
+                    view_job_id: null,
+                    read_mapping_job_id: null,
+                    reference_mapping_job_id: null,
+                },
+            });
+            if (!identityIsCurrent()) return;
+            acceptSignalViewerSession(created);
+            openSignalWorkbench(created.viewer_session_id);
+        } catch (reason) {
+            if (!identityIsCurrent()) return;
+            setIgvError(`Signal viewer session could not be created: ${reason instanceof Error ? reason.message : String(reason)}`);
+        }
+    }, [acceptSignalViewerSession, igvAlignmentColorBy, igvAlignmentDisplayMode, igvAlignmentGroupBy, igvCurrentLocus?.contig, igvCurrentLocus?.end, igvCurrentLocus?.start, igvReadsTrackLoaded, openSignalWorkbench, rawSignalObservedGeneration, rawSignalRunId, selectedAlignmentSession, selectedJob, signalDatasetId, signalReferenceRevisionId]);
+    useEffect(() => {
+        const preferred = alignmentSessions.find((session) => session.session_id === persistedAlignmentSessionId)
+            || alignmentSessions.find((session) => session.mode === 'primary')
+            || alignmentSessions[0]
+            || null;
         if (!alignmentSessions.some((session) => session.session_id === selectedAlignmentSessionId)) {
             setSelectedAlignmentSessionId(preferred?.session_id || '');
         }
-    }, [alignmentSessions, selectedAlignmentSessionId]);
+    }, [alignmentSessions, persistedAlignmentSessionId, selectedAlignmentSessionId]);
     useEffect(() => {
         const selectedSessionId = selectedAlignmentSession?.session_id || '';
         selectedAlignmentSessionIdRef.current = selectedSessionId;
         if (pendingIgvLocusRef.current?.sessionId !== selectedSessionId) {
             pendingIgvLocusRef.current = null;
         }
+        if (igvNavigationOwnerRef.current?.navigation.sessionId !== selectedSessionId) {
+            igvNavigationOwnerRef.current = null;
+        }
         setIgvCurrentLocus(null);
     }, [selectedAlignmentSession?.session_id]);
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
     const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
+    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(
+        selectedAlignmentSession?.artifacts.alignment?.size_bytes,
+    );
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
     const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
@@ -2523,19 +2802,41 @@ export function NGSToolkit() {
         : null;
     const activeIgvFaiUrl = selectedAlignmentSession?.artifacts.reference_index?.url || null;
     const activeIgvSourceKey = selectedAlignmentSession?.session_id || '';
+    const searchOwnedIgvNavigation = useCallback(async (
+        browser: UntypedApiValue,
+        loadToken: number,
+        initialOwner: OwnedIgvNavigation,
+    ) => {
+        let owner = initialOwner;
+        while (true) {
+            await Promise.resolve(browser.search(owner.navigation.locus));
+            if (
+                igvLoadTokenRef.current !== loadToken
+                || igvBrowserRef.current !== browser
+                || selectedAlignmentSessionIdRef.current !== owner.navigation.sessionId
+            ) return;
+            const currentOwner = igvNavigationOwnerRef.current;
+            if (!currentOwner || currentOwner.navigation.sessionId !== owner.navigation.sessionId) return;
+            if (currentOwner === owner) {
+                if (pendingIgvLocusRef.current === owner.navigation) pendingIgvLocusRef.current = null;
+                return;
+            }
+            owner = currentOwner;
+        }
+    }, []);
     const navigateToVerifiedLocus = useCallback((
         position_1based: number,
         end_1based: number | undefined,
         source: string,
     ) => {
-        if (!selectedAlignmentSession?.ready || !selectedAlignmentSession.reference_contig) {
+        if (!selectedAlignmentSession?.ready || !selectedAlignmentSession.reference.contig) {
             setIgvError(`Cannot navigate ${source}: the selected alignment session has no authoritative reference contig.`);
             return;
         }
         const locus = resolveBoundSessionLocus(
             selectedAlignmentSession.session_id,
             selectedAlignmentSession.session_id,
-            selectedAlignmentSession.reference_contig,
+            selectedAlignmentSession.reference.contig,
             position_1based,
             end_1based ?? position_1based,
         );
@@ -2547,36 +2848,65 @@ export function NGSToolkit() {
             sessionId: selectedAlignmentSession.session_id,
             locus,
         };
+        const owner: OwnedIgvNavigation = {
+            requestId: igvNavigationRequestIdRef.current + 1,
+            navigation,
+        };
+        igvNavigationRequestIdRef.current = owner.requestId;
+        igvNavigationOwnerRef.current = owner;
         pendingIgvLocusRef.current = navigation;
         const browser = igvBrowserRef.current;
         if (igvModalOpen && browser && typeof browser.search === 'function') {
             const loadToken = igvLoadTokenRef.current;
-            const navigationIsCurrent = () => (
-                igvLoadTokenRef.current === loadToken
-                && igvBrowserRef.current === browser
-                && selectedAlignmentSessionIdRef.current === navigation.sessionId
-                && pendingIgvLocusRef.current === navigation
-            );
-            void (async () => {
-                try {
-                    const completion = await awaitCurrentGeneration(
-                        Promise.resolve(browser.search(navigation.locus)),
-                        navigationIsCurrent,
-                    );
-                    if (completion === null || !navigationIsCurrent()) return;
-                    pendingIgvLocusRef.current = null;
-                } catch (error: unknown) {
-                    if (!navigationIsCurrent()) return;
-                    setIgvError(`Failed to navigate selected IGV session: ${error instanceof Error ? error.message : String(error)}`);
-                }
-            })();
+            void searchOwnedIgvNavigation(browser, loadToken, owner).catch((error: unknown) => {
+                if (
+                    igvNavigationOwnerRef.current !== owner
+                    || igvLoadTokenRef.current !== loadToken
+                    || igvBrowserRef.current !== browser
+                    || selectedAlignmentSessionIdRef.current !== navigation.sessionId
+                ) return;
+                setIgvError(`Failed to navigate selected IGV session: ${error instanceof Error ? error.message : String(error)}`);
+            });
             return;
         }
         void openIgvModal();
-    }, [igvModalOpen, openIgvModal, selectedAlignmentSession]);
+    }, [igvModalOpen, openIgvModal, searchOwnedIgvNavigation, selectedAlignmentSession]);
+    const navigateFromSignalWorkbench = useCallback((
+        contig: string,
+        start_1based: number,
+        end_1based: number,
+        source: string,
+    ) => {
+        if (!selectedAlignmentSession?.reference?.contig || contig !== selectedAlignmentSession.reference.contig) {
+            setIgvError(`Cannot navigate ${source}: locus contig is not bound to the selected alignment session.`);
+            return;
+        }
+        navigateToVerifiedLocus(start_1based, end_1based, source);
+    }, [navigateToVerifiedLocus, selectedAlignmentSession?.reference?.contig]);
+    const navigateToLocalIgvRange = useCallback((value: string, source: string) => {
+        const referenceContig = selectedAlignmentSession?.reference?.contig;
+        const referenceLength = ontFastqQcResultState.result?.verification.summary.reference_length;
+        if (!referenceContig || typeof referenceLength !== 'number') {
+            setIgvRangeError(`Cannot navigate ${source}: authoritative reference bounds are unavailable.`);
+            return;
+        }
+        const locus = parseLocalIgvRange(value, referenceContig, referenceLength);
+        if (!locus) {
+            setIgvRangeError(`Range must use ${referenceContig}:start-end within 1-${referenceLength}.`);
+            return;
+        }
+        const coordinates = /:(\d+)-(\d+)$/.exec(locus);
+        if (!coordinates) {
+            setIgvRangeError('Range is malformed.');
+            return;
+        }
+        setIgvRangeInput(locus);
+        setIgvRangeError(null);
+        navigateToVerifiedLocus(Number(coordinates[1]), Number(coordinates[2]), source);
+    }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
     const igvMissingReason = alignmentSessionsError
-        ? 'Authoritative alignment session is unavailable.'
+        ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
         : !selectedAlignmentSession
             ? 'No job-scoped alignment session was published.'
             : !selectedAlignmentSession.ready
@@ -2587,8 +2917,15 @@ export function NGSToolkit() {
                         ? 'BAM index (.bai/.csi) not found yet.'
                         : !activeIgvFastaUrl
                             ? 'Reference FASTA not found yet.'
-                            : null;
+                            : !activeIgvFaiUrl
+                                ? 'Reference FASTA index (.fai) not found yet.'
+                                : null;
     const igvReady = selectedAlignmentSession?.ready === true && !igvMissingReason;
+    useEffect(() => {
+        if (signalWorkbenchRequested && selectedJob && signalDatasetId && rawSignalRunId && rawSignalObservedGeneration) {
+            setIgvModalOpen(true);
+        }
+    }, [rawSignalObservedGeneration, rawSignalRunId, selectedJob, signalDatasetId, signalWorkbenchRequested]);
     const igvReadinessChecks = useMemo(
         () => [
             {
@@ -2607,7 +2944,7 @@ export function NGSToolkit() {
                 path: activeIgvFastaPath,
             },
             {
-                label: 'Reference FASTA index (.fai, optional)',
+                label: 'Reference FASTA index (.fai, required)',
                 ok: Boolean(activeIgvFaiUrl),
                 path: activeIgvFaiPath,
             },
@@ -2628,7 +2965,7 @@ export function NGSToolkit() {
         return [{
             label: 'Session-bound coverage depth track',
             ok: Boolean(coverage),
-            path: coverage?.manifest || null,
+            path: coverage?.source_manifest_sha256 || null,
         }];
     }, [selectedAlignmentSession]);
     const missingIgvAuxTracks = useMemo(
@@ -2663,7 +3000,6 @@ export function NGSToolkit() {
             setIgvSelectedReferencePath(preferred);
         }
     }, [igvReferenceSources, activeIgvFastaPath, igvSelectedReferencePath]);
-    const igvReportDownloadHref = selectedAlignmentSession?.artifacts.report?.url || null;
     const igvTrackConfigDownloadHref = selectedAlignmentSession?.artifacts.track_config?.url || null;
     const methylationSummaryDownloadHref = methylationArtifacts.summaryPath
         ? toDownloadHref(methylationArtifacts.summaryPath, selectedJob?.id || undefined)
@@ -3226,6 +3562,13 @@ export function NGSToolkit() {
                 return;
             }
 
+            if (isCanonicalFastqQcRun) {
+                setMultimerLoading(false);
+                setMultimerError(null);
+                setMultimerReport(null);
+                return;
+            }
+
             if (!shouldShowMultimerInspector) {
                 setMultimerLoading(false);
                 setMultimerError('FASTQ input is required for multimer QC.');
@@ -3385,7 +3728,7 @@ export function NGSToolkit() {
         return () => {
             cancelled = true;
         };
-    }, [selectedJob?.id, shouldShowMultimerInspector, multimerArtifacts.summaryUrl, multimerArtifacts.lengthsUrl, multimerArtifacts.candidatesUrl, multimerArtifacts.dimerSummaryUrl, multimerArtifacts.dimerConsensusUrl, multimerArtifacts.dominantDimerConsensusUrl, selectedReferenceFastaUrl, multimerArtifacts.missingReason, selectedJob]);
+    }, [selectedJob?.id, isCanonicalFastqQcRun, shouldShowMultimerInspector, multimerArtifacts.summaryUrl, multimerArtifacts.lengthsUrl, multimerArtifacts.candidatesUrl, multimerArtifacts.dimerSummaryUrl, multimerArtifacts.dimerConsensusUrl, multimerArtifacts.dominantDimerConsensusUrl, selectedReferenceFastaUrl, multimerArtifacts.missingReason, selectedJob]);
 
     useEffect(() => {
         let cancelled = false;
@@ -3519,6 +3862,12 @@ export function NGSToolkit() {
             igvLoadedSourceKeyRef.current = '';
             return;
         }
+        if (!activeIgvFastaUrl) {
+            setIgvLoading(false);
+            setIgvError('Validated reference FASTA is unavailable.');
+            return;
+        }
+        const igvFastaUrl = activeIgvFastaUrl;
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
@@ -3573,7 +3922,7 @@ export function NGSToolkit() {
                     });
                 }
                 const initialLocus = await withTimeout(
-                    detectInitialLocusFromFasta(activeIgvFastaUrl),
+                    detectInitialLocusFromFasta(igvFastaUrl),
                     Math.max(5000, Math.floor(IGV_INIT_TIMEOUT_MS / 2)),
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while preparing reference`
                 );
@@ -3583,22 +3932,19 @@ export function NGSToolkit() {
                     pendingIgvLocusRef.current,
                     selectedAlignmentSessionIdRef.current,
                 ) || initialLocus;
+                const referenceContig = selectedAlignmentSession?.reference?.contig
+                    || requestedLocus?.split(':', 1)[0]
+                    || 'custom_reference';
+                const localIgvConfig = buildLocalIgvConfig({
+                    referenceId: referenceContig,
+                    referenceName: referenceContig,
+                    fastaUrl: igvFastaUrl,
+                    faiUrl: activeIgvFaiUrl,
+                    initialLocus: requestedLocus,
+                    auxiliaryTracks: [],
+                });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
-                    create: () => igvAny.createBrowser(igvContainerRef.current, {
-                        ...(requestedLocus ? { locus: requestedLocus } : {}),
-                        reference: {
-                            fastaURL: activeIgvFastaUrl,
-                            ...(activeIgvFaiUrl
-                                ? {
-                                    indexURL: activeIgvFaiUrl,
-                                    indexed: true,
-                                }
-                                : {
-                                    indexed: false,
-                                }),
-                        },
-                        tracks: [],
-                    }),
+                    create: () => igvAny.createBrowser(igvContainerRef.current, localIgvConfig),
                     remove: (staleBrowser: unknown) => removeIgvBrowser(igvAny, staleBrowser),
                     isCurrent: () => isCurrentLoad() && !cancelled,
                     invalidate: () => {
@@ -3631,13 +3977,22 @@ export function NGSToolkit() {
                     setIgvLoading(false);
                 }
 
-                if (!cancelled && requestedLocus && igvBrowser && typeof igvBrowser.search === 'function') {
-                    void awaitCurrentGeneration(
-                        Promise.resolve(igvBrowser.search(requestedLocus)),
-                        () => isCurrentLoad() && !cancelled && igvBrowserRef.current === igvBrowser,
-                    ).then((completion) => {
-                        if (completion !== null && isCurrentLoad()) pendingIgvLocusRef.current = null;
-                    }).catch(() => { /* keep viewer open if locus search fails */ });
+                const postCreationNavigationOwner = igvNavigationOwnerRef.current;
+                if (
+                    !cancelled
+                    && postCreationNavigationOwner?.navigation.sessionId === selectedAlignmentSessionIdRef.current
+                    && igvBrowser
+                    && typeof igvBrowser.search === 'function'
+                ) {
+                    void searchOwnedIgvNavigation(igvBrowser, loadToken, postCreationNavigationOwner).catch((error: unknown) => {
+                        if (
+                            igvNavigationOwnerRef.current !== postCreationNavigationOwner
+                            || !isCurrentLoad()
+                            || cancelled
+                            || igvBrowserRef.current !== igvBrowser
+                        ) return;
+                        setIgvError(`Failed to navigate selected IGV session: ${error instanceof Error ? error.message : String(error)}`);
+                    });
                 }
             } catch (error) {
                 const msg = error instanceof Error ? error.message : String(error);
@@ -3691,6 +4046,7 @@ export function NGSToolkit() {
         activeIgvFastaUrl,
         activeIgvFaiUrl,
         igvMissingReason,
+        searchOwnedIgvNavigation,
         selectedAlignmentSession?.session_id,
     ]);
 
@@ -3707,6 +4063,7 @@ export function NGSToolkit() {
         }
         setIgvReadsTrackLoading(true);
         setIgvError(null);
+        setIgvAuxTrackFailures([]);
         const loadToken = igvLoadTokenRef.current;
         const sessionId = selectedAlignmentSession?.session_id || '';
         const isCurrentTrackLoad = () => (
@@ -3773,13 +4130,21 @@ export function NGSToolkit() {
                 colorBy: igvAlignmentColorBy,
                 groupBy: igvAlignmentGroupBy,
             });
+            setIgvReadsTrackLoaded(true);
 
             for (const trackConfig of auxiliaryTracks) {
-                const loadedTrack = await awaitCurrentGeneration(
-                    Promise.resolve(browser.loadTrack(trackConfig)),
-                    isCurrentTrackLoad,
-                );
-                if (loadedTrack === null || !isCurrentTrackLoad()) return;
+                try {
+                    const loadedTrack = await awaitCurrentGeneration(
+                        Promise.resolve(browser.loadTrack(trackConfig)),
+                        isCurrentTrackLoad,
+                    );
+                    if (loadedTrack === null || !isCurrentTrackLoad()) return;
+                } catch (error) {
+                    if (!isCurrentTrackLoad()) return;
+                    const label = typeof trackConfig.name === 'string' ? trackConfig.name : 'Optional track';
+                    const message = error instanceof Error ? error.message : String(error);
+                    setIgvAuxTrackFailures((current) => [...current, `${label}: ${message}`]);
+                }
             }
             if (!isCurrentTrackLoad()) return;
             patchIgvRulerContrast(browser);
@@ -3789,7 +4154,6 @@ export function NGSToolkit() {
             // the session-bound requested locus or the FASTA-derived initial locus.
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
             igvLoadedSourceKeyRef.current = activeIgvSourceKey;
-            setIgvReadsTrackLoaded(true);
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
             if (isCurrentTrackLoad()) setIgvError(`Failed to load IGV tracks: ${msg}`);
@@ -3858,6 +4222,7 @@ export function NGSToolkit() {
     useEffect(() => {
         if (!igvModalOpen) return;
         if (!igvReady || igvLoading) return;
+        if (!igvAlignmentLoadDisposition.autoLoad) return;
         if (igvReadsTrackLoading || igvReadsTrackLoaded) return;
         if (igvAutoLoadAttempted) return;
         if (!igvBrowserRef.current) return;
@@ -3867,6 +4232,7 @@ export function NGSToolkit() {
         igvModalOpen,
         igvReady,
         igvLoading,
+        igvAlignmentLoadDisposition.autoLoad,
         igvReadsTrackLoading,
         igvReadsTrackLoaded,
         igvAutoLoadAttempted,
@@ -3907,6 +4273,11 @@ export function NGSToolkit() {
 
     return (
         <div className="min-h-screen bg-[var(--bg-primary)] p-6 space-y-6 text-[var(--text-primary)]">
+            <AlignmentAccessPageLifetime
+                jobId={selectedJobId}
+                queryClient={queryClient}
+                recoveryGenerationRef={alignmentAccessRecoveryGenerationRef}
+            />
             {(requestedJobId || requestedRunId || requestedReferenceSetId || requestedAssignmentId) && (
                 <aside className="rounded-lg border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-4 py-3 text-xs" aria-label="Exact NGS source context">
                     {requestedJobId && <span className="mr-3">Job <code>{requestedJobId}</code></span>}
@@ -3933,6 +4304,7 @@ export function NGSToolkit() {
                         <h1 className="text-3xl font-bold text-[var(--text-primary)]">NGS Toolkit</h1>
                     </div>
                     <div className="flex items-center gap-2">
+                        <NgsMolBioProjectHub presentation="launcher-dialog" />
                         <button
                             onClick={() => navigate('/designer')}
                             className="px-4 py-2 rounded-lg text-sm font-medium border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
@@ -3943,30 +4315,27 @@ export function NGSToolkit() {
                         <button
                             onClick={() => selectView('launch')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'launch'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'launch' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
-                            Analyze existing data
+                            Data Analysis
                         </button>
                         <button
                             onClick={() => selectView('instrument')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'instrument'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'instrument' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
-                            Instrument intent
+                            Instrument setup
                         </button>
                         <button
                             onClick={() => selectView('runs')}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${view === 'runs'
-                                ? 'text-white'
+                                ? 'bg-[var(--accent-primary)]/20 ring-1 ring-[var(--accent-primary)]/50 text-[var(--accent-primary)]'
                                 : 'bg-[var(--bg-secondary)] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
                                 }`}
-                            style={view === 'runs' ? { backgroundColor: 'var(--accent-secondary)' } : undefined}
                         >
                             Runs
                         </button>
@@ -4070,9 +4439,9 @@ export function NGSToolkit() {
                                 New Nanopore Run
                             </button>
                         </div>
-                        <div className="overflow-x-auto">
+                        <div className="max-h-[22rem] overflow-auto overscroll-contain">
                             <table className="w-full text-sm">
-                                <thead className="bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
+                                <thead className="sticky top-0 z-10 bg-[var(--bg-tertiary)] text-[var(--text-secondary)]">
                                     <tr>
                                         <th className="text-left px-4 py-2">Job</th>
                                         <th className="text-left px-4 py-2">Workflow</th>
@@ -4124,7 +4493,7 @@ export function NGSToolkit() {
                                                 <td className="px-4 py-2">
                                                     <div className="flex gap-2">
                                                         <button
-                                                            onClick={() => updateQueryParams({ job_id: job.id })}
+                                                            onClick={() => updateQueryParams({ job_id: job.id, viewer_session_id: null })}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Inspect
@@ -4136,7 +4505,11 @@ export function NGSToolkit() {
                                                             Logs
                                                         </button>
                                                         <button
-                                                            onClick={() => navigate(contextHref('/ngs', { section: 'analyses', job_id: job.id }))}
+                                                            onClick={() => navigate(contextHref('/ngs', {
+                                                                section: 'analyses',
+                                                                job_id: job.id,
+                                                                viewer_session_id: null,
+                                                            }))}
                                                             className="px-2 py-1 text-xs rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-secondary)] text-[var(--text-primary)]"
                                                         >
                                                             Open
@@ -4192,11 +4565,23 @@ export function NGSToolkit() {
                                     )}
                                     <button
                                         onClick={() => void openIgvModal()}
-                                        disabled={!selectedJob}
+                                        disabled={!selectedJob || !!igvMissingReason}
                                         title={igvMissingReason || 'Open IGV genome viewer'}
                                         className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--text-primary)] border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
                                     >
                                         Open IGV
+                                    </button>
+                                    <button
+                                        onClick={() => openSignalWorkbench()}
+                                        disabled={!selectedJob || !signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
+                                        title={!signalDatasetId
+                                            ? 'This job is not bound to an immutable managed dataset.'
+                                            : !rawSignalRunId || !rawSignalObservedGeneration
+                                                ? 'This job is not bound to an immutable ONT run generation.'
+                                                : 'Open the dataset-scoped read and signal workbench; reference controls remain gated until alignment is available.'}
+                                        className="px-3 py-1.5 text-xs rounded border transition-colors text-[var(--accent-secondary)] border-[var(--accent-secondary)]/50 hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+                                    >
+                                        Read &amp; Signal Workbench
                                     </button>
                                     <span className="text-xs text-[var(--text-secondary)]">{selectedJobId}</span>
                                 </div>
@@ -4215,6 +4600,30 @@ export function NGSToolkit() {
                             <p role="alert" className="text-sm text-rose-300">Full job detail returned no job record.</p>
                         ) : (
                             <>
+                                {isCanonicalFastqQcRun && (
+                                    <div className="space-y-2">
+                                        <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC result</h4>
+                                        <OntFastqQcResultPanel
+                                            result={ontFastqQcResultState.result}
+                                            loading={ontFastqQcResultState.loading}
+                                            error={ontFastqQcResultState.error}
+                                            onOpenViewer={(locus) => {
+                                                if (locus) {
+                                                    navigateToLocalIgvRange(locus, 'verification evidence');
+                                                } else {
+                                                    void openIgvModal();
+                                                }
+                                            }}
+                                            onRecoverAccess={ontFastqQcResultState.accessDenied ? restoreAlignmentAccess : undefined}
+                                            recoveryPending={alignmentAccessRecoveryPending}
+                                        />
+                                    </div>
+                                )}
+                                <details open={!isCanonicalFastqQcRun} className="rounded border border-[var(--border-primary)] bg-[var(--bg-tertiary)]/30 p-3">
+                                    <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+                                        {isCanonicalFastqQcRun ? 'Technical job details' : 'Job details'}
+                                    </summary>
+                                    <div className="mt-3 space-y-3">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                     <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
                                         <div className="text-xs text-[var(--text-secondary)] mb-1">Job</div>
@@ -4225,8 +4634,8 @@ export function NGSToolkit() {
                                         <div className="text-[var(--text-primary)]">{selectedJob.status}</div>
                                     </div>
                                     <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
-                                        <div className="text-xs text-[var(--text-secondary)] mb-1">Output Directory</div>
-                                        <div className="text-[var(--text-secondary)] font-mono text-xs break-all">{selectedJob.output_dir || '—'}</div>
+                                        <div className="text-xs text-[var(--text-secondary)] mb-1">Job ID</div>
+                                        <div className="text-[var(--text-secondary)] font-mono text-xs break-all">{selectedJob.id}</div>
                                     </div>
                                     <div className="bg-[var(--bg-tertiary)] rounded border border-[var(--border-primary)] p-3">
                                         <div className="text-xs text-[var(--text-secondary)] mb-1">Created</div>
@@ -4234,18 +4643,20 @@ export function NGSToolkit() {
                                     </div>
                                 </div>
 
+                                <ExperimentReferenceLinks
+                                    domainExperimentId={domainExperimentId}
+                                    stateRevisionId={stateRevisionId}
+                                    title="Exact molecular references for this NGS result"
+                                />
+
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                                     {[
                                         ['Input source', selectedJob.params?.pod5_dir ? 'pod5' : selectedJob.params?.bam_path ? 'bam' : selectedJob.params?.fastq_path ? 'fastq' : '—'],
                                         ['Pinned GPU (queue)', selectedJob.pinned_gpu],
                                         ['Pinned GPUs', selectedJob.params?.pinned_gpus],
                                         ['Lock GPUs', selectedJob.params?.lock_gpus],
-                                        ['POD5 directory', selectedJob.params?.pod5_dir],
-                                        ['BAM path', selectedJob.params?.bam_path],
                                         ['BAM force realign', selectedJob.params?.bam_force_realign],
                                         ['BAM min MAPQ', selectedJob.params?.bam_min_mapq],
-                                        ['FASTQ path', selectedJob.params?.fastq_path],
-                                        ['Reference FASTA', selectedJob.params?.reference_fasta],
                                         ['Dorado model', selectedJob.params?.dorado_model],
                                         ['Modified bases', selectedJob.params?.modified_bases],
                                         ['Min qscore (POD5 basecalling)', selectedJob.params?.min_qscore],
@@ -4275,6 +4686,8 @@ export function NGSToolkit() {
                                         </div>
                                     ))}
                                 </div>
+                                    </div>
+                                </details>
 
                                 <SequenceQcManifestPanel
                                     status={sequenceQcManifestState.status}
@@ -4316,8 +4729,8 @@ export function NGSToolkit() {
                                                         {check.ok ? 'ready' : 'missing'}
                                                     </div>
                                                 </div>
-                                                <div className="mt-1 text-xs text-[var(--text-secondary)] font-mono break-all">
-                                                    {check.path || 'No resolved path'}
+                                                <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                                                    {check.ok ? 'Resolved by the governed job artifact contract.' : 'No governed artifact is available.'}
                                                 </div>
                                             </div>
                                         ))}
@@ -4339,8 +4752,8 @@ export function NGSToolkit() {
                                                             {check.ok ? 'found' : 'missing'}
                                                         </div>
                                                     </div>
-                                                    <div className="mt-1 text-[10px] text-[var(--text-secondary)] font-mono break-all">
-                                                        {check.path || 'No resolved path'}
+                                                    <div className="mt-1 text-[10px] text-[var(--text-secondary)]">
+                                                        {check.ok ? 'Resolved by the governed optional-artifact contract.' : 'No governed optional artifact is available.'}
                                                     </div>
                                                 </div>
                                             ))}
@@ -4368,30 +4781,18 @@ export function NGSToolkit() {
                                             )}
                                         </div>
                                     )}
-                                    {(igvReportDownloadHref || igvTrackConfigDownloadHref) && (
+                                    {igvTrackConfigDownloadHref && (
                                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                                            {igvReportDownloadHref && (
-                                                <a
-                                                    href={igvReportDownloadHref}
-                                                    target="_blank"
-                                                    rel="noopener"
-                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                >
-                                                    Open compact IGV report
-                                                </a>
-                                            )}
-                                            {igvTrackConfigDownloadHref && (
-                                                <a
-                                                    href={igvTrackConfigDownloadHref}
-                                                    className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
-                                                >
-                                                    Download track config
-                                                </a>
-                                            )}
+                                            <a
+                                                href={igvTrackConfigDownloadHref}
+                                                className="px-2 py-1 text-xs rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                            >
+                                                Download track config
+                                            </a>
                                         </div>
                                     )}
                                 </div>
-                                {shouldShowMultimerInspector && (
+                                {shouldShowMultimerInspector && !isCanonicalFastqQcRun && (
                                     <div className="space-y-2">
                                         <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">FASTQ QC</h4>
                                         {multimerLoading ? (
@@ -4965,6 +5366,7 @@ export function NGSToolkit() {
                                 </div>
                                 )}
 
+                                {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Progress</h4>
                                     {stagesLoading ? (
@@ -4994,7 +5396,9 @@ export function NGSToolkit() {
                                         </div>
                                     )}
                                 </div>
+                                )}
 
+                                {!isCanonicalFastqQcRun && (
                                 <div className="space-y-2">
                                     <h4 className="text-xs uppercase tracking-wide text-[var(--text-secondary)]">Stage Artifacts</h4>
                                     {Object.keys(stageOutputs).length === 0 ? (
@@ -5021,7 +5425,7 @@ export function NGSToolkit() {
                                                                                 {name}
                                                                             </a>
                                                                         ) : (
-                                                                            <span className="text-[var(--text-secondary)] break-all">{output}</span>
+                                                                            <span className="text-[var(--text-secondary)] break-all">{name}</span>
                                                                         )}
                                                                     </li>
                                                                 );
@@ -5033,6 +5437,7 @@ export function NGSToolkit() {
                                         </div>
                                     )}
                                 </div>
+                                )}
                             </>
                         )}
                     </div>
@@ -5040,11 +5445,11 @@ export function NGSToolkit() {
             )}
 
             {igvModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-0 bg-black/80 backdrop-blur-sm">
-                    <div className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl w-screen h-screen max-w-none max-h-none flex flex-col ${igvIsFullscreen ? 'rounded-none border-0' : 'rounded-2xl'}`}>
-                        <div className="flex items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
+                <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm ${igvIsFullscreen ? 'p-0' : 'p-4'}`}>
+                    <div ref={igvFullscreenShellRef} data-ngs-igv-fullscreen-shell className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
+                        <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
-                                <span className="text-xs font-semibold text-[var(--text-primary)]">IGV</span>
+                                <span className="text-xs font-semibold text-[var(--text-primary)]">IGV · Read and Signal Workbench</span>
                                 {selectedJob && (
                                     <span className="truncate max-w-[40vw]" title={selectedJob.name}>
                                         {selectedJob.name}
@@ -5053,7 +5458,7 @@ export function NGSToolkit() {
                                 <span>IGV.js {igvVersion || `loading (>= ${IGV_REQUIRED_VERSION})`}</span>
                                 <span>{igvIsFullscreen ? 'FS on' : 'FS off'}</span>
                             </div>
-                            <div className="flex items-center gap-1">
+                            <div className="flex flex-wrap items-center gap-1">
                                 <select
                                     value={selectedAlignmentSession?.session_id || ''}
                                     onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
@@ -5070,9 +5475,36 @@ export function NGSToolkit() {
                                         </option>
                                     ))}
                                 </select>
+                                <form
+                                    className="flex items-center gap-1"
+                                    onSubmit={(event) => {
+                                        event.preventDefault();
+                                        navigateToLocalIgvRange(igvRangeInput, 'Range control');
+                                    }}
+                                >
+                                    <input
+                                        aria-label="Range"
+                                        value={igvRangeInput}
+                                        onChange={(event) => {
+                                            setIgvRangeInput(event.target.value);
+                                            setIgvRangeError(null);
+                                        }}
+                                        placeholder={selectedAlignmentSession?.reference?.contig
+                                            ? `${selectedAlignmentSession.reference.contig}:3400-3600`
+                                            : 'contig:start-end'}
+                                        className="w-[210px] rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--text-primary)]"
+                                    />
+                                    <button
+                                        type="submit"
+                                        disabled={igvLoading || !selectedAlignmentSession?.ready}
+                                        className="rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-primary)] disabled:opacity-50"
+                                    >
+                                        Go
+                                    </button>
+                                </form>
                                 <select
                                     value={igvAlignmentDisplayMode}
-                                    onChange={(event) => setIgvAlignmentDisplayMode(event.target.value)}
+                                    onChange={(event) => setIgvAlignmentDisplayMode(event.target.value as OntSignalViewerAlignmentDisplayMode)}
                                     disabled={igvLoading || igvReadsTrackLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
@@ -5084,7 +5516,7 @@ export function NGSToolkit() {
                                 </select>
                                 <select
                                     value={igvAlignmentColorBy}
-                                    onChange={(event) => setIgvAlignmentColorBy(event.target.value)}
+                                    onChange={(event) => setIgvAlignmentColorBy(event.target.value as OntSignalViewerAlignmentColorBy)}
                                     disabled={igvLoading || igvReadsTrackLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
@@ -5096,7 +5528,7 @@ export function NGSToolkit() {
                                 </select>
                                 <select
                                     value={igvAlignmentGroupBy}
-                                    onChange={(event) => setIgvAlignmentGroupBy(event.target.value)}
+                                    onChange={(event) => setIgvAlignmentGroupBy(event.target.value as OntSignalViewerAlignmentGroupBy)}
                                     disabled={igvLoading || igvReadsTrackLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
@@ -5110,10 +5542,38 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvReadsTrack()}
-                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl}
+                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl || !igvAlignmentLoadDisposition.autoLoad}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
+                                {igvAlignmentLoadDisposition.autoLoad
+                                    ? igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'
+                                    : 'Alignment too large for browser'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (signalWorkbenchRequested) updateQueryParams({ view: null }, { replace: true });
+                                    else openSignalWorkbench();
+                                }}
+                                disabled={!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--accent-secondary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
+                            >
+                                {signalWorkbenchRequested ? 'Hide signal panel' : 'Show signal panel'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void toggleIgvFullscreen()}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
+                            >
+                                {igvIsFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setIgvInspectorOpen((current) => !current)}
+                                disabled={!selectedJob || !selectedAlignmentSession?.ready}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+                            >
+                                {igvInspectorOpen ? 'Hide reads' : 'Inspect reads'}
                             </button>
                             <button
                                 onClick={() => void closeIgvModal()}
@@ -5122,6 +5582,11 @@ export function NGSToolkit() {
                                 ×
                             </button>
                         </div>
+                        {igvRangeError && (
+                            <div role="alert" className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
+                                {igvRangeError}
+                            </div>
+                        )}
 
                         <div className="flex-1 overflow-hidden min-h-0">
                             <div className="relative w-full h-full">
@@ -5141,7 +5606,7 @@ export function NGSToolkit() {
                                 )}
                                 {!igvLoading && !igvError && !igvReadsTrackLoaded && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
-                                        Reference loaded; tracks autoload or use Load tracks.
+                                        {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
                                 {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (
@@ -5149,7 +5614,45 @@ export function NGSToolkit() {
                                         Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
                                     </div>
                                 )}
-                                {selectedJob && selectedAlignmentSession?.ready && (
+                                {!igvLoading && !igvError && igvReadsTrackLoaded && igvAuxTrackFailures.length > 0 && (
+                                    <div role="status" className="absolute bottom-2 right-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
+                                        Optional tracks unavailable: {igvAuxTrackFailures.join(' · ')}
+                                    </div>
+                                )}
+                                {signalWorkbenchRequested ? (
+                                    requestedViewerSessionReopenFailed ? (
+                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+                                            Requested viewer session could not be reopened. No replacement session was created.
+                                        </div>
+                                    ) : requestedViewerSessionCompatibilityPending ? (
+                                        <div role="status" className="absolute right-2 top-2 z-20 max-w-md rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                                            Viewer session compatibility is still being verified.
+                                        </div>
+                                    ) : selectedJob && signalDatasetId && rawSignalRunId && rawSignalObservedGeneration ? (
+                                        <ReadAndSignalWorkbench
+                                            datasetId={signalDatasetId}
+                                            runId={rawSignalRunId}
+                                            observedGeneration={rawSignalObservedGeneration}
+                                            alignmentJobId={selectedJob.id}
+                                            alignmentSession={selectedAlignmentSession}
+                                            referenceRevisionId={signalReferenceRevisionId}
+                                            currentLocus={igvCurrentLocus}
+                                            viewerSession={compatibleSignalViewerSession}
+                                            igvState={{
+                                                alignment_display_mode: igvAlignmentDisplayMode,
+                                                alignment_color_by: igvAlignmentColorBy,
+                                                alignment_group_by: igvAlignmentGroupBy,
+                                                reads_track_loaded: igvReadsTrackLoaded,
+                                            }}
+                                            onViewerSessionChange={acceptSignalViewerSession}
+                                            onNavigateIgv={navigateFromSignalWorkbench}
+                                        />
+                                    ) : (
+                                        <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                            The selected job is not bound to both an immutable managed dataset and an immutable ONT run generation, so its signal workbench cannot open.
+                                        </div>
+                                    )
+                                ) : igvInspectorOpen && selectedJob && selectedAlignmentSession?.ready && (
                                     <RawReadInspector
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}
@@ -5159,6 +5662,7 @@ export function NGSToolkit() {
                                             observedGeneration: rawSignalObservedGeneration,
                                             representationId: rawSignalRepresentationId,
                                         } : null}
+                                        onOpenRawSignal={(read) => void openSignalWorkbenchForRead(read)}
                                     />
                                 )}
                             </div>

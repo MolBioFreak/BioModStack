@@ -26,7 +26,11 @@ Raw benchmark record: `benchmarks/md/adh_engine_comparison_2026-07-17.json`.
 
 ## Public contracts
 
-- Job schema: `schemas/md_job_v1.schema.json` (`bms.md.job.v1`)
+- Canonical typed Job schema: `bms.md.job.v2`
+- Typed launcher intent: `bms.md.launch-intent.v1`
+- Preview envelope: `bms.md.launch-preview-request.v1`
+- Launch envelope: `bms.md.launch-request.v1`
+- Legacy compatibility schema: `schemas/md_job_v1.schema.json` (`bms.md.job.v1`)
 - Run-manifest schema: `schemas/md_run_v1.schema.json` (`bms.md.run.v1`)
 - CLI: `python3 -m scripts.bms_md.cli validate|run|aggregate`
 - Runner: `scripts/bms_md/gromacs_pipeline.py`
@@ -48,9 +52,23 @@ The normalized job contract explicitly records:
 
 The run manifest records the normalized config, engine version/platform, stage ledger, relative artifact paths, byte counts, and SHA-256 checksums. Absolute host paths are excluded from the artifact contract.
 
+## Molecular Dynamics launcher
+
+The Molecular Dynamics launcher uses a source-first boundary. The operator chooses one governed starting-structure identity, the server resolves immutable bytes and reports inspection/admission evidence, and the browser renders that evidence before any launch is possible. Supported sources are a verified managed fixture, an RCSB PDB accession, a direct PDB/mmCIF upload, a completed prediction artifact, an existing Design, a prior MD Job input (`prior_md_input`), or a policy-enumerated server file. The browser never submits a host filesystem path in the typed automatic-preparation lane.
+
+**Prediction-result handoff:** a sequence can be sent to the standard Structure Prediction launcher without fabricating coordinates in MD. After the prediction Job completes, the MD launcher lists bounded, typed source candidates from that exact Job. The selected candidate is still inspected and admitted against the selected chemistry profile before preview.
+
+The browser submits the complete requested scientific settings as `bms.md.launch-intent.v1`, including replicas, random seed, profile-owned preparation values, minimization/equilibration/production controls, output cadence, checkpoint cadence, CPU-thread request, and any Project `launch_context_id`. Unknown or omitted intent fields fail closed. A preview through `bms.md.launch-preview-request.v1` returns the server-compiled effective request, blockers/warnings, and an effective request digest. Final `bms.md.launch-request.v1` materialization requires that preview digest and creates the one canonical scheduler-visible Job.
+
+Profile changes invalidate both admission and preview. Any operator-setting change invalidates the preview. Clones reopen the prior Job-owned immutable input by Job UUID; typed Project requests reopen their original Design source and requested settings. Neither path recovers a browser-visible source path.
+
+### Compatibility boundary
+
+The prepared-system compatibility lane remains available only for explicitly prepared coordinates/topology through the pinned OpenMM 8.5.2 adapter. It does not use the typed automatic-preparation route and makes no GROMACS profile-admission claim. Generic `bms.md.job.v1` and direct `md_job_config` handling remain compatibility surfaces for existing automation; new browser and agent automatic-preparation submissions use the typed Gen 2 preview/launch routes.
+
 ## API and Nextflow integration
 
-The API accepts a complete `bms.md.job.v1` document as `md_job_config`. `build_nextflow_command` derives `md_input_root` from that document's parent directory, allowing relative structure/topology paths to be resolved before execution and binding only that input root into the runtime.
+For typed automatic preparation, the API validates the raw `bms.md.launch-intent.v1`, resolves and snapshots the admitted source bytes, compiles one authoritative `bms.md.job.v2` effective request, and binds the launch to the preview digest. Existing direct `bms.md.job.v1` / `md_job_config` handling is retained only for bounded compatibility. `build_nextflow_command` derives `md_input_root` from the server-materialized document's parent directory, allowing only server-owned relative structure/topology paths to be bound into the runtime.
 
 The workflow has three bounded processes:
 

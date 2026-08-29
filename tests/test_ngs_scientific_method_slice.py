@@ -1,9 +1,74 @@
 from pathlib import Path
+import hashlib
+import json
 import os
 import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_primary_alignment_stage_reports_after_publication() -> None:
+    workflow = (ROOT / "workflows/ngs/ont_plasmid_qc.nf").read_text(encoding="utf-8")
+    bam_branch = workflow.split("if (has_bam) {", 1)[1].split("// --- FASTQ input", 1)[0]
+
+    assert "DoradoAlign.out.aligned.subscribe" not in bam_branch
+    assert "workflow.onComplete" in workflow
+    assert "terminalOutputs.every { file(it).exists() }" in workflow
+    assert 'reportStage(params, "dorado_align"' in workflow
+
+
+def test_external_signal_alignment_uses_terminal_package_validator() -> None:
+    runner = (ROOT / "platform/api/services/nextflow.py").read_text(encoding="utf-8")
+
+    assert "is_ont_signal_alignment_job" in runner
+    assert "validate_and_prepare_ont_signal_alignment_completion" in runner
+    assert "Validated external ONT signal-alignment result package" in runner
+
+
+def test_primary_alignment_manifest_builder_binds_exact_artifacts(tmp_path: Path) -> None:
+    artifacts = {
+        "aligned.bam": b"bam",
+        "aligned.bam.bai": b"bai",
+        "reference.fasta": b">ref\nACGT\n",
+        "reference.fasta.fai": b"ref\t4\t5\t4\t5\n",
+    }
+    for name, content in artifacts.items():
+        (tmp_path / name).write_bytes(content)
+    reference_sha256 = hashlib.sha256(b"ACGT").hexdigest()
+    script = ROOT / "scripts/build_primary_alignment_session_manifest.sh"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script),
+            "job-primary-1",
+            reference_sha256,
+            "ont_plasmid_qc",
+            "bam",
+            "qc_manifest.json",
+            "circular",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    manifest = json.loads((tmp_path / "qc_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["summary"]["reference_topology"] == "circular"
+    assert manifest["alignment_session"] == {
+        "mode": "primary",
+        "reference_sequence_sha256": reference_sha256,
+        "source_reference_sequence_sha256": reference_sha256,
+        "binding": "authorized source reference binds exact primary BAM, index, FASTA, and index digests",
+    }
+    declared = {item["kind"]: item for item in manifest["artifacts"]}
+    assert set(declared) == {"alignment_bam", "alignment_bai", "reference", "reference_index"}
+    assert declared["alignment_bam"]["path"] == "align/aligned.bam"
+    assert declared["reference"]["sha256"] == hashlib.sha256(artifacts["reference.fasta"]).hexdigest()
+    assert all(item["required"] is True and item["state"] == "present" for item in declared.values())
 
 
 def test_dorado_image_pins_the_approved_consensus_runtime() -> None:
@@ -19,6 +84,10 @@ def test_dorado_image_pins_the_approved_consensus_runtime() -> None:
     assert '"igv-reports==${IGV_REPORTS_VERSION}"' in image
     assert 'IGV_REPORTS_VERSION="1.16.3"' in image
     assert "test -x /usr/local/bin/create_report" in image
+    assert 'IGV_JS_VERSION="3.5.2"' in image
+    assert "0efd638a0997aa90791ce6c83a8b33912d4bc06aed5e28741fc74f32a20998d6" in image
+    assert 'https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js' in image
+    assert "templates/ngs/igv_variant_standalone.html" in image
     assert 'MODKIT_VERSION="0.6.4"' in image
     assert "modkit_v0.6.4_u16_x86_64.tar.gz" in image
     assert "fb332c691431bd336eb0a81cbca17d2a35caf442ac48277ed3e296c2fe061d80" in image
@@ -31,7 +100,7 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     config = (ROOT / "nextflow.config").read_text(encoding="utf-8")
 
     assert "withLabel: fastq_qc_cpu" in config
-    assert 'container = "${params.container_dir}/dorado.sif"' in config
+    assert "container = params.dorado_runtime_sif" in config
     assert "apptainer" not in module
     assert "mpileup" not in module
     assert "fallback" not in module.lower()
@@ -41,28 +110,38 @@ def test_fastq_qc_has_one_authoritative_fail_closed_method() -> None:
     assert "CRITICAL_FAILURE: SAMTOOLS_CONSENSUS_EMPTY" in module
     assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_UNAVAILABLE" in module
     assert "CRITICAL_FAILURE: IGV_REPORT_CREATE_REPORT_FAILED" in module
-    assert "CRITICAL_FAILURE: IGV_REPORT_FINALIZE_FAILED" in module
+    assert "CRITICAL_FAILURE: IGV_REPORT_VALIDATE_FAILED" in module
     assert "build_small_igv_report_inputs.py" in module
-    assert "finalize_small_igv_report.py" in module
+    assert "finalize_small_igv_report.py" not in module
     assert "--reference-index reference_qc.fasta.fai" in module
     assert "stageAs: 'source-aligned.bam'" in module
     assert "stageAs: 'source-aligned.bam.bai'" in module
     assert 'cp -- "${bam}" aligned.bam' in module
     assert 'cp -- "${bai}" aligned.bam.bai' in module
     assert "--out-reference-config igv_reference_config.json" in module
-    assert "--reference-config igv_reference_config.json" in module
     assert "--fasta reference_qc.fasta" in module
-    assert "--generated-reference-fasta reference_qc.fasta" in module
-    assert "--generated-reference-index reference_qc.fasta.fai" in module
     assert "igv_reference_uri" not in module
-    assert "--no-embed" in module
+    assert "--standalone" in module
+    assert "--subsample 0.002" in module
+    assert "--no-embed" not in module
+    assert "--template /opt/bms/igv-reports/igv_variant_standalone.html" in module
+    assert "igv_standalone_track_config.json" in module
+    assert "validate_standalone_igv_report.py" in module
     assert "IGV_REPORT_ARTIFACT_OVERSIZED" in module
-    assert "1048576" in module
+    assert "100663296" in module
     assert '"url": "\\${bam_local}"' not in module
     assert "/api/files/" not in module
     assert "<!doctype html>" not in module
     assert "IGV Report Fallback" not in module
     assert 'path "fastq_consensus.fasta", optional: true' not in module
+
+
+def test_portable_igv_template_uses_only_the_pinned_local_runtime_asset() -> None:
+    template = (ROOT / "templates/ngs/igv_variant_standalone.html").read_text(encoding="utf-8")
+
+    assert 'src="file:///opt/bms/igv-reports/igv.min.js"' in template
+    assert "loadDefaultGenomes: false" in template
+    assert "cdn.jsdelivr.net" not in template
 
 
 def test_dimer_consensus_has_no_reference_or_majority_fallback() -> None:

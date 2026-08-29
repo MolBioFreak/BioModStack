@@ -37,6 +37,27 @@ V2_MANIFEST_ARTIFACT_PATHS = (
     "frustrampnn_statistics_v1.json",
 )
 AUTHORITY_ARTIFACT_PATH = "authority_artifact_v1.json"
+V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v2.json",
+    AUTHORITY_ARTIFACT_PATH,
+    *V2_MANIFEST_ARTIFACT_PATHS[1:],
+)
+V3_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v3.json",
+    "normalized_input.pdb",
+    "frustrampnn_structure_map_v1.json",
+    "raw_frustrampnn.csv",
+    "frustrampnn_landscape_v3.json",
+    "frustrampnn_summary_v3.json",
+    "frustrampnn_stdout.log",
+    "frustrampnn_stderr.log",
+    "frustrampnn_execution_receipt_v3.json",
+)
+V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS = (
+    "workflow_component_request_v3.json",
+    AUTHORITY_ARTIFACT_PATH,
+    *V3_MANIFEST_ARTIFACT_PATHS[1:],
+)
 EXTERNAL_SUCCESS_RESULT_ARTIFACT_PATHS = (
     AUTHORITY_ARTIFACT_PATH,
     *SUCCESS_RESULT_ARTIFACT_PATHS,
@@ -49,28 +70,40 @@ FAILURE_CLASSES = frozenset({
     "inference_timeout", "raw_output_missing", "raw_output_invalid",
     "position_mapping_failed", "wildtype_mismatch", "landscape_incomplete",
     "manifest_invalid", "publication_failed", "ingestion_failed",
+    "upstream_output_omitted", "source_verification_failed", "model_load_failed",
+    "batch_call_failed", "upstream_output_invalid", "csv_publication_failed",
 })
 SCHEMA_FILENAMES = {
     "workflow_component_request_v1": "workflow_component_request_v1.schema.json",
     "workflow_component_request_v2": "workflow_component_request_v2.schema.json",
+    "workflow_component_request_v3": "workflow_component_request_v3.schema.json",
     "capability_inventory_v1": "capability_inventory_v1.schema.json",
     "frustrampnn_requested_settings_v1": "settings_v1.schema.json",
+    "frustrampnn_requested_settings_v2": "settings_v2.schema.json",
     "frustrampnn_effective_settings_v1": "effective_settings_v1.schema.json",
+    "frustrampnn_effective_settings_v2": "effective_settings_v2.schema.json",
     "frustrampnn_execution_configuration_v2": "execution_configuration_v2.schema.json",
+    "frustrampnn_execution_configuration_v3": "execution_configuration_v3.schema.json",
     "frustrampnn_settings_v1": "settings_v1.schema.json",
     "frustrampnn_global_configuration_v2": "execution_configuration_v2.schema.json",
     "workflow_component_result_v1": "workflow_component_result_v1.schema.json",
     "workflow_component_result_v2": "workflow_component_result_v2.schema.json",
+    "workflow_component_result_v3": "workflow_component_result_v3.schema.json",
     "frustrampnn_structure_map_v1": "frustrampnn_structure_map_v1.schema.json",
     "frustrampnn_landscape_v1": "frustrampnn_landscape_v1.schema.json",
     "frustrampnn_landscape_v2": "frustrampnn_landscape_v2.schema.json",
+    "frustrampnn_landscape_v3": "frustrampnn_landscape_v3.schema.json",
     "frustrampnn_summary_v1": "frustrampnn_summary_v1.schema.json",
     "frustrampnn_summary_v2": "frustrampnn_summary_v2.schema.json",
+    "frustrampnn_summary_v3": "frustrampnn_summary_v3.schema.json",
     "frustrampnn_execution_receipt_v1": "frustrampnn_execution_receipt_v1.schema.json",
     "frustrampnn_execution_receipt_v2": "frustrampnn_execution_receipt_v2.schema.json",
+    "frustrampnn_execution_receipt_v3": "frustrampnn_execution_receipt_v3.schema.json",
     "frustrampnn_result_manifest_v1": "frustrampnn_result_manifest_v1.schema.json",
     "frustrampnn_result_manifest_v2": "frustrampnn_result_manifest_v2.schema.json",
+    "frustrampnn_result_manifest_v3": "frustrampnn_result_manifest_v3.schema.json",
     "frustrampnn_statistics_v1": "frustrampnn_statistics_v1.schema.json",
+    "frustrampnn_statistics_v2": "frustrampnn_statistics_v2.schema.json",
     "frustrampnn_comparison_v1": "frustrampnn_comparison_v1.schema.json",
     "frustrampnn_guidance_v1": "frustrampnn_guidance_v1.schema.json",
     "frustrampnn_multistate_comparison_v1": "frustrampnn_multistate_comparison_v1.schema.json",
@@ -201,6 +234,8 @@ def project_summary_artifact(instance: Mapping[str, Any]) -> dict[str, Any]:
         schema_key = "frustrampnn_summary_v1"
     elif identity == ("frustrampnn_summary", 2):
         schema_key = "frustrampnn_summary_v2"
+    elif identity == ("frustrampnn_summary", 3):
+        schema_key = "frustrampnn_summary_v3"
     else:
         raise ContractValidationError(
             f"unsupported persisted FrustraMPNN summary identity: {identity!r}"
@@ -303,10 +338,12 @@ def _validate_execution_configuration_v2(instance: Mapping[str, Any]) -> None:
         ) from exc
 
 
-def _validate_request_v2(instance: Mapping[str, Any]) -> None:
+def _validate_request_versioned(
+    instance: Mapping[str, Any],
+    configuration_model: type,
+) -> None:
     from .configuration import (
         ConfigurationValidationError,
-        FrustraMPNNExecutionConfigurationV2,
         validate_configuration,
     )
     from .settings import (
@@ -390,7 +427,7 @@ def _validate_request_v2(instance: Mapping[str, Any]) -> None:
     configuration_payload = instance["execution_configuration"]
     try:
         validate_configuration(configuration_payload)
-        configuration = FrustraMPNNExecutionConfigurationV2.model_validate(
+        configuration = configuration_model.model_validate(
             configuration_payload
         )
     except (ConfigurationValidationError, ValidationError) as exc:
@@ -446,6 +483,18 @@ def _validate_request_v2(instance: Mapping[str, Any]) -> None:
         raise ContractValidationError(
             "execution configuration SHA-256 does not match receipt"
         )
+
+
+def _validate_request_v2(instance: Mapping[str, Any]) -> None:
+    from .configuration import FrustraMPNNExecutionConfigurationV2
+
+    _validate_request_versioned(instance, FrustraMPNNExecutionConfigurationV2)
+
+
+def _validate_request_v3(instance: Mapping[str, Any]) -> None:
+    from .configuration import FrustraMPNNExecutionConfigurationV3
+
+    _validate_request_versioned(instance, FrustraMPNNExecutionConfigurationV3)
 
 
 def _validate_result(instance: Mapping[str, Any]) -> None:
@@ -693,13 +742,20 @@ def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
     plan = instance["command_plan"]
     entries = plan["entries"]
     commands = instance["commands"]
+    is_predict_batch = (
+        instance.get("schema_version") == 3
+        and instance.get("execution_method") == "predict_batch"
+    )
     if [entry["ordinal"] for entry in entries] != list(range(len(entries))):
         raise ContractValidationError("command plan ordinals are not contiguous and ordered")
     for entry in entries:
         _validate_typed_selection(entry, label="command-plan selection")
     if plan["plan_sha256"] != canonical_sha256({"entries": entries}):
         raise ContractValidationError("command plan SHA-256 does not match canonical plan")
-    if instance["command_count"] != len(entries) or len(commands) != len(entries):
+    if is_predict_batch:
+        if instance["command_count"] != 1 or len(commands) != 1:
+            raise ContractValidationError("predict_batch receipt must bind exactly one shared command")
+    elif instance["command_count"] != len(entries) or len(commands) != len(entries):
         raise ContractValidationError("command count does not match the command plan")
 
     modes = {
@@ -726,13 +782,21 @@ def _validate_execution_receipt_v2(instance: Mapping[str, Any]) -> None:
                 )
             seen_position_groups.add(position_group)
 
-    for entry, command in zip(entries, commands, strict=True):
+    paired_commands = (
+        [(None, commands[0])]
+        if is_predict_batch
+        else list(zip(entries, commands, strict=True))
+    )
+    for entry, command in paired_commands:
         _validate_typed_selection(command, label="command selection")
-        for field in ("ordinal", "chains", "positions", "shard_relative_path"):
-            if command[field] != entry[field]:
-                raise ContractValidationError(
-                    "command selection does not match its command-plan entry"
-                )
+        if entry is not None:
+            for field in ("ordinal", "chains", "positions", "shard_relative_path"):
+                if command[field] != entry[field]:
+                    raise ContractValidationError(
+                        "command selection does not match its command-plan entry"
+                    )
+        elif command["chains"] is not None or command["positions"] is not None:
+            raise ContractValidationError("predict_batch command must record unrestricted upstream selection")
         argv = command["argv"]
         if command["argv_sha256"] != canonical_sha256(argv):
             raise ContractValidationError("command argv SHA-256 does not match exact argv")
@@ -865,12 +929,16 @@ def _validate_manifest_v2(instance: Mapping[str, Any]) -> None:
     _validate_manifest(instance)
     records = instance["artifacts"]
     paths = [record["relative_path"] for record in records]
-    if paths != list(V2_MANIFEST_ARTIFACT_PATHS):
+    if paths not in (
+        list(V2_MANIFEST_ARTIFACT_PATHS),
+        list(V2_EXTERNAL_MANIFEST_ARTIFACT_PATHS),
+    ):
         raise ContractValidationError(
             "v2 manifest artifact paths are not the exact canonical generation"
         )
     expected = {
         "workflow_component_request_v2.json": ("workflow_component_request", 2, None),
+        AUTHORITY_ARTIFACT_PATH: ("producer_manifest", 1, ("records",)),
         "normalized_input.pdb": (None, None, ("residues",)),
         "frustrampnn_structure_map_v1.json": (
             "frustrampnn_structure_map", 1, ("residues",)
@@ -931,14 +999,66 @@ def _validate_result_v2(instance: Mapping[str, Any]) -> None:
         )
 
 
+def _validate_manifest_v3(instance: Mapping[str, Any]) -> None:
+    _validate_manifest(instance)
+    records = instance["artifacts"]
+    paths = [record["relative_path"] for record in records]
+    if paths not in (
+        list(V3_MANIFEST_ARTIFACT_PATHS),
+        list(V3_EXTERNAL_MANIFEST_ARTIFACT_PATHS),
+    ):
+        raise ContractValidationError(
+            "v3 manifest artifact paths are not the exact core generation"
+        )
+    expected = {
+        "workflow_component_request_v3.json": ("workflow_component_request", 3, None),
+        AUTHORITY_ARTIFACT_PATH: ("producer_manifest", 1, ("records",)),
+        "normalized_input.pdb": (None, None, ("residues",)),
+        "frustrampnn_structure_map_v1.json": (
+            "frustrampnn_structure_map", 1, ("residues",)
+        ),
+        "raw_frustrampnn.csv": (None, None, ("rows",)),
+        "frustrampnn_landscape_v3.json": (
+            "frustrampnn_landscape", 3, ("residues",)
+        ),
+        "frustrampnn_summary_v3.json": ("frustrampnn_summary", 3, ("records",)),
+        "frustrampnn_stdout.log": (None, None, None),
+        "frustrampnn_stderr.log": (None, None, None),
+        "frustrampnn_execution_receipt_v3.json": (
+            "frustrampnn_execution_receipt", 3, ("records",)
+        ),
+    }
+    for record in records:
+        schema_name, schema_version, kinds = expected[record["relative_path"]]
+        if record["schema_name"] != schema_name or record["schema_version"] != schema_version:
+            raise ContractValidationError("v3 manifest artifact schema identity is not exact")
+        is_log = record["relative_path"].endswith(".log")
+        if record["bytes"] < 0 or (not is_log and record["bytes"] == 0):
+            raise ContractValidationError("v3 manifest artifact byte count is invalid")
+        cardinality = record["cardinality"]
+        if kinds is None:
+            if cardinality is not None:
+                raise ContractValidationError("v3 manifest log cardinality must be null")
+        elif (
+            not isinstance(cardinality, Mapping)
+            or cardinality["kind"] not in kinds
+            or cardinality["count"] <= 0
+        ):
+            raise ContractValidationError("v3 manifest artifact cardinality is invalid")
+
+
 def validate_schema(schema_key: str, instance: Any) -> None:
     _schema_validate(schema_key, instance)
     validators = {
         "workflow_component_request_v1": _validate_request,
         "workflow_component_request_v2": _validate_request_v2,
+        "workflow_component_request_v3": _validate_request_v3,
         "frustrampnn_requested_settings_v1": _validate_settings_v1,
+        "frustrampnn_requested_settings_v2": _validate_settings_v1,
         "frustrampnn_effective_settings_v1": _typed_effective_settings,
+        "frustrampnn_effective_settings_v2": _typed_effective_settings,
         "frustrampnn_execution_configuration_v2": _validate_execution_configuration_v2,
+        "frustrampnn_execution_configuration_v3": _validate_execution_configuration_v2,
         "frustrampnn_settings_v1": _validate_settings_v1,
         "frustrampnn_global_configuration_v2": _validate_execution_configuration_v2,
         "workflow_component_result_v1": _validate_result,
@@ -947,10 +1067,15 @@ def validate_schema(schema_key: str, instance: Any) -> None:
         "frustrampnn_summary_v1": _validate_summary,
         "frustrampnn_result_manifest_v1": _validate_manifest,
         "frustrampnn_execution_receipt_v2": _validate_execution_receipt_v2,
+        "frustrampnn_execution_receipt_v3": _validate_execution_receipt_v2,
         "frustrampnn_landscape_v2": _validate_landscape_v2,
+        "frustrampnn_landscape_v3": _validate_landscape_v2,
         "frustrampnn_summary_v2": _validate_summary_v2,
+        "frustrampnn_summary_v3": _validate_summary_v2,
         "frustrampnn_result_manifest_v2": _validate_manifest_v2,
+        "frustrampnn_result_manifest_v3": _validate_manifest_v3,
         "workflow_component_result_v2": _validate_result_v2,
+        "workflow_component_result_v3": _validate_result_v2,
     }
     validator = validators.get(schema_key)
     if validator is not None:

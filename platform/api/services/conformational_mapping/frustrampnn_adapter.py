@@ -18,7 +18,13 @@ from services.frustrampnn.configuration import execution_configuration
 from services.frustrampnn.contracts import canonical_json_bytes, canonical_sha256 as frustrampnn_sha256
 from services.frustrampnn.contracts import validate_schema as validate_frustrampnn_schema
 from services.frustrampnn.settings import (
+    FrustraMPNNEffectiveSettings,
+    FrustraMPNNProteinSelection,
     FrustraMPNNRequestedSettings,
+    FrustraMPNNResolvedChainSelection,
+    FrustraMPNNSourceStructureSettings,
+    SourceResolutionError,
+    _build_effective_settings,
     requested_settings_sha256,
     resolve_effective_settings,
     validate_persisted_requested_settings,
@@ -38,6 +44,72 @@ from .contracts import (
 
 class FrustraMPNNAdapterError(ValueError):
     """A CM snapshot cannot safely authorize neutral structure normalization."""
+
+
+def build_cm_frustrampnn_source_inspection(
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project one exact CM snapshot into pre-conformer sequence scope metadata."""
+
+    try:
+        validate_schema("cm_complex_snapshot_v1", snapshot)
+    except Exception as exc:
+        raise FrustraMPNNAdapterError(f"CM source snapshot is invalid: {exc}") from exc
+
+    mappings_by_source: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for mapping in snapshot["instance_mappings"]:
+        mappings_by_source.setdefault(
+            (str(mapping["source_entity_id"]), str(mapping["source_instance_id"])),
+            [],
+        ).append(mapping)
+
+    projected: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    seen_identities: set[tuple[str, str]] = set()
+    source_order = 0
+    for entity in snapshot["entities"]:
+        if entity["entity_type"] != "protein":
+            continue
+        sequence = str(entity["sequence"])
+        for instance_id in entity["ordered_instance_ids"]:
+            source_identity = (str(entity["source_entity_id"]), str(instance_id))
+            if not mappings_by_source.get(source_identity):
+                raise FrustraMPNNAdapterError(
+                    "CM source snapshot does not map each protein instance"
+                )
+            selector = {
+                "entity_instance_id": source_identity[1],
+                "source_entity_id": source_identity[0],
+                "label_asym_id": None,
+                "auth_asym_id": None,
+            }
+            if source_identity in seen_identities:
+                raise FrustraMPNNAdapterError(
+                    "CM source snapshot has ambiguous source protein identity"
+                )
+            seen_identities.add(source_identity)
+            projected.append((
+                source_order,
+                {**selector, "pdb_chain_id": None},
+                {**selector, "sequence_start": 1, "sequence_end": len(sequence)},
+            ))
+            source_order += 1
+
+    if not projected:
+        raise FrustraMPNNAdapterError("CM source snapshot has no protein entity")
+    projected.sort(key=lambda item: (
+        item[0],
+        item[1]["entity_instance_id"],
+        item[1]["source_entity_id"],
+    ))
+    return {
+        "source_models": [1],
+        "selected_source_model": 1,
+        "observed_altlocs": [""],
+        "selected_altloc": "",
+        "protein_entities": [item[1] for item in projected],
+        "protein_sequence_spans": [item[2] for item in projected],
+        "mapped_residues": [],
+    }
 
 
 # Backward-readable CM v1 wire identity.  Its accompanying hash is always the
@@ -94,14 +166,42 @@ def bind_cm_candidate_snapshot_bytes(
         if source_relative_path is not None:
             bound["original_source_path"] = source_relative_path
         entity_by_source = {item["source_entity_id"]: item for item in bound["entities"]}
-        unique_mappings: list[dict[str, Any]] = []
+        mapping_candidate_ids = {
+            str(mapping["candidate_id"])
+            for mapping in bound["instance_mappings"]
+        }
+        if candidate_id in mapping_candidate_ids:
+            selected_candidate_ids = {candidate_id}
+        elif len(mapping_candidate_ids) == 1:
+            selected_candidate_ids = mapping_candidate_ids
+        else:
+            raise FrustraMPNNAdapterError(
+                "CM snapshot lacks a requested-candidate output mapping"
+            )
+        candidate_mappings: list[dict[str, Any]] = []
         seen_source_keys: set[tuple[str, str]] = set()
         for mapping in bound["instance_mappings"]:
+            if mapping["candidate_id"] not in selected_candidate_ids:
+                continue
             source_key = (mapping["source_entity_id"], mapping["source_instance_id"])
-            if source_key not in seen_source_keys:
-                seen_source_keys.add(source_key)
-                unique_mappings.append(mapping)
-        bound["instance_mappings"] = unique_mappings
+            if source_key in seen_source_keys:
+                raise FrustraMPNNAdapterError(
+                    "CM snapshot candidate output mapping is ambiguous"
+                )
+            seen_source_keys.add(source_key)
+            candidate_mappings.append(mapping)
+        required_protein_keys = {
+            (entity["source_entity_id"], instance_id)
+            for entity in bound["entities"]
+            if entity["entity_type"] == "protein"
+            for instance_id in entity["ordered_instance_ids"]
+        }
+        missing_protein_keys = required_protein_keys - seen_source_keys
+        if missing_protein_keys:
+            raise FrustraMPNNAdapterError(
+                "CM snapshot lacks a requested-candidate protein output mapping"
+            )
+        bound["instance_mappings"] = candidate_mappings
         for mapping in bound["instance_mappings"]:
             declared_auth = str(
                 mapping.get("output_auth_asym_id") or mapping["source_instance_id"]
@@ -524,6 +624,138 @@ def normalize_cm_structure(
         raise FrustraMPNNAdapterError(f"CM structure authority/identity rejected: {exc}") from exc
 
 
+def _candidate_protein_mapping_indexes(
+    snapshot: Mapping[str, Any], *, candidate_id: str,
+) -> tuple[
+    dict[tuple[str, str], Mapping[str, Any]],
+    dict[tuple[str, str, str, str], Mapping[str, Any]],
+]:
+    protein_source_keys = {
+        (str(instance_id), str(entity["source_entity_id"]))
+        for entity in snapshot["entities"]
+        if entity["entity_type"] == "protein"
+        for instance_id in entity["ordered_instance_ids"]
+    }
+    by_source: dict[tuple[str, str], Mapping[str, Any]] = {}
+    by_output: dict[tuple[str, str, str, str], Mapping[str, Any]] = {}
+    for mapping in snapshot["instance_mappings"]:
+        source_key = (
+            str(mapping["source_instance_id"]),
+            str(mapping["source_entity_id"]),
+        )
+        if source_key not in protein_source_keys or mapping["candidate_id"] != candidate_id:
+            continue
+        output_key = (
+            source_key[0],
+            str(mapping["output_entity_id"]),
+            str(mapping["output_label_asym_id"]),
+            str(mapping["output_auth_asym_id"]),
+        )
+        if source_key in by_source or output_key in by_output:
+            raise FrustraMPNNAdapterError(
+                "CM candidate source/output protein identity is ambiguous"
+            )
+        by_source[source_key] = mapping
+        by_output[output_key] = mapping
+    if set(by_source) != protein_source_keys:
+        raise FrustraMPNNAdapterError(
+            "CM candidate does not map every authorized source protein instance"
+        )
+    return by_source, by_output
+
+
+def _resolve_cm_effective_settings(
+    requested: FrustraMPNNRequestedSettings,
+    structure_map: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+    *,
+    candidate_id: str,
+) -> FrustraMPNNEffectiveSettings:
+    """Resolve source intent through one candidate's generated hierarchy."""
+
+    by_source, by_output = _candidate_protein_mapping_indexes(
+        snapshot, candidate_id=candidate_id,
+    )
+    selection = requested.protein_selection
+
+    def rebound(selector: Any, *, location: tuple[str | int, ...]) -> Any:
+        mapping = by_source.get(selector.source_key())
+        if mapping is None:
+            raise SourceResolutionError(
+                "selected CM source entity identity is stale or mismatched",
+                location=location,
+            )
+        output_label = str(mapping["output_label_asym_id"])
+        output_auth = str(mapping["output_auth_asym_id"])
+        if (
+            selector.label_asym_id not in {None, output_label}
+            or selector.auth_asym_id not in {None, output_auth}
+        ):
+            raise SourceResolutionError(
+                "selected CM source entity carries incompatible generated chain authority",
+                location=location,
+            )
+        return selector.model_copy(update={
+            "source_entity_id": str(mapping["output_entity_id"]),
+            "label_asym_id": output_label,
+            "auth_asym_id": output_auth,
+        })
+
+    if selection.mode == "selected_entities":
+        candidate_selection = FrustraMPNNProteinSelection(
+            mode=selection.mode,
+            entities=tuple(
+                rebound(
+                    selector,
+                    location=("protein_selection", "entities", index),
+                )
+                for index, selector in enumerate(selection.entities)
+            ),
+        )
+    elif selection.mode == "selected_regions":
+        candidate_selection = FrustraMPNNProteinSelection(
+            mode=selection.mode,
+            regions=tuple(
+                rebound(
+                    selector,
+                    location=("protein_selection", "regions", index),
+                )
+                for index, selector in enumerate(selection.regions)
+            ),
+        )
+    else:
+        candidate_selection = selection
+    candidate_requested = requested.model_copy(
+        update={"protein_selection": candidate_selection}
+    )
+    candidate_effective = resolve_effective_settings(candidate_requested, structure_map)
+
+    source_chains: list[FrustraMPNNResolvedChainSelection] = []
+    for chain in candidate_effective.resolved_chains:
+        mapping = by_output.get(chain.entity.canonical_key())
+        if mapping is None:
+            raise FrustraMPNNAdapterError(
+                "resolved generated chain has no exact CM source identity binding"
+            )
+        source_entity_id = str(mapping["source_entity_id"])
+        source_entity = chain.entity.model_copy(
+            update={"source_entity_id": source_entity_id}
+        )
+        source_chains.append(FrustraMPNNResolvedChainSelection(
+            entity=source_entity,
+            pdb_chain_id=chain.pdb_chain_id,
+            residues=tuple(
+                residue.model_copy(update={"source_entity_id": source_entity_id})
+                for residue in chain.residues
+            ),
+        ))
+    return _build_effective_settings(
+        requested,
+        resolved_chains=tuple(source_chains),
+        resolution_identity=candidate_effective.resolution_identity,
+    )
+
+
 def prepare_cm_candidate_v2(
     *,
     source: Path | str,
@@ -560,6 +792,9 @@ def prepare_cm_candidate_v2(
         if isinstance(requested_settings, FrustraMPNNRequestedSettings)
         else validate_persisted_requested_settings(requested_settings)
     )
+    requested = requested.model_copy(
+        update={"source_structure": FrustraMPNNSourceStructureSettings()}
+    )
     try:
         source_bytes = read_structure_bytes(source_path)
         source_sha256 = hashlib.sha256(source_bytes).hexdigest()
@@ -579,14 +814,16 @@ def prepare_cm_candidate_v2(
             parent_job_id=parent_job_id,
             candidate_id=candidate_id,
             complex_snapshot=bound_snapshot,
-            selected_model=requested.source_structure.selected_model_number,
-            altloc_policy=(
-                "blank_or_explicit:"
-                + (requested.source_structure.preferred_altloc or "<blank>")
-            ),
+            selected_model=1,
+            altloc_policy="blank_or_explicit:<blank>",
             source_bytes=source_bytes,
         )
-        effective = resolve_effective_settings(requested, structure_map)
+        effective = _resolve_cm_effective_settings(
+            requested,
+            structure_map,
+            bound_snapshot,
+            candidate_id=candidate_id,
+        )
         configuration = execution_configuration(effective)
         normalized_bytes = output_path.read_bytes()
         normalized_sha256 = hashlib.sha256(normalized_bytes).hexdigest()
@@ -618,9 +855,9 @@ def prepare_cm_candidate_v2(
         configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
         request = {
             "schema_name": "workflow_component_request",
-            "schema_version": 2,
+            "schema_version": 3,
             "component_id": "frustrampnn",
-            "component_contract_version": "2.0",
+            "component_contract_version": "3.0",
             "invocation_id": f"frustrampnn:{parent_job_id}:{candidate_id}",
             "parent_job_id": parent_job_id,
             "parent_workflow_id": parent_workflow_id,
@@ -642,6 +879,7 @@ def prepare_cm_candidate_v2(
                 "relative_path": "authority_artifact_v1.json",
                 "media_type": "application/json",
                 "sha256": hashlib.sha256(authority_payload).hexdigest(),
+                "bytes": len(authority_payload),
                 "canonical_json_base64": base64.b64encode(authority_payload).decode("ascii"),
                 "cm_complex_snapshot_sha256": snapshot_sha256,
             },
@@ -677,7 +915,7 @@ def prepare_cm_candidate_v2(
                 "structure_map", "raw_csv", "landscape", "summary", "execution_receipt",
             ],
         }
-        validate_frustrampnn_schema("workflow_component_request_v2", request)
+        validate_frustrampnn_schema("workflow_component_request_v3", request)
         component_request_path.write_bytes(canonical_json_bytes(request))
         authority_path.unlink()
         return request

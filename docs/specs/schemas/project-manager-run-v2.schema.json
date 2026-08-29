@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.run.v2",
+  "title": "Project Manager canonical run projection v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "native_binding_state", "canonical_job_id", "workflow_type", "target_label", "canonical_state", "normalized_state", "stage", "progress", "started_at", "elapsed_seconds", "replica_index", "batch_or_run_group_id", "output_count", "condition", "receipt_id", "adapter_id", "available_actions", "canonical_surface"],
+  "properties": {
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "native_binding_state": {"enum": ["unmaterialized", "binding_pending", "bound", "conflicted"]},
+    "canonical_job_id": {"$ref": "#/$defs/nullableId"},
+    "workflow_type": {"type": "string", "minLength": 1, "maxLength": 255},
+    "target_label": {"type": "string", "maxLength": 512},
+    "canonical_state": {"type": "string", "minLength": 1, "maxLength": 128},
+    "normalized_state": {"enum": ["planned", "prepared", "queued", "running", "paused", "cancelling", "completed", "failed", "cancelled", "blocked", "unknown"]},
+    "stage": {"anyOf": [{"type": "string", "maxLength": 255}, {"type": "null"}]},
+    "progress": {"$ref": "#/$defs/progress"},
+    "started_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "elapsed_seconds": {"type": "integer", "minimum": 0},
+    "replica_index": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+    "batch_or_run_group_id": {"$ref": "#/$defs/nullableId"},
+    "output_count": {"type": "integer", "minimum": 0},
+    "condition": {"$ref": "#/$defs/condition"},
+    "receipt_id": {"$ref": "#/$defs/nullableId"},
+    "adapter_id": {"type": "string", "minLength": 1, "maxLength": 255},
+    "available_actions": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+    "canonical_surface": {"anyOf": [{"$ref": "#/$defs/typedEnvelope"}, {"type": "null"}]}
+  },
+  "allOf": [
+    {"if": {"properties": {"native_binding_state": {"const": "bound"}}, "required": ["native_binding_state"]}, "then": {"properties": {"canonical_job_id": {"$ref": "#/$defs/id"}, "receipt_id": {"$ref": "#/$defs/id"}}}},
+    {"if": {"properties": {"native_binding_state": {"enum": ["unmaterialized", "binding_pending", "conflicted"]}}, "required": ["native_binding_state"]}, "then": {"properties": {"canonical_job_id": {"type": "null"}, "receipt_id": {"type": "null"}}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "nullableId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "progress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "unit"],
+      "properties": {
+        "kind": {"enum": ["fraction", "elapsed", "indeterminate"]},
+        "value": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        "unit": {"enum": ["ratio", "seconds", null]}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "fraction"}}, "required": ["kind"]}, "then": {"properties": {"value": {"type": "number", "minimum": 0, "maximum": 1}, "unit": {"const": "ratio"}}}},
+        {"if": {"properties": {"kind": {"const": "elapsed"}}, "required": ["kind"]}, "then": {"properties": {"value": {"type": "integer", "minimum": 0}, "unit": {"const": "seconds"}}}},
+        {"if": {"properties": {"kind": {"const": "indeterminate"}}, "required": ["kind"]}, "then": {"properties": {"value": {"type": "null"}, "unit": {"type": "null"}}}}
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message"],
+      "properties": {
+        "severity": {"enum": ["none", "warning", "failure"]},
+        "code": {"anyOf": [{"type": "string", "maxLength": 128}, {"type": "null"}]},
+        "message": {"anyOf": [{"type": "string", "maxLength": 2048}, {"type": "null"}]}
+      }
+    },
+    "typedEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "source_authority_keys", "payload"],
+      "properties": {
+        "schema": {"type": "string", "pattern": "^bms\\.[A-Za-z0-9_.-]+$", "maxLength": 255},
+        "source_authority_keys": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/sha256"}},
+        "payload": {"type": "object"}
+      }
+    }
+  }
+}

@@ -30,11 +30,18 @@ def requireExactSettingsObject(value, Set<String> expectedKeys, String location)
 
 def requireCompleteFrustraMPNNSettings(value) {
     requireExactSettingsObject(value, [
-        'schema_name', 'schema_version', 'protein_selection',
+        'schema_name', 'schema_version', 'batching_enabled', 'structures_per_job',
+        'protein_selection',
         'source_structure', 'classification_policy',
     ] as Set, 'frustrampnn_settings')
+    if (value.schema_name != 'frustrampnn_settings' || value.schema_version != 2 ||
+        !(value.batching_enabled instanceof Boolean) ||
+        !(value.structures_per_job instanceof Integer) ||
+        value.structures_per_job < 1 || value.structures_per_job > 250) {
+        throw new IllegalArgumentException('frustrampnn_settings v2 batching authority is invalid')
+    }
     requireExactSettingsObject(value.protein_selection, [
-        'mode', 'entities', 'residues',
+        'mode', 'entities', 'regions', 'residues',
     ] as Set, 'frustrampnn_settings.protein_selection')
     requireExactSettingsObject(value.source_structure, [
         'selected_model_number', 'preferred_altloc',
@@ -43,6 +50,7 @@ def requireCompleteFrustraMPNNSettings(value) {
         'mode', 'high_max', 'minimal_min',
     ] as Set, 'frustrampnn_settings.classification_policy')
     if (!(value.protein_selection.entities instanceof Collection) ||
+        !(value.protein_selection.regions instanceof Collection) ||
         !(value.protein_selection.residues instanceof Collection)) {
         throw new IllegalArgumentException('frustrampnn_settings protein selectors must be arrays')
     }
@@ -50,6 +58,12 @@ def requireCompleteFrustraMPNNSettings(value) {
         requireExactSettingsObject(selector, [
             'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
         ] as Set, "frustrampnn_settings.protein_selection.entities[${index}]")
+    }
+    value.protein_selection.regions.eachWithIndex { selector, index ->
+        requireExactSettingsObject(selector, [
+            'entity_instance_id', 'source_entity_id', 'label_asym_id', 'auth_asym_id',
+            'sequence_start', 'sequence_end',
+        ] as Set, "frustrampnn_settings.protein_selection.regions[${index}]")
     }
     value.protein_selection.residues.eachWithIndex { selector, index ->
         requireExactSettingsObject(selector, [
@@ -95,6 +109,19 @@ def sha256Hex(byte[] payload) {
     digest.digest().encodeHex().toString()
 }
 
+def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
+    def payload = canonicalJsonValue(value) as Map
+    payload['settings_value_origin'] = settingsValueOrigin
+    def selection = payload['protein_selection']
+    if (selection instanceof Map && selection['regions'] instanceof Collection && selection['regions'].isEmpty()) {
+        def compatibleSelection = new TreeMap<String, Object>()
+        compatibleSelection.putAll(selection)
+        compatibleSelection.remove('regions')
+        payload['protein_selection'] = compatibleSelection
+    }
+    return payload
+}
+
 params.sequence_batch_json_path = params.sequence_batch_json_path ?: null
 params.complex_batch_dir = params.complex_batch_dir ?: null
 params.target_geometry_mode = params.target_geometry_mode ?: null
@@ -125,7 +152,7 @@ include { BoltzFromSequence } from '../modules/structure_prediction.nf'
 include { RF3FromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
-include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn.nf'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 def proteinDesignSha256(rawPath) {
     def digest = java.security.MessageDigest.getInstance('SHA-256')
@@ -375,7 +402,7 @@ process PrepareProteinDesignFrustraMPNNCandidate {
         val(settings_sha256), val(settings_value_origin)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
@@ -390,8 +417,8 @@ process PrepareProteinDesignFrustraMPNNCandidate {
     set -euo pipefail
     '${params.api_python}' '${params.code_root}/scripts/prepare_frustrampnn_candidate.py' \
       --source '${terminal_structure}' --output-pdb canonical_source.pdb \
-      --request workflow_component_request_v2.json --metadata-base64 '${metadataBase64}' \
-      --request-version 2 --structure-map frustrampnn_structure_map_v1.json \
+      --request workflow_component_request_v3.json --metadata-base64 '${metadataBase64}' \
+      --request-version 3 --structure-map frustrampnn_structure_map_v1.json \
       --settings-base64 '${settings_base64}' --settings-sha256 '${settings_sha256}' \
       --settings-value-origin '${settings_value_origin}'
     """
@@ -1178,19 +1205,17 @@ workflow PROTEIN_DESIGN {
             error('frustrampnn_settings must be exact compact canonical JSON')
         }
         def settingsBase64 = settingsBytes.encodeBase64().toString()
-        def settingsWithOrigin = new TreeMap<String, Object>()
-        settingsWithOrigin.putAll(rawSettings)
-        settingsWithOrigin['settings_value_origin'] = settingsValueOrigin
-        def settingsSha256 = sha256Hex(canonicalJsonBytes(settingsWithOrigin))
-        def typedFrustraMPNNCandidates = terminal_designs.map { candidate_meta, terminal_structure ->
-            tuple(candidate_meta, terminal_structure, settingsBase64, settingsSha256, settingsValueOrigin)
-        }
-        PrepareProteinDesignFrustraMPNNCandidate(typedFrustraMPNNCandidates)
-        CanonicalFrustraMPNNV2(PrepareProteinDesignFrustraMPNNCandidate.out.prepared)
-        frustrampnn_results = CanonicalFrustraMPNNV2.out.result
-        PublishProteinDesignFrustraMPNNCandidate(frustrampnn_results)
-        def published_frustrampnn_markers = PublishProteinDesignFrustraMPNNCandidate.out.marker.collect()
-        ReportProteinDesignFrustraMPNNComplete(published_frustrampnn_markers)
+        def settingsSha256 = sha256Hex(canonicalJsonBytes(
+            requestedFrustraMPNNSettingsHashPayload(rawSettings, settingsValueOrigin)
+        ))
+        SchedulerFrustraMPNNParentFanout(
+            terminal_designs,
+            Channel.value(params.job_id.toString()),
+            Channel.value('protein_design'),
+            Channel.value(params.frustrampnn_settings.toString()),
+            Channel.value(settingsValueOrigin),
+        )
+        frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
     }
     else {
         ReportProteinDesignFrustraMPNNNotRequested(Channel.value('not_requested'))

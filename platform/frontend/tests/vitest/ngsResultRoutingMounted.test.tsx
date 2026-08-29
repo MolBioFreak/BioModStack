@@ -10,6 +10,9 @@ const ngsApiMocks = vi.hoisted(() => ({
     fetchJobs: vi.fn(),
 }));
 const alignmentMocks = vi.hoisted(() => ({
+    bindAlignmentSessionsToResultAuthority: vi.fn((sessions: unknown[]) => sessions),
+    describeNgsError: vi.fn((_reason: unknown, fallback: string) => fallback),
+    disposeAlignmentAccess: vi.fn(),
     fetchAlignmentSessions: vi.fn(),
     isAlignmentAccessDenied: vi.fn(),
     rotateAlignmentAccess: vi.fn(),
@@ -105,6 +108,8 @@ beforeEach(() => {
     contextMocks.updateQueryParams.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockReset();
     alignmentMocks.fetchAlignmentSessions.mockResolvedValue([]);
+    alignmentMocks.disposeAlignmentAccess.mockReset();
+    alignmentMocks.disposeAlignmentAccess.mockResolvedValue(undefined);
     alignmentMocks.isAlignmentAccessDenied.mockReset();
     alignmentMocks.isAlignmentAccessDenied.mockReturnValue(false);
     alignmentMocks.rotateAlignmentAccess.mockReset();
@@ -405,7 +410,7 @@ describe('completed NGS result routing', () => {
         await flush();
 
         expect(alignmentMocks.fetchAlignmentSessions.mock.calls.filter(([jobId]) => jobId === 'job-123')).toHaveLength(1);
-        expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])?.isInvalidated).toBe(false);
+        expect(client.getQueryState(['sequence-qc-manifest', 'job-123'])).toBeUndefined();
         expect(container.textContent).not.toContain('Restoring access…');
         expect(container.querySelector('[role="alert"]')?.textContent || '').not.toContain('job-123');
     });

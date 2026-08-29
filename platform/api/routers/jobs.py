@@ -3,11 +3,13 @@ Jobs API router - Create, list, cancel pipeline jobs.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body, Request, Response
+from fastapi.params import Depends as DependsParam
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from sqlalchemy.exc import OperationalError
-from typing import Optional, List, Dict, Any, Callable, NoReturn, cast
+from typing import Optional, List, Dict, Any, Callable, Mapping, NoReturn, cast
+from dataclasses import dataclass
 from types import SimpleNamespace
 from copy import deepcopy
 import asyncio
@@ -21,7 +23,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ from database import (
     Job,
     Design,
     FrustraMPNNResult,
+    ConformationalMappingRequest,
     RFD3LocalRedesignRequest,
     RFD3LocalRedesignCandidate,
     RFD3LocalRedesignArtifact,
@@ -61,7 +64,12 @@ from paths import (
     resolve_runtime_data_path,
     to_allowed_relative,
 )
-from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
+from runtime_policy import (
+    acquire_workflow_mutation_lease,
+    run_with_workflow_mutation_lease,
+    workflow_launch_block_detail,
+    workflow_launches_allowed,
+)
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
@@ -72,6 +80,7 @@ from services.md.launch_contract import MDLaunchError, materialize_md_job_spec, 
 from services.md.results import expected_analysis_implementation_sha256
 from services.md.state import MdStateError, create_md_run, create_replica_attempt
 from services.proteinbase_importer import import_proteinbase_bundle
+from services.nextflow import normalize_plr_input_pdb_path, normalize_plr_structure_validators
 from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
@@ -843,6 +852,9 @@ class AntibodyIterationLaunchRequest(BaseModel):
 
 class AntibodyIterationLaunchResponse(BaseModel):
     """Response for viewer-driven antibody iteration actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
     message: str
     action: str
     source_job_id: str
@@ -850,6 +862,8 @@ class AntibodyIterationLaunchResponse(BaseModel):
     selection_dir: str
     selected_design_count: int
     launched_job: JobResponse
+    launched_jobs: List[JobResponse] = Field(default_factory=list)
+    fanout_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class ManualMutagenesisLaunchRequest(BaseModel):
@@ -4537,6 +4551,7 @@ def _resolve_nanopore_fastq_qc_mode(params: Optional[dict]) -> tuple[bool, bool]
     if isinstance(run_fastq_qc, bool):
         return run_fastq_qc, False
 
+    # Legacy persisted jobs may carry run_multimer_qc. New requests use run_fastq_qc only.
     run_multimer_qc = params.get("run_multimer_qc")
     if isinstance(run_multimer_qc, bool):
         return run_multimer_qc, True
@@ -4550,9 +4565,73 @@ def _resolve_nanopore_bam_realign(params: Optional[dict]) -> bool:
     return _to_bool(params.get("bam_force_realign"))
 
 
+NANOPORE_STAGE_RESPONSE_MODES = frozenset(
+    {
+        "basecall_dna",
+        "basecall_rna",
+        "plasmid_qc",
+        "construct_screening",
+        "methylation_analysis",
+        "nanopore_methylation",
+        "fastq_qc",
+        "clone_validation",
+    }
+)
+
+
+def _uses_nanopore_stage_response(job: Job) -> bool:
+    return job.model_id == "nanopore" and job.mode in NANOPORE_STAGE_RESPONSE_MODES
+
+
+def _planned_nanopore_stages(params: Optional[dict], *, mode: Optional[str] = None) -> List[str]:
+    np_params = params if isinstance(params, dict) else {}
+    display_stages: List[str] = []
+    has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
+    has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
+    has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
+    has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
+    if mode in {"basecall_dna", "basecall_rna"}:
+        if not has_pod5:
+            return []
+        display_stages.append("dorado_basecall")
+        has_barcode_kit = _is_meaningful_param_value(np_params.get("barcode_kit"))
+        if mode == "basecall_dna" and has_barcode_kit:
+            display_stages.append("dorado_demux")
+        elif has_reference:
+            display_stages.append("dorado_align")
+        return display_stages
+    fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
+    bam_force_realign = _resolve_nanopore_bam_realign(np_params)
+
+    if has_pod5:
+        display_stages.append("dorado_basecall")
+    if has_pod5 and has_reference:
+        display_stages.append("dorado_align")
+    if has_bam and has_reference:
+        display_stages.append("dorado_align" if bam_force_realign else "bam_prepare")
+    if (has_bam and not has_reference) or (has_pod5 and not has_reference):
+        display_stages.append("bam_prepare")
+    if has_fastq and has_reference:
+        display_stages.append("fastq_align")
+    if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+        display_stages.append("fastq_qc")
+    if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
+        display_stages.append("modkit")
+    if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+        display_stages.append("multimer_qc")
+    if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+        display_stages.append("dimer_analysis")
+    if np_params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
+        display_stages.append("wf_clone_validation")
+
+    return _dedupe_preserve_order(display_stages)
+
+
 def _infer_nanopore_stage_outputs(
     output_dir: Optional[str],
     params: Optional[dict] = None,
+    *,
+    mode: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     output_path = resolve_output_dir(output_dir or "")
     if not output_path or not output_path.exists():
@@ -4570,6 +4649,11 @@ def _infer_nanopore_stage_outputs(
             "align/reference.fasta",
             "align/reference.fasta.fai",
             "align/align.log",
+        ],
+        "dorado_demux": [
+            "demux/demux_manifest.json",
+            "demux/per_barcode_units.json",
+            "demux/demux/units",
         ],
         "bam_prepare": [
             "align/aligned.bam",
@@ -4669,29 +4753,32 @@ def _infer_nanopore_stage_outputs(
         fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(params)
         bam_force_realign = _resolve_nanopore_bam_realign(params)
 
-        allowed_stages = set()
-        if has_pod5:
-            allowed_stages.add("dorado_basecall")
-        if has_pod5 and has_reference:
-            allowed_stages.add("dorado_align")
-        if has_bam and has_reference and bam_force_realign:
-            allowed_stages.add("dorado_align")
-        if has_bam:
-            allowed_stages.add("bam_prepare")
-        if has_pod5 and not has_reference:
-            allowed_stages.add("bam_prepare")
-        if has_fastq and has_reference:
-            allowed_stages.add("fastq_align")
-        if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
-            allowed_stages.add("fastq_qc")
-        if params.get("run_modkit") is not False and (has_pod5 or has_bam):
-            allowed_stages.add("modkit")
-        if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
-            allowed_stages.add("multimer_qc")
-        if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
-            allowed_stages.add("dimer_analysis")
-        if params.get("run_assembly") is True and (has_pod5 or has_bam):
-            allowed_stages.add("wf_clone_validation")
+        if mode in {"basecall_dna", "basecall_rna"}:
+            allowed_stages = set(_planned_nanopore_stages(params, mode=mode))
+        else:
+            allowed_stages = set()
+            if has_pod5:
+                allowed_stages.add("dorado_basecall")
+            if has_pod5 and has_reference:
+                allowed_stages.add("dorado_align")
+            if has_bam and has_reference and bam_force_realign:
+                allowed_stages.add("dorado_align")
+            if has_bam:
+                allowed_stages.add("bam_prepare")
+            if has_pod5 and not has_reference:
+                allowed_stages.add("bam_prepare")
+            if has_fastq and has_reference:
+                allowed_stages.add("fastq_align")
+            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
+                allowed_stages.add("fastq_qc")
+            if params.get("run_modkit") is not False and (has_pod5 or has_bam):
+                allowed_stages.add("modkit")
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
+                allowed_stages.add("multimer_qc")
+            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
+                allowed_stages.add("dimer_analysis")
+            if params.get("run_assembly") is True and (has_pod5 or has_bam or has_fastq):
+                allowed_stages.add("wf_clone_validation")
 
     inferred: Dict[str, List[str]] = {}
     for stage, rel_paths in expected.items():
@@ -4711,9 +4798,9 @@ def _resolve_stage_state_for_response(job: Job) -> tuple[List[str], Dict[str, Li
     completed = _dedupe_preserve_order(list(job.completed_stages or []))
     stage_outputs = dict(job.stage_outputs or {})
 
-    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+    if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
         for stage, outputs in inferred_outputs.items():
             existing = stage_outputs.get(stage)
             if isinstance(existing, list):
@@ -4934,6 +5021,33 @@ def _normalize_nanopore_modbase_for_validation(
     return normalized
 
 
+def _validate_plr_validator_availability(registry, params: dict) -> None:
+    selected = params.get("structure_validators")
+    if not isinstance(selected, list):
+        return
+    registry_ids = {
+        "boltz2": "boltz2",
+        "esmfold2": "esmfold2",
+        "protenix_v2": "protenix",
+    }
+    unavailable = [
+        validator
+        for validator in selected
+        if registry.get_model(registry_ids[validator]) is None
+    ]
+    if unavailable:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Selected structure validators are disabled or unavailable: {', '.join(unavailable)}",
+        )
+
+
+def _is_protein_local_redesign_job(job: Job) -> bool:
+    return job.model_id == "protein_local_redesign" or (
+        job.model_id == "protein_modification_experimental" and job.mode == "region_redesign"
+    )
+
+
 @router.get("", response_model=JobList)
 async def list_jobs(
     status: Optional[JobStatus] = None,
@@ -5048,6 +5162,16 @@ async def list_jobs(
             str(parent_job_id): int(result_count)
             for parent_job_id, result_count in frustrampnn_counts.all()
         }
+    conformational_mapping_request_id_by_job: dict[str, str] = {}
+    if listed_job_ids:
+        cm_request_rows = await session.execute(
+            select(ConformationalMappingRequest.job_id, ConformationalMappingRequest.request_id)
+            .where(ConformationalMappingRequest.job_id.in_(listed_job_ids))
+        )
+        conformational_mapping_request_id_by_job = {
+            str(job_id): str(request_id)
+            for job_id, request_id in cm_request_rows.all()
+        }
     child_design_count_by_parent: dict[str, int] = {}
     if listed_job_ids:
         child_count_result = await session.execute(
@@ -5138,6 +5262,7 @@ async def list_jobs(
                 {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
                 if frustrampnn_result_count else None
             ),
+            conformational_mapping_request_id=conformational_mapping_request_id_by_job.get(str(job.id)),
         ))
     
     return JobList(jobs=job_responses, total=total)
@@ -5277,6 +5402,31 @@ def _standard_job_output_dir(name: str, timestamp: str, preallocated_job_id: str
     return get_results_dir() / f"{name}_{timestamp}"
 
 
+def _resolve_job_sequence_length(
+    explicit_length: int | None,
+    params: Mapping[str, Any],
+) -> int:
+    if explicit_length is not None:
+        return explicit_length
+    for key in ("sequence", "sequence_input"):
+        sequence = params.get(key)
+        if isinstance(sequence, str) and sequence:
+            return len(sequence)
+    components = params.get("complex_components")
+    if isinstance(components, list):
+        lengths = [
+            len(component["sequence"])
+            for component in components
+            if isinstance(component, Mapping)
+            and component.get("type") == "protein"
+            and isinstance(component.get("sequence"), str)
+            and component["sequence"]
+        ]
+        if lengths:
+            return max(lengths)
+    return 300
+
+
 async def _create_job(
     job_data: JobCreate,
     background_tasks: BackgroundTasks,
@@ -5305,6 +5455,18 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
+        try:
+            job_data.params = normalize_plr_structure_validators(job_data.params or {})
+            job_data.params = normalize_plr_input_pdb_path(job_data.params, resolve_relative=resolve_allowed_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        input_pdb = (job_data.params or {}).get("input_pdb")
+        if isinstance(input_pdb, str) and input_pdb.strip() and not Path(input_pdb).is_file():
+            raise HTTPException(
+                status_code=422,
+                detail=f"PLR input_pdb provisioned file is missing: {input_pdb}",
+            )
     if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
         if "workflow_adapter" in (job_data.params or {}) and _trusted_workflow_adapter is not True:
             raise HTTPException(
@@ -5312,6 +5474,16 @@ async def _create_job(
                 detail={
                     "local_redesign_contract_error": "workflow_adapter is server-owned for native RFD3"
                 },
+            )
+        try:
+            job_data.params = normalize_plr_input_pdb_path(job_data.params or {}, resolve_relative=resolve_allowed_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        input_pdb = (job_data.params or {}).get("input_pdb")
+        if isinstance(input_pdb, str) and input_pdb.strip() and not Path(input_pdb).is_file():
+            raise HTTPException(
+                status_code=422,
+                detail=f"PLR input_pdb provisioned file is missing: {input_pdb}",
             )
         pinned_gpu = job_data.pinned_gpu
         if isinstance(pinned_gpu, bool) or not isinstance(pinned_gpu, int) or pinned_gpu < 0:
@@ -5384,6 +5556,9 @@ async def _create_job(
     except Exception as e:
         logger.warning(f"Failed to reload model registry before validation: {e}")
 
+    if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
+        _validate_plr_validator_availability(registry, job_data.params or {})
+
     if job_data.model_id == "nanopore" and not ont_submission_trust.is_trusted_ont_job_creation():
         raise HTTPException(
             status_code=422,
@@ -5417,7 +5592,12 @@ async def _create_job(
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
-        if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+        is_protein_local_redesign = (
+            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
+        ) or (
+            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
+        )
+        if not is_protein_local_redesign:
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
@@ -5661,25 +5841,11 @@ async def _create_job(
         )
         os.makedirs(base_output_dir, exist_ok=True)
     
-    # Extract sequence length for VRAM estimation (same for all jobs in batch)
-    # PRIORITY: 1) job_data.sequence_length (explicit), 2) extract from params, 3) fallback
-    sequence_length = job_data.sequence_length  # May be explicitly set by spawn scripts
-    
-    if sequence_length is None:
-        # Try to extract from params
-        if 'sequence_input' in job_data.params and job_data.params['sequence_input']:
-            sequence_length = len(job_data.params['sequence_input'])
-        elif 'complex_components' in job_data.params:
-            # For complexes, use the longest chain
-            max_len = 0
-            for comp in job_data.params['complex_components']:
-                if comp.get('type') == 'protein' and comp.get('sequence'):
-                    max_len = max(max_len, len(comp['sequence']))
-            if max_len > 0:
-                sequence_length = max_len
-    
-    if sequence_length is None:
-        sequence_length = 300  # Default fallback
+    # Extract sequence length for VRAM estimation (same for all jobs in batch).
+    sequence_length = _resolve_job_sequence_length(
+        job_data.sequence_length,
+        job_data.params,
+    )
     
     # Estimate VRAM based on model type
     from services.gpu_orchestrator import estimate_vram, estimate_protenix_tokens
@@ -6178,6 +6344,289 @@ async def _create_job(
     )
 
 
+_TYPED_MD_INTENT_AUTHORITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_ref",
+        "expected_source_sha256",
+        "chemistry_profile_id",
+        "chemistry_profile_sha256",
+        "catalog_digest",
+        "requested_settings",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TypedMdProjectLaunch:
+    """Server-owned handoff from the sealed typed MD route to canonical Job creation."""
+
+    request_schema_version: str
+    intent: Mapping[str, Any]
+    preview: Mapping[str, Any]
+    preview_digest: str
+    md_job_spec: Mapping[str, Any]
+    source_token: str
+
+
+def _canonical_typed_md_document(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _typed_md_adapter_error(message: str) -> LaunchContextError:
+    return LaunchContextError(
+        "launch_context_typed_md_adapter_invalid",
+        message,
+        status_code=409,
+    )
+
+
+async def _validated_typed_md_project_params(
+    *,
+    experiment_session: AsyncSession,
+    context: Any,
+    job_data: JobCreate,
+    adapter: Any,
+    md_input_resolver: Any,
+) -> dict[str, Any]:
+    """Bind one current prepared Design authority to one server-compiled MD v2 spec."""
+
+    if not isinstance(adapter, TypedMdProjectLaunch):
+        raise _typed_md_adapter_error("Typed MD launch requires its sealed internal adapter.")
+    if (
+        adapter.request_schema_version != "bms.md.launch-request.v1"
+        or job_data.model_id != "molecular_dynamics"
+        or job_data.mode != "simulate"
+        or job_data.launch_context_id != context.launch_context_id
+        or not callable(md_input_resolver)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD adapter route, context, model, mode, or resolver authority is invalid."
+        )
+
+    intent = deepcopy(dict(adapter.intent))
+    preview = deepcopy(dict(adapter.preview))
+    md_job_spec = deepcopy(dict(adapter.md_job_spec))
+    supplied_params = dict(job_data.params or {})
+    if set(intent) != _TYPED_MD_INTENT_AUTHORITY_FIELDS | {"name", "launch_context_id"}:
+        raise _typed_md_adapter_error("Typed MD intent authority is not the sealed v1 schema.")
+    if (
+        intent.get("schema_version") != "bms.md.launch-intent.v1"
+        or intent.get("launch_context_id") != context.launch_context_id
+        or set(supplied_params) != {"md_job_spec"}
+        or _canonical_typed_md_document(supplied_params["md_job_spec"])
+        != _canonical_typed_md_document(md_job_spec)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD request contains caller-owned or divergent server fields."
+        )
+
+    intent_authority = {
+        key: intent[key] for key in _TYPED_MD_INTENT_AUTHORITY_FIELDS
+    }
+    source_ref = intent_authority.get("source_ref")
+    preview_source = preview.get("source")
+    preview_chemistry = preview.get("chemistry")
+    effective_request = preview.get("effective_request")
+    if (
+        not isinstance(source_ref, dict)
+        or source_ref.get("kind") != "design"
+        or not isinstance(source_ref.get("id"), str)
+        or not source_ref["id"]
+        or preview.get("schema_version") != "bms.md.launch-preview.v1"
+        or preview.get("preview_digest") != adapter.preview_digest
+        or not isinstance(preview_source, dict)
+        or preview_source.get("source_ref") != source_ref
+        or preview_source.get("sha256") != intent_authority["expected_source_sha256"]
+        or preview.get("requested_settings") != intent_authority["requested_settings"]
+        or not isinstance(preview_chemistry, dict)
+        or preview_chemistry.get("profile_id") != intent_authority["chemistry_profile_id"]
+        or preview_chemistry.get("profile_sha256")
+        != intent_authority["chemistry_profile_sha256"]
+        or preview_chemistry.get("catalog_digest") != intent_authority["catalog_digest"]
+        or preview_chemistry.get("admitted") is not True
+        or preview.get("blockers") != []
+        or not isinstance(effective_request, dict)
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD preview no longer matches its source, settings, profile, or catalog authority."
+        )
+
+    expected_execution = deepcopy(effective_request.get("execution"))
+    if not isinstance(expected_execution, dict):
+        raise _typed_md_adapter_error("Typed MD effective execution authority is invalid.")
+    expected_execution.pop("placement_authority", None)
+    expected_execution["gpu_id"] = "0"
+    spec_input = md_job_spec.get("input")
+    spec_chemistry = md_job_spec.get("chemistry")
+    if (
+        set(md_job_spec)
+        != {
+            "schema",
+            "job_id",
+            "engine",
+            "replicas",
+            "random_seed",
+            "input",
+            "chemistry",
+            "preparation",
+            "stages",
+            "execution",
+        }
+        or md_job_spec.get("schema") != "bms.md.job.v2"
+        or md_job_spec.get("job_id") != "assigned-by-server"
+        or not isinstance(spec_input, dict)
+        or set(spec_input) != {"structure"}
+        or spec_input.get("structure") != adapter.source_token
+        or not isinstance(adapter.source_token, str)
+        or not adapter.source_token.startswith("bms-md-starting-structure:")
+        or not isinstance(spec_chemistry, dict)
+        or spec_chemistry.get("profile_id") != intent_authority["chemistry_profile_id"]
+        or spec_chemistry.get("profile_sha256")
+        != intent_authority["chemistry_profile_sha256"]
+        or spec_chemistry.get("catalog_digest") != intent_authority["catalog_digest"]
+        or set(spec_chemistry)
+        != {"profile_id", "profile_sha256", "catalog_digest", "requested_scope"}
+        or not isinstance(spec_chemistry.get("requested_scope"), str)
+        or not spec_chemistry["requested_scope"]
+        or md_job_spec.get("engine") != effective_request.get("engine")
+        or md_job_spec.get("replicas") != effective_request.get("replicas")
+        or md_job_spec.get("random_seed") != effective_request.get("random_seed")
+        or md_job_spec.get("preparation") != effective_request.get("preparation")
+        or md_job_spec.get("stages") != effective_request.get("stages")
+        or md_job_spec.get("execution") != expected_execution
+    ):
+        raise _typed_md_adapter_error(
+            "Server-compiled MD v2 authority does not match the current typed preview."
+        )
+
+    from experiment_models import (
+        ExperimentAggregateHead,
+        ExperimentRevision,
+        ExperimentValidation,
+        ExperimentWorkflowPreparation,
+    )
+    from routers.molecular_dynamics import _launch_context_source_refs
+
+    preparation = await experiment_session.get(
+        ExperimentWorkflowPreparation, context.preparation_id
+    )
+    workflow = await experiment_session.get(ExperimentAggregateHead, context.workflow_id)
+    revision = await experiment_session.get(
+        ExperimentRevision, context.workflow_revision_id
+    )
+    domain = await experiment_session.get(
+        ExperimentAggregateHead, context.domain_experiment_id
+    )
+    domain_revision = await experiment_session.get(
+        ExperimentRevision,
+        domain.current_revision_id if domain is not None else "",
+    )
+    validation = await experiment_session.get(
+        ExperimentValidation,
+        preparation.validation_resource_id if preparation is not None else "",
+    )
+    if (
+        preparation is None
+        or workflow is None
+        or revision is None
+        or domain is None
+        or domain_revision is None
+        or validation is None
+        or preparation.resource_id != context.preparation_id
+        or preparation.workspace_id != context.project_id
+        or preparation.workflow_revision_id != context.workflow_revision_id
+        or preparation.normalized_request_sha256 != context.normalized_request_sha256
+        or preparation.validation_status != "valid"
+        or preparation.validation_resource_id != context.validation_receipt_id
+        or hashlib.sha256(preparation.validation_receipt_json.encode()).hexdigest()
+        != context.validation_receipt_sha256
+        or validation.subject_resource_id != preparation.resource_id
+        or validation.outcome != "valid"
+        or validation.receipt_json != preparation.validation_receipt_json
+        or validation.receipt_sha256
+        != hashlib.sha256(validation.receipt_json.encode()).hexdigest()
+        or workflow.parent_id != context.domain_experiment_id
+        or workflow.current_revision_id != context.workflow_revision_id
+        or revision.subject_id != context.workflow_id
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD context hierarchy, revision, preparation, or validation authority diverged."
+        )
+    try:
+        normalized_request = json.loads(preparation.normalized_request_json)
+        workflow_payload = json.loads(revision.canonical_payload)
+        domain_payload = json.loads(domain_revision.canonical_payload)
+        validation_receipt = json.loads(preparation.validation_receipt_json)
+        scheduler_payload = json.loads(preparation.scheduler_payload_json)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _typed_md_adapter_error(
+            "Typed MD preparation is no longer current and usable."
+        ) from exc
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            normalized_request,
+            workflow_payload,
+            domain_payload,
+            validation_receipt,
+            scheduler_payload,
+        )
+    ):
+        raise _typed_md_adapter_error("Typed MD prepared authority has an invalid shape.")
+    scheduler = workflow_payload.get("scheduler")
+    expected_params = scheduler.get("params") if isinstance(scheduler, dict) else None
+    bound_refs = _launch_context_source_refs(normalized_request, workflow_payload)
+    if (
+        _canonical_typed_md_document(normalized_request)
+        != preparation.normalized_request_json
+        or hashlib.sha256(preparation.normalized_request_json.encode()).hexdigest()
+        != preparation.normalized_request_sha256
+        or _canonical_typed_md_document(workflow_payload) != revision.canonical_payload
+        or hashlib.sha256(revision.canonical_payload.encode()).hexdigest()
+        != revision.payload_sha256
+        or normalized_request.get("workflow_revision_id")
+        != context.workflow_revision_id
+        or normalized_request.get("workflow") != workflow_payload
+        or not isinstance(normalized_request.get("input_dataset_revision_ids"), list)
+        or not isinstance(normalized_request.get("input_authority"), dict)
+        or validation_receipt.get("status") != "valid"
+        or validation_receipt.get("workflow_revision_id")
+        != context.workflow_revision_id
+        or validation_receipt.get("normalized_request_sha256")
+        != context.normalized_request_sha256
+        or scheduler_payload != scheduler
+        or _canonical_typed_md_document(scheduler_payload)
+        != preparation.scheduler_payload_json
+        or domain_payload.get("domain_kind") != "protein_in_silico"
+        or workflow_payload.get("adapter_id") != "molecular-dynamics.v2"
+        or not isinstance(scheduler, dict)
+        or scheduler.get("model_id") != "molecular_dynamics"
+        or scheduler.get("mode") != "simulate"
+        or not isinstance(expected_params, dict)
+        or set(expected_params) != _TYPED_MD_INTENT_AUTHORITY_FIELDS
+        or _canonical_typed_md_document(expected_params)
+        != _canonical_typed_md_document(intent_authority)
+        or len(bound_refs) != 1
+        or bound_refs[0].kind != "design"
+        or bound_refs[0].id != source_ref["id"]
+    ):
+        raise _typed_md_adapter_error(
+            "Typed MD intent does not match the one prepared Project Design authority."
+        )
+
+    canonical_params = await validate_bound_job_request(
+        experiment_session,
+        context,
+        job_name=job_data.name,
+        model_id=job_data.model_id,
+        mode=job_data.mode,
+        params=deepcopy(expected_params),
+        pinned_gpu=job_data.pinned_gpu,
+    )
+    return {**canonical_params, "md_job_spec": md_job_spec}
+
+
 def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
     return HTTPException(
         status_code=exc.status_code,
@@ -6193,18 +6642,35 @@ async def create_job(
     _preallocated_job_id: Any = Depends(lambda: None),
     _commit: Any = Depends(lambda: True),
     _skip_parent_lineage_update: Any = Depends(lambda: False),
+    _md_output_creation: Any = Depends(lambda: None),
+    _md_input_resolver: Any = Depends(lambda: None),
+    _typed_md_project_launch: Any = Depends(lambda: None),
     experiment_session: AsyncSession = Depends(get_experiment_session),
 ) -> JobResponse:
     """Canonical Job submission, optionally bound by one opaque launch context."""
     launch_context_id = str(job_data.launch_context_id or "").strip()
+    typed_md_project_launch = (
+        None
+        if isinstance(_typed_md_project_launch, DependsParam)
+        else _typed_md_project_launch
+    )
     if not launch_context_id:
+        if typed_md_project_launch is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "launch_context_typed_md_adapter_invalid",
+                    "message": "Typed MD Project authority requires one launch context.",
+                },
+            )
         return await _create_job(
             job_data,
             background_tasks,
             session,
-            _preallocated_job_id,
-            _commit,
-            _skip_parent_lineage_update,
+            _preallocated_job_id=_preallocated_job_id,
+            _commit=_commit,
+            _md_output_creation=_md_output_creation,
+            _md_input_resolver=_md_input_resolver,
         )
     if current_launch_context_id.get() != launch_context_id:
         raise HTTPException(
@@ -6227,15 +6693,32 @@ async def create_job(
             if prepared_attempt is None:
                 raise LaunchContextError("launch_context_binding_invalid", "Reserved attempt is unavailable.", status_code=409)
             _preallocated_job_id = prepared_attempt.scheduler_job_id
-        job_data.params = await validate_bound_job_request(
-            experiment_session,
-            preview_context,
-            job_name=job_data.name,
-            model_id=job_data.model_id,
-            mode=job_data.mode,
-            params=dict(job_data.params or {}),
-            pinned_gpu=job_data.pinned_gpu,
-        )
+        if typed_md_project_launch is None:
+            job_data.params = await validate_bound_job_request(
+                experiment_session,
+                preview_context,
+                job_name=job_data.name,
+                model_id=job_data.model_id,
+                mode=job_data.mode,
+                params=dict(job_data.params or {}),
+                pinned_gpu=job_data.pinned_gpu,
+            )
+        else:
+            job_data.params = await _validated_typed_md_project_params(
+                experiment_session=experiment_session,
+                context=preview_context,
+                job_data=job_data,
+                adapter=typed_md_project_launch,
+                md_input_resolver=_md_input_resolver,
+            )
+        if _preallocated_job_id:
+            existing_job = await session.get(Job, str(_preallocated_job_id))
+            if existing_job is not None:
+                raise LaunchContextError(
+                    "launch_context_claimed",
+                    "The canonical Job already exists for this launch context.",
+                    status_code=409,
+                )
         context, claim_token = await claim_launch_context(experiment_session, launch_context_id)
         await experiment_session.commit()
     except LaunchContextError as exc:
@@ -6309,11 +6792,11 @@ async def create_job(
             job_data,
             background_tasks,
             session,
-            _preallocated_job_id,
-            _commit,
-            _skip_parent_lineage_update,
-            None,
-            True,
+            _preallocated_job_id=_preallocated_job_id,
+            _commit=_commit,
+            _md_output_creation=_md_output_creation,
+            _md_input_resolver=_md_input_resolver,
+            _trusted_workflow_adapter=True,
         )
     except HTTPException:
         await session.rollback()
@@ -6425,9 +6908,10 @@ async def launch_antibody_iteration_from_designs(
             )
         from services.frustrampnn.jobs import (
             FrustraMPNNChildError,
-            create_child_job as create_frustrampnn_child_job,
             design_selections as resolve_frustrampnn_selections,
         )
+        from services.structure_dataset_fanout import StructureDatasetFanoutError
+        from routers.frustrampnn import _fanout_design_selections
 
         try:
             selections = await resolve_frustrampnn_selections(
@@ -6435,27 +6919,34 @@ async def launch_antibody_iteration_from_designs(
                 source_parent=source_job,
                 design_ids=design_ids,
             )
-            child = await create_frustrampnn_child_job(
-                session,
-                selections=selections,
-                source_parent=source_job,
-                trigger="antibody_iteration",
-                requested_settings=(
-                    request.frustrampnn_settings or default_frustrampnn_settings()
-                ),
+            requested_settings = (
+                request.frustrampnn_settings or default_frustrampnn_settings()
             )
-        except FrustraMPNNChildError as exc:
+            fanout = await _fanout_design_selections(
+                session,
+                parent=source_job,
+                selections=selections,
+                trigger="antibody_iteration",
+                requested_settings=requested_settings,
+            )
+        except (FrustraMPNNChildError, StructureDatasetFanoutError) as exc:
             await session.rollback()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        launched_job = await get_job(str(child.id), session)
+        launched_jobs = [await get_job(str(child.id), session) for child in fanout.child_jobs]
+        launched_job = launched_jobs[0]
         return AntibodyIterationLaunchResponse(
-            message=f"Queued FrustraMPNN analysis for {len(ordered_designs)} selected designs.",
+            message=(
+                f"Queued {len(launched_jobs)} FrustraMPNN scheduler jobs for "
+                f"{len(ordered_designs)} selected designs."
+            ),
             action=action,
             source_job_id=source_job.id,
             root_job_id=root_job.id,
-            selection_dir=str(child.output_dir),
+            selection_dir=str(fanout.child_jobs[0].output_dir),
             selected_design_count=len(ordered_designs),
             launched_job=launched_job,
+            launched_jobs=launched_jobs,
+            fanout_id=fanout.fanout_id,
         )
 
     selection_dir = _materialize_antibody_selection(root_job, source_job, ordered_designs, request.action)
@@ -6892,6 +7383,13 @@ async def get_job(
     frustrampnn_result_count = int((await session.execute(
         select(func.count(FrustraMPNNResult.invocation_id)).where(FrustraMPNNResult.parent_job_id == job.id)
     )).scalar_one())
+    conformational_mapping_request_id = None
+    if job.model_id in {"conformational_mapping", "confornets_experimental"}:
+        conformational_mapping_request_id = await session.scalar(
+            select(ConformationalMappingRequest.request_id).where(
+                ConformationalMappingRequest.job_id == job.id,
+            )
+        )
 
     return JobResponse(
         id=job.id,
@@ -6940,6 +7438,7 @@ async def get_job(
             {"surface": "frustrampnn-workbench", "params": {"job_id": job.id}}
             if frustrampnn_result_count else None
         ),
+        conformational_mapping_request_id=conformational_mapping_request_id,
     )
 
 
@@ -7129,6 +7628,23 @@ async def resubmit_job(
     resubmit_params = _normalize_structure_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_structure_geometry_params(resubmit_params)
     resubmit_params = _normalize_antibody_job_params(resubmit_params)
+    resubmit_workflow_id = str(
+        resubmit_params.get("ont_workflow_id")
+        or resubmit_params.get("ont_request_workflow_id")
+        or resubmit_params.get("workflow_id")
+        or ""
+    ).strip()
+    resubmit_input_mode = str(
+        resubmit_params.get("ont_input_mode") or resubmit_params.get("input_mode") or ""
+    ).strip()
+    if (
+        original_job.model_id == "nanopore"
+        and resubmit_workflow_id == "ont_fastq_qc"
+        and resubmit_input_mode == "fastq"
+    ):
+        resubmit_params = ont_ngs_contract.normalize_ont_launch_params(
+            "ont_fastq_qc", resubmit_params
+        )
     if resubmit_params.get("msa_force_refresh") is True:
         # Resubmits should reuse cache by default unless user explicitly
         # starts a fresh job with force-refresh enabled.
@@ -7152,6 +7668,10 @@ async def resubmit_job(
         resubmit_sequence_length,
         resubmit_params,
     )
+    if original_job.model_id == "nanopore" and resubmit_workflow_id == "ont_fastq_qc" and resubmit_input_mode == "fastq":
+        resubmit_vram_estimate = 0
+        for key in ("gpu_id", "pinned_gpu", "pinned_gpus", "cpus_per_gpu"):
+            resubmit_params.pop(key, None)
     resubmit_selected_input_artifact_class = normalize_antibody_artifact_class(
         resubmit_params.get("selected_input_artifact_class")
     )
@@ -7345,9 +7865,17 @@ async def annotate_cdr_regions(
     total_count = len(designs)
     
     logger.info(f"[CDR ANNOTATE] Starting background annotation on {len(pdb_paths)} designs for job {job_id}")
-    asyncio.create_task(
-        annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job_id))
-    )
+    mutation_lease = acquire_workflow_mutation_lease()
+    try:
+        asyncio.create_task(
+            run_with_workflow_mutation_lease(
+                mutation_lease,
+                annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job_id)),
+            )
+        )
+    except BaseException:
+        mutation_lease.close()
+        raise
     
     return {
         "message": f"CDR annotation started for {len(pdb_paths)} designs (running in background)",
@@ -7543,6 +8071,88 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
     }
 
 
+async def _publish_generic_stage_terminal(
+    *,
+    session: AsyncSession,
+    job_id: str,
+    stage: str,
+    status: str,
+    outputs: list[str],
+    token: str,
+) -> dict[str, Any]:
+    terminal = {"status": status, "outputs": list(outputs)}
+    for _attempt in range(4):
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        current = result.scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not stage_reporting.token_is_authorized(current.provenance, token):
+            raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+        if (
+            current.status != JobStatus.RUNNING.value
+            or current.queue_status != "running"
+            or current.awaiting_input
+        ):
+            raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
+
+        original_completed = current.completed_stages
+        original_outputs = current.stage_outputs
+        original_provenance = current.provenance
+        original_current_stage = current.current_stage
+        original_stage_progress = current.stage_progress
+        completed = list(original_completed or [])
+        stage_outputs = dict(original_outputs or {})
+        provenance = dict(original_provenance or {})
+        terminal_states = dict(provenance.get("stage_terminal_states") or {})
+        existing_terminal = terminal_states.get(stage)
+        if existing_terminal is not None and existing_terminal != terminal:
+            raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
+        if status == "complete":
+            if stage not in completed:
+                completed.append(stage)
+        elif stage in completed:
+            raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
+        stage_outputs[stage] = list(outputs)
+        terminal_states[stage] = terminal
+        provenance["stage_terminal_states"] = terminal_states
+        current_stage = None if original_current_stage == stage else original_current_stage
+
+        predicates = [
+            Job.id == job_id,
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_status == "running",
+            Job.awaiting_input.is_(False),
+            Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
+            Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
+            Job.provenance.is_(None) if original_provenance is None else Job.provenance == original_provenance,
+            Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
+            Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,
+        ]
+        session.expunge(current)
+        published = await session.execute(
+            update(Job)
+            .where(*predicates)
+            .values(
+                completed_stages=completed,
+                stage_outputs=stage_outputs,
+                provenance=provenance,
+                current_stage=current_stage,
+            )
+        )
+        if published.rowcount == 1:
+            await session.commit()
+            return {
+                "message": f"Stage '{stage}' marked {status}",
+                "job_id": job_id,
+                "stage": stage,
+                "status": status,
+                "completed_stages": completed,
+                "outputs_count": len(outputs),
+            }
+        await session.rollback()
+    raise HTTPException(status_code=409, detail="workflow stage callback conflicted with concurrent publication")
+
+
 @router.post("/{job_id}/stage-complete")
 async def report_stage_complete(
     job_id: str,
@@ -7565,6 +8175,9 @@ async def report_stage_complete(
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+
+    if job.model_id == "nanopore" and stage == "clone_validation":
+        stage = "wf_clone_validation"
 
     if stage == "dorado_demux":
         provenance = dict(job.provenance or {})
@@ -7610,40 +8223,16 @@ async def report_stage_complete(
             "outputs_count": len(outputs),
         }
     
-    # Update completed stages
-    completed = job.completed_stages or []
-    if stage not in completed:
-        completed.append(stage)
-    job.completed_stages = completed
-    
-    # Update stage outputs
-    stage_outputs = job.stage_outputs or {}
-    stage_outputs[stage] = outputs
-    job.stage_outputs = stage_outputs
-
-    provenance = dict(job.provenance or {})
-    terminal_states = dict(provenance.get("stage_terminal_states") or {})
-    existing_terminal = terminal_states.get(stage)
-    complete_terminal = {"status": "complete", "outputs": list(outputs)}
-    if existing_terminal is not None and existing_terminal != complete_terminal:
-        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
-    terminal_states[stage] = complete_terminal
-    provenance["stage_terminal_states"] = terminal_states
-    job.provenance = provenance
-    
-    # Clear current stage (will be set when next stage starts)
-    job.current_stage = None
-    
-    await session.commit()
-    
-    logger.info(f"Job {job_id}: Stage '{stage}' completed with {len(outputs)} outputs")
-    
-    return {
-        "message": f"Stage '{stage}' marked complete",
-        "job_id": job_id,
-        "completed_stages": completed,
-        "outputs_count": len(outputs)
-    }
+    response = await _publish_generic_stage_terminal(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        status="complete",
+        outputs=list(outputs),
+        token=token,
+    )
+    logger.info("Job %s: Stage '%s' completed with %s outputs", job_id, stage, len(outputs))
+    return response
 
 
 @router.post("/{job_id}/stage-terminal")
@@ -7668,33 +8257,16 @@ async def report_stage_terminal(
     if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
 
-    completed = list(job.completed_stages or [])
-    if stage in completed:
-        raise HTTPException(status_code=409, detail="completed workflow stage cannot be reclassified")
-    terminal = {"status": status, "outputs": list(outputs)}
-    provenance = dict(job.provenance or {})
-    terminal_states = dict(provenance.get("stage_terminal_states") or {})
-    existing = terminal_states.get(stage)
-    if existing is not None and existing != terminal:
-        raise HTTPException(status_code=409, detail="workflow stage terminal state is immutable")
-    terminal_states[stage] = terminal
-    provenance["stage_terminal_states"] = terminal_states
-    job.provenance = provenance
-
-    stage_outputs = dict(job.stage_outputs or {})
-    stage_outputs[stage] = list(outputs)
-    job.stage_outputs = stage_outputs
-    if job.current_stage == stage:
-        job.current_stage = None
-    await session.commit()
+    response = await _publish_generic_stage_terminal(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        status=status,
+        outputs=list(outputs),
+        token=token,
+    )
     logger.info("Job %s: Stage '%s' terminal state is %s", job_id, stage, status)
-    return {
-        "message": f"Stage '{stage}' marked {status}",
-        "job_id": job_id,
-        "stage": stage,
-        "status": status,
-        "outputs_count": len(outputs),
-    }
+    return response
 
 
 @router.post("/{job_id}/stage-gates/{stage}/open")
@@ -8032,6 +8604,69 @@ async def mark_children_aggregated(
     }
 
 
+async def _publish_generic_stage_start(
+    *,
+    session: AsyncSession,
+    job_id: str,
+    stage: str,
+    token: str,
+) -> dict[str, Any]:
+    if not stage or len(stage) > 128:
+        raise HTTPException(status_code=422, detail="workflow stage identity is invalid")
+    for _attempt in range(4):
+        result = await session.execute(select(Job).where(Job.id == job_id))
+        current = result.scalar_one_or_none()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if not stage_reporting.token_is_authorized(current.provenance, token):
+            raise HTTPException(status_code=403, detail="invalid workflow stage credential")
+        if (
+            current.status != JobStatus.RUNNING.value
+            or current.queue_status != "running"
+            or current.awaiting_input
+        ):
+            raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
+
+        original_current_stage = current.current_stage
+        original_stage_progress = current.stage_progress
+        original_completed = current.completed_stages
+        original_outputs = current.stage_outputs
+        original_provenance = current.provenance
+        terminal_states = (
+            original_provenance.get("stage_terminal_states")
+            if isinstance(original_provenance, dict)
+            else None
+        )
+        if (
+            (isinstance(terminal_states, dict) and stage in terminal_states)
+            or stage in (original_completed or [])
+        ):
+            raise HTTPException(status_code=409, detail="terminal workflow stage cannot restart")
+        if original_current_stage == stage:
+            return {"message": f"Stage '{stage}' started", "job_id": job_id}
+
+        predicates = [
+            Job.id == job_id,
+            Job.status == JobStatus.RUNNING.value,
+            Job.queue_status == "running",
+            Job.awaiting_input.is_(False),
+            Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
+            Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,
+            Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
+            Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
+            Job.provenance.is_(None) if original_provenance is None else Job.provenance == original_provenance,
+        ]
+        session.expunge(current)
+        published = await session.execute(
+            update(Job).where(*predicates).values(current_stage=stage)
+        )
+        if published.rowcount == 1:
+            await session.commit()
+            return {"message": f"Stage '{stage}' started", "job_id": job_id}
+        await session.rollback()
+    raise HTTPException(status_code=409, detail="workflow stage start conflicted with concurrent publication")
+
+
 @router.post("/{job_id}/stage-start")
 async def report_stage_start(
     job_id: str,
@@ -8039,27 +8674,21 @@ async def report_stage_start(
     stage: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """
-    Report that a workflow stage has started.
-    Called by Nextflow workflows when entering a new stage.
-    """
+    """Publish one authenticated workflow stage start through snapshot CAS."""
+
     await reject_generic_md_lifecycle_control(job_id, session)
-    result = await session.execute(select(Job).where(Job.id == job_id).with_for_update())
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
     authorization = str(request.headers.get("authorization") or "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not stage_reporting.token_is_authorized(job.provenance, token):
+    if scheme.lower() != "bearer":
         raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-    
-    job.current_stage = stage
-    await session.commit()
-    
-    logger.info(f"Job {job_id}: Stage '{stage}' started")
-    
-    return {"message": f"Stage '{stage}' started", "job_id": job_id}
+    response = await _publish_generic_stage_start(
+        session=session,
+        job_id=job_id,
+        stage=stage,
+        token=token,
+    )
+    logger.info("Job %s: Stage '%s' started", job_id, stage)
+    return response
 
 
 @router.get("/{job_id}/stages")
@@ -8126,49 +8755,9 @@ async def get_job_stages(
              display_stages.append("thermompnn")
              
     else:
-        # Nanopore stage list is dynamic based on params.
-        if job.mode in ["methylation_analysis", "nanopore_methylation"]:
-            np_params = job.params or {}
-            display_stages = []
-            has_pod5 = _is_meaningful_param_value(np_params.get("pod5_dir"))
-            has_bam = _is_meaningful_param_value(np_params.get("bam_path"))
-            has_fastq = _is_meaningful_param_value(np_params.get("fastq_path"))
-            has_reference = _is_meaningful_param_value(np_params.get("reference_fasta"))
-            fastq_qc_enabled, legacy_multimer_mode = _resolve_nanopore_fastq_qc_mode(np_params)
-            bam_force_realign = _resolve_nanopore_bam_realign(np_params)
-
-            if has_pod5:
-                display_stages.append("dorado_basecall")
-
-            if has_pod5 and has_reference:
-                display_stages.append("dorado_align")
-
-            if has_bam and has_reference:
-                if bam_force_realign:
-                    display_stages.append("dorado_align")
-                else:
-                    display_stages.append("bam_prepare")
-
-            if (has_bam and not has_reference) or (has_pod5 and not has_reference):
-                display_stages.append("bam_prepare")
-
-            if has_fastq and has_reference:
-                display_stages.append("fastq_align")
-            if fastq_qc_enabled and has_fastq and has_reference and not legacy_multimer_mode:
-                display_stages.append("fastq_qc")
-
-            # Modkit only for POD5/BAM — FASTQ lacks methylation tags (MM/ML)
-            if np_params.get("run_modkit") is not False and (has_pod5 or has_bam):
-                display_stages.append("modkit")
-
-            # Legacy multimer/dimer stage labels for old runs.
-            if fastq_qc_enabled and legacy_multimer_mode and has_fastq:
-                display_stages.append("multimer_qc")
-            if fastq_qc_enabled and legacy_multimer_mode and has_fastq and has_reference:
-                display_stages.append("dimer_analysis")
-
-            if np_params.get("run_assembly") is True and (has_pod5 or has_bam):
-                display_stages.append("wf_clone_validation")
+        # Nanopore stage inventory is dynamic across every typed ONT mode.
+        if _uses_nanopore_stage_response(job):
+            display_stages = _planned_nanopore_stages(job.params, mode=job.mode)
         else:
             # Fallback for other modes
             all_stages_map = {
@@ -8184,10 +8773,10 @@ async def get_job_stages(
     if job.awaiting_input and job.awaiting_stage and job.awaiting_stage not in all_stages:
         all_stages.append(job.awaiting_stage)
 
-    if job.mode in ["methylation_analysis", "nanopore_methylation"]:
+    if _uses_nanopore_stage_response(job):
         stage_outputs = _sanitize_nanopore_stage_outputs(stage_outputs, job.output_dir)
         # Merge filesystem-derived outputs so UI remains useful even when stage-report calls fail.
-        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params)
+        inferred_outputs = _infer_nanopore_stage_outputs(job.output_dir, job.params, mode=job.mode)
         for stage, outputs in inferred_outputs.items():
             existing = stage_outputs.get(stage)
             if isinstance(existing, list):
@@ -8300,7 +8889,7 @@ async def resume_job(
         output_path = Path(job.output_dir)
         if not output_path.is_absolute():
             output_path = get_data_root() / output_path
-        if candidate_dir and job.model_id == "protein_local_redesign":
+        if candidate_dir and _is_protein_local_redesign_job(job):
             if job.awaiting_stage == "post_rfantibody":
                 param_overrides.setdefault("plr_backbone_input_pdbs", candidate_dir)
                 param_overrides.setdefault(
@@ -8309,8 +8898,6 @@ async def resume_job(
                 )
             elif job.awaiting_stage == "post_fampnn":
                 param_overrides.setdefault("plr_sequence_input_pdbs", candidate_dir)
-                if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
-                    param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
             elif job.awaiting_stage == "post_structure_validation":
                 param_overrides.setdefault("plr_validation_input_pdbs", candidate_dir)
                 param_overrides.setdefault("plr_final_candidate_dir", candidate_dir)
@@ -8545,7 +9132,7 @@ async def continue_protein_local_review(
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.model_id != "protein_local_redesign":
+    if not _is_protein_local_redesign_job(job):
         raise HTTPException(status_code=422, detail="This continue endpoint only supports Protein Local Redesign jobs.")
     if not job.awaiting_input or not job.awaiting_stage:
         raise HTTPException(status_code=422, detail="Protein local redesign job is not currently paused for review.")
@@ -8593,8 +9180,6 @@ async def continue_protein_local_review(
         from_stage = "rfantibody"
     elif job.awaiting_stage == "post_fampnn":
         param_overrides["plr_sequence_input_pdbs"] = str(selection_dir)
-        if not _to_bool((job.params or {}).get("plr_run_boltz_validation")):
-            param_overrides["plr_final_candidate_dir"] = str(selection_dir)
         from_stage = "fampnn"
     elif job.awaiting_stage == "post_structure_validation":
         param_overrides.update({

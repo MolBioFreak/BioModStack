@@ -23,6 +23,7 @@ import subprocess
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List, Dict, Tuple, Optional, Any
 from dataclasses import dataclass, replace
 
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 CODE_ROOT = Path(__file__).resolve().parents[3]
 
+
 from antibody_pipeline_contract import is_antibody_pipeline_mode
 from database import (
     LAUNCH_CONTEXT_BINDING_PROVENANCE_KEY,
@@ -42,6 +44,7 @@ from database import (
 )
 from services.execution_ownership import (
     ExecutionOwnershipError,
+    cancellation_intent_requested,
     latest_started_execution_attempt,
     parse_unit_identity,
     release_scheduler_gpu_assignment,
@@ -51,6 +54,16 @@ from services.execution_ownership import (
 from services.gpu_config import read_scheduler_config, mutate_scheduler_config
 from services.gpu_metadata import GPU_CAPABILITIES
 from services.gpu_stage_activity import job_uses_assigned_gpu
+from services.resource_usage_evidence import (
+    GLOBAL_DISPATCH_AUTHORITY_PARAM,
+    GLOBAL_RESOURCE_ADMISSION_PARAM,
+    ResourceUsageEvidenceError,
+    attach_dispatch_materialization_authority,
+    attach_pre_spawn_nonexecution_receipt,
+    materialize_scheduler_dispatch_authority,
+    validate_dispatch_materialization_authority,
+    validate_resource_admission_handoff,
+)
 from services.stage_review import (
     has_stage_gate,
     nextflow_history_status,
@@ -59,6 +72,135 @@ from services.stage_review import (
     resolve_nextflow_run_dir,
 )
 from services.workflow_adapter import workflow_adapter_enabled, workflow_adapter_lane
+
+
+def _publish_pre_spawn_launch_failure(
+    job: Any,
+    *,
+    error: Exception,
+    completed_at: datetime | str,
+) -> bool:
+    """Publish terminal zero-use evidence before releasing a scheduler claim."""
+
+    if cancellation_intent_requested(job):
+        return False
+    params = _normalize_job_params(getattr(job, "params", None))
+    if params.get("execution_attempts") not in (None, []):
+        return False
+    if str(getattr(job, "nextflow_run_id", "") or "").strip():
+        return False
+    current_status = str(getattr(job, "status", "") or "").strip().lower()
+    if current_status in {"completed", "awaiting_input"}:
+        return False
+    terminal_statuses = {"cancelled", "canceled", "completed", "failed", "awaiting_input"}
+    evidence_completed_at: datetime | str = completed_at
+    if current_status not in terminal_statuses:
+        job.status = "failed"
+        job.queue_status = "failed"
+        job.completed_at = completed_at
+        job.error_message = str(error)
+    else:
+        persisted_completed_at = getattr(job, "completed_at", None)
+        if not (
+            isinstance(persisted_completed_at, datetime)
+            or isinstance(persisted_completed_at, str) and persisted_completed_at
+        ):
+            return False
+        evidence_completed_at = persisted_completed_at
+    finished_at = (
+        evidence_completed_at.isoformat(timespec="microseconds") + "Z"
+        if isinstance(evidence_completed_at, datetime)
+        else str(evidence_completed_at)
+    )
+    published = False
+    try:
+        job.params = attach_pre_spawn_nonexecution_receipt(
+            job,
+            finished_at=finished_at,
+        )
+        published = True
+    except ResourceUsageEvidenceError as exc:
+        logger.debug(
+            "[LAUNCH FAILED] No pre-spawn resource receipt for %s: %s",
+            getattr(job, "id", ""),
+            exc,
+        )
+    job.assigned_gpu = None
+    job.params = release_scheduler_gpu_assignment(job.params)
+    return published
+
+
+async def _persist_pre_spawn_launch_failure(
+    session: Any,
+    job: Any,
+    *,
+    error: Exception,
+    completed_at: datetime | str,
+) -> bool | None:
+    """CAS one exact pre-spawn terminal projection against the observed Job."""
+    from sqlalchemy import update
+    from database import Job
+
+    original_params = _normalize_job_params(getattr(job, "params", None))
+    original = {
+        "status": getattr(job, "status", None),
+        "queue_status": getattr(job, "queue_status", None),
+        "completed_at": getattr(job, "completed_at", None),
+        "error_message": getattr(job, "error_message", None),
+        "nextflow_run_id": getattr(job, "nextflow_run_id", None),
+        "assigned_gpu": getattr(job, "assigned_gpu", None),
+        "pinned_gpu": getattr(job, "pinned_gpu", None),
+    }
+    candidate = SimpleNamespace(
+        id=str(job.id),
+        params=original_params,
+        **original,
+    )
+    published = _publish_pre_spawn_launch_failure(
+        candidate,
+        error=error,
+        completed_at=completed_at,
+    )
+    candidate_changed = (
+        candidate.status != original["status"]
+        or candidate.queue_status != original["queue_status"]
+        or candidate.completed_at != original["completed_at"]
+        or candidate.error_message != original["error_message"]
+        or candidate.assigned_gpu != original["assigned_gpu"]
+        or candidate.params != original_params
+    )
+    if not candidate_changed:
+        return None
+    transition = await session.execute(
+        update(Job)
+        .where(
+            Job.id == str(job.id),
+            Job.status == original["status"],
+            Job.queue_status == original["queue_status"],
+            Job.completed_at == original["completed_at"],
+            Job.error_message == original["error_message"],
+            Job.nextflow_run_id == original["nextflow_run_id"],
+            Job.assigned_gpu == original["assigned_gpu"],
+            Job.pinned_gpu == original["pinned_gpu"],
+            Job.params == original_params,
+        )
+        .values(
+            status=candidate.status,
+            queue_status=candidate.queue_status,
+            completed_at=candidate.completed_at,
+            error_message=candidate.error_message,
+            assigned_gpu=candidate.assigned_gpu,
+            params=candidate.params,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await session.rollback()
+        await session.refresh(job)
+        return None
+    await session.commit()
+    await session.refresh(job)
+    return published
 
 
 @dataclass
@@ -1157,11 +1299,25 @@ def _normalize_job_params(raw_params: Any) -> Dict[str, Any]:
     return {}
 
 
+def _scheduler_gpu_uuid(gpu_id: int) -> str | None:
+    """Resolve scheduler index to the current physical GPU UUID."""
+
+    from routers.gpu import _query_smi_gpu_map
+
+    metadata = _query_smi_gpu_map().get(int(gpu_id))
+    if not isinstance(metadata, dict):
+        return None
+    gpu_uuid = metadata.get("uuid")
+    return gpu_uuid if isinstance(gpu_uuid, str) and gpu_uuid else None
+
+
 async def _claim_job_for_gpu(
     session: Any,
     job: Any,
     gpu_id: int,
     vram_estimate_mb: int,
+    *,
+    gpu_uuid: str | None = None,
 ) -> Dict[str, Any] | None:
     """Atomically claim a queued job before crossing into the launch boundary."""
     from sqlalchemy import update
@@ -1171,7 +1327,35 @@ async def _claim_job_for_gpu(
     original = _normalize_job_params(getattr(job, "params", None))
     try:
         scheduler_params = attach_scheduler_gpu_assignment(original, int(gpu_id))
-    except ExecutionOwnershipError:
+        handoff = validate_resource_admission_handoff(
+            original.get(GLOBAL_RESOURCE_ADMISSION_PARAM)
+        )
+        raw_dispatch = original.get(GLOBAL_DISPATCH_AUTHORITY_PARAM)
+        if (handoff is None) != (raw_dispatch is None):
+            raise ResourceUsageEvidenceError(
+                "resource admission and dispatch authority must be paired"
+            )
+        if handoff is not None:
+            prepared = validate_dispatch_materialization_authority(
+                raw_dispatch,
+                expected_handoff=handoff,
+            )
+            if not isinstance(gpu_uuid, str) or not gpu_uuid:
+                raise ResourceUsageEvidenceError(
+                    "live scheduler GPU UUID is unavailable"
+                )
+            assigned_dispatch = materialize_scheduler_dispatch_authority(
+                prepared,
+                handoff=handoff,
+                gpu_index=int(gpu_id),
+                gpu_uuid=gpu_uuid,
+            )
+            scheduler_params = attach_dispatch_materialization_authority(
+                scheduler_params,
+                assigned_dispatch,
+            )
+    except (ExecutionOwnershipError, ResourceUsageEvidenceError) as exc:
+        logger.warning("[CLAIM SKIPPED] %s: %s", getattr(job, "id", ""), exc)
         return None
     transition = await session.execute(
         update(Job)
@@ -1181,6 +1365,8 @@ async def _claim_job_for_gpu(
             Job.queue_status == "queued",
             Job.paused.is_(False),
             Job.assigned_gpu.is_(None),
+            Job.pinned_gpu == getattr(job, "pinned_gpu", None),
+            Job.params == original,
             Job.started_at.is_(None),
             Job.nextflow_run_id.is_(None),
         )
@@ -2564,11 +2750,18 @@ class GPUOrchestrator:
                 if i > 0:
                     await asyncio.sleep(0.5)
                 
+                original_params = _normalize_job_params(getattr(job, "params", None))
+                claim_gpu_uuid = (
+                    _scheduler_gpu_uuid(int(gpu_id))
+                    if GLOBAL_RESOURCE_ADMISSION_PARAM in original_params
+                    else None
+                )
                 scheduler_params = await _claim_job_for_gpu(
                     session,
                     job,
                     int(gpu_id),
                     int(job_info.vram_estimate_mb),
+                    gpu_uuid=claim_gpu_uuid,
                 )
                 if scheduler_params is None:
                     logger.info("[LAUNCH SKIPPED] %s lost its queued-to-running claim", job.name)
@@ -2619,14 +2812,17 @@ class GPUOrchestrator:
                     job = failed_result.scalar_one_or_none()
                     if job is None:
                         continue
-                    terminal_statuses = {"cancelled", "completed", "failed", "awaiting_input"}
-                    if str(job.status or "").lower() not in terminal_statuses:
-                        job.status = "failed"
-                        job.queue_status = "failed"
-                        job.completed_at = datetime.utcnow()
-                        job.error_message = str(e)
-                    job.assigned_gpu = None
-                    job.params = release_scheduler_gpu_assignment(job.params)
+                    published = await _persist_pre_spawn_launch_failure(
+                        session,
+                        job,
+                        error=e,
+                        completed_at=datetime.utcnow(),
+                    )
+                    if published is None:
+                        logger.info(
+                            "[LAUNCH FAILURE DEFERRED] %s execution authority changed",
+                            job.id,
+                        )
 
             if used_quick_enable_gpu_ids:
                 def consume_quick_enable_tokens(latest_config: Dict[str, Any]) -> None:

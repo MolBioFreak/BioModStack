@@ -1,7 +1,9 @@
 import axios from 'axios';
 
 import { api, type JobLogs } from '../../lib/api';
+import { parseFrustraMpnnSourceInspection } from '../../lib/frustraMpnnApi';
 import type { FrustraMpnnRequestedSettings } from '../frustrampnn/frustraMpnnSettingsState';
+import type { FrustraMpnnSourceInspection } from '../frustrampnn/frustraMpnnSettingsState';
 
 export type CmBackend = 'protenix_v2_ensemble' | 'confornets' | 'external_import';
 export type CmSourceKind =
@@ -229,7 +231,45 @@ export interface CmRecord {
     type: string;
     key: string;
     sha256: string;
-    payload: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+    artifact?: CmRecordArtifact | null;
+    pages?: Record<string, CmRecordPageDescriptor>;
+}
+
+export interface CmRecordArtifact {
+    artifact_id: string;
+    owner_kind: string;
+    owner_id: string;
+    role: string;
+    schema_id: string;
+    schema_version: number;
+    content_sha256: string;
+    size_bytes: number;
+    row_count: number;
+    relative_path: string;
+    media_type: string;
+}
+
+export interface CmRecordPageDescriptor {
+    offset: number;
+    limit: number;
+    total_count: number;
+    next_offset: number | null;
+}
+
+export interface CmRecordCollectionPage {
+    request_id: string;
+    record_type: string;
+    record_key: string;
+    sha256: string;
+    collection: string;
+    artifact: CmRecordArtifact;
+    key: string;
+    offset: number;
+    limit: number;
+    total_count: number;
+    next_offset: number | null;
+    rows: unknown[];
 }
 
 export type CmStateLandscapeComparisonMode = 'pairwise' | 'reference';
@@ -381,6 +421,32 @@ export interface CmLandscapeRow {
     provenance: Record<string, unknown>;
 }
 
+export interface CmLegacyLandscapeRow {
+    candidate_id: string;
+    entity_instance_id: string;
+    auth_asym_id: string;
+    auth_seq_id: string;
+    insertion_code: string;
+    sequence_index: number;
+    wt: string;
+    mutation_aa: string;
+    score: number | null;
+    class: 'high' | 'neutral' | 'minimally_frustrated' | null;
+    scoreable: boolean;
+    status: 'ok' | 'unscoreable_residue' | 'missing_row' | 'duplicate_row'
+        | 'malformed_row' | 'nonfinite_score' | 'mapping_failed' | 'conformer_missing';
+    reason: string | null;
+    provenance: CmLegacyLandscapeProvenance;
+}
+
+export interface CmLegacyLandscapeProvenance {
+    raw_csv_sha256: string;
+    checkpoint_sha256: string;
+    tool_sha256: string;
+    threshold_policy_sha256: string;
+    container_sha256?: string;
+}
+
 export interface CmLandscapePage {
     request_id: string;
     offset: number;
@@ -393,6 +459,53 @@ export interface CmLandscapePage {
     rows: CmLandscapeRow[];
 }
 
+export interface CmLegacyLandscapePage {
+    request_id: string;
+    offset: number;
+    limit: number;
+    candidate_id: string | null;
+    entity_instance_id: string | null;
+    sequence_start: number | null;
+    sequence_end: number | null;
+    next_offset: number | null;
+    rows: CmLegacyLandscapeRow[];
+}
+
+const CM_LEGACY_LANDSCAPE_PAGE_KEYS = [
+    'request_id', 'offset', 'limit', 'candidate_id', 'entity_instance_id',
+    'sequence_start', 'sequence_end', 'next_offset', 'rows',
+] as const;
+
+export const parseCmLegacyLandscapePage = (value: unknown): CmLegacyLandscapePage => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('Landscape page envelope must be an object');
+    }
+    const page = value as Record<string, unknown>;
+    const actualKeys = Object.keys(page).sort();
+    const expectedKeys = [...CM_LEGACY_LANDSCAPE_PAGE_KEYS].sort();
+    if (actualKeys.length !== expectedKeys.length
+        || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+        throw new Error('Landscape page envelope must contain exact keys');
+    }
+    const nullableString = (item: unknown): boolean => item === null
+        || (typeof item === 'string' && item.length > 0);
+    const nullablePositiveInteger = (item: unknown): boolean => item === null
+        || (typeof item === 'number' && Number.isInteger(item) && item >= 1);
+    if (typeof page.request_id !== 'string' || !page.request_id
+        || typeof page.offset !== 'number' || !Number.isInteger(page.offset) || page.offset < 0
+        || typeof page.limit !== 'number' || !Number.isInteger(page.limit) || page.limit < 1 || page.limit > 1000
+        || !nullableString(page.candidate_id)
+        || !nullableString(page.entity_instance_id)
+        || !nullablePositiveInteger(page.sequence_start)
+        || !nullablePositiveInteger(page.sequence_end)
+        || !(page.next_offset === null
+            || (typeof page.next_offset === 'number' && Number.isInteger(page.next_offset) && page.next_offset >= 0))
+        || !Array.isArray(page.rows)) {
+        throw new Error('Landscape page envelope is malformed');
+    }
+    return value as CmLegacyLandscapePage;
+};
+
 export const cmApiError = (value: unknown, fallback: string): string => {
     if (axios.isAxiosError(value)) {
         const detail = value.response?.data?.detail;
@@ -404,6 +517,14 @@ export const cmApiError = (value: unknown, fallback: string): string => {
 
 export const listCmSources = async (): Promise<CmSource[]> =>
     (await api.get<{ sources: CmSource[] }>('/api/conformational-mapping/sources')).data.sources;
+
+export const inspectCmFrustrampnnSource = async (
+    sourceId: string,
+): Promise<FrustraMpnnSourceInspection> => parseFrustraMpnnSourceInspection(
+    (await api.get<unknown>(
+        `/api/conformational-mapping/sources/${encodeURIComponent(sourceId)}/frustrampnn-inspection`,
+    )).data,
+);
 
 export const cmSourceContentUrl = (sourceId: string): string =>
     `/api/conformational-mapping/sources/${encodeURIComponent(sourceId)}/content`;
@@ -563,11 +684,15 @@ const parseCmRcsbEntry = (value: unknown): CmRcsbEntry => {
     };
 };
 
-export const searchCmRcsb = async (query: string): Promise<CmRcsbSearchResponse> => {
+export const searchCmRcsb = async (
+    query: string,
+    purpose: 'cm_import' | 'full_structure_context' = 'cm_import',
+): Promise<CmRcsbSearchResponse> => {
     const normalized = query.trim();
-    const params = /^[A-Za-z0-9]{4}$/.test(normalized)
+    const params: Record<string, string> = /^[A-Za-z0-9]{4}$/.test(normalized)
         ? { accession: normalized.toUpperCase() }
         : { keyword: normalized };
+    if (purpose === 'full_structure_context') params.purpose = purpose;
     const response = await api.get<unknown>('/api/conformational-mapping/sources/rcsb/search', { params });
     const body = rcsbObject(response.data, 'response must be an object');
     const responseQuery = rcsbString(body.query, 'response query is required');
@@ -602,15 +727,31 @@ export const getCmLogs = async (jobId: string): Promise<JobLogs> =>
 export const getCmResults = async (requestId: string): Promise<CmResults> =>
     (await api.get<CmResults>(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/results`)).data;
 
+export const getCmRecordPage = async (
+    requestId: string,
+    recordType: string,
+    recordKey: string,
+    collection: string,
+    offset = 0,
+    limit = 100,
+): Promise<CmRecordCollectionPage> =>
+    (await api.get<CmRecordCollectionPage>(
+        `/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/records/${encodeURIComponent(recordType)}/${encodeURIComponent(recordKey)}/page`,
+        { params: { collection, offset, limit } },
+    )).data;
+
 export const getCmLandscape = async (
     requestId: string,
     candidateId: string,
     offset = 0,
     limit = 1000,
-): Promise<CmLandscapePage> =>
-    (await api.get<CmLandscapePage>(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/landscape`, {
-        params: { candidate_id: candidateId, offset, limit },
-    })).data;
+): Promise<CmLegacyLandscapePage> => {
+    const response = await api.get<unknown>(
+        `/api/conformational-mapping/requests/${encodeURIComponent(requestId)}/landscape`,
+        { params: { candidate_id: candidateId, offset, limit } },
+    );
+    return parseCmLegacyLandscapePage(response.data);
+};
 
 /** Compact B2 projection; callers validate it before rendering any scientific value. */
 export const getCmStateLandscapeAnalysis = async (requestId: string): Promise<CmStateLandscapeAnalysisSummary> =>

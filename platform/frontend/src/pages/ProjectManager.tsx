@@ -2,11 +2,22 @@ import { isAxiosError } from 'axios';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { fetchMolBioNgsDomainState, fetchProjectHub } from '../lib/api';
 import {
     createLaunchContext,
+    getDomainRunGroup,
+    getDomainWorkflowPlan,
     getProjectSummary,
     getResultSurface,
+    internalRouteHref,
     isPermissionError,
+    issuePreparedLaunchContext,
+    listNgsMolBioProjectLinks,
+    listDomainWorkflowPlanRevisions,
+    prepareDomainWorkflowPlanRevision,
+    publishDomainWorkflowPlanRevision,
+    replaceDomainWorkflowPlanDraft,
+    retryDomainRunGroup,
     searchProjects,
     projectManagerErrorMessage,
     type JsonObject,
@@ -84,6 +95,86 @@ function domainExperimentForNode(summary: ProjectManagerReadModel, nodeKey: stri
     return null;
 }
 
+function nativeProjectContext(summary: ProjectManagerReadModel): { globalExperimentId: string; domainExperimentId: string } | null {
+    const selectedDomainId = domainExperimentForNode(summary, summary.selection.node_key);
+    const domainNodes = summary.tree.nodes.filter((node) => node.node_type === 'domain_experiment');
+    const focusedDomains = domainNodes.filter((node) => node.parent_node_key === summary.map.focus_node_key);
+    const domain = selectedDomainId
+        ? domainNodes.find((node) => node.subject_id === selectedDomainId)
+        : focusedDomains.length === 1
+            ? focusedDomains[0]
+            : undefined;
+    if (!domain?.subject_id || !domain.parent_node_key) return null;
+    const globalExperiment = summary.tree.nodes.find((node) => node.node_key === domain.parent_node_key && node.node_type === 'global_experiment');
+    if (!globalExperiment?.subject_id) return null;
+    return { globalExperimentId: globalExperiment.subject_id, domainExperimentId: domain.subject_id };
+}
+
+function NativeProjectDataPanel({ summary, stateRevisionId }: { summary: ProjectManagerReadModel; stateRevisionId: string | null }) {
+    const context = useMemo(() => nativeProjectContext(summary), [summary]);
+    const isNativeProject = summary.project.project_scope === 'ngs_molbio_local';
+    const stateQuery = useQuery({
+        queryKey: ['project-manager', 'native-domain-state', context?.domainExperimentId ?? null],
+        queryFn: () => fetchMolBioNgsDomainState(context?.domainExperimentId as string),
+        enabled: isNativeProject && context !== null,
+        retry: false,
+    });
+    const selectedStateRevisionId = stateRevisionId ?? stateQuery.data?.current_state_revision_id ?? null;
+    const projectHubQuery = useQuery({
+        queryKey: ['project-manager', 'native-project-hub', summary.project.id, context?.globalExperimentId ?? null, context?.domainExperimentId ?? null, selectedStateRevisionId],
+        queryFn: ({ signal }) => fetchProjectHub(
+            summary.project.id,
+            context?.globalExperimentId as string,
+            context?.domainExperimentId as string,
+            selectedStateRevisionId as string,
+            signal,
+        ),
+        enabled: isNativeProject && context !== null && selectedStateRevisionId !== null,
+        retry: false,
+    });
+
+    if (!isNativeProject) return null;
+    if (!context) {
+        return <section role="status" className="border-b border-warning/40 bg-warning/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-warning">Plasmid workspace unavailable.</span> Select the Project's NGS/MolBio Domain Experiment to restore its exact workspace context.</section>;
+    }
+    if (stateQuery.isPending || (selectedStateRevisionId !== null && projectHubQuery.isPending)) {
+        return <section aria-busy="true" className="border-b border-border-primary bg-surface-secondary px-4 py-3 text-xs text-content-secondary">Loading native plasmid Project data…</section>;
+    }
+    if (stateQuery.isError || projectHubQuery.isError || !projectHubQuery.data) {
+        return <section role="alert" className="border-b border-error/40 bg-error/10 px-4 py-3 text-xs text-content-secondary"><span className="font-semibold text-error">Native plasmid Project data could not be loaded.</span> The relationship map below lists external attachments only.</section>;
+    }
+
+    const model = projectHubQuery.data;
+    const workspaceParams = new URLSearchParams({
+        workspace_id: model.identity.workspace_id,
+        global_experiment_id: model.identity.global_experiment_id,
+        domain_experiment_id: model.identity.domain_experiment_id,
+        state_revision_id: model.identity.selected_state_revision_id,
+        section: 'plasmids',
+    });
+
+    return (
+        <section aria-label="Native plasmid Project data" className="border-b border-border-primary bg-surface-secondary px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">Project plasmid data</p>
+                    <h2 className="mt-1 text-sm font-semibold text-content">{model.project.plasmid_count} plasmids in {model.project.name}</h2>
+                    <p className="mt-1 text-xs text-content-secondary">These records are stored in the native NGS/MolBio workspace. External attachments appear separately in the relationship map.</p>
+                </div>
+                <Link to={`/designer?${workspaceParams.toString()}`} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white outline-none focus:ring-2 focus:ring-accent">Open plasmid workspace</Link>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                {model.plasmids.map((plasmid) => (
+                    <Link key={`${plasmid.sequence_id}:${plasmid.revision_id}`} to={plasmid.reopen_href} className="rounded-lg border border-border-primary bg-surface px-3 py-2 outline-none hover:border-accent focus:ring-2 focus:ring-accent">
+                        <span className="block truncate text-xs font-semibold text-content">{plasmid.name}</span>
+                        <span className="mt-1 block text-[10px] text-content-muted">{plasmid.length_bp.toLocaleString()} bp · {plasmid.feature_count} features · Revision {plasmid.revision_number}</span>
+                    </Link>
+                ))}
+            </div>
+        </section>
+    );
+}
+
 function ProjectManagerErrorState({ error, onRetry, permission = false }: { error: unknown; onRetry: () => void; permission?: boolean }) {
     return (
         <section role="alert" className="grid min-h-[32rem] place-items-center p-6">
@@ -97,15 +188,41 @@ function ProjectManagerErrorState({ error, onRetry, permission = false }: { erro
     );
 }
 
+function LocalProjectAssociationBadge({ projectId }: { projectId: string }) {
+    const links = useQuery({
+        queryKey: ['project-manager', 'local-project-links', projectId],
+        queryFn: () => listNgsMolBioProjectLinks(projectId),
+    });
+    if (links.isLoading) return <span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">Link state loading</span>;
+    if (links.isError) return <span className="rounded-full border border-red-700 px-2 py-1 text-xs text-red-300">Link state unavailable</span>;
+    return <span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{links.data?.length ? 'Linked' : 'Standalone'}</span>;
+}
+
 function ProjectsIndex() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [dialogMode, setDialogMode] = useState<ManagerDialogMode | null>(null);
     const [query, setQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState('all');
     const [archiveFilter, setArchiveFilter] = useState('active');
+    const requestedScope = searchParams.get('scope');
+    const scope = requestedScope === 'global' || requestedScope === 'ngs-molbio' ? requestedScope : 'all';
+    const apiScope = scope === 'ngs-molbio' ? 'ngs_molbio_local' : scope;
+    useEffect(() => {
+        if (requestedScope === null || requestedScope === 'all' || requestedScope === 'global' || requestedScope === 'ngs-molbio') return;
+        const next = new URLSearchParams(searchParams);
+        next.delete('scope');
+        setSearchParams(next, { replace: true });
+    }, [requestedScope, searchParams, setSearchParams]);
+    const selectScope = (nextScope: 'all' | 'global' | 'ngs-molbio') => {
+        const next = new URLSearchParams(searchParams);
+        if (nextScope === 'all') next.delete('scope');
+        else next.set('scope', nextScope);
+        setSearchParams(next);
+    };
     const projectsQuery = useInfiniteQuery({
-        queryKey: ['project-manager', 'projects', query.trim(), statusFilter, archiveFilter],
+        queryKey: ['project-manager', 'projects', apiScope, query.trim(), statusFilter, archiveFilter],
         initialPageParam: undefined as string | undefined,
         queryFn: ({ pageParam, signal }) => searchProjects({
             query,
@@ -113,6 +230,7 @@ function ProjectsIndex() {
             archive: archiveFilter as 'active' | 'archived' | 'all',
             cursor: pageParam,
             limit: 50,
+            projectScope: apiScope,
             signal,
         }),
         getNextPageParam: (page) => page.next_cursor ?? undefined,
@@ -135,14 +253,19 @@ function ProjectsIndex() {
             <div className="mx-auto max-w-6xl">
                 <header className="flex flex-wrap items-end justify-between gap-4">
                     <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Global research organization</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Research organization</p>
                         <h1 className="mt-2 text-2xl font-semibold text-content sm:text-3xl">Project Manager</h1>
                         <p className="mt-2 max-w-2xl text-sm text-content-secondary">Open a durable Project relationship map or create a new research container. Scientific records remain authoritative in their owning BMS stores.</p>
                     </div>
                     <button type="button" onClick={() => setDialogMode('create_project')} className="rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white focus:ring-2 focus:ring-accent">Create Project</button>
                 </header>
 
-                <section aria-label="Project discovery controls" className="mt-6 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
+                <div role="tablist" aria-label="Project scope" className="mt-6 inline-flex rounded-xl border border-border-primary bg-surface-secondary p-1">
+                    {([['all', 'All'], ['global', 'Global'], ['ngs-molbio', 'NGS/MolBio']] as const).map(([value, label]) => (
+                        <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => selectScope(value)} className={`rounded-lg px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-accent ${scope === value ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{label}</button>
+                    ))}
+                </div>
+                <section aria-label="Project discovery controls" className="mt-3 grid gap-3 rounded-xl border border-border-primary bg-surface-secondary p-3 md:grid-cols-[minmax(12rem,1fr)_auto_auto_auto]">
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
                     <select aria-label="Archive filter" value={archiveFilter} onChange={(event) => setArchiveFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="active">Current only</option><option value="archived">Archived only</option><option value="all">Current and archived</option></select>
@@ -157,15 +280,17 @@ function ProjectsIndex() {
                     <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         {projects.map((project) => {
                             const payload = project.payload ?? {};
+                            const projectScope = payload.project_scope === 'ngs_molbio_local' ? 'ngs_molbio_local' : 'global';
                             const activeCount = typeof project.active_experiment_count === 'number' ? project.active_experiment_count : typeof payload.active_experiment_count === 'number' ? payload.active_experiment_count : null;
                             const failureCount = typeof project.unresolved_failure_count === 'number' ? project.unresolved_failure_count : typeof payload.unresolved_failure_count === 'number' ? payload.unresolved_failure_count : null;
                             return (
                                 <Link data-project-card key={project.id} to={`/projects/${encodeURIComponent(project.id)}`} className="group rounded-2xl border border-border-primary bg-surface-secondary p-5 shadow-sm outline-none transition hover:-translate-y-0.5 hover:border-accent hover:shadow-xl focus:ring-2 focus:ring-accent">
-                                    <div className="flex items-start justify-between gap-3"><span className="rounded-full border border-border-primary px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-content-secondary">{project.status}</span><span className="text-[10px] text-content-muted">Revision {project.head_generation}</span></div>
+                                    <div className="flex flex-wrap items-start justify-between gap-2"><div className="flex flex-wrap gap-2"><span className="rounded-full border border-border-primary px-2 py-1 text-xs font-semibold text-content-secondary">{projectScope === 'ngs_molbio_local' ? 'NGS/MolBio' : 'Global'}</span>{projectScope === 'ngs_molbio_local' ? <LocalProjectAssociationBadge projectId={project.id} /> : null}</div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-muted">{project.status}</span></div>
                                     <h2 className="mt-4 text-lg font-semibold text-content group-hover:text-accent">{project.name}</h2>
                                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-content-secondary">{typeof payload.research_objective === 'string' ? payload.research_objective : project.description || 'No research objective recorded.'}</p>
                                     <div className="mt-3 space-y-1 text-[10px] text-content-muted"><p>{activeCount === null ? 'Active experiments unavailable' : `${activeCount} active experiments`}</p><p>{failureCount === null ? 'Unresolved failures unavailable' : `${failureCount} unresolved failures`}</p></div>
                                     <p className="mt-4 text-[10px] text-content-muted">Updated {new Date(project.updated_at).toLocaleString()}</p>
+                                    <span className="mt-3 inline-flex text-sm font-semibold text-accent">Open Project</span>
                                 </Link>
                             );
                         })}
@@ -198,6 +323,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const queryClient = useQueryClient();
     const [searchParams, setSearchParams] = useSearchParams();
     const focusId = searchParams.get('focus') ?? routeFocusId;
+    const stateRevisionId = searchParams.get('state_revision_id');
     const selectedNodeKey = searchParams.get('selected')
         ?? (routeDomainId ? `domain_experiment:${routeDomainId}` : routeFocusId ? `global_experiment:${routeFocusId}` : undefined);
     const [mapCursor, setMapCursor] = useState<string | undefined>();
@@ -405,7 +531,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 if (typeof receiptId !== 'string') throw new Error('The server did not issue a receipt-backed canonical surface.');
                 return getResultSurface(projectId, receiptId);
             })();
-            if (!surface.route || !surface.route.startsWith('/') || surface.route.startsWith('//')) {
+            if (!surface.route) {
                 throw new Error('The server did not issue a same-origin canonical route.');
             }
             const globalExperimentId = globalExperimentForNode(summary, summary.selection.node_key)
@@ -437,8 +563,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     return_uri: returnUri,
                 },
             );
-            const routeQuery = new URLSearchParams({ launch_context_id: launchContext.launch_context_id });
-            return `${surface.route}${surface.route.includes('?') ? '&' : '?'}${routeQuery.toString()}`;
+            const route = new URL(internalRouteHref(surface.route), window.location.origin);
+            route.searchParams.set('launch_context_id', launchContext.launch_context_id);
+            return `${route.pathname}${route.search}`;
         },
         onSuccess: (route) => navigate(route),
     });
@@ -455,7 +582,27 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             global_experiment_id: selectedGlobalExperimentId,
             domain_experiment_id: selectedDomainExperimentId,
             section: 'workflow-plans',
+            ownership_scope: summary.project.project_scope,
         });
+        if (stateRevisionId) query.set('state_revision_id', stateRevisionId);
+        navigate(`/ngs?${query.toString()}`);
+    };
+
+    const openNgsRunInspector = () => {
+        if (!summary) return;
+        const selectedGlobalExperimentId = globalExperimentForNode(summary, summary.selection.node_key)
+            ?? focusId
+            ?? focusIdFromReadModel(summary);
+        const selectedDomainExperimentId = domainExperimentForNode(summary, summary.selection.node_key);
+        if (!selectedGlobalExperimentId || !selectedDomainExperimentId) return;
+        const query = new URLSearchParams({
+            workspace_id: projectId,
+            global_experiment_id: selectedGlobalExperimentId,
+            domain_experiment_id: selectedDomainExperimentId,
+            section: 'analyses',
+            ownership_scope: summary.project.project_scope,
+        });
+        if (stateRevisionId) query.set('state_revision_id', stateRevisionId);
         navigate(`/ngs?${query.toString()}`);
     };
 
@@ -464,7 +611,62 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             if (!summary) throw new Error('No validated Project context is available.');
             const workflowNodeKey = `workflow:${run.workflow_id}`;
             const domainExperimentId = domainExperimentForNode(summary, workflowNodeKey);
-            if (action === 'retry' || action === 'resubmit') {
+            if (action === 'launch_molecular_dynamics') {
+                const uniqueDomainExperimentIds = summary.tree.nodes
+                    .filter((node) => node.node_type === 'domain_experiment' && node.subject_id)
+                    .map((node) => node.subject_id as string);
+                const preparedDomainExperimentId = domainExperimentId
+                    ?? (uniqueDomainExperimentIds.length === 1 ? uniqueDomainExperimentIds[0] : null);
+                const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
+                    ?? focusId
+                    ?? focusIdFromReadModel(summary);
+                if (!globalExperimentId || !preparedDomainExperimentId) {
+                    throw new Error('The completed Design has no validated Project launch scope.');
+                }
+                const binding = run.attempts.at(-1)?.binding_receipt;
+                const mdPreparation = binding?.md_preparation;
+                if (!mdPreparation || typeof mdPreparation !== 'object' || Array.isArray(mdPreparation)) {
+                    throw new Error('The completed Design has no server-issued MD preparation.');
+                }
+                const preparationId = typeof mdPreparation.preparation_id === 'string' ? mdPreparation.preparation_id : '';
+                const sourceDesignId = typeof mdPreparation.source_design_id === 'string' ? mdPreparation.source_design_id : '';
+                const workflowId = typeof mdPreparation.workflow_id === 'string' ? mdPreparation.workflow_id : '';
+                const workflowRevisionId = typeof mdPreparation.workflow_revision_id === 'string' ? mdPreparation.workflow_revision_id : '';
+                if (!preparationId || !sourceDesignId || !workflowId || !workflowRevisionId) {
+                    throw new Error('The server-issued MD preparation is incomplete.');
+                }
+                const returnQuery = new URLSearchParams({
+                    focus: globalExperimentId,
+                    selected: summary.selection.node_key,
+                });
+                const returnUri = `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`;
+                const launchContext = await issuePreparedLaunchContext(
+                    projectId,
+                    globalExperimentId,
+                    preparedDomainExperimentId,
+                    preparationId,
+                    returnUri,
+                );
+                if (
+                    launchContext.schema !== 'bms.launch-context.v2'
+                    || launchContext.project_id !== projectId
+                    || launchContext.global_experiment_id !== globalExperimentId
+                    || launchContext.domain_experiment_id !== preparedDomainExperimentId
+                    || launchContext.workflow_id !== workflowId
+                    || launchContext.workflow_revision_id !== workflowRevisionId
+                    || launchContext.preparation_id !== preparationId
+                    || launchContext.return_uri !== returnUri
+                ) {
+                    throw new Error('The server-issued MD launch context does not match the prepared Design scope.');
+                }
+                const launchQuery = new URLSearchParams({
+                    template: 'molecular_dynamics',
+                    launch_context_id: launchContext.launch_context_id,
+                    source_design_id: sourceDesignId,
+                });
+                return { kind: 'route' as const, route: `/submit?${launchQuery.toString()}` };
+            }
+            if (action === 'retry' || action === 'resubmit' || action === 'clone') {
                 if (!run.batch_or_run_group_id) throw new Error('The server did not issue a run-group identity.');
                 const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
                     ?? focusId
@@ -472,14 +674,106 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 if (!globalExperimentId || !domainExperimentId) {
                     throw new Error('The run has no validated Domain Experiment context.');
                 }
+                if (action === 'retry' && run.adapter_id === 'bms.core-job.esmfold2.adapter.v1') {
+                    const sourceAttempt = run.attempts.at(-1);
+                    const binding = sourceAttempt?.binding_receipt;
+                    const workflowRevisionId = binding && typeof binding.workflow_revision_id === 'string'
+                        ? binding.workflow_revision_id
+                        : null;
+                    if (!workflowRevisionId) {
+                        throw new Error('The failed ESMFold2 attempt has no immutable workflow revision binding.');
+                    }
+                    const [group, plan, revisions] = await Promise.all([
+                        getDomainRunGroup(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.batch_or_run_group_id,
+                        ),
+                        getDomainWorkflowPlan(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.workflow_id,
+                        ),
+                        listDomainWorkflowPlanRevisions(
+                            projectId,
+                            globalExperimentId,
+                            domainExperimentId,
+                            run.workflow_id,
+                        ),
+                    ]);
+                    const sourceRevision = revisions.items.find((item) => item.revision_id === workflowRevisionId);
+                    if (!sourceRevision || plan.draft_generation === null) {
+                        throw new Error('The failed ESMFold2 revision cannot be copied into a fresh immutable retry revision.');
+                    }
+                    const draft = await replaceDomainWorkflowPlanDraft(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.workflow_id,
+                        plan.draft_generation,
+                        sourceRevision.payload,
+                    );
+                    const retryRevision = await publishDomainWorkflowPlanRevision(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.workflow_id,
+                        {
+                            expected_head_generation: plan.head_generation,
+                            expected_draft_generation: draft.generation,
+                            change_summary: `Retry failed ESMFold2 attempt ${sourceAttempt?.attempt_id ?? run.run_id}`,
+                        },
+                    );
+                    const preparation = await prepareDomainWorkflowPlanRevision(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.workflow_id,
+                        retryRevision.revision_id,
+                        [],
+                    );
+                    const returnQuery = new URLSearchParams({
+                        focus: globalExperimentId,
+                        selected: `workflow_run:${run.run_id}`,
+                    });
+                    const launchContext = await issuePreparedLaunchContext(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        preparation.preparation_id,
+                        `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`,
+                    );
+                    await retryDomainRunGroup(
+                        projectId,
+                        globalExperimentId,
+                        domainExperimentId,
+                        run.batch_or_run_group_id,
+                        group.generation,
+                        [{
+                            run_id: run.run_id,
+                            preparation_id: preparation.preparation_id,
+                            launch_context_id: launchContext.launch_context_id,
+                        }],
+                    );
+                    return { kind: 'refresh' as const };
+                }
                 const query = new URLSearchParams({
                     workspace_id: projectId,
                     global_experiment_id: globalExperimentId,
                     domain_experiment_id: domainExperimentId,
                     section: 'workflow-plans',
                     run_group_id: run.batch_or_run_group_id,
+                    ownership_scope: 'global',
                     run_group_action: action,
                 });
+                if (action === 'clone') {
+                    const sourceAttempt = run.attempts.at(-1);
+                    if (!sourceAttempt) throw new Error('The server did not issue an exact source attempt for clone.');
+                    query.set('source_run_id', run.run_id);
+                    query.set('source_attempt_id', sourceAttempt.attempt_id);
+                }
                 return { kind: 'route' as const, route: `/ngs?${query.toString()}` };
             }
             if (action === 'view_lineage') {
@@ -488,7 +782,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
             }
             if (action === 'open_results') {
                 const surface = run.canonical_surface;
-                if (!surface?.route || !surface.route.startsWith('/') || surface.route.startsWith('//')) {
+                if (!surface?.route) {
                     throw new Error('The server did not issue a same-origin canonical result route.');
                 }
                 const globalExperimentId = globalExperimentForNode(summary, workflowNodeKey)
@@ -504,8 +798,9 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     workflow_revision_id: null,
                     return_uri: `/projects/${encodeURIComponent(projectId)}?${returnQuery.toString()}`,
                 });
-                const separator = surface.route.includes('?') ? '&' : '?';
-                return { kind: 'route' as const, route: `${surface.route}${separator}launch_context_id=${encodeURIComponent(launchContext.launch_context_id)}` };
+                const route = new URL(internalRouteHref(surface.route), window.location.origin);
+                route.searchParams.set('launch_context_id', launchContext.launch_context_id);
+                return { kind: 'route' as const, route: `${route.pathname}${route.search}` };
             }
             throw new Error(`Unsupported server-issued run action: ${action}`);
         },
@@ -569,7 +864,8 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         else if (folder === 'decisions') setDecisionCursor(summary.pagination.decisions.next_cursor ?? undefined);
         else if (folder === 'activity') setActivityCursor(summary.pagination.activity.next_cursor ?? undefined);
     };
-    const inspectExecution = (kind: 'workflow' | 'workflow_run', id: string, _run: ProjectManagerReadModel['runs']['items'][number]) => {
+    const inspectExecution = (kind: 'workflow' | 'workflow_run', id: string, run: ProjectManagerReadModel['runs']['items'][number]) => {
+        void run;
         const nodeKey = `${kind}:${id}`;
         setSelection(nodeKey, kind, null);
     };
@@ -602,11 +898,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     <Link to="/projects" className="rounded-lg border border-border-primary px-2.5 py-2 text-xs text-content-secondary outline-none hover:text-content focus:ring-2 focus:ring-accent">All Projects</Link>
                     <div className="min-w-0">
                         <h1 className="truncate text-sm font-semibold text-content">{summary.project.name}</h1>
-                        <p className="truncate text-[10px] text-content-muted">{summary.project.objective || 'No objective recorded'} · revision {summary.project.head_generation}</p>
+                        <p className="truncate text-xs text-content-muted">{summary.project.project_scope === 'ngs_molbio_local' ? 'NGS/MolBio Project' : 'Global Project'} · {summary.project.objective || 'No objective recorded'}</p>
                     </div>
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">Attach existing record</button>
                     <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>
                     <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>
                     {summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New Global Experiment</button>}
@@ -642,6 +939,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 )}
                 {treeOpen && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
                 <main className="flex min-h-0 min-w-0 flex-col">
+                    <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
                     <RelationshipMap
                         summary={summary}
                         selectedNodeKey={summary.selection.node_key}
@@ -663,6 +961,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                             onClose={() => setInspectorOpen(false)}
                             onOpenCanonical={() => surfaceMutation.mutate()}
                             onOpenNgsMolBio={openNgsMolBioWorkspace}
+                            onOpenNgsRuns={openNgsRunInspector}
                             onAddExisting={() => setAttachOpen(true)}
                             onCreateDomain={() => setDialogMode('create_domain')}
                             onEdit={() => setDialogMode('edit')}

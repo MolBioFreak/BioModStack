@@ -13,10 +13,11 @@ from jsonschema import Draft202012Validator
 from services.ngs_molbio_capabilities import capability_inventory
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_RECORD = _REPO_ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
+_RECORD = _REPO_ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json"
 _SCHEMA = _REPO_ROOT / "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json"
-_DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+_DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
 _DENOMINATOR = _REPO_ROOT / _DENOMINATOR_RELATIVE
+_DENOMINATOR_SCHEMA = "bms.ngs-molbio.runtime-source-denominator.v2"
 _N0_RECEIPT = _REPO_ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
 
 
@@ -61,7 +62,7 @@ def _source_denominator() -> dict[str, Any]:
     paths = denominator.get("paths")
     if (
         set(denominator) != {"schema", "paths", "content_sha256"}
-        or denominator.get("schema") != "bms.ngs-molbio.runtime-source-denominator.v1"
+        or denominator.get("schema") != _DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
         or len(paths) > 256

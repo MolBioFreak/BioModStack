@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,20 @@ SCHEMA_ROOT = Path(__file__).resolve().parents[3] / "docs" / "specs" / "schemas"
 
 def _schema(name: str) -> dict:
     return json.loads((SCHEMA_ROOT / name).read_text(encoding="utf-8"))
+
+
+def _typed_payload(schema_id: str, payload: dict) -> dict:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return {
+        "schema_id": schema_id,
+        "content_sha256": hashlib.sha256(encoded).hexdigest(),
+        "canonical_size_bytes": len(encoded),
+        "payload": payload,
+    }
+
+
+def _route(path: str) -> dict:
+    return {"template_id": "bms.route.project-manager-test.v1", "path": path, "query": {}}
 
 
 def _project() -> dict:
@@ -144,11 +159,12 @@ def _surface() -> dict:
         "contract_id": "bms.protein.result.v1",
         "content_digest": "b" * 64,
         "surface_kind": "protein_design",
-        "route": "/results/result-1",
+        "route": _route("/results/result-1"),
         "readiness": "ready",
-        "native_summary": {},
+        "native_summary": _typed_payload("bms.result-summary.test.v1", {}),
         "scientific_acceptance": {"state": "review", "reason": None},
-        "provenance": {},
+        "provenance": _typed_payload("bms.result-provenance.test.v1", {}),
+        "comparison": {"state": "not_applicable", "reason": None, "authority": None},
         "available_actions": ["open"],
     }
 
@@ -165,8 +181,21 @@ def _external_receipt() -> dict:
         "source_build_revision": "build-1",
         "verified_at": "2026-08-09T12:00:00Z",
         "verifier_id": "global.rfd3.v1",
-        "reopen_uri": "/designs/job-1",
-        "metadata": {},
+        "reopen_route": _route("/designs/job-1"),
+        "metadata": _typed_payload("bms.external-entity-metadata.test.v1", {}),
+    }
+
+
+def _run_clone_request() -> dict:
+    return {
+        "schema": "bms.run-clone-request.v1",
+        "source_run_id": "run-1",
+        "source_attempt_id": "attempt-1",
+        "new_workflow_name": "Cloned ubiquitin intent",
+        "change_summary": "Clone exact immutable intent",
+        "expected_domain_revision_id": "domain-revision-1",
+        "expected_run_group_generation": 3,
+        "idempotency_key": "12345678-1234-4567-8901-123456789012",
     }
 
 
@@ -187,6 +216,7 @@ def _read_model() -> dict:
         "pagination": {},
         "project": {
             "id": "project-1",
+            "project_scope": "global",
             "name": "Project",
             "objective": "Objective",
             "lifecycle_state": "active",
@@ -244,6 +274,7 @@ def _launch_context() -> dict:
         ("result-receipt-v1.schema.json", _result_receipt),
         ("result-surface-v1.schema.json", _surface),
         ("launch-context-v1.schema.json", _launch_context),
+        ("run-clone-request-v1.schema.json", _run_clone_request),
     ],
 )
 def test_phase_zero_contract_schema_is_valid_and_closed(filename: str, document) -> None:

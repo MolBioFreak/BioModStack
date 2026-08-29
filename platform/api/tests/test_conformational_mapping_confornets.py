@@ -175,12 +175,52 @@ def _fixture_settings(**overrides: object) -> dict[str, object]:
     return settings
 
 
+def _fixture_snapshot() -> dict:
+    snapshot = {
+        "schema_name": "cm_complex_snapshot", "schema_version": 1,
+        "target_id": "target-a", "target_order": 0,
+        "original_source_path": "registered/protein_sequence",
+        "original_source_sha256": "0" * 64,
+        "normalized_source_sha256": "0" * 64,
+        "entities": [{
+            "entity_type": "protein", "source_entity_id": "protein", "count": 1,
+            "ordered_instance_ids": ["protein-1"], "sequence": "MKT",
+        }],
+        "bonds": [],
+        "instance_mappings": [{
+            "source_entity_id": "protein", "source_instance_id": "protein-1",
+            "runtime_target_id": "target-a", "runtime_entity_id": "runtime-protein",
+            "runtime_instance_id": "runtime-protein-1", "runtime_order": 0,
+            "candidate_id": "candidate", "output_entity_id": "protein",
+            "output_label_asym_id": "A", "output_auth_asym_id": "A",
+            "output_entity_order": 0,
+        }],
+        "admission": {"token_count": 3, "atom_count": 4, "token_limit": 100,
+                      "conversion_omissions": []},
+        "unsupported_fields": [],
+    }
+    snapshot["normalized_source_sha256"] = canonical_sha256({
+        key: value for key, value in snapshot.items() if key != "normalized_source_sha256"
+    })
+    return snapshot
+
+
 def _run_finalizer(
     tmp_path: Path,
     *,
     fixture_root: Path = FIXTURE_ROOT,
+    snapshot: object | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     output = tmp_path / "finalized"
+    snapshot_path = tmp_path / "cm_complex_snapshots_v1.json"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    if snapshot is None:
+        payload: object = [_fixture_snapshot()]
+    elif isinstance(snapshot, list):
+        payload = snapshot
+    else:
+        payload = [snapshot]
+    snapshot_path.write_text(json.dumps(payload), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
@@ -189,6 +229,8 @@ def _run_finalizer(
             str(fixture_root / "request.json"),
             "--native-root",
             str(fixture_root / "native"),
+            "--snapshot",
+            str(snapshot_path),
             "--out",
             str(output),
         ],
@@ -576,7 +618,13 @@ def test_cm4_008_native_manifest_complete(tmp_path: Path) -> None:
     observed = {
         path.relative_to(output).as_posix()
         for path in output.rglob("*")
-        if path.is_file() and path.name not in {"cm_native_artifacts_v1.json", "cm_ensemble_v1.json"}
+        if path.is_file()
+        and path.name
+        not in {
+            "cm_native_artifacts_v1.json",
+            "cm_ensemble_v1.json",
+            "cm_complex_snapshots_v1.json",
+        }
     }
     assert manifested == observed
     for record in native_manifest["files"]:
@@ -983,3 +1031,42 @@ ATOM 12 O O . THR A 1 3 ? 11.100 {index}.0 0.000 1.00 50.00 3 THR A O 1
     assert native["params"]["save_steps"] == [1, 2]
     assert native["params"]["k_confornets"] == 1
     assert native["params"]["num_samples"] == 2
+
+
+def test_cm4_016_finalizer_emits_request_bound_snapshot_authority(
+    tmp_path: Path,
+) -> None:
+    result, output = _run_finalizer(tmp_path)
+    assert result.returncode == 0, result.stderr
+    emitted = output / "cm_complex_snapshots_v1.json"
+    assert emitted.is_file()
+    assert not emitted.is_symlink()
+    source_snapshot = tmp_path / "cm_complex_snapshots_v1.json"
+    assert emitted.read_bytes() == source_snapshot.read_bytes()
+    snapshots = json.loads(emitted.read_text(encoding="utf-8"))
+    assert isinstance(snapshots, list) and len(snapshots) == 1
+    assert snapshots[0]["target_id"] == "target-a"
+
+
+def test_cm4_017_finalizer_rejects_missing_or_malformed_snapshot(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    result, _ = _run_finalizer(
+        missing,
+        snapshot={"schema_name": "cm_complex_snapshot", "schema_version": 1},
+    )
+    assert result.returncode != 0
+    assert "snapshot" in result.stderr.lower()
+
+    wrong_target = _fixture_snapshot()
+    wrong_target["target_id"] = "other-target"
+    wrong_target["instance_mappings"][0]["runtime_target_id"] = "other-target"
+    result, _ = _run_finalizer(tmp_path / "wrong-target", snapshot=wrong_target)
+    assert result.returncode != 0
+    assert "no complex snapshot" in result.stderr.lower()
+
+    result, _ = _run_finalizer(tmp_path / "empty", snapshot=[])
+    assert result.returncode != 0
+    assert "empty" in result.stderr.lower()

@@ -1,0 +1,21 @@
+{
+  "schema": "bms.md.admitted-structures.v1",
+  "fixtures": [
+    {
+      "id": "1aki-admitted-v1",
+      "label": "RCSB 1AKI — hen egg-white lysozyme",
+      "accession": "1AKI",
+      "product_relative_path": "assets/md/admitted_structures/1AKI.pdb",
+      "sha256": "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb",
+      "size_bytes": 116397,
+      "format": "pdb",
+      "compatible_profile_ids": [
+        "amber_ff19sb_opc_lifecycle_v1",
+        "amber_ff19sb_opc_protein_v1",
+        "gmx_amber99sb_ildn_tip3p_smoke_v1"
+      ],
+      "citation": "Artymiuk PJ, Blake CCF, Rice DW, Wilson KS. The structures of the monoclinic and orthorhombic forms of hen egg-white lysozyme at 6 A resolution. Acta Crystallogr B. RCSB PDB 1AKI.",
+      "intended_validation_scope": "Exact-byte managed fixture for infrastructure smoke, short accepted protein MD, and lifecycle validation only; not arbitrary chemistry or long-timescale production-science admission."
+    }
+  ]
+}

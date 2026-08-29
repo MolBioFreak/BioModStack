@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
-import type { CmLandscapeRow, CmResults } from '../src/components/conformationalMapping/conformationalMappingApi.js';
+import type { CmLegacyLandscapeRow, CmResults } from '../src/components/conformationalMapping/conformationalMappingApi.js';
 import {
     CANONICAL_AMINO_ACIDS,
     candidateLabel,
@@ -11,7 +11,7 @@ import {
     candidateStructureMap,
     canonicalAnalysis,
     ensembleCandidates,
-    groupExact20Landscape,
+    groupLegacyExact20Landscape,
     requireApprovedCmResults,
 } from '../src/components/conformationalMapping/conformationalMappingSemantics.js';
 
@@ -113,17 +113,29 @@ test('test_cm13_008_legacy_viewer_no_regression', () => {
     assert.match(resultsViewer, /StructureViewerPane/);
 });
 
+test('state-analysis queries suppress retained scientific data after refetch errors', () => {
+    const viewer = readFileSync(resolve(process.cwd(), 'src/components/conformationalMapping/ConformationalMappingViewer.tsx'), 'utf8');
+    assert.match(viewer, /if \(stateAnalysisSummary\.isError\)/);
+    assert.match(viewer, /if \(stateAnalysisPage\.isError\)/);
+    assert.match(viewer, /page=\{stateAnalysisPage\.isError \|\| stateAnalysisPageParsed\.error \? null : stateAnalysisRows\}/);
+});
+
 test('canonical landscape display requires exact 20 API slots', () => {
-    const rows = CANONICAL_AMINO_ACIDS.map((mutation_aa, index): CmLandscapeRow => ({
+    const provenance = {
+        raw_csv_sha256: sha('1'),
+        checkpoint_sha256: sha('2'),
+        tool_sha256: sha('3'),
+        threshold_policy_sha256: sha('4'),
+    };
+    const rows = CANONICAL_AMINO_ACIDS.map((mutation_aa): CmLegacyLandscapeRow => ({
         candidate_id: 'candidate-a', entity_instance_id: 'copy1', auth_asym_id: 'AUTH', auth_seq_id: '7', insertion_code: '',
-        source_entity_id: '1', label_asym_id: 'A', label_seq_id: 1,
-        sequence_index: 1, wt: 'A', pdb_chain_id: 'A', pdb_residue_id: 7, pdb_insertion_code: '',
-        model_position: 0, residue_name: 'ALA', mutation_aa, score: index, class: 'neutral', scoreable: true, status: 'ok', reason: null,
-        provenance: {},
+        sequence_index: 1, wt: 'A', mutation_aa, score: 0, class: 'neutral', scoreable: true, status: 'ok', reason: null,
+        provenance,
     }));
-    assert.equal(groupExact20Landscape(rows).length, 1);
-    assert.throws(() => groupExact20Landscape(rows.slice(1)), /exact-20/);
+    assert.equal(groupLegacyExact20Landscape(rows, 'candidate-a').length, 1);
+    assert.throws(() => groupLegacyExact20Landscape(rows.slice(1), 'candidate-a'), /exact-20/);
     for (const [field, value] of [
+        ['candidate_id', 'candidate-b'],
         ['auth_asym_id', 'OTHER'],
         ['auth_seq_id', '8'],
         ['insertion_code', 'A'],
@@ -131,6 +143,68 @@ test('canonical landscape display requires exact 20 API slots', () => {
     ] as const) {
         const conflicting = rows.map((row) => ({ ...row }));
         conflicting[1] = { ...conflicting[1]!, [field]: value };
-        assert.throws(() => groupExact20Landscape(conflicting), /canonical exact-20 API order/);
+        assert.throws(() => groupLegacyExact20Landscape(conflicting, 'candidate-a'), /canonical exact-20 API order|selected candidate/);
     }
+    const malformedRows: CmLegacyLandscapeRow[] = [
+        { ...rows[0]!, class: 'unknown' as CmLegacyLandscapeRow['class'] },
+        { ...rows[0]!, unexpected: true } as CmLegacyLandscapeRow,
+        { ...rows[0]!, score: 0.7, class: 'neutral' },
+        { ...rows[0]!, score: Number.POSITIVE_INFINITY },
+        { ...rows[0]!, status: 'missing_row', scoreable: false, score: null, class: null, reason: null },
+        { ...rows[0]!, status: 'missing_row', scoreable: true, score: null, class: null, reason: 'unsupported' },
+    ];
+    for (const malformed of malformedRows) {
+        const conflicting = rows.map((row) => ({ ...row }));
+        conflicting[0] = malformed;
+        assert.throws(() => groupLegacyExact20Landscape(conflicting, 'candidate-a'), /landscape slot/i);
+    }
+    for (const malformedProvenance of [
+        {},
+        { ...provenance, raw_csv_sha256: 'not-a-digest' },
+        { ...provenance, unexpected: sha('5') },
+        { ...provenance, container_sha256: 'not-a-digest' },
+    ]) {
+        const malformed = rows.map((row) => ({
+            ...row,
+            provenance: malformedProvenance as CmLegacyLandscapeRow['provenance'],
+        }));
+        assert.throws(
+            () => groupLegacyExact20Landscape(malformed, 'candidate-a'),
+            /provenance/i,
+        );
+    }
+    const optionalContainer = rows.map((row) => ({
+        ...row,
+        provenance: { ...provenance, container_sha256: sha('5') },
+    }));
+    assert.equal(groupLegacyExact20Landscape(optionalContainer, 'candidate-a').length, 1);
+    for (const malformedScoreable of ['true', 1, null]) {
+        const malformed = rows.map((row) => ({
+            ...row,
+            scoreable: malformedScoreable as unknown as boolean,
+        }));
+        assert.throws(() => groupLegacyExact20Landscape(malformed, 'candidate-a'), /availability|scoreable/i);
+    }
+    const unavailable = rows.map((row) => ({
+        ...row,
+        score: null,
+        class: null,
+        scoreable: 0 as unknown as boolean,
+        status: 'missing_row' as const,
+        reason: 'missing',
+    }));
+    assert.throws(() => groupLegacyExact20Landscape(unavailable, 'candidate-a'), /missingness|scoreable/i);
+    const mixedProvenance = rows.map((row) => ({ ...row }));
+    mixedProvenance[1] = {
+        ...mixedProvenance[1]!,
+        provenance: { source: 'foreign' } as unknown as CmLegacyLandscapeRow['provenance'],
+    };
+    assert.throws(
+        () => groupLegacyExact20Landscape(mixedProvenance, 'candidate-a'),
+        /provenance/i,
+    );
+    assert.throws(
+        () => groupLegacyExact20Landscape([...rows, ...rows], 'candidate-a'),
+        /repeats one residue identity/i,
+    );
 });

@@ -3,30 +3,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import pyarrow as pa
 import rfc8785
-from sqlalchemy import select
+from sqlalchemy import and_, func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from database import (
+    ConformationalMappingRequest,
     Design,
     FrustraMPNNArtifact,
     FrustraMPNNLandscapeRow,
     FrustraMPNNResult,
     Job,
+    ScientificArtifactReceipt,
 )
+from services.scientific_artifacts import (
+    ScientificArtifactError,
+    artifact_reference,
+    artifact_row_reference,
+    count_rows,
+    publish_json_payload,
+    publish_table_rows,
+    query_rows,
+    resolve_json_value,
+)
+from services.scientific_artifacts.writer import guarded_delete_new_artifact
+from services.conformational_mapping.contracts import candidate_id as cm_candidate_id
 from .contracts import canonical_json_bytes, canonical_json_loads
 from .manifests import (
     MANIFEST_PATH,
     V2_MANIFEST_PATH,
+    V3_MANIFEST_PATH,
     ManifestValidationError,
     load_result_manifest_bytes_and_document,
     validate_result_manifest,
 )
+from .statistics_jobs import ensure_statistics_child
 from .structure import StructureNormalizationError, read_structure_bytes
 
 
@@ -70,6 +89,7 @@ _V1_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
 }
 _V2_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
     "workflow_component_request_v2.json": ("component_request", "application/json"),
+    "authority_artifact_v1.json": ("identity_authority", "application/json"),
     "normalized_input.pdb": ("normalized_input", "chemical/x-pdb"),
     "frustrampnn_structure_map_v1.json": ("structure_map", "application/json"),
     "raw_frustrampnn.csv": ("raw_csv", "text/csv"),
@@ -80,6 +100,39 @@ _V2_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
     "frustrampnn_execution_receipt_v2.json": ("execution_receipt", "application/json"),
     "frustrampnn_statistics_v1.json": ("statistics", "application/json"),
 }
+_V3_ARTIFACT_CONTRACT: dict[str, tuple[str, str]] = {
+    "workflow_component_request_v3.json": ("component_request", "application/json"),
+    "authority_artifact_v1.json": ("identity_authority", "application/json"),
+    "normalized_input.pdb": ("normalized_input", "chemical/x-pdb"),
+    "frustrampnn_structure_map_v1.json": ("structure_map", "application/json"),
+    "raw_frustrampnn.csv": ("raw_csv", "text/csv"),
+    "frustrampnn_landscape_v3.json": ("landscape", "application/json"),
+    "frustrampnn_summary_v3.json": ("summary", "application/json"),
+    "frustrampnn_stdout.log": ("stdout", "text/plain"),
+    "frustrampnn_stderr.log": ("stderr", "text/plain"),
+    "frustrampnn_execution_receipt_v3.json": ("execution_receipt", "application/json"),
+}
+_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA = pa.schema(
+    [
+        ("row_index", pa.int64()),
+        ("id", pa.string()),
+        ("target_id", pa.string()),
+        ("entity_instance_id", pa.string()),
+        ("auth_asym_id", pa.string()),
+        ("auth_seq_id", pa.string()),
+        ("insertion_code", pa.string()),
+        ("sequence_index", pa.int64()),
+        ("wt", pa.string()),
+        ("mutation_aa", pa.string()),
+        ("score", pa.float64()),
+        ("score_class", pa.string()),
+        ("scoreable", pa.bool_()),
+        ("status", pa.string()),
+        ("reason", pa.string()),
+        ("row_json", pa.string()),
+    ]
+)
+_CORE_INSERT_CHUNK_SIZE = 250
 _V1_TERMINAL_AUTHORITY_FIELDS = (
     "invocation_id",
     "parent_job_id",
@@ -143,7 +196,7 @@ def _terminal_identity_matches(
     terminal_result: Mapping[str, Any],
     contract_version: int,
 ) -> bool:
-    if contract_version == 2:
+    if contract_version in {2, 3}:
         try:
             return canonical_json_bytes(dict(terminal_envelope)) == canonical_json_bytes(
                 dict(terminal_result)
@@ -162,6 +215,7 @@ def load_and_validate_result_bundle(
     *,
     expected_parent_job_id: str,
     terminal_envelope: Mapping[str, Any],
+    allow_legacy_v2_external_authority: bool = False,
 ) -> ValidatedResultBundle:
     """Load and retain one exact manifest-validated v1 or v2 bundle snapshot."""
 
@@ -176,17 +230,28 @@ def load_and_validate_result_bundle(
         ) from exc
     manifest = _canonical_object(manifest_bytes, manifest_relative_path)
     contract_version = manifest.get("schema_version")
-    if contract_version not in {1, 2}:
+    if contract_version not in {1, 2, 3}:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN result manifest schema generation is unsupported"
         )
-    expected_manifest_path = MANIFEST_PATH if contract_version == 1 else V2_MANIFEST_PATH
+    expected_manifest_path = {
+        1: MANIFEST_PATH,
+        2: V2_MANIFEST_PATH,
+        3: V3_MANIFEST_PATH,
+    }[contract_version]
     if manifest_relative_path != expected_manifest_path:
         raise FrustraMPNNPersistenceError(
             "FrustraMPNN result manifest path contradicts its explicit schema generation"
         )
     try:
-        payloads = validate_result_manifest(root, manifest)
+        if allow_legacy_v2_external_authority:
+            payloads = validate_result_manifest(
+                root,
+                manifest,
+                allow_legacy_v2_external_authority=True,
+            )
+        else:
+            payloads = validate_result_manifest(root, manifest)
     except ManifestValidationError as exc:
         raise FrustraMPNNPersistenceError(
             f"FrustraMPNN result manifest validation failed: {exc}"
@@ -206,24 +271,30 @@ def load_and_validate_result_bundle(
                 f"FrustraMPNN artifact size changed after validation: {relative_path}"
             )
 
-    names = (
-        {
+    names = {
+        1: {
             "request": "workflow_component_request_v1.json",
             "summary": "frustrampnn_summary_v1.json",
             "receipt": "frustrampnn_execution_receipt_v1.json",
             "terminal": "workflow_component_result_v1.json",
             "landscape": "frustrampnn_landscape_v1.json",
-        }
-        if contract_version == 1
-        else {
+        },
+        2: {
             "request": "workflow_component_request_v2.json",
             "summary": "frustrampnn_summary_v2.json",
             "receipt": "frustrampnn_execution_receipt_v2.json",
             "terminal": "workflow_component_result_v2.json",
             "landscape": "frustrampnn_landscape_v2.json",
             "statistics": "frustrampnn_statistics_v1.json",
-        }
-    )
+        },
+        3: {
+            "request": "workflow_component_request_v3.json",
+            "summary": "frustrampnn_summary_v3.json",
+            "receipt": "frustrampnn_execution_receipt_v3.json",
+            "terminal": "workflow_component_result_v3.json",
+            "landscape": "frustrampnn_landscape_v3.json",
+        },
+    }[contract_version]
     request = _canonical_object(payloads[names["request"]], names["request"])
     summary = _canonical_object(payloads[names["summary"]], names["summary"])
     receipt = _canonical_object(payloads[names["receipt"]], names["receipt"])
@@ -257,7 +328,14 @@ def load_and_validate_result_bundle(
         )
 
     try:
-        final_payloads = validate_result_manifest(root, manifest)
+        if allow_legacy_v2_external_authority:
+            final_payloads = validate_result_manifest(
+                root,
+                manifest,
+                allow_legacy_v2_external_authority=True,
+            )
+        else:
+            final_payloads = validate_result_manifest(root, manifest)
     except ManifestValidationError as exc:
         raise FrustraMPNNPersistenceError(
             f"FrustraMPNN result bundle changed after validated ingestion snapshot: {exc}"
@@ -293,11 +371,11 @@ def _artifact_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
     values: list[dict[str, Any]] = []
     invocation_id = bundle.manifest["invocation_id"]
     parent_job_id = bundle.manifest["parent_job_id"]
-    contract = (
-        _V1_ARTIFACT_CONTRACT
-        if bundle.contract_version == 1
-        else _V2_ARTIFACT_CONTRACT
-    )
+    contract = {
+        1: _V1_ARTIFACT_CONTRACT,
+        2: _V2_ARTIFACT_CONTRACT,
+        3: _V3_ARTIFACT_CONTRACT,
+    }[bundle.contract_version]
     for record in bundle.artifact_records:
         relative_path = record["relative_path"]
         try:
@@ -351,7 +429,7 @@ def _landscape_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
         "threshold_policy": landscape["threshold_policy"],
         "threshold_policy_sha256": landscape["threshold_policy_sha256"],
     }
-    if bundle.contract_version == 2:
+    if bundle.contract_version in {2, 3}:
         provenance.update(
             {
                 "schema_name": landscape["schema_name"],
@@ -432,6 +510,36 @@ def _landscape_values(bundle: ValidatedResultBundle) -> list[dict[str, Any]]:
     return values
 
 
+def _landscape_artifact_values(
+    values: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], str]:
+    rows: list[dict[str, Any]] = []
+    digest = hashlib.sha256()
+    for index, value in enumerate(values):
+        row = {
+            "row_index": index,
+            "id": str(value["id"]),
+            "target_id": str(value["target_id"]),
+            "entity_instance_id": str(value["entity_instance_id"]),
+            "auth_asym_id": str(value["auth_asym_id"]),
+            "auth_seq_id": str(value["auth_seq_id"]),
+            "insertion_code": str(value["insertion_code"]),
+            "sequence_index": int(value["sequence_index"]),
+            "wt": str(value["wt"]),
+            "mutation_aa": str(value["mutation_aa"]),
+            "score": value["score"],
+            "score_class": str(value["score_class"]),
+            "scoreable": bool(value["scoreable"]),
+            "status": str(value["status"]),
+            "reason": None if value["reason"] is None else str(value["reason"]),
+            "row_json": json.dumps(value["row_json"], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False),
+        }
+        rows.append(row)
+        digest.update(canonical_json_bytes(row))
+        digest.update(b"\n")
+    return rows, digest.hexdigest()
+
+
 def _result_values(
     bundle: ValidatedResultBundle,
     design_id: str | None,
@@ -442,7 +550,7 @@ def _result_values(
     summary_path = (
         "frustrampnn_summary_v1.json"
         if bundle.contract_version == 1
-        else "frustrampnn_summary_v2.json"
+        else f"frustrampnn_summary_v{bundle.contract_version}.json"
     )
     summary_record = next(
         record
@@ -492,11 +600,7 @@ def _result_values(
         "statistics_json": None,
         "comparison_compatibility_id": None,
     }
-    if bundle.contract_version == 2:
-        if bundle.statistics is None:
-            raise FrustraMPNNPersistenceError(
-                "validated v2 FrustraMPNN bundle is missing exact statistics authority"
-            )
+    if bundle.contract_version in {2, 3}:
         values.update(
             {
                 "settings_sha256": request["requested_settings_sha256"],
@@ -509,6 +613,15 @@ def _result_values(
                 "capability_inventory_sha256": request[
                     "capability_inventory_byte_sha256"
                 ],
+            }
+        )
+    if bundle.contract_version == 2:
+        if bundle.statistics is None:
+            raise FrustraMPNNPersistenceError(
+                "validated v2 FrustraMPNN bundle is missing exact statistics authority"
+            )
+        values.update(
+            {
                 "statistics_sha256": bundle.statistics["statistics_sha256"],
                 "statistics_json": canonical_json_loads(
                     canonical_json_bytes(bundle.statistics)
@@ -521,6 +634,74 @@ def _result_values(
     return values
 
 
+async def _insert_core_mappings(
+    session: AsyncSession,
+    table: Any,
+    mappings: Sequence[Mapping[str, Any]],
+) -> None:
+    for start in range(0, len(mappings), _CORE_INSERT_CHUNK_SIZE):
+        chunk = [dict(value) for value in mappings[start : start + _CORE_INSERT_CHUNK_SIZE]]
+        if chunk:
+            await session.execute(insert(table), chunk)
+
+
+def _cleanup_installed_artifacts(installed_artifacts: Sequence[Any]) -> None:
+    for artifact in reversed(installed_artifacts):
+        guarded_delete_new_artifact(artifact)
+
+
+async def _verify_publication_counts(
+    session: AsyncSession,
+    *,
+    parent_job_id: str,
+    invocation_id: str,
+    expected_artifacts: int,
+    expected_receipt_roles: set[str],
+) -> None:
+    result_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(FrustraMPNNResult).where(
+                    FrustraMPNNResult.parent_job_id == parent_job_id,
+                    FrustraMPNNResult.invocation_id == invocation_id,
+                )
+            )
+        ).scalar_one()
+    )
+    artifact_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(FrustraMPNNArtifact).where(
+                    FrustraMPNNArtifact.parent_job_id == parent_job_id,
+                    FrustraMPNNArtifact.invocation_id == invocation_id,
+                )
+            )
+        ).scalar_one()
+    )
+    receipt_role_rows = list(
+        (
+            await session.execute(
+                select(ScientificArtifactReceipt.role).where(
+                    ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                    ScientificArtifactReceipt.owner_id
+                    == f"{parent_job_id}:{invocation_id}",
+                    ScientificArtifactReceipt.role.in_(expected_receipt_roles),
+                )
+            )
+        ).scalars()
+    )
+    receipt_roles = set(receipt_role_rows)
+    if (
+        result_count != 1
+        or artifact_count != expected_artifacts
+        or len(receipt_role_rows) != len(expected_receipt_roles)
+        or receipt_roles != expected_receipt_roles
+    ):
+        raise FrustraMPNNPersistenceError(
+            "FrustraMPNN publication counts do not match the validated closure"
+        )
+
+
 async def _exact_design_link(
     session: AsyncSession,
     *,
@@ -528,10 +709,43 @@ async def _exact_design_link(
     source_artifact_sha256: str,
     normalized_source_sha256: str,
     parent_job_id: str,
+    parent_workflow_id: str,
+    candidate_id: str,
 ) -> Design | None:
     job = await session.get(Job, parent_job_id)
     if job is None:
         raise FrustraMPNNPersistenceError("FrustraMPNN current parent job does not exist")
+    if parent_workflow_id == "conformational_mapping":
+        request = (
+            await session.execute(
+                select(ConformationalMappingRequest).where(
+                    ConformationalMappingRequest.job_id == parent_job_id,
+                    ConformationalMappingRequest.request_id == job.lineage_root_job_id,
+                    ConformationalMappingRequest.status.in_(("queued", "running", "completed")),
+                )
+            )
+        ).scalar_one_or_none()
+        coordinates = (
+            request.coordinate_plan_json.get("coordinates")
+            if request is not None and isinstance(request.coordinate_plan_json, Mapping)
+            else None
+        )
+        expected_candidates = (
+            {cm_candidate_id(coordinate) for coordinate in coordinates}
+            if isinstance(coordinates, list)
+            and all(isinstance(item, Mapping) for item in coordinates)
+            else set()
+        )
+        if (
+            job.model_id != "conformational_mapping"
+            or job.stage_family != "conformational_mapping"
+            or source_artifact_id != candidate_id
+            or candidate_id not in expected_candidates
+        ):
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN CM source is not bound to the current typed request coordinate plan"
+            )
+        return None
     child_envelope = (job.params or {}).get("_frustrampnn_child_v1")
     if job.model_id == "frustrampnn" and isinstance(child_envelope, dict):
         selections = child_envelope.get("selection")
@@ -608,6 +822,72 @@ def _strict_authority_values_equal(
     return True
 
 
+def _resolved_landscape_values(
+    row: FrustraMPNNLandscapeRow, fields: Sequence[str]
+) -> dict[str, Any]:
+    values = _model_values(row, fields)
+    values["row_json"] = resolve_json_value(values["row_json"])
+    values["provenance_json"] = resolve_json_value(values["provenance_json"])
+    return values
+
+
+def _receipt_reference(receipt: ScientificArtifactReceipt) -> dict[str, Any]:
+    return artifact_reference(
+        artifact_id=receipt.artifact_id,
+        owner_kind=receipt.owner_kind,
+        owner_id=receipt.owner_id,
+        role=receipt.role,
+        schema_id=receipt.schema_id,
+        schema_version=receipt.artifact_schema_version,
+        content_sha256=receipt.content_sha256,
+        size_bytes=receipt.size_bytes,
+        row_count=receipt.row_count,
+        relative_path=receipt.relative_path,
+    )
+
+
+async def _landscape_receipt(
+    session: AsyncSession, parent_job_id: str, invocation_id: str
+) -> ScientificArtifactReceipt:
+    owner_id = f"{parent_job_id}:{invocation_id}"
+    receipts = list(
+        (
+            await session.execute(
+                select(ScientificArtifactReceipt).where(
+                    ScientificArtifactReceipt.owner_id == owner_id,
+                    ScientificArtifactReceipt.schema_id == "bms.frustrampnn-landscape.v1",
+                    ScientificArtifactReceipt.availability == "available",
+                    or_(
+                        and_(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                            ScientificArtifactReceipt.role == "landscape",
+                        ),
+                        and_(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_landscape",
+                            ScientificArtifactReceipt.role == "rows",
+                        ),
+                    ),
+                )
+            )
+        ).scalars().all()
+    )
+    if not receipts:
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape artifact receipt is missing"
+        )
+    preferred = [
+        receipt
+        for receipt in receipts
+        if receipt.owner_kind == "frustrampnn_result" and receipt.role == "landscape"
+    ]
+    selected = preferred or receipts
+    if len(selected) != 1:
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape artifact receipt is ambiguous"
+        )
+    return selected[0]
+
+
 async def _assert_identical_replay(
     session: AsyncSession,
     existing: FrustraMPNNResult,
@@ -615,8 +895,10 @@ async def _assert_identical_replay(
     artifact_values: Sequence[Mapping[str, Any]],
     landscape_values: Sequence[Mapping[str, Any]],
 ) -> None:
+    observed_result = _model_values(existing, _RESULT_IMMUTABLE_FIELDS)
+    observed_result["statistics_json"] = resolve_json_value(observed_result["statistics_json"])
     if not _strict_authority_values_equal(
-        _model_values(existing, _RESULT_IMMUTABLE_FIELDS),
+        observed_result,
         result_values,
         _RESULT_IMMUTABLE_FIELDS,
     ):
@@ -657,42 +939,17 @@ async def _assert_identical_replay(
             "FrustraMPNN invocation already exists with different artifact authority"
         )
 
-    existing_rows = (
-        await session.execute(
-            select(FrustraMPNNLandscapeRow)
-            .where(
-                FrustraMPNNLandscapeRow.parent_job_id == existing.parent_job_id,
-                FrustraMPNNLandscapeRow.invocation_id == existing.invocation_id,
-            )
-            .order_by(FrustraMPNNLandscapeRow.id)
-        )
-    ).scalars().all()
-    expected_rows = sorted(landscape_values, key=lambda value: value["id"])
-    landscape_fields = (
-        "id",
-        "parent_job_id",
-        "invocation_id",
-        "target_id",
-        "entity_instance_id",
-        "auth_asym_id",
-        "auth_seq_id",
-        "insertion_code",
-        "sequence_index",
-        "wt",
-        "mutation_aa",
-        "score",
-        "score_class",
-        "scoreable",
-        "status",
-        "reason",
-        "row_json",
-        "provenance_json",
+    receipt = await _landscape_receipt(
+        session, existing.parent_job_id, existing.invocation_id
     )
-    if len(existing_rows) != len(expected_rows) or any(
-        not _strict_authority_values_equal(
-            _model_values(row, landscape_fields), value, landscape_fields
-        )
-        for row, value in zip(existing_rows, expected_rows, strict=True)
+    _expected_artifact_rows, expected_source_sha256 = _landscape_artifact_values(
+        landscape_values
+    )
+    source_receipts = receipt.source_receipts_json
+    if (
+        not isinstance(source_receipts, Mapping)
+        or source_receipts.get("source_sha256") != expected_source_sha256
+        or receipt.row_count != len(landscape_values)
     ):
         raise FrustraMPNNConflictError(
             "FrustraMPNN invocation already exists with different landscape authority"
@@ -713,9 +970,16 @@ def _apply_canonical_projection(design: Design, bundle: ValidatedResultBundle) -
         design.frustrampnn_summary_relpath = "frustrampnn_summary_v1.json"
         design.frustrampnn_runtime_sha256 = result["runtime_identity"]["sif_sha256"]
     else:
-        design.frustrampnn_manifest_relpath = V2_MANIFEST_PATH
-        design.frustrampnn_landscape_relpath = "frustrampnn_landscape_v2.json"
-        design.frustrampnn_summary_relpath = "frustrampnn_summary_v2.json"
+        design.frustrampnn_manifest_relpath = {
+            2: V2_MANIFEST_PATH,
+            3: V3_MANIFEST_PATH,
+        }[bundle.contract_version]
+        design.frustrampnn_landscape_relpath = (
+            f"frustrampnn_landscape_v{bundle.contract_version}.json"
+        )
+        design.frustrampnn_summary_relpath = (
+            f"frustrampnn_summary_v{bundle.contract_version}.json"
+        )
         design.frustrampnn_runtime_sha256 = bundle.request["execution_configuration"][
             "runtime"
         ]["sif_sha256"]
@@ -736,6 +1000,7 @@ async def ingest_result_bundle(
 ) -> FrustraMPNNResult:
     """Validate and insert one immutable closure, or replay it byte-identically."""
 
+    installed_artifacts: list[Any] = []
     try:
         if validated_bundle is None:
             bundle = load_and_validate_result_bundle(
@@ -763,6 +1028,10 @@ async def ingest_result_bundle(
                 "FrustraMPNN current parent job does not exist"
             )
         source_artifact_id = bundle.request["source_artifact"].get("artifact_id")
+        if bundle.request["parent_workflow_id"] == "conformational_mapping" and commit:
+            raise FrustraMPNNPersistenceError(
+                "FrustraMPNN CM results require caller-owned atomic persistence"
+            )
         artifact_values = _artifact_values(bundle)
         landscape_values = _landscape_values(bundle)
         design = await _exact_design_link(
@@ -779,7 +1048,29 @@ async def ingest_result_bundle(
                 else bundle.request["normalized_pdb_sha256"]
             ),
             parent_job_id=parent_job_id,
+            parent_workflow_id=bundle.request["parent_workflow_id"],
+            candidate_id=bundle.manifest["candidate_id"],
         )
+        statistics_bundle_relative_path: str | None = None
+        if bundle.contract_version == 3:
+            owner_job = await session.get(Job, parent_job_id)
+            owner_root_value = (
+                owner_job.child_output_dir or owner_job.output_dir
+                if owner_job is not None
+                else None
+            )
+            if not isinstance(owner_root_value, str) or not owner_root_value.strip():
+                raise FrustraMPNNPersistenceError(
+                    "v3 core result has no owning Job output-root authority"
+                )
+            try:
+                statistics_bundle_relative_path = Path(bundle_root).resolve().relative_to(
+                    Path(owner_root_value).resolve()
+                ).as_posix()
+            except ValueError as exc:
+                raise FrustraMPNNPersistenceError(
+                    "v3 core result bundle escapes its owning Job output root"
+                ) from exc
         existing = await session.get(
             FrustraMPNNResult,
             (parent_job_id, bundle.manifest["invocation_id"]),
@@ -795,45 +1086,115 @@ async def ingest_result_bundle(
                 artifact_values,
                 landscape_values,
             )
+            if bundle.contract_version == 3:
+                assert statistics_bundle_relative_path is not None
+                landscape_receipt = (
+                    await session.execute(
+                        select(ScientificArtifactReceipt).where(
+                            ScientificArtifactReceipt.owner_kind == "frustrampnn_result",
+                            ScientificArtifactReceipt.owner_id
+                            == f"{parent_job_id}:{bundle.manifest['invocation_id']}",
+                            ScientificArtifactReceipt.role == "landscape",
+                        )
+                    )
+                ).scalar_one_or_none()
+                if landscape_receipt is None:
+                    raise FrustraMPNNPersistenceError(
+                        "v3 core replay has no immutable landscape artifact receipt"
+                    )
+                await ensure_statistics_child(
+                    session,
+                    result=existing,
+                    core_artifact_id=landscape_receipt.artifact_id,
+                    core_bundle_relative_path=statistics_bundle_relative_path,
+                )
             if design is not None:
                 _apply_canonical_projection(design, bundle)
                 await session.flush()
-                if commit:
-                    await session.commit()
+            if commit and (design is not None or bundle.contract_version == 3):
+                await session.commit()
             return existing
 
         result_values = _result_values(
             bundle, design.id if design is not None else None, parent_metadata_snapshot
         )
-
         result = FrustraMPNNResult(**result_values)
         session.add(result)
-        # SQLite enforces the composite child foreign keys in production. Flush
-        # the immutable parent authority before adding artifacts and landscape
-        # rows; ORM add order alone does not establish that dependency here.
-        await session.flush()
-        session.add_all(FrustraMPNNArtifact(**values) for values in artifact_values)
-        session.add_all(
-            FrustraMPNNLandscapeRow(**values) for values in landscape_values
+        # Establish the composite parent authority before any manifest mapping
+        # or governed scientific-artifact receipt is introduced.
+        await session.flush([result])
+        if bundle.contract_version == 2 and bundle.statistics is not None:
+            statistics_reference = await publish_json_payload(
+                session,
+                owner_kind="frustrampnn_result",
+                owner_id=f"{parent_job_id}:{bundle.manifest['invocation_id']}",
+                role="statistics",
+                schema_id="bms.frustrampnn-statistics-envelope.v1",
+                payload=bundle.statistics,
+                source_sha256=str(bundle.statistics["statistics_sha256"]),
+                installed_artifacts=installed_artifacts,
+            )
+            result_values["statistics_json"] = statistics_reference
+            result.statistics_json = statistics_reference
+
+        landscape_artifact_rows, landscape_source_sha256 = _landscape_artifact_values(
+            landscape_values
         )
+        landscape_artifact = await publish_table_rows(
+            session,
+            owner_kind="frustrampnn_result",
+            owner_id=f"{parent_job_id}:{bundle.manifest['invocation_id']}",
+            role="landscape",
+            schema_id="bms.frustrampnn-landscape.v1",
+            source_sha256=landscape_source_sha256,
+            rows=landscape_artifact_rows,
+            schema=_FRUSTRA_LANDSCAPE_PARQUET_SCHEMA,
+            installed_artifacts=installed_artifacts,
+        )
+        await _insert_core_mappings(
+            session, FrustraMPNNArtifact.__table__, artifact_values
+        )
+        if bundle.contract_version == 3:
+            assert statistics_bundle_relative_path is not None
+            await ensure_statistics_child(
+                session,
+                result=result,
+                core_artifact_id=landscape_artifact.artifact_id,
+                core_bundle_relative_path=statistics_bundle_relative_path,
+            )
         if design is not None:
             _apply_canonical_projection(design, bundle)
         await session.flush()
+        await _verify_publication_counts(
+            session,
+            parent_job_id=parent_job_id,
+            invocation_id=bundle.manifest["invocation_id"],
+            expected_artifacts=len(artifact_values),
+            expected_receipt_roles={"landscape", "statistics"}
+            if bundle.contract_version == 2
+            else {"landscape"},
+        )
         if commit:
             await session.commit()
+        if bundle.contract_version == 2 and bundle.statistics is not None:
+            set_committed_value(result, "statistics_json", bundle.statistics)
         return result
     except FrustraMPNNConflictError:
+        _cleanup_installed_artifacts(installed_artifacts)
         await session.rollback()
         raise
     except FrustraMPNNPersistenceError:
+        _cleanup_installed_artifacts(installed_artifacts)
         await session.rollback()
         raise
     except IntegrityError as exc:
+        _cleanup_installed_artifacts(installed_artifacts)
         await session.rollback()
         raise FrustraMPNNConflictError(
             f"FrustraMPNN immutable persistence constraint conflict: {exc}"
         ) from exc
     except Exception as exc:
+        _cleanup_installed_artifacts(installed_artifacts)
         await session.rollback()
         raise FrustraMPNNPersistenceError(
             f"FrustraMPNN bundle persistence rolled back: {exc}"
@@ -894,6 +1255,261 @@ async def list_result_artifacts(
     ]
 
 
+def _required_sha256(value: Any) -> str | None:
+    if (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    ):
+        return value
+    return None
+
+
+def _complete_landscape_invocation_authority(authority: Any) -> bool:
+    if not isinstance(authority, Mapping):
+        return False
+    common_sha256_fields = (
+        "landscape_sha256",
+        "structure_map_sha256",
+        "normalized_pdb_sha256",
+        "raw_csv_sha256",
+        "threshold_policy_sha256",
+    )
+    if (
+        any(_required_sha256(authority.get(field)) is None for field in common_sha256_fields)
+        or not isinstance(authority.get("threshold_policy"), Mapping)
+    ):
+        return False
+    schema_version = authority.get("schema_version")
+    if schema_version not in (2, 3):
+        return schema_version in (None, 1)
+    generation_sha256_fields = (
+        "execution_configuration_sha256",
+        "requested_settings_sha256",
+        "effective_settings_sha256",
+        "runtime_identity_sha256",
+        "source_artifact_sha256",
+    )
+    return (
+        authority.get("schema_name") == "frustrampnn_landscape"
+        and isinstance(authority.get("threshold_policy_id"), str)
+        and bool(authority["threshold_policy_id"])
+        and all(
+            _required_sha256(authority.get(field)) is not None
+            for field in generation_sha256_fields
+        )
+    )
+
+
+async def _core_landscape_invocation_authority(
+    session: AsyncSession,
+    parent_job_id: str,
+    invocation_id: str,
+) -> dict[str, Any] | None:
+    result = await session.get(FrustraMPNNResult, (parent_job_id, invocation_id))
+    if result is None or not isinstance(result.summary_json, Mapping):
+        return None
+    artifacts = list(
+        (
+            await session.execute(
+                select(FrustraMPNNArtifact).where(
+                    FrustraMPNNArtifact.parent_job_id == parent_job_id,
+                    FrustraMPNNArtifact.invocation_id == invocation_id,
+                    FrustraMPNNArtifact.role.in_(
+                        ("normalized_input", "structure_map", "raw_csv")
+                    ),
+                )
+            )
+        ).scalars()
+    )
+    artifacts_by_role: dict[str, FrustraMPNNArtifact] = {}
+    for artifact in artifacts:
+        if artifact.role in artifacts_by_role:
+            return None
+        artifacts_by_role[artifact.role] = artifact
+
+    summary = result.summary_json
+    schema_version = summary.get("schema_version")
+    if schema_version not in (1, 2, 3):
+        return None
+    raw_csv = artifacts_by_role.get("raw_csv")
+    if raw_csv is None:
+        return None
+    structure_map_sha256 = _required_sha256(summary.get("structure_map_sha256"))
+    if structure_map_sha256 is None:
+        structure_map = artifacts_by_role.get("structure_map")
+        structure_map_sha256 = (
+            _required_sha256(structure_map.content_sha256)
+            if structure_map is not None
+            else None
+        )
+    normalized_pdb_sha256 = _required_sha256(summary.get("normalized_pdb_sha256"))
+    if normalized_pdb_sha256 is None:
+        normalized_input = artifacts_by_role.get("normalized_input")
+        normalized_pdb_sha256 = (
+            _required_sha256(normalized_input.content_sha256)
+            if normalized_input is not None
+            else None
+        )
+    policy = summary.get("threshold_policy")
+    authority: dict[str, Any] = {
+        "landscape_sha256": _required_sha256(summary.get("landscape_sha256")),
+        "structure_map_sha256": structure_map_sha256,
+        "normalized_pdb_sha256": normalized_pdb_sha256,
+        "raw_csv_sha256": _required_sha256(raw_csv.content_sha256),
+        "threshold_policy": dict(policy) if isinstance(policy, Mapping) else None,
+        "threshold_policy_sha256": _required_sha256(
+            summary.get("threshold_policy_sha256")
+        ),
+    }
+    if any(value is None for value in authority.values()):
+        return None
+    if schema_version in (2, 3):
+        generation_authority: dict[str, Any] = {
+            "schema_name": "frustrampnn_landscape",
+            "schema_version": schema_version,
+            "execution_configuration_sha256": _required_sha256(
+                summary.get("execution_configuration_sha256")
+            ),
+            "requested_settings_sha256": _required_sha256(result.settings_sha256),
+            "effective_settings_sha256": _required_sha256(
+                result.effective_settings_sha256
+            ),
+            "runtime_identity_sha256": _required_sha256(
+                summary.get("runtime_identity_sha256")
+            ),
+            "source_artifact_sha256": _required_sha256(
+                result.source_artifact_sha256
+            ),
+            "threshold_policy_id": summary.get("threshold_policy_id"),
+        }
+        if (
+            any(value is None for value in generation_authority.values())
+            or summary.get("requested_settings_sha256")
+            != generation_authority["requested_settings_sha256"]
+            or summary.get("effective_settings_sha256")
+            != generation_authority["effective_settings_sha256"]
+            or summary.get("source_artifact_sha256")
+            != generation_authority["source_artifact_sha256"]
+        ):
+            return None
+        authority.update(generation_authority)
+    return authority
+
+
+async def landscape_page(
+    session: AsyncSession,
+    parent_job_id: str,
+    invocation_id: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    target_id: str | None = None,
+    entity_instance_id: str | None = None,
+    auth_asym_id: str | None = None,
+    auth_seq_id: str | None = None,
+    insertion_code: str | None = None,
+    sequence_index: int | None = None,
+    mutation_aa: str | None = None,
+    status: str | None = None,
+    sequence_start: int | None = None,
+    sequence_end: int | None = None,
+) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit), 500))
+    bounded_offset = max(0, int(offset))
+    receipt = await _landscape_receipt(session, parent_job_id, invocation_id)
+    filters = {
+        key: value
+        for key, value in {
+            "target_id": target_id,
+            "entity_instance_id": entity_instance_id,
+            "auth_asym_id": auth_asym_id,
+            "auth_seq_id": auth_seq_id,
+            "insertion_code": insertion_code,
+            "sequence_index": sequence_index,
+            "mutation_aa": mutation_aa,
+            "status": status,
+        }.items()
+        if value is not None
+    }
+    range_filters = {
+        "sequence_index": (sequence_start, sequence_end)
+    } if sequence_start is not None or sequence_end is not None else {}
+    columns = (
+        "id", "target_id", "entity_instance_id", "auth_asym_id", "auth_seq_id",
+        "insertion_code", "sequence_index", "wt", "mutation_aa", "score",
+        "score_class", "scoreable", "status", "reason", "row_json",
+    )
+    reference = _receipt_reference(receipt)
+    invocation_authority = await _core_landscape_invocation_authority(
+        session, parent_job_id, invocation_id
+    )
+    if invocation_authority is None:
+        try:
+            legacy_rows = query_rows(
+                reference,
+                columns=("provenance_json",),
+                limit=1,
+                max_limit=1,
+            )
+            invocation_authority = (
+                json.loads(legacy_rows[0]["provenance_json"])
+                if legacy_rows
+                else None
+            )
+        except (ScientificArtifactError, KeyError, TypeError, ValueError):
+            invocation_authority = None
+    if not _complete_landscape_invocation_authority(invocation_authority):
+        raise FrustraMPNNPersistenceError(
+            "persisted FrustraMPNN landscape invocation authority is missing"
+        )
+    assert isinstance(invocation_authority, Mapping)
+    try:
+        total = count_rows(reference, filters=filters, range_filters=range_filters)
+        rows = query_rows(
+            reference,
+            columns=columns,
+            limit=bounded_limit,
+            offset=bounded_offset,
+            max_limit=500,
+            filters=filters,
+            range_filters=range_filters,
+            order_by=(
+                "entity_instance_id", "sequence_index", "mutation_aa", "id",
+            ),
+        )
+    except ScientificArtifactError as exc:
+        raise FrustraMPNNPersistenceError(
+            f"persisted FrustraMPNN landscape artifact is unavailable: {exc}"
+        ) from exc
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": row["id"],
+                "invocation_id": invocation_id,
+                "target_id": row["target_id"],
+                "entity_instance_id": row["entity_instance_id"],
+                "auth_asym_id": row["auth_asym_id"],
+                "auth_seq_id": row["auth_seq_id"],
+                "insertion_code": row["insertion_code"],
+                "sequence_index": row["sequence_index"],
+                "wt": row["wt"],
+                "mutation_aa": row["mutation_aa"],
+                "score": row["score"],
+                "score_class": row["score_class"],
+                "class": row["score_class"],
+                "scoreable": row["scoreable"],
+                "status": row["status"],
+                "reason": row["reason"],
+                "row": json.loads(row["row_json"]),
+                "provenance": dict(invocation_authority),
+            }
+            for row in rows
+        ],
+    }
+
+
 async def paged_landscape(
     session: AsyncSession,
     parent_job_id: str,
@@ -905,55 +1521,18 @@ async def paged_landscape(
     entity_instance_id: str | None = None,
     auth_asym_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    bounded_limit = max(1, min(int(limit), 500))
-    bounded_offset = max(0, int(offset))
-    statement = select(FrustraMPNNLandscapeRow).where(
-        FrustraMPNNLandscapeRow.parent_job_id == parent_job_id,
-        FrustraMPNNLandscapeRow.invocation_id == invocation_id,
-    )
-    if target_id is not None:
-        statement = statement.where(FrustraMPNNLandscapeRow.target_id == target_id)
-    if entity_instance_id is not None:
-        statement = statement.where(
-            FrustraMPNNLandscapeRow.entity_instance_id == entity_instance_id
+    return (
+        await landscape_page(
+            session,
+            parent_job_id,
+            invocation_id,
+            limit=limit,
+            offset=offset,
+            target_id=target_id,
+            entity_instance_id=entity_instance_id,
+            auth_asym_id=auth_asym_id,
         )
-    if auth_asym_id is not None:
-        statement = statement.where(
-            FrustraMPNNLandscapeRow.auth_asym_id == auth_asym_id
-        )
-    statement = statement.order_by(
-        FrustraMPNNLandscapeRow.target_id,
-        FrustraMPNNLandscapeRow.entity_instance_id,
-        FrustraMPNNLandscapeRow.auth_asym_id,
-        FrustraMPNNLandscapeRow.auth_seq_id,
-        FrustraMPNNLandscapeRow.insertion_code,
-        FrustraMPNNLandscapeRow.sequence_index,
-        FrustraMPNNLandscapeRow.mutation_aa,
-        FrustraMPNNLandscapeRow.id,
-    ).offset(bounded_offset).limit(bounded_limit)
-    rows = (await session.execute(statement)).scalars().all()
-    return [
-        {
-            "id": row.id,
-            "invocation_id": row.invocation_id,
-            "target_id": row.target_id,
-            "entity_instance_id": row.entity_instance_id,
-            "auth_asym_id": row.auth_asym_id,
-            "auth_seq_id": row.auth_seq_id,
-            "insertion_code": row.insertion_code,
-            "sequence_index": row.sequence_index,
-            "wt": row.wt,
-            "mutation_aa": row.mutation_aa,
-            "score": row.score,
-            "class": row.score_class,
-            "scoreable": row.scoreable,
-            "status": row.status,
-            "reason": row.reason,
-            "row": row.row_json,
-            "provenance": row.provenance_json,
-        }
-        for row in rows
-    ]
+    )["items"]
 
 
 __all__ = [
@@ -963,6 +1542,7 @@ __all__ = [
     "load_and_validate_result_bundle",
     "ingest_result_bundle",
     "get_result_projection",
+    "landscape_page",
     "paged_landscape",
     "list_result_artifacts",
 ]

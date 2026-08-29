@@ -91,6 +91,41 @@ def test_public_model_routes_hide_internal_and_disabled_models(
     assert registry.validate_job_params("internal_enabled", "any", {}) == ["Unknown model: internal_enabled"]
 
 
+def test_string_list_enum_validates_each_selected_value(tmp_path: Path) -> None:
+    record = _model_record("validator_suite")
+    record["modes"] = [
+        {
+            "id": "validate",
+            "name": "Validate",
+            "description": "Validate with selected peers",
+            "params": ["structure_validators"],
+        }
+    ]
+    record["params"] = [
+        {
+            "name": "structure_validators",
+            "type": "string_list",
+            "description": "Selected peer validators",
+            "enum": ["boltz2", "esmfold2", "protenix_v2"],
+        }
+    ]
+    registry = _write_registry(tmp_path / "models", [record])
+
+    assert registry.validate_job_params(
+        "validator_suite",
+        "validate",
+        {"structure_validators": ["esmfold2", "protenix_v2"]},
+    ) == []
+    assert registry.validate_job_params(
+        "validator_suite",
+        "validate",
+        {"structure_validators": ["esmfold2", "unknown"]},
+    ) == [
+        "Invalid value for structure_validators: members must be one of "
+        "['boltz2', 'esmfold2', 'protenix_v2']"
+    ]
+
+
 def test_internal_model_integration_route_returns_only_bounded_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

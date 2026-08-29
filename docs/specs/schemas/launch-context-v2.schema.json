@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.launch-context.v2",
+  "title": "Prepared workflow launch context v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "launch_context_id",
+    "project_id",
+    "project_revision_id",
+    "global_experiment_id",
+    "global_experiment_revision_id",
+    "domain_experiment_id",
+    "domain_experiment_revision_id",
+    "domain_context_id",
+    "workflow_plan_id",
+    "workflow_revision_id",
+    "preparation_id",
+    "normalized_request_sha256",
+    "validation_receipt_id",
+    "validation_receipt_sha256",
+    "source_receipt_id",
+    "return_uri",
+    "state",
+    "run_attempt_id",
+    "launch_fence_epoch",
+    "launch_fence_token_sha256",
+    "canonical_job_id",
+    "binding_receipt_id",
+    "binding_receipt_sha256",
+    "issued_by",
+    "issued_at",
+    "expires_at",
+    "reserved_at",
+    "claimed_at",
+    "consumed_at"
+  ],
+  "properties": {
+    "schema": {"const": "bms.launch-context.v2"},
+    "launch_context_id": {"$ref": "#/$defs/id"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "project_revision_id": {"$ref": "#/$defs/id"},
+    "global_experiment_id": {"$ref": "#/$defs/id"},
+    "global_experiment_revision_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_id": {"$ref": "#/$defs/id"},
+    "domain_experiment_revision_id": {"$ref": "#/$defs/id"},
+    "domain_context_id": {"$ref": "#/$defs/nullableId"},
+    "workflow_plan_id": {"$ref": "#/$defs/id"},
+    "workflow_revision_id": {"$ref": "#/$defs/id"},
+    "preparation_id": {"$ref": "#/$defs/id"},
+    "normalized_request_sha256": {"$ref": "#/$defs/sha256"},
+    "validation_receipt_id": {"$ref": "#/$defs/id"},
+    "validation_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "source_receipt_id": {"$ref": "#/$defs/id"},
+    "return_uri": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^/[^/]"
+    },
+    "state": {"enum": ["issued", "reserved", "claimed", "consumed"]},
+    "run_attempt_id": {"$ref": "#/$defs/nullableId"},
+    "launch_fence_epoch": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+    "launch_fence_token_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "canonical_job_id": {"$ref": "#/$defs/nullableId"},
+    "binding_receipt_id": {"$ref": "#/$defs/nullableId"},
+    "binding_receipt_sha256": {
+      "anyOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "issued_by": {"$ref": "#/$defs/id"},
+    "issued_at": {"$ref": "#/$defs/timestamp"},
+    "expires_at": {"$ref": "#/$defs/timestamp"},
+    "reserved_at": {"$ref": "#/$defs/nullableTimestamp"},
+    "claimed_at": {"$ref": "#/$defs/nullableTimestamp"},
+    "consumed_at": {"$ref": "#/$defs/nullableTimestamp"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "issued"}}, "required": ["state"]},
+      "then": {
+        "properties": {
+          "run_attempt_id": {"type": "null"},
+          "launch_fence_epoch": {"type": "null"},
+          "launch_fence_token_sha256": {"type": "null"},
+          "canonical_job_id": {"type": "null"},
+          "binding_receipt_id": {"type": "null"},
+          "binding_receipt_sha256": {"type": "null"},
+          "reserved_at": {"type": "null"},
+          "claimed_at": {"type": "null"},
+          "consumed_at": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"state": {"const": "reserved"}}, "required": ["state"]},
+      "then": {
+        "properties": {
+          "run_attempt_id": {"$ref": "#/$defs/id"},
+          "launch_fence_epoch": {"type": "integer", "minimum": 0},
+          "launch_fence_token_sha256": {"$ref": "#/$defs/sha256"},
+          "canonical_job_id": {"type": "null"},
+          "binding_receipt_id": {"type": "null"},
+          "binding_receipt_sha256": {"type": "null"},
+          "reserved_at": {"$ref": "#/$defs/timestamp"},
+          "claimed_at": {"type": "null"},
+          "consumed_at": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"state": {"const": "claimed"}}, "required": ["state"]},
+      "then": {
+        "properties": {
+          "run_attempt_id": {"$ref": "#/$defs/id"},
+          "launch_fence_epoch": {"type": "integer", "minimum": 0},
+          "launch_fence_token_sha256": {"$ref": "#/$defs/sha256"},
+          "canonical_job_id": {"type": "null"},
+          "binding_receipt_id": {"type": "null"},
+          "binding_receipt_sha256": {"type": "null"},
+          "reserved_at": {"$ref": "#/$defs/timestamp"},
+          "claimed_at": {"$ref": "#/$defs/timestamp"},
+          "consumed_at": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"state": {"const": "consumed"}}, "required": ["state"]},
+      "then": {
+        "properties": {
+          "run_attempt_id": {"$ref": "#/$defs/id"},
+          "launch_fence_epoch": {"type": "integer", "minimum": 0},
+          "launch_fence_token_sha256": {"$ref": "#/$defs/sha256"},
+          "canonical_job_id": {"$ref": "#/$defs/id"},
+          "binding_receipt_id": {"$ref": "#/$defs/id"},
+          "binding_receipt_sha256": {"$ref": "#/$defs/sha256"},
+          "reserved_at": {"$ref": "#/$defs/timestamp"},
+          "claimed_at": {"$ref": "#/$defs/timestamp"},
+          "consumed_at": {"$ref": "#/$defs/timestamp"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "nullableId": {
+      "anyOf": [
+        {"$ref": "#/$defs/id"},
+        {"type": "null"}
+      ]
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "nullableTimestamp": {
+      "anyOf": [
+        {"$ref": "#/$defs/timestamp"},
+        {"type": "null"}
+      ]
+    }
+  }
+}

@@ -97,6 +97,9 @@ AUTOSTART_PATH = Path.home() / ".config" / "autostart" / "biomodstack-panel.desk
 START_SCRIPT = PROJECT_ROOT / "start_ui.sh"
 RESTART_API_SCRIPT = PROJECT_ROOT / "restart_api.sh"  
 STOP_SCRIPT = PROJECT_ROOT / "stop_services.sh"
+SYNC_STATE_DIR = Path.home() / ".local" / "state" / "biomodstack"
+SYNC_CONTROL_PATH = SYNC_STATE_DIR / "dev-sync-control.json"
+SYNC_SCRIPT = Path.home() / ".local" / "libexec" / "biomodstack" / "biomodstack_dev_sync.py"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION MANAGEMENT
@@ -115,6 +118,19 @@ def save_config(config: dict):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
         json.dump(config, f, indent=2)
+
+
+def development_deployment_paused() -> bool | None:
+    """Read the durable Development deployment gate."""
+    if not SYNC_CONTROL_PATH.exists():
+        return False
+    try:
+        with SYNC_CONTROL_PATH.open(encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    paused = payload.get("deployment_paused") if isinstance(payload, dict) else None
+    return paused if isinstance(paused, bool) else None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SERVICE STATUS
@@ -693,6 +709,14 @@ class BioModStackPanel(Adw.Application):
         row.set_child(button_box)
         group.add(row)
 
+        self.dev_updates_row = Adw.ActionRow()
+        self.dev_updates_row.set_title("Development auto-deploy")
+        self.btn_dev_updates = Gtk.Button()
+        self.btn_dev_updates.connect("clicked", self._on_toggle_dev_updates)
+        self.dev_updates_row.add_suffix(self.btn_dev_updates)
+        group.add(self.dev_updates_row)
+        self._update_dev_updates_control()
+
         self.action_status_row = Adw.ActionRow()
         self.action_status_row.set_title("Last action")
         self.action_status_row.set_subtitle("Ready")
@@ -769,12 +793,53 @@ class BioModStackPanel(Adw.Application):
             ["bash", str(STOP_SCRIPT), "--runtime", runtime_mode],
         )
 
+    def _update_dev_updates_control(self) -> None:
+        if not hasattr(self, "btn_dev_updates"):
+            return
+        paused = development_deployment_paused()
+        if paused is None:
+            self.btn_dev_updates.set_label("⚠ Updates state unknown")
+            self.btn_dev_updates.set_sensitive(False)
+            self.dev_updates_row.set_subtitle("The Development deployment control file is unreadable.")
+            return
+        if paused:
+            self.btn_dev_updates.set_label("▶ Resume Updates")
+            self.btn_dev_updates.set_tooltip_text("Resume Development deployment and run one guarded poll now")
+            self.dev_updates_row.set_subtitle("Paused. Polling continues and the newest test revision stays queued.")
+        else:
+            self.btn_dev_updates.set_label("⏸ Pause Updates")
+            self.btn_dev_updates.set_tooltip_text("Pause Development deployment while keeping 60-second queue polling")
+            self.dev_updates_row.set_subtitle("Active. Development checks origin/test every 60 seconds.")
+        self.btn_dev_updates.set_sensitive(not getattr(self, "_service_action_active", False))
+
+    def _on_toggle_dev_updates(self, button):
+        paused = development_deployment_paused()
+        if paused is None:
+            show_notification("Updates Unavailable", "The Development deployment control state is unreadable.")
+            return
+        action = "--resume-deploy" if paused else "--pause-deploy"
+        label = "Resume Development updates" if paused else "Pause Development updates"
+        sync_script = SYNC_SCRIPT if SYNC_SCRIPT.exists() else PROJECT_ROOT / "scripts" / "biomodstack_dev_sync.py"
+        self._run_service_action(
+            label,
+            [
+                sys.executable,
+                str(sync_script),
+                action,
+                "--root",
+                str(PROJECT_ROOT),
+                "--state-dir",
+                str(SYNC_STATE_DIR),
+            ],
+        )
+
     def _run_service_action(self, label: str, command: list[str]) -> None:
         if getattr(self, "_service_action_active", False):
             show_notification("Action In Progress", "Wait for the current BioModStack service action to finish.")
             return
 
         self._service_action_active = True
+        self._update_dev_updates_control()
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(f"{label} in progress…")
         show_notification(label, "BioModStack service action started.")
@@ -818,6 +883,7 @@ class BioModStackPanel(Adw.Application):
 
         if hasattr(self, "action_status_row"):
             self.action_status_row.set_subtitle(subtitle)
+        self._update_dev_updates_control()
         show_notification(notification_title, detail)
         self._refresh_status_once()
         return False
@@ -1064,6 +1130,7 @@ X-GNOME-Autostart-enabled=true
         self._update_jobs_row()
         self._update_db_info()
         self._update_bioxp_row()
+        self._update_dev_updates_control()
         return True  # Keep timer running
 
     def _refresh_status_once(self):

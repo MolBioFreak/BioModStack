@@ -11,9 +11,18 @@ import subprocess
 
 import pytest
 
-from services.frustrampnn.configuration import execution_configuration, request_parameters
+from services.frustrampnn.configuration import (
+    configuration_sha256,
+    execution_configuration,
+    request_parameters,
+)
 from services.frustrampnn.contracts import canonical_json_bytes, canonical_sha256
-from services.frustrampnn.settings import default_settings, resolve_effective_settings
+from services.frustrampnn.settings import (
+    FrustraMPNNRequestedSettings,
+    compatible_effective_settings_payload,
+    default_settings,
+    resolve_effective_settings,
+)
 from services.frustrampnn.structure import normalize_structure
 
 
@@ -141,9 +150,22 @@ def _v2_packet(tmp_path: Path) -> tuple[dict[str, object], Path, Path, Path]:
         selected_model=1,
         altloc_policy="blank_or_explicit:<blank>",
     )
-    requested = default_settings()
+    requested = FrustraMPNNRequestedSettings.model_validate({"schema_version": 1})
     effective = resolve_effective_settings(requested, structure_map)
-    configuration = execution_configuration(effective)
+    effective_payload = compatible_effective_settings_payload(effective)
+    current_configuration = execution_configuration(effective)
+    historical_configuration = current_configuration.model_dump(
+        mode="json", exclude_none=False
+    )
+    historical_configuration.update({
+        "configuration_id": "frustrampnn_execution_configuration_v2",
+        "schema_version": 2,
+        "effective_settings": effective_payload,
+    })
+    historical_configuration["configuration_sha256"] = configuration_sha256(
+        historical_configuration
+    )
+    configuration = historical_configuration
     request = {
         "schema_name": "workflow_component_request",
         "schema_version": 2,
@@ -163,17 +185,17 @@ def _v2_packet(tmp_path: Path) -> tuple[dict[str, object], Path, Path, Path]:
         "requiredness": "required",
         "identity_authority": "pdb_coordinates",
         "settings_value_origin": requested.settings_value_origin,
-        "requested_settings": requested.model_dump(mode="json", exclude_none=False),
+        "requested_settings": effective_payload["requested_settings"],
         "requested_settings_sha256": effective.settings_sha256,
-        "effective_settings": effective.model_dump(mode="json", exclude_none=False),
+        "effective_settings": effective_payload,
         "effective_settings_sha256": effective.effective_settings_sha256,
         "classification_policy_sha256": effective.threshold_policy_sha256,
         "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
-        "runtime_identity_sha256": configuration.runtime_identity_sha256,
+        "runtime_identity_sha256": configuration["runtime_identity_sha256"],
         "structure_map_sha256": canonical_sha256(structure_map),
         "normalized_pdb_sha256": hashlib.sha256(normalized.read_bytes()).hexdigest(),
-        "execution_configuration": configuration.model_dump(mode="json", exclude_none=False),
-        "execution_configuration_sha256": configuration.configuration_sha256,
+        "execution_configuration": configuration,
+        "execution_configuration_sha256": configuration["configuration_sha256"],
         "requested_outputs": [
             "structure_map",
             "raw_csv",
@@ -203,6 +225,38 @@ def _v2_packet(tmp_path: Path) -> tuple[dict[str, object], Path, Path, Path]:
         "structure_map_size_bytes": len(map_payload),
     }
     return record, request_path, normalized, structure_map_path
+
+
+def _v3_packet(tmp_path: Path) -> tuple[dict[str, object], Path, Path, Path]:
+    record, request_path, normalized, structure_map_path = _v2_packet(tmp_path)
+    structure_map = json.loads(structure_map_path.read_text(encoding="utf-8"))
+    requested = default_settings()
+    effective = resolve_effective_settings(requested, structure_map)
+    configuration = execution_configuration(effective)
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    request.update({
+        "schema_version": 3,
+        "component_contract_version": "3.0",
+        "settings_value_origin": requested.settings_value_origin,
+        "requested_settings": requested.model_dump(mode="json", exclude_none=False),
+        "requested_settings_sha256": effective.settings_sha256,
+        "effective_settings": effective.model_dump(mode="json", exclude_none=False),
+        "effective_settings_sha256": effective.effective_settings_sha256,
+        "classification_policy_sha256": effective.threshold_policy_sha256,
+        "capability_inventory_byte_sha256": effective.capability_inventory_byte_sha256,
+        "runtime_identity_sha256": configuration.runtime_identity_sha256,
+        "execution_configuration": configuration.model_dump(mode="json", exclude_none=False),
+        "execution_configuration_sha256": configuration.configuration_sha256,
+    })
+    current_request = tmp_path / "request-v3.json"
+    request_payload = canonical_json_bytes(request)
+    current_request.write_bytes(request_payload)
+    record.update({
+        "request_relative_path": "inputs/requests/0000/workflow_component_request_v3.json",
+        "request_sha256": hashlib.sha256(request_payload).hexdigest(),
+        "request_size_bytes": len(request_payload),
+    })
+    return record, current_request, normalized, structure_map_path
 
 
 def test_prepare_persisted_dispatches_historical_v1_and_exact_v2_files(tmp_path: Path) -> None:
@@ -247,6 +301,32 @@ def test_prepare_persisted_dispatches_historical_v1_and_exact_v2_files(tmp_path:
     ]
 
 
+def test_prepare_persisted_accepts_current_v3_request(tmp_path: Path) -> None:
+    prepare = _prepare_module()
+    record, request, source, structure_map = _v3_packet(tmp_path)
+    output_root = tmp_path / "v3-out"
+    output_root.mkdir()
+    outputs = (
+        output_root / "workflow_component_request_v3.json",
+        output_root / "canonical_source.pdb",
+        output_root / "frustrampnn_structure_map_v1.json",
+    )
+    prepare.prepare(
+        record_base64=_encoded(record),
+        request_path=request,
+        source_path=source,
+        structure_map_path=structure_map,
+        output_request=outputs[0],
+        output_source=outputs[1],
+        output_structure_map=outputs[2],
+    )
+    assert [path.read_bytes() for path in outputs] == [
+        request.read_bytes(),
+        source.read_bytes(),
+        structure_map.read_bytes(),
+    ]
+
+
 def test_prepare_persisted_rejects_v2_map_tampering_before_staging(tmp_path: Path) -> None:
     prepare = _prepare_module()
     record, request, source, structure_map = _v2_packet(tmp_path)
@@ -268,7 +348,7 @@ def test_prepare_persisted_rejects_v2_map_tampering_before_staging(tmp_path: Pat
     assert list(output_root.iterdir()) == []
 
 
-def test_module_keeps_v1_consumer_and_adds_exact_file_only_v2_transport() -> None:
+def test_module_keeps_v1_consumer_and_adds_exact_file_only_v3_transport() -> None:
     module = MODULE_PATH.read_text(encoding="utf-8")
     assert "workflow CanonicalFrustraMPNN" in module
     assert "tuple val(component_request_meta), path(source_structure)" in module
@@ -283,29 +363,35 @@ def test_module_keeps_v1_consumer_and_adds_exact_file_only_v2_transport() -> Non
     assert "--structure-map '${structure_map}'" in v2_process
     assert "--request-base64" not in v2_process
     assert "JsonSlurper" not in v2_process
-    assert "frustrampnn_result_manifest_v2.json" in v2_process
-    assert "workflow_component_result_v2.json" in v2_process
+    assert "frustrampnn_result_manifest_v3.json" in v2_process
+    assert "workflow_component_result_v3.json" in v2_process
     assert "CUDA_VISIBLE_DEVICES='${assigned_gpu}'" in v2_process
 
 
-def test_standalone_workflow_uses_exact_v2_three_file_tuple_and_terminal_names() -> None:
+def test_standalone_workflow_uses_exact_v3_three_file_tuple_and_terminal_names() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "include { CanonicalFrustraMPNNV2 } from '../modules/frustrampnn'" in workflow
     assert (
         "tuple val(record_base64), path(request_snapshot), path(source_snapshot), "
         "path(structure_map_snapshot)"
     ) in workflow
-    assert "tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb')" in workflow
+    assert "tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb')" in workflow
     assert "path('frustrampnn_structure_map_v1.json'), emit: prepared" in workflow
-    assert "--output-request .prepared_workflow_component_request_v2.json" in workflow
-    assert "mv .prepared_workflow_component_request_v2.json workflow_component_request_v2.json" in workflow
+    assert "--output-request .prepared_workflow_component_request_v3.json" in workflow
+    assert "mv .prepared_workflow_component_request_v3.json workflow_component_request_v3.json" in workflow
     assert "CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)" in workflow
     assert "record.record_schema_version != 2" in workflow
+    assert "batch.schema_version != 3" in workflow
+    assert "batch.expected_cardinality != batch.records.size()" in workflow
+    assert "workflow_component_request_v3\\.json" in workflow
+    assert "RunPersistedFrustraMPNNGroupedBatch(manifestPath.toString())" in workflow
+    assert "CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)" in workflow
+    assert "batch.batching_enabled && batch.records.size() > 1" in workflow
     assert "record.launch_authority" not in workflow
     assert "workflow_component_request_v1.json" not in workflow
     module = MODULE_PATH.read_text(encoding="utf-8")
-    assert "workflow_component_result_v2.json" in module
-    assert "frustrampnn_result_manifest_v2.json" in module
+    assert "workflow_component_result_v3.json" in module
+    assert "frustrampnn_result_manifest_v3.json" in module
 
 
 @pytest.mark.runtime_integration
@@ -375,19 +461,19 @@ def test_v2_nextflow_stub_accepts_exact_three_file_tuple(tmp_path: Path) -> None
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert (
-        "PHASE3C_RESULT=standalone-v2-candidate|candidate_bundle|frustrampnn_result_manifest_v2.json"
+        "PHASE3C_RESULT=standalone-v2-candidate|candidate_bundle|frustrampnn_result_manifest_v3.json"
         in completed.stdout
     )
 
 
 @pytest.mark.runtime_integration
-def test_standalone_v2_nextflow_preview_compiles_exact_persisted_wiring(
+def test_standalone_v3_nextflow_preview_compiles_exact_persisted_wiring(
     tmp_path: Path,
 ) -> None:
     if not _docker_available():
         pytest.skip(f"missing pinned Nextflow image {NEXTFLOW_IMAGE}")
 
-    record, request, source, structure_map = _v2_packet(tmp_path)
+    record, request, source, structure_map = _v3_packet(tmp_path)
     job_root = tmp_path / "standalone-v2-job"
     for relative, payload_path in (
         (record["request_relative_path"], request),
@@ -397,13 +483,19 @@ def test_standalone_v2_nextflow_preview_compiles_exact_persisted_wiring(
         target = job_root / str(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload_path.read_bytes())
-    manifest = job_root / "inputs" / "frustrampnn_scheduler_batch_v1.json"
+    manifest = job_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
     manifest.write_bytes(
         canonical_json_bytes(
             {
                 "schema_name": "bms_frustrampnn_scheduler_batch",
-                "schema_version": 2,
+                "schema_version": 3,
                 "execution_owner_job_id": "standalone-v2-job",
+                "batching_enabled": False,
+                "structures_per_job": 1,
+                "settings_sha256": json.loads(request.read_text(encoding="utf-8"))[
+                    "requested_settings_sha256"
+                ],
+                "expected_cardinality": 1,
                 "records": [record],
             }
         )
@@ -443,7 +535,7 @@ def test_standalone_v2_nextflow_preview_compiles_exact_persisted_wiring(
             "--job_id",
             "standalone-v2-job",
             "--frustrampnn_batch_manifest_path",
-            "/run/standalone-v2-job/inputs/frustrampnn_scheduler_batch_v1.json",
+            "/run/standalone-v2-job/inputs/frustrampnn_scheduler_batch_v3.json",
             "--frustrampnn_physical_gpu_id",
             "2",
             "--out_dir",
@@ -474,3 +566,61 @@ def test_standalone_v2_nextflow_preview_compiles_exact_persisted_wiring(
     )
     assert "/run/parse-repo/workflows/frustrampnn_analysis.nf" in parser_log
     assert "/run/parse-repo/modules/frustrampnn.nf" in parser_log
+
+
+@pytest.mark.runtime_integration
+def test_grouped_v3_nextflow_preview_invokes_one_grouped_gpu_process(tmp_path: Path) -> None:
+    if not _docker_available():
+        pytest.skip(f"missing pinned Nextflow image {NEXTFLOW_IMAGE}")
+    record, request, source, structure_map = _v3_packet(tmp_path)
+    job_root = tmp_path / "grouped-job"
+    records = []
+    for ordinal in range(2):
+        item = dict(record)
+        item.update({
+            "ordinal": ordinal,
+            "candidate_id": f"grouped-candidate-{ordinal}",
+            "invocation_id": f"grouped-invocation-{ordinal}",
+            "request_relative_path": f"inputs/requests/{ordinal:04d}/workflow_component_request_v3.json",
+            "source_relative_path": f"inputs/sources/{ordinal:04d}/canonical_source.pdb",
+            "structure_map_relative_path": f"inputs/maps/{ordinal:04d}/frustrampnn_structure_map_v1.json",
+        })
+        for relative, payload in (
+            (item["request_relative_path"], request.read_bytes()),
+            (item["source_relative_path"], source.read_bytes()),
+            (item["structure_map_relative_path"], structure_map.read_bytes()),
+        ):
+            target = job_root / str(relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+        records.append(item)
+    manifest = job_root / "inputs" / "frustrampnn_scheduler_batch_v3.json"
+    manifest.write_bytes(canonical_json_bytes({
+        "schema_name": "bms_frustrampnn_scheduler_batch", "schema_version": 3,
+        "execution_owner_job_id": "grouped-job", "batching_enabled": True,
+        "structures_per_job": 2,
+        "settings_sha256": json.loads(request.read_text())["requested_settings_sha256"],
+        "expected_cardinality": 2, "records": records,
+    }))
+    parse_root = tmp_path / "parse-repo"
+    (parse_root / "workflows").mkdir(parents=True)
+    (parse_root / "modules").mkdir()
+    (parse_root / "workflows" / WORKFLOW_PATH.name).write_bytes(WORKFLOW_PATH.read_bytes())
+    (parse_root / "modules" / MODULE_PATH.name).write_bytes(MODULE_PATH.read_bytes())
+    completed = subprocess.run([
+        "docker", "run", "--rm", "--network", "none", "-e", "NXF_OFFLINE=true",
+        "-e", "NXF_DISABLE_CHECK_LATEST=true", "-v", f"{REPO_ROOT}:/workspace:ro",
+        "-v", f"{tmp_path}:/run:rw", "-w", "/run/parse-repo", NEXTFLOW_IMAGE,
+        "nextflow", "-log", "/run/grouped-nextflow.log", "run", "workflows/frustrampnn_analysis.nf",
+        "-ansi-log", "false", "-preview", "-offline", "--job_id", "grouped-job",
+        "--frustrampnn_batch_manifest_path", "/run/grouped-job/inputs/frustrampnn_scheduler_batch_v3.json",
+        "--frustrampnn_physical_gpu_id", "2", "--out_dir", "/run/grouped-job",
+        "--api_python", "/usr/bin/python3", "--code_root", "/workspace",
+        "--container_dir", "/run", "-work-dir", "/run/grouped-preview-work",
+    ], env=_subprocess_env(), text=True, capture_output=True, check=False)
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 0, output
+    parser_log = (tmp_path / "grouped-nextflow.log").read_text()
+    assert "Creating process 'RunPersistedFrustraMPNNGroupedBatch'" in parser_log
+    assert "Creating process 'PublishPersistedFrustraMPNNGroupedBundles'" in parser_log
+    assert "Creating process 'CanonicalFrustraMPNNV2Task'" not in parser_log

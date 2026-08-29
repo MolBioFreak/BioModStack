@@ -1,7 +1,7 @@
-export type ModificationMode = 'de_novo_design' | 'rfd3_local_redesign' | 'region_redesign' | 'shape_blueprint';
+export type ModificationMode = 'de_novo_design' | 'rfd3_iteration' | 'shape_blueprint';
 
 export interface DeNovoModificationModeCard {
-    id: Exclude<ModificationMode, 'region_redesign'>;
+    id: ModificationMode;
     label: string;
     description: string;
     cardClassName: string;
@@ -17,9 +17,9 @@ export const DE_NOVO_MODIFICATION_MODE_CARDS: DeNovoModificationModeCard[] = [
         labelClassName: 'text-cyan-100',
     },
     {
-        id: 'rfd3_local_redesign',
-        label: 'RFD3 Local Redesign',
-        description: 'Use native RFD3 to redesign selected coordinates while preserving the source sequence by default.',
+        id: 'rfd3_iteration',
+        label: 'RFD3 Iteration Workbench',
+        description: 'Load or simulate a complex, select residue roles in Mol*, then choose native RFD3 output or downstream sequence design and validation.',
         cardClassName: 'border-emerald-500/40 bg-emerald-500/10 hover:border-emerald-300',
         labelClassName: 'text-emerald-100',
     },

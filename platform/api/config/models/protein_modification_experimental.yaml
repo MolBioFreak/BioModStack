@@ -63,11 +63,12 @@ modes:
       - context_chains
       - region_mode
       - redesign_ranges
+      - sequence_redesign_ranges
       - interface_cutoff
       - region_padding
       - num_designs
       - seq_method
-      - run_boltz_validation
+      - structure_validators
 
 params:
   - name: backend
@@ -184,6 +185,12 @@ params:
     required: false
     ui_group: Region Redesign
     ui_order: 34
+  - name: sequence_redesign_ranges
+    type: string
+    description: Exact editable residue subset whose amino-acid identities may change during downstream sequence design
+    required: false
+    ui_group: Region Redesign
+    ui_order: 35
   - name: interface_cutoff
     type: float
     description: Interface-shell distance cutoff in angstroms
@@ -210,10 +217,11 @@ params:
     enum: [fampnn, mpnn]
     ui_group: Region Redesign
     ui_order: 37
-  - name: run_boltz_validation
-    type: boolean
-    description: Validate redesigned candidates with Boltz-2
+  - name: structure_validators
+    type: string_list
+    description: One to three peer structure validators for every redesigned candidate
     required: false
-    default: true
+    default: [protenix_v2]
+    enum: [boltz2, esmfold2, protenix_v2]
     ui_group: Region Redesign
     ui_order: 38

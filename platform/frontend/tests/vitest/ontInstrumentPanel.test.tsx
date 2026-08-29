@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import React, { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ont = vi.hoisted(() => ({
@@ -45,11 +47,28 @@ const optionsResponse = {
     },
 };
 
-vi.mock('../../src/lib/api', () => ({
-    fetchOntDeviceStatus: ont.fetchDevice,
-    fetchOntProtocolOptions: ont.fetchOptions,
-    createOntRunIntent: ont.createIntent,
-    startOntRunIntent: ont.startIntent,
+vi.mock('../../src/lib/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/api')>();
+    return {
+        ...actual,
+        fetchOntDeviceStatus: ont.fetchDevice,
+        fetchOntProtocolOptions: ont.fetchOptions,
+        fetchMolBioNgsSamples: vi.fn().mockResolvedValue([]),
+        fetchOntInstrumentRuns: vi.fn().mockResolvedValue([]),
+        fetchOntExternalPod5Candidates: vi.fn().mockResolvedValue({ candidates: [] }),
+        createOntRunIntent: ont.createIntent,
+        startOntRunIntent: ont.startIntent,
+    };
+});
+
+vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
+    useGlobalExperimentContext: () => ({
+        workspaceId: 'workspace-test',
+        globalExperimentId: 'global-experiment-test',
+        selectedDomainExperiment: { domain_experiment_id: 'domain-experiment-test' },
+        availability: { state: 'available', reason: null },
+        contextHref: (href: string) => href,
+    }),
 }));
 
 import { OntInstrumentPanel } from '../../src/components/ngs/OntInstrumentPanel';
@@ -74,6 +93,16 @@ async function flush() {
         await new Promise((resolve) => setTimeout(resolve, 0));
         await Promise.resolve();
     });
+}
+
+function panel() {
+    return (
+        <MemoryRouter>
+            <QueryClientProvider client={client}>
+                <OntInstrumentPanel onAnalyzeExistingData={() => undefined} />
+            </QueryClientProvider>
+        </MemoryRouter>
+    );
 }
 
 async function waitUntil(assertion: () => void) {
@@ -108,13 +137,45 @@ afterEach(async () => {
 });
 
 describe('OntInstrumentPanel opaque intent lifecycle', () => {
+    it('distinguishes source samples from displayed waveform samples', () => {
+        const source = readFileSync(
+            'src/components/ngs/OntInstrumentPanel.tsx',
+            'utf8',
+        );
+        expect(source).toContain('source samples');
+        expect(source).toContain('displayed');
+        expect(source).not.toContain('samples returned');
+    });
+
+    it('keeps raw-signal receipt data closed behind technical details by default', () => {
+        const source = readFileSync(
+            'src/components/ngs/OntInstrumentPanel.tsx',
+            'utf8',
+        );
+        const receiptStart = source.indexOf('aria-label="Raw-signal publication receipt"');
+        const detailsStart = source.lastIndexOf('<details', receiptStart);
+        const waveformStart = source.indexOf('Indexed BLOW5 waveform inspection', receiptStart);
+        const receipt = source.slice(detailsStart, waveformStart);
+
+        expect(receiptStart).toBeGreaterThan(-1);
+        expect(detailsStart).toBeGreaterThan(-1);
+        expect(waveformStart).toBeGreaterThan(receiptStart);
+        expect(receipt).toContain('<details');
+        expect(receipt).toContain('<summary');
+        expect(receipt).toContain('Technical details');
+        expect(receipt).toContain('Published artifacts');
+        expect(receipt).toContain('Semantic receipt');
+        expect(receipt).toContain('Compared samples');
+        expect(receipt).not.toContain('<details open');
+    });
+
     it('retains the created BMS intent and renders it revalidated/armed after the expected disabled-start response', async () => {
         let rejectStart: (reason: unknown) => void = () => undefined;
         ont.createIntent.mockResolvedValue({ data: intent });
         ont.startIntent.mockImplementation(() => new Promise((_, reject) => { rejectStart = reject; }));
 
         await act(async () => {
-            root.render(<QueryClientProvider client={client}><OntInstrumentPanel onAnalyzeExistingData={() => undefined} /></QueryClientProvider>);
+            root.render(panel());
         });
         await flush();
 
@@ -131,7 +192,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
             confirm_start: true,
             intent_generation: 1,
         });
-        expect(container.textContent).toContain('Intent ont-run-durable-001 · armed');
+        expect(container.textContent).toContain('BMS run ont-run-durable-001 is armed; revalidating before physical start');
 
         await act(async () => {
             rejectStart({
@@ -150,7 +211,7 @@ describe('OntInstrumentPanel opaque intent lifecycle', () => {
 
     it('fails closed and exposes a refresh error after cached protocol authorization becomes stale', async () => {
         await act(async () => {
-            root.render(<QueryClientProvider client={client}><OntInstrumentPanel onAnalyzeExistingData={() => undefined} /></QueryClientProvider>);
+            root.render(panel());
         });
         await flush();
 

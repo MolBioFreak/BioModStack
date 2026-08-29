@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.isolated-restoration-reopen.v1",
+  "title": "Isolated restoration restart and exact historical reopen evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "isolated_reopen_receipt_id",
+    "backup_receipt",
+    "historical_denominator_id",
+    "historical_denominator_sha256",
+    "source_commit",
+    "source_tree",
+    "destination_identity",
+    "restart_command",
+    "pre_restart_process_set",
+    "post_restart_process_set",
+    "observations",
+    "restore_verifier_assertion",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.isolated-restoration-reopen.v1"
+    },
+    "isolated_reopen_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "backup_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.backup-receipt.v3"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "historical_denominator_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "historical_denominator_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "destination_identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "restart_command": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "pre_restart_process_set": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "post_restart_process_set": {
+      "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+    },
+    "observations": {
+      "type": "object",
+      "minProperties": 7,
+      "maxProperties": 100000,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._:-]{1,255}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_id",
+          "contract_version",
+          "authority_family",
+          "resource_kind",
+          "stable_id",
+          "exact_revision_id",
+          "raw_persisted_bytes_sha256",
+          "route_template_id",
+          "route_parameters",
+          "expected_content_sha256",
+          "expected_response_size_bytes",
+          "observed_response"
+        ],
+        "properties": {
+          "schema_id": {
+            "type": "string",
+            "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$"
+          },
+          "contract_version": {
+            "type": "string",
+            "pattern": "^v[0-9]+$"
+          },
+          "authority_family": {
+            "enum": [
+              "project-manager",
+              "ngs-molbio",
+              "protein",
+              "conformational-mapping",
+              "molecular-dynamics",
+              "frustrampnn",
+              "structure-prediction",
+              "trajectory"
+            ]
+          },
+          "resource_kind": {
+            "enum": [
+              "project_revision",
+              "global_experiment_revision",
+              "domain_experiment_revision",
+              "local_state_revision",
+              "dataset_revision",
+              "run",
+              "result",
+              "research_record"
+            ]
+          },
+          "stable_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "exact_revision_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "raw_persisted_bytes_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "route_template_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "route_parameters": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 32,
+            "additionalProperties": {
+              "type": [
+                "string",
+                "integer",
+                "boolean"
+              ]
+            }
+          },
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expected_response_size_bytes": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 1048576
+          },
+          "observed_response": {
+            "$ref": "bms.project-manager.operational-evidence.v1#/$defs/httpObservation"
+          }
+        }
+      }
+    },
+    "restore_verifier_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-isolated-restoration-verifier-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

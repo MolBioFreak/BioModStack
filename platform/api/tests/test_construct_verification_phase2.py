@@ -528,6 +528,19 @@ def test_supported_snv_is_normalized_and_fails_construct_identity(tmp_path: Path
         }
     ]
     assert f"\t{position}\tvar1\t{ref}\t{alt}\t" in (out_dir / "variants.vcf").read_text(encoding="utf-8")
+    evidence = (out_dir / "evidence.html").read_text(encoding="utf-8")
+    assert "Decision summary" in evidence
+    assert "Sequence identity" in evidence
+    assert "Coverage" in evidence
+    assert "Observed variants" in evidence
+    assert "var1" in evidence
+    assert "SNV" in evidence
+    assert f"<td>{position}</td>" in evidence
+    assert f"<td>{ref}</td>" in evidence
+    assert f"<td>{alt}</td>" in evidence
+    assert "90.00%" in evidence
+    assert "Check evidence" in evidence
+    assert "Minimum Depth" in evidence
 
 
 def test_low_support_snv_is_review_not_fail(tmp_path: Path) -> None:
@@ -1062,6 +1075,45 @@ def test_observed_reference_copy_contradicting_unanimous_alt_bam_fails(tmp_path:
     assert "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION" in manifest["reason_codes"]
     assert manifest["checks"]["sequence_identity"]["status"] == "fail"
     assert not (out_dir / "observed_consensus.fasta").exists()
+
+
+def test_evidence_report_distinguishes_pending_variants_and_topology_state(tmp_path: Path) -> None:
+    namespace = runpy.run_path(str(SCRIPT))
+    report = tmp_path / "evidence.html"
+    namespace["write_evidence_html"](
+        report,
+        {
+            "verdict": "FAIL",
+            "reason_codes": ["OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION"],
+            "summary": {
+                "sequence_identity_fraction": None,
+                "coverage_fraction": 1.0,
+                "unmapped_fraction": 0.1,
+            },
+            "variants": [],
+            "checks": {
+                "sequence_identity": {
+                    "status": "fail",
+                    "reason_codes": [
+                        "OBSERVED_CONSENSUS_SUPPORT_CONTRADICTION",
+                        "VARIANT_ANALYSIS_PENDING",
+                    ],
+                    "metrics": {},
+                },
+                "topology": {
+                    "status": "review",
+                    "reason_codes": ["TOPOLOGY_EVIDENCE_INSUFFICIENT"],
+                    "metrics": {"state": "present"},
+                },
+            },
+        },
+    )
+
+    evidence = report.read_text(encoding="utf-8")
+    assert "<span>Observed variants</span><strong>not assessed</strong>" in evidence
+    assert "Variant analysis was not completed." in evidence
+    assert "No observed variants." not in evidence
+    assert "<span>Topology</span><strong>present</strong>" in evidence
 
 
 @pytest.mark.parametrize(

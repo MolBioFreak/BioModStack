@@ -17,10 +17,13 @@ from pathlib import Path
 import rfc8785  # type: ignore[import-not-found]
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v1.json"
-DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v1.json"
+OUTPUT = ROOT / "platform/api/config/ngs_molbio_runtime/runtime_implementation_v2.json"
+DENOMINATOR_RELATIVE = "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
 DENOMINATOR = ROOT / DENOMINATOR_RELATIVE
+DENOMINATOR_SCHEMA = "bms.ngs-molbio.runtime-source-denominator.v2"
+N0_RECEIPT = ROOT / "docs/reports/ngs-molbio-phase-n0-verification-v1.json"
 _GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 PHASES = (
     ("N1", "Additive global/domain persistence and immutable binding source are implemented."),
@@ -128,7 +131,7 @@ def _load_source_denominator() -> dict[str, object]:
         raise RuntimeError("runtime source denominator authority shape is invalid")
     paths = value.get("paths")
     if (
-        value.get("schema") != "bms.ngs-molbio.runtime-source-denominator.v1"
+        value.get("schema") != DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
         or len(paths) > 256
@@ -140,6 +143,26 @@ def _load_source_denominator() -> dict[str, object]:
     ):
         raise RuntimeError("runtime source denominator authority is invalid or digest-divergent")
     return value
+
+
+def _load_n0_receipt_authority() -> tuple[str, str]:
+    try:
+        value = json.loads(N0_RECEIPT.read_text(encoding="utf-8"), object_pairs_hook=_pairs)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("N0 verification receipt authority is unreadable") from exc
+    if type(value) is not dict:
+        raise RuntimeError("N0 verification receipt authority must be an object")
+    content_sha256 = value.get("content_sha256")
+    package_fingerprint = value.get("payload_fingerprint_sha256")
+    if (
+        type(content_sha256) is not str
+        or _SHA256_RE.fullmatch(content_sha256) is None
+        or content_sha256 != _content_sha256(value)
+        or type(package_fingerprint) is not str
+        or _SHA256_RE.fullmatch(package_fingerprint) is None
+    ):
+        raise RuntimeError("N0 verification receipt authority is invalid or digest-divergent")
+    return content_sha256, package_fingerprint
 
 
 def main() -> int:
@@ -169,6 +192,7 @@ def main() -> int:
         arguments.successor_commit_object,
     )
     denominator = _load_source_denominator()
+    n0_receipt_content_sha256, n0_package_fingerprint = _load_n0_receipt_authority()
     source_paths = denominator["paths"]
     assert isinstance(source_paths, list)
     authorities: list[dict[str, object]] = []
@@ -189,8 +213,8 @@ def main() -> int:
         "baseline_source_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
         "successor_source_commit": arguments.successor_source_commit,
         "successor_source_tree": arguments.successor_source_tree,
-        "n0_package_fingerprint": "77673329001f48e610f13ed115fed62f56d7d10b93cc5ee30cea033c34bb3659",
-        "n0_receipt_content_sha256": "37c3ff50004fcf33768c3368a01a8f862394bdfd4895149596ac1d745ce7efba",
+        "n0_package_fingerprint": n0_package_fingerprint,
+        "n0_receipt_content_sha256": n0_receipt_content_sha256,
         "implementation_state": "implemented_unverified",
         "release_acceptance_state": "open",
         "verification_state": "source_audit_only",

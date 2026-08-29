@@ -264,6 +264,52 @@ def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
         raise
 
 
+def _copy_file_bytes(source: Path, destination: Path) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(source.read_bytes())
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _validate_snapshots(
+    snapshot_path: Path, request: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    if snapshot_path.is_symlink():
+        raise FinalizationError("canonical complex snapshot authority must not be a symlink")
+    resolved = snapshot_path.resolve()
+    if not resolved.is_file():
+        raise FinalizationError("canonical complex snapshot authority is absent")
+    try:
+        raw = canonical_json_loads(resolved.read_bytes())
+    except (OSError, ContractValidationError) as exc:
+        raise FinalizationError(f"canonical complex snapshot authority is malformed: {exc}") from exc
+    snapshots = raw if isinstance(raw, list) else [raw]
+    if not snapshots:
+        raise FinalizationError("canonical complex snapshot authority is empty")
+    for snapshot in snapshots:
+        if not isinstance(snapshot, Mapping):
+            raise FinalizationError("canonical complex snapshot entry must be an object")
+        try:
+            validate_schema("cm_complex_snapshot_v1", snapshot)
+        except ContractValidationError as exc:
+            raise FinalizationError(str(exc)) from exc
+    by_target = {str(snapshot.get("target_id")): snapshot for snapshot in snapshots}
+    for target in request.get("targets", []):
+        target_id = str(target.get("target_id"))
+        if target_id not in by_target:
+            raise FinalizationError(f"CM target has no complex snapshot: {target_id}")
+    return snapshots
+
+
 def _validate_request(request_path: Path) -> dict[str, Any]:
     request = _load_json(request_path, label="canonical request")
     if not isinstance(request, dict):
@@ -887,16 +933,23 @@ def _semantic_role(relative_path: str, coordinate_paths: set[str]) -> str:
     return "preprocess"
 
 
-def finalize(request_path: Path, native_root: Path, output: Path) -> None:
+def finalize(
+    request_path: Path,
+    native_root: Path,
+    output: Path,
+    snapshot_path: Path,
+) -> None:
     request_path = request_path.resolve()
     native_root = native_root.resolve()
     output = output.resolve()
+    snapshot_path = snapshot_path.resolve()
     if output.exists():
         raise FinalizationError(f"output already exists; refusing to overwrite: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
 
     request = _validate_request(request_path)
     plan, coordinates = _validate_coordinate_plan(request_path, request)
+    _validate_snapshots(snapshot_path, request)
     native_files = _validate_native_tree(native_root)
     _validate_legacy_manifest(native_root, native_files, request, plan)
     legacy_request = _validate_single_chain(native_root, request, plan)
@@ -1124,6 +1177,9 @@ def finalize(request_path: Path, native_root: Path, output: Path) -> None:
         except ContractValidationError as exc:
             raise FinalizationError(str(exc)) from exc
         _atomic_json(temporary / "cm_ensemble_v1.json", ensemble)
+        _copy_file_bytes(
+            snapshot_path, temporary / "cm_complex_snapshots_v1.json"
+        )
         os.replace(temporary, output)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -1134,10 +1190,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--native-root", type=Path, required=True)
+    parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     try:
-        finalize(args.request, args.native_root, args.out)
+        finalize(args.request, args.native_root, args.out, args.snapshot)
     except (FinalizationError, ContractValidationError, OSError) as exc:
         parser.exit(2, f"ConforNets canonical finalization failed: {exc}\n")
     print(f"Wrote canonical ConforNets manifests to {args.out}")

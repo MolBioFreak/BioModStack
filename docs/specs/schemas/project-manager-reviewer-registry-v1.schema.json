@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.reviewer-registry.v1",
+  "title": "Independent exact-package reviewer authority registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "registry_id",
+    "generation",
+    "reviewer_authorities",
+    "role_assignments",
+    "coordinator_assertion",
+    "content_algorithm",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.reviewer-registry.v1"
+    },
+    "registry_id": {
+      "const": "bms.project-manager.reviewer-registry.v1"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reviewer_authorities": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._:-]{1,255}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider_id",
+          "model_id",
+          "key_object",
+          "release_integrator_can_issue"
+        ],
+        "properties": {
+          "provider_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "model_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "key_object": {
+            "$ref": "bms.project-manager.operational-evidence.v1#/$defs/rawArtifact"
+          },
+          "release_integrator_can_issue": {
+            "const": false
+          }
+        }
+      }
+    },
+    "role_assignments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent_child",
+        "schema_truth_table",
+        "adversarial_cross_package"
+      ],
+      "properties": {
+        "parent_child": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "schema_truth_table": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "adversarial_cross_package": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "coordinator_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-independent-review-coordinator-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "content_algorithm": {
+      "const": "sha256-rfc8785-reviewer-authority-registry-v1"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

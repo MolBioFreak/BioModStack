@@ -8,6 +8,7 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 %post
     export DEBIAN_FRONTEND=noninteractive
+    FRUSTRAMPNN_SOURCE_COMMIT=bbae1d03edf33dbe6f645d45c5604eb4464962ca
     apt-get -q update
     apt-get install -y python3.10 python3.10-venv python3-pip curl git
     
@@ -26,20 +27,25 @@ From: nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
     # Install pytorch-lightning and dependencies
     uv pip install --compile pytorch-lightning omegaconf click pandas tqdm
     
-    # Install FrustraMPNN from GitHub
-    uv pip install --compile git+https://github.com/schoederlab/frustraMPNN.git
+    # Resolve install code and both weight families from one immutable source tree.
+    git clone https://github.com/schoederlab/frustraMPNN.git /opt/frustrampnn
+    cd /opt/frustrampnn
+    git checkout --detach "$FRUSTRAMPNN_SOURCE_COMMIT"
+    test "$(git rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"
+    uv pip install --compile /opt/frustrampnn
     
     # Download pretrained weights
     mkdir -p /opt/frustrampnn_weights
     
     # Main checkpoint (megascale trained)
-    curl -L https://github.com/schoederlab/frustraMPNN/raw/main/weights/megascale_train_weights.ckpt \
+    curl --fail --location \
+        "https://raw.githubusercontent.com/schoederlab/frustraMPNN/$FRUSTRAMPNN_SOURCE_COMMIT/weights/megascale_train_weights.ckpt" \
         -o /opt/frustrampnn_weights/megascale.ckpt
+    echo "eaee71adb7eec366fc672d2aadef87f2c51243042a4518cd897634784dc2da3b  /opt/frustrampnn_weights/megascale.ckpt" | sha256sum --check -
     
     # Also get vanilla_model_weights (required for ProteinMPNN base)
-    git clone --depth 1 https://github.com/schoederlab/frustraMPNN.git /tmp/frustrampnn_repo
-    cp -r /tmp/frustrampnn_repo/weights/vanilla_model_weights /opt/frustrampnn_weights/
-    rm -rf /tmp/frustrampnn_repo
+    test "$(git -C /opt/frustrampnn rev-parse HEAD)" = "$FRUSTRAMPNN_SOURCE_COMMIT"
+    cp -r /opt/frustrampnn/weights/vanilla_model_weights /opt/frustrampnn_weights/
     
     # Verify weights exist
     ls -la /opt/frustrampnn_weights/

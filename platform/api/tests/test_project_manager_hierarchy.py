@@ -47,6 +47,7 @@ from experiment_models import (
     ExperimentResource,
     ExperimentResearchRecord,
     ExperimentRevisionEdge,
+    ExperimentRevision,
     ExperimentWorkflowRun,
 )
 from experiment_operations import (
@@ -68,6 +69,7 @@ from experiment_services import (
     create_project,
     create_workflow,
     save_dataset_revision,
+    save_hierarchy_revision,
 )
 from routers.experiment_workspaces import router as compatibility_router
 from routers.projects import router as projects_router
@@ -142,6 +144,121 @@ async def project_store(tmp_path: Path):
         yield db_path, factory
     finally:
         await engine.dispose()
+
+
+def _remove_parent_revision_authority_migration(db_path: Path) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("DELETE FROM experiment_schema_migrations WHERE version = 20")
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_domain_parent_global_revision_insert")
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_revision_edge_immutable_delete")
+        connection.execute("DROP INDEX IF EXISTS ux_experiment_domain_parent_global_revision")
+        connection.commit()
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_parent_global_revision_migration_backfills_historical_domain_intervals_idempotently(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "historical-parent-revisions.db"
+    run_all(db_path)
+    _remove_parent_revision_authority_migration(db_path)
+    engine = create_experiment_engine(f"sqlite+aiosqlite:///{db_path}")
+    factory = create_experiment_session_factory(engine)
+    async with factory() as session:
+        project = await create_project(session, _project_payload())
+        global_experiment = await create_global_experiment(
+            session, project.id, _experiment_payload()
+        )
+        domain = await create_domain_experiment(
+            session, project.id, global_experiment.id, _domain_payload()
+        )
+        global_one_id = global_experiment.current_revision_id
+        domain_one_id = domain.current_revision_id
+        global_one = await session.get(ExperimentRevision, global_one_id)
+        assert global_one is not None
+        global_payload = json.loads(global_one.canonical_payload)
+        global_payload["change_summary"] = "second Global interval"
+        global_two = await save_hierarchy_revision(
+            session,
+            global_experiment.id,
+            "experiment",
+            global_payload,
+            expected_head_generation=global_experiment.head_generation,
+        )
+        domain_one = await session.get(ExperimentRevision, domain_one_id)
+        assert domain_one is not None
+        domain_payload = json.loads(domain_one.canonical_payload)
+        domain_payload["change_summary"] = "second Domain interval"
+        domain_two = await save_hierarchy_revision(
+            session,
+            domain.id,
+            "domain_experiment",
+            domain_payload,
+            expected_head_generation=domain.head_generation,
+        )
+        await session.commit()
+        await session.execute(
+            ExperimentRevisionEdge.__table__.delete().where(
+                ExperimentRevisionEdge.role == "parent_global_revision"
+            )
+        )
+        await session.commit()
+        global_one = await session.get(ExperimentRevision, global_one_id)
+        assert global_one is not None
+        expected = {
+            domain_one_id: (global_one_id, global_one.payload_sha256),
+            domain_two.resource_id: (global_two.resource_id, global_two.payload_sha256),
+        }
+    await engine.dispose()
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            CREATE TRIGGER trg_experiment_revision_edge_immutable_delete
+            BEFORE DELETE ON revision_edges
+            BEGIN SELECT RAISE(ABORT, 'immutable revision edge'); END
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    run_all(db_path)
+    run_all(db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        rows = connection.execute(
+            "SELECT revision_id, target_resource_id, expected_sha256 "
+            "FROM revision_edges WHERE role = 'parent_global_revision' ORDER BY revision_id"
+        ).fetchall()
+        assert {row[0]: (row[1], row[2]) for row in rows} == expected
+        assert connection.execute(
+            "SELECT count(*) FROM experiment_schema_migrations WHERE version = 20"
+        ).fetchone() == (1,)
+    finally:
+        connection.close()
+
+    _remove_parent_revision_authority_migration(db_path)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO revision_edges(
+                revision_id, target_resource_id, role, ordinal,
+                expected_sha256, metadata_json
+            ) VALUES (?, ?, 'parent_global_revision', 1, ?, '{"authority":"server_resolved"}')
+            """,
+            (domain_one_id, global_two.resource_id, global_two.payload_sha256),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(RuntimeError, match="conflicting parent Global revision authority"):
+        run_all(db_path)
 
 
 def _app(factory) -> FastAPI:
@@ -252,15 +369,8 @@ async def test_fresh_and_v2_to_new_migrations_preserve_rows_and_attest(project_s
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
         assert ledger == [
-            (2, "global_experiment_workspace_receipts_and_projections"),
-            (MIGRATION_V3_VERSION, MIGRATION_V3_NAME),
-            (MIGRATION_V4_VERSION, MIGRATION_V4_NAME),
-            (MIGRATION_V5_VERSION, MIGRATION_V5_NAME),
-            (MIGRATION_V6_VERSION, MIGRATION_V6_NAME),
-            (MIGRATION_V7_VERSION, MIGRATION_V7_NAME),
-            (MIGRATION_V8_VERSION, MIGRATION_V8_NAME),
-            (MIGRATION_V9_VERSION, MIGRATION_V9_NAME),
-            (MIGRATION_VERSION, MIGRATION_NAME),
+            (version, name)
+            for version, name, _checksum in migration_module._accepted_migration_ledgers()[0]
         ]
         assert attest_schema(connection)["ok"] is True
         assert connection.execute(
@@ -384,15 +494,8 @@ async def test_fresh_and_v2_to_new_migrations_preserve_rows_and_attest(project_s
         assert migrated.execute(
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version"
         ).fetchall() == [
-            (2, "global_experiment_workspace_receipts_and_projections"),
-            (MIGRATION_V3_VERSION, MIGRATION_V3_NAME),
-            (MIGRATION_V4_VERSION, MIGRATION_V4_NAME),
-            (MIGRATION_V5_VERSION, MIGRATION_V5_NAME),
-            (MIGRATION_V6_VERSION, MIGRATION_V6_NAME),
-            (MIGRATION_V7_VERSION, MIGRATION_V7_NAME),
-            (MIGRATION_V8_VERSION, MIGRATION_V8_NAME),
-            (MIGRATION_V9_VERSION, MIGRATION_V9_NAME),
-            (MIGRATION_VERSION, MIGRATION_NAME),
+            (version, name)
+            for version, name, _checksum in migration_module._accepted_migration_ledgers()[0]
         ]
         assert attest_schema(migrated)["ok"] is True
         migrated.execute("DROP TRIGGER trg_experiment_research_record_immutable_update")
@@ -473,15 +576,8 @@ def test_genuine_v2_receipt_schema_migrates_legacy_rows_with_unverified_authorit
         assert migrated.execute(
             "SELECT version, name FROM experiment_schema_migrations ORDER BY version"
         ).fetchall() == [
-            (2, "global_experiment_workspace_receipts_and_projections"),
-            (MIGRATION_V3_VERSION, MIGRATION_V3_NAME),
-            (MIGRATION_V4_VERSION, MIGRATION_V4_NAME),
-            (MIGRATION_V5_VERSION, MIGRATION_V5_NAME),
-            (MIGRATION_V6_VERSION, MIGRATION_V6_NAME),
-            (MIGRATION_V7_VERSION, MIGRATION_V7_NAME),
-            (MIGRATION_V8_VERSION, MIGRATION_V8_NAME),
-            (MIGRATION_V9_VERSION, MIGRATION_V9_NAME),
-            (MIGRATION_VERSION, MIGRATION_NAME),
+            (version, name)
+            for version, name, _checksum in migration_module._accepted_migration_ledgers()[0]
         ]
         assert attest_schema(migrated)["ok"] is True
     finally:

@@ -29,10 +29,13 @@ def _pdb() -> bytes:
 def _settings_payload() -> dict[str, object]:
     return {
         "schema_name": "frustrampnn_settings",
-        "schema_version": 1,
+        "schema_version": 2,
+        "batching_enabled": True,
+        "structures_per_job": 250,
         "protein_selection": {
             "mode": "all_protein_entities",
             "entities": [],
+            "regions": [],
             "residues": [],
         },
         "source_structure": {
@@ -104,8 +107,44 @@ async def test_every_direct_launch_body_and_multipart_form_transports_the_same_t
             "settings_value_origin": "operator_request",
             "requested_settings": requested.model_dump(mode="json"),
             "requested_settings_sha256": "0" * 64,
+            "batch_manifest": {
+                "schema_name": "bms_frustrampnn_scheduler_batch",
+                "schema_version": 3,
+                "sha256": "1" * 64,
+                "size_bytes": 1,
+                "expected_cardinality": 1,
+                "ordered_candidate_ids": ["candidate-1"],
+                "ordered_invocation_ids": ["invocation-1"],
+            },
+            "grouped_terminal_artifact": None,
             "candidates": [],
             "results": [],
+        }
+
+    async def fake_fanout(*_args, requested_settings, trigger, **_kwargs):
+        captured.append((trigger, requested_settings))
+        return SimpleNamespace(
+            fanout_id="f" * 64,
+            parent_job_id="parent-1",
+            selected_structure_count=1,
+            structures_per_job=requested_settings.structures_per_job,
+            effective_structures_per_job=requested_settings.structures_per_job,
+            replayed=False,
+            child_jobs=(SimpleNamespace(id="child-design_analyze"),),
+        )
+
+    async def fake_fanout_receipt(session, fanout):
+        child = await fake_receipt(session, fanout.child_jobs[0])
+        child["structure_count"] = 1
+        return {
+            "schema_name": "bms.structure-dataset-fanout.v1",
+            "fanout_id": fanout.fanout_id,
+            "parent_job_id": fanout.parent_job_id,
+            "selected_structure_count": 1,
+            "structures_per_job": fanout.structures_per_job,
+            "effective_structures_per_job": fanout.effective_structures_per_job,
+            "replayed": False,
+            "child_jobs": [child],
         }
 
     async def fake_scoped_result(*_args, **_kwargs):
@@ -122,6 +161,8 @@ async def test_every_direct_launch_body_and_multipart_form_transports_the_same_t
     monkeypatch.setattr(router_module, "create_child_job", fake_create_child_job)
     monkeypatch.setattr(router_module, "create_reanalysis_child", fake_create_reanalysis_child)
     monkeypatch.setattr(router_module, "child_receipt", fake_receipt)
+    monkeypatch.setattr(router_module, "_fanout_design_selections", fake_fanout)
+    monkeypatch.setattr(router_module, "_fanout_receipt", fake_fanout_receipt)
     monkeypatch.setattr(router_module, "_scoped_result", fake_scoped_result)
     monkeypatch.setattr(router_module, "load_persisted_landscape", fake_persisted_landscape)
     monkeypatch.setattr(router_module, "_read_bounded_upload", fake_bounded_read)
@@ -192,7 +233,7 @@ async def test_every_direct_launch_body_and_multipart_form_transports_the_same_t
     [
         {
             "schema_name": "frustrampnn_settings",
-            "schema_version": 1,
+            "schema_version": 2,
         },
         {
             **_settings_payload(),
@@ -220,7 +261,7 @@ def test_reanalysis_replacement_rejects_partial_or_unknown_settings() -> None:
             {
                 "frustrampnn_settings": {
                     "schema_name": "frustrampnn_settings",
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "classification_policy": {"mode": "canonical"},
                 }
             }
@@ -257,7 +298,7 @@ async def test_upload_partial_settings_reject_before_child_creation(monkeypatch:
                 "pdb_file": ("candidate.pdb", _pdb(), "chemical/x-pdb"),
                 "frustrampnn_settings": (
                     None,
-                    json.dumps({"schema_name": "frustrampnn_settings", "schema_version": 1}),
+                    json.dumps({"schema_name": "frustrampnn_settings", "schema_version": 2}),
                 ),
             },
         )

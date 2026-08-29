@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +63,9 @@ class _Session:
     async def commit(self) -> None:
         return None
 
+    async def rollback(self) -> None:
+        return None
+
 
 def _handoff_payload(params: dict | None = None) -> dict:
     return {
@@ -88,7 +92,15 @@ def test_handoff_accepts_only_explicit_safe_tuning_fields(monkeypatch):
     monkeypatch.setattr(ont_runs.ont_run_control, "build_plasmid_qc_handoff", build_handoff)
     captured = {}
     created = SimpleNamespace(id="job-safe")
-    async def fake_create(job, background_tasks, session, response, request, **_kwargs):
+    async def fake_create(
+        job,
+        background_tasks,
+        session,
+        experiment_session,
+        response,
+        request,
+        **_kwargs,
+    ):
         captured["job"] = job
         return created
     monkeypatch.setattr(ont_runs, "_create_pipeline_job", fake_create)
@@ -219,3 +231,189 @@ def test_generic_caller_cannot_claim_instrument_snapshot_authority() -> None:
 
     with pytest.raises(ValueError, match="server-controlled"):
         ont_runs._job_create_for_ont_submit("ont_plasmid_qc", request)
+
+
+def test_trusted_external_alignment_authority_survives_canonical_submit_normalization(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    inputs_root = tmp_path / "inputs"
+    bam_path = (
+        inputs_root / "ont_external_move_launch_snapshots" / "one" / "filtered.bam"
+    )
+    reference_path = (
+        inputs_root / "molbio_ngs_managed_launch_snapshots" / "one" / "egfp.fasta"
+    )
+    bam_path.parent.mkdir(parents=True)
+    reference_path.parent.mkdir(parents=True)
+    bam_path.write_bytes(b"bam")
+    reference_path.write_bytes(b">eGFP\nACGT\n")
+    bam_sha = hashlib.sha256(bam_path.read_bytes()).hexdigest()
+    reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        ont_runs, "_confine_submitted_path",
+        lambda value, _key, **_kwargs: str(value),
+    )
+    monkeypatch.setattr(
+        ont_runs, "normalized_fasta_sequence_sha256", lambda _path: "e" * 64,
+    )
+    monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
+    server_params = {
+        "dataset_id": "receipt-1",
+        "source_instrument_run_id": "run-1",
+        "source_instrument_observed_generation": 7,
+        "source_instrument_artifact_manifest_sha256": "f" * 64,
+        "source_instrument_artifact_sha256": bam_sha,
+        "source_instrument_artifact_bytes": bam_path.stat().st_size,
+        "source_raw_representation_id": "raw-1",
+        "source_move_source_id": "moves-1",
+        "source_external_move_registration_receipt_id": "receipt-1",
+        "source_move_bam_sha256": "a" * 64,
+        "source_filtered_move_bam_sha256": bam_sha,
+        "source_read_inventory_sha256": "b" * 64,
+        "bam_source_sha256": bam_sha,
+        "global_domain_experiment_id": "domain-1",
+        "molbio_ngs_state_revision_id": "state-1",
+        "ngs_reference_id": "reference-aggregate-1",
+        "ngs_reference_revision_id": "reference-1",
+        "ngs_reference_artifact_id": "reference-artifact-1",
+        "state_membership_receipt_id": "membership-1",
+        "selected_reference_sha256": reference_sha,
+        "expected_reference_fasta_sha256": reference_sha,
+        "managed_reference_snapshot_sha256": reference_sha,
+        "managed_reference_snapshot_size_bytes": reference_path.stat().st_size,
+        "expected_result_manifest_schema": "bms.ont-fastq-qc-result.v1",
+    }
+    request = ont_runs.OntNgsSubmitRequest(
+        name="external alignment",
+        params={
+            "bam_path": str(bam_path),
+            "reference_fasta": str(reference_path),
+            "bam_force_realign": True,
+            **server_params,
+        },
+        source_instrument_run_id="run-1",
+    )
+
+    job = ont_runs._job_create_for_ont_submit(
+        "ont_plasmid_qc",
+        request,
+        trusted_server_params=frozenset({*server_params, "bam_force_realign"}),
+        trusted_result_paths=frozenset({"bam_path"}),
+        trusted_reference_fasta=reference_path,
+    )
+
+    assert job.params["ont_input_mode"] == "bam"
+    assert job.params["bam_force_realign"] is True
+    assert job.params["reference_sequence_sha256"] == "e" * 64
+    assert {key: job.params[key] for key in server_params} == server_params
+    ont_submission_trust.verify_launch_input_snapshots(job.params)
+
+
+def test_external_launch_snapshot_rejects_intermediate_directory_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    outside = tmp_path / "outside"
+    inputs_root = tmp_path / "inputs"
+    outside.mkdir()
+    inputs_root.mkdir()
+    source = outside / "filtered.bam"
+    source.write_bytes(b"bam")
+    results_root.mkdir()
+    (results_root / "redirect").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
+
+    with pytest.raises(ValueError):
+        ont_submission_trust.publish_immutable_launch_snapshot(
+            results_root / "redirect" / "filtered.bam",
+            source_root=results_root,
+            family="ont_external_move_launch_snapshots",
+            authority_id="receipt-1",
+            expected_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            expected_size_bytes=source.stat().st_size,
+            suffix=".bam",
+        )
+
+
+def test_external_registration_marker_requires_complete_prelaunch_snapshot_authority() -> None:
+    with pytest.raises(
+        ValueError, match="ONT instrument artifact snapshot authority is incomplete",
+    ):
+        ont_submission_trust.verify_instrument_artifact_snapshot({
+            "source_external_move_registration_receipt_id": "receipt-1",
+            "bam_path": "/managed/external.bam",
+        })
+
+
+def test_runtime_snapshot_closes_leaf_descriptor_when_fstat_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    source = root / "source.bam"
+    root.mkdir()
+    source.write_bytes(b"bam")
+    real_fstat = os.fstat
+    real_close = os.close
+    leaf_fd: int | None = None
+    closed: list[int] = []
+
+    def failing_fstat(fd: int):
+        nonlocal leaf_fd
+        try:
+            target = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            target = ""
+        if target == str(source):
+            leaf_fd = fd
+            closed.clear()
+            raise OSError("forced fstat failure")
+        return real_fstat(fd)
+
+    def recording_close(fd: int) -> None:
+        closed.append(fd)
+        real_close(fd)
+
+    monkeypatch.setattr(ont_submission_trust.os, "fstat", failing_fstat)
+    monkeypatch.setattr(ont_submission_trust.os, "close", recording_close)
+
+    with pytest.raises(OSError, match="forced fstat failure"):
+        ont_submission_trust._open_runtime_snapshot(source, root, label="test")
+
+    assert leaf_fd is not None
+    assert leaf_fd in closed
+
+
+def test_unclaimed_launch_snapshot_cleanup_is_exact_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    results_root = tmp_path / "results"
+    inputs_root = tmp_path / "inputs"
+    source = results_root / "source.bam"
+    results_root.mkdir()
+    inputs_root.mkdir()
+    source.write_bytes(b"bam")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    monkeypatch.setattr(ont_submission_trust, "get_inputs_dir", lambda: inputs_root)
+    snapshot = ont_submission_trust.publish_immutable_launch_snapshot(
+        source,
+        source_root=results_root,
+        family="ont_external_move_launch_snapshots",
+        authority_id="receipt-1",
+        expected_sha256=digest,
+        expected_size_bytes=source.stat().st_size,
+        suffix=".bam",
+    )
+
+    assert ont_submission_trust.discard_unclaimed_launch_snapshot(
+        snapshot,
+        snapshot_root=inputs_root / "ont_external_move_launch_snapshots",
+        expected_sha256=digest,
+        expected_size_bytes=3,
+    ) is True
+    assert not snapshot.exists()
+    assert ont_submission_trust.discard_unclaimed_launch_snapshot(
+        snapshot,
+        snapshot_root=inputs_root / "ont_external_move_launch_snapshots",
+        expected_sha256=digest,
+        expected_size_bytes=3,
+    ) is False

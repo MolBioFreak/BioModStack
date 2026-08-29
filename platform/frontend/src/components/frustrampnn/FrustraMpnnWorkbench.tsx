@@ -1,5 +1,11 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { Job } from '../../lib/api.js';
+import {
+    parseFrustraMpnnExperimentContext,
+    type FrustraMpnnExperimentContext,
+    type FrustraMpnnResultScope,
+} from './workflowResultViewState.js';
 
 const FrustraMpnnResultsViewer = lazy(() => import('../FrustraMpnnResultsViewer.js'));
 
@@ -9,6 +15,9 @@ export interface FrustraMpnnWorkbenchProps {
     onBack: () => void;
     backLabel?: string;
     onOpenJob: (jobId: string) => void;
+    scope?: FrustraMpnnResultScope;
+    onScopeChange?: (scope: FrustraMpnnResultScope) => void;
+    experimentContext?: FrustraMpnnExperimentContext | null;
 }
 
 /**
@@ -23,7 +32,15 @@ export function FrustraMpnnWorkbench({
     onBack,
     backLabel,
     onOpenJob,
+    scope,
+    onScopeChange,
+    experimentContext,
 }: FrustraMpnnWorkbenchProps) {
+    const location = useLocation();
+    const resolvedExperimentContext = useMemo(
+        () => experimentContext ?? parseFrustraMpnnExperimentContext(location.search),
+        [experimentContext, location.search],
+    );
     return (
         <div data-frustrampnn-workbench="global">
             <Suspense fallback={<div role="status" className="p-6 text-sm text-slate-400">Loading global FrustraMPNN workbench…</div>}>
@@ -33,6 +50,9 @@ export function FrustraMpnnWorkbench({
                     onBack={onBack}
                     backLabel={backLabel}
                     onOpenJob={onOpenJob}
+                    scope={scope}
+                    onScopeChange={onScopeChange}
+                    experimentContext={resolvedExperimentContext}
                 />
             </Suspense>
         </div>

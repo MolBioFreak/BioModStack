@@ -13,8 +13,51 @@ import biomodstack_tailnet as tailnet  # noqa: E402
 
 
 def test_global_tailnet_policy_installs_governed_mobile_update_routes() -> None:
-    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-apk"] == "http://127.0.0.1:18000/api/mobile-apk"
-    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-ui"] == "http://127.0.0.1:18000/api/mobile-ui"
+    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-apk"] == "http://127.0.0.1:18003/api/mobile-apk"
+    assert tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-ui"] == "http://127.0.0.1:18003/api/mobile-ui"
+    assert all(
+        ":18000/" not in target and ":18002/" not in target
+        for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items()
+        if path in {"/api/mobile-apk", "/api/mobile-ui"}
+    )
+
+
+def test_global_tailnet_policy_migrates_current_production_api_mobile_routes(monkeypatch) -> None:
+    old_targets = {
+        "/api/mobile-apk": "http://127.0.0.1:18000/api/mobile-apk",
+        "/api/mobile-ui": "http://127.0.0.1:18000/api/mobile-ui",
+    }
+    handlers = {
+        "/": {"Proxy": "http://127.0.0.1:18082"},
+        **{path: {"Proxy": target} for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items()},
+        **{path: {"Proxy": target} for path, target in old_targets.items()},
+    }
+
+    def snapshot() -> tailnet.ServeSnapshot:
+        return tailnet.ServeSnapshot(
+            origin="https://node.example.ts.net",
+            root_proxy=handlers["/"]["Proxy"],
+            handlers={path: dict(handler) for path, handler in handlers.items()},
+            raw={"handlers": {path: dict(handler) for path, handler in handlers.items()}},
+        )
+
+    set_calls: list[tuple[str, str]] = []
+
+    def set_path(path: str, target: str) -> None:
+        set_calls.append((path, target))
+        handlers[path] = {"Proxy": target}
+
+    monkeypatch.setattr(tailnet, "_read_serve_snapshot", snapshot)
+    monkeypatch.setattr(tailnet, "_set_serve_path", set_path)
+
+    installed = tailnet.ensure_global_tailnet_routes()
+
+    assert set_calls == [
+        ("/api/mobile-apk", tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-apk"]),
+        ("/api/mobile-ui", tailnet.GLOBAL_SERVE_HANDLERS["/api/mobile-ui"]),
+    ]
+    for path, target in tailnet.GLOBAL_SERVE_HANDLERS.items():
+        assert installed.handlers[path] == {"Proxy": target}
 
 
 def test_global_tailnet_policy_adds_managed_routes_removes_exact_dead_routes_and_preserves_others(monkeypatch) -> None:

@@ -1,0 +1,487 @@
+{
+  "$id": "https://biomodstack.local/schemas/ngs/ont_fastq_qc_reconciliation_receipt_v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "applied_at": {
+      "format": "date-time",
+      "pattern": "Z$",
+      "type": "string"
+    },
+    "artifact_set_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "authorization_class": {
+      "enum": [
+        "development_service_owner",
+        "authenticated_ngs_operator"
+      ]
+    },
+    "backup": {
+      "additionalProperties": false,
+      "properties": {
+        "backup_id": {
+          "pattern": "^[A-Za-z0-9_.-]{1,255}$",
+          "type": "string"
+        },
+        "foreign_key_violations": {
+          "const": 0
+        },
+        "integrity_check": {
+          "const": "ok"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "backup_id",
+        "sha256",
+        "size_bytes",
+        "integrity_check",
+        "foreign_key_violations"
+      ],
+      "type": "object"
+    },
+    "backup_source_preimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "completed_stages": {
+      "items": false,
+      "maxItems": 4,
+      "minItems": 4,
+      "prefixItems": [
+        {
+          "const": "fastq_align"
+        },
+        {
+          "const": "dimer_qc"
+        },
+        {
+          "const": "fastq_qc"
+        },
+        {
+          "const": "construct_verification"
+        }
+      ],
+      "type": "array"
+    },
+    "completed_stages_postimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "completed_stages_preimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "compute_invoked": {
+      "const": false
+    },
+    "database_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "declared_artifact_count": {
+      "maximum": 256,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "domain_experiment_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "global_experiment_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "hierarchy_authority_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "input_mode": {
+      "const": "fastq"
+    },
+    "job_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "lane": {
+      "const": "development"
+    },
+    "member_receipt_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "normalized_request_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "present_artifact_count": {
+      "maximum": 256,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "principal": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "project_id": {
+      "format": "uuid",
+      "type": "string"
+    },
+    "protected_row_preimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "provenance_preimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "receipt_free_provenance_postimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "receipt_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reference_revision_id": {
+      "pattern": "^molbio_ngs_reference_revision_[0-9a-f-]{36}$",
+      "type": "string"
+    },
+    "reference_sequence_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "resource_evidence_status": {
+      "const": "historical_unavailable"
+    },
+    "result_root_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "sample_revision_id": {
+      "pattern": "^molbio_ngs_sample_revision_[0-9a-f-]{36}$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "bms.ont-fastq-qc-reconciliation.v1"
+    },
+    "scientific_artifacts_modified": {
+      "const": false
+    },
+    "sequence_qc_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "source_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "source_fastq_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "source_snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "bms.sqlite-backup-source-preimage.v1"
+        },
+        "database_identity_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "data_version": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "foreign_key_violations": {
+          "const": 0
+        },
+        "integrity_check": {
+          "const": "ok"
+        },
+        "page_count": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "page_size": {
+          "minimum": 512,
+          "type": "integer"
+        },
+        "schema_version": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_size_bytes": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "database_identity_sha256",
+        "source_size_bytes",
+        "source_sha256",
+        "page_size",
+        "page_count",
+        "schema_version",
+        "data_version",
+        "integrity_check",
+        "foreign_key_violations"
+      ],
+      "type": "object"
+    },
+    "source_tree": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "stage_outputs": {
+      "additionalProperties": false,
+      "properties": {
+        "construct_verification": {
+          "items": false,
+          "maxItems": 6,
+          "minItems": 6,
+          "prefixItems": [
+            {
+              "pattern": "^bms_results/[^/]+/verification/qc_manifest\\.json$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/verification/verification_summary\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/verification/variants\\.vcf$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/verification/per_base_metrics\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/verification/evidence\\.html$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/verification/topology_evidence\\.json$",
+              "type": "string"
+            }
+          ],
+          "type": "array"
+        },
+        "dimer_qc": {
+          "items": false,
+          "maxItems": 6,
+          "minItems": 6,
+          "prefixItems": [
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_breakpoint_call\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_evidence_by_position\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_read_events\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_breakpoint_sequences\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_secondary_anomalies\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/multimer_qc/dimer_secondary_summary\\.tsv$",
+              "type": "string"
+            }
+          ],
+          "type": "array"
+        },
+        "fastq_align": {
+          "items": false,
+          "maxItems": 5,
+          "minItems": 5,
+          "prefixItems": [
+            {
+              "pattern": "^bms_results/[^/]+/align/aligned\\.bam$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/align/aligned\\.bam\\.bai$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/align/reference\\.fasta$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/align/reference\\.fasta\\.fai$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/align/fastq_align\\.log$",
+              "type": "string"
+            }
+          ],
+          "type": "array"
+        },
+        "fastq_qc": {
+          "items": false,
+          "maxItems": 8,
+          "minItems": 8,
+          "prefixItems": [
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/read_lengths\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/fastq_qc_summary\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/fastq_alignment_stats\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/fastq_coverage\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/per_base_support\\.tsv$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/qc_manifest\\.json$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/igv_report\\.html$",
+              "type": "string"
+            },
+            {
+              "pattern": "^bms_results/[^/]+/fastq_qc/fastq_consensus\\.fasta$",
+              "type": "string"
+            }
+          ],
+          "type": "array"
+        }
+      },
+      "required": [
+        "fastq_align",
+        "dimer_qc",
+        "fastq_qc",
+        "construct_verification"
+      ],
+      "type": "object"
+    },
+    "stage_outputs_postimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "stage_outputs_preimage_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "state_revision_id": {
+      "pattern": "^molbio_ngs_state_revision_[0-9a-f-]{36}$",
+      "type": "string"
+    },
+    "unavailable_artifact_count": {
+      "maximum": 256,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "verification_manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "workflow_id": {
+      "const": "ont_fastq_qc"
+    }
+  },
+  "required": [
+    "schema",
+    "job_id",
+    "applied_at",
+    "principal",
+    "authorization_class",
+    "project_id",
+    "global_experiment_id",
+    "domain_experiment_id",
+    "state_revision_id",
+    "member_receipt_id",
+    "sample_revision_id",
+    "reference_revision_id",
+    "hierarchy_authority_sha256",
+    "lane",
+    "database_identity_sha256",
+    "backup",
+    "source_snapshot",
+    "backup_source_preimage_sha256",
+    "source_commit",
+    "source_tree",
+    "normalized_request_sha256",
+    "completed_stages_preimage_sha256",
+    "stage_outputs_preimage_sha256",
+    "provenance_preimage_sha256",
+    "completed_stages_postimage_sha256",
+    "stage_outputs_postimage_sha256",
+    "receipt_free_provenance_postimage_sha256",
+    "protected_row_preimage_sha256",
+    "sequence_qc_manifest_sha256",
+    "verification_manifest_sha256",
+    "artifact_set_sha256",
+    "declared_artifact_count",
+    "present_artifact_count",
+    "unavailable_artifact_count",
+    "result_root_identity_sha256",
+    "workflow_id",
+    "input_mode",
+    "reference_sequence_sha256",
+    "source_fastq_sha256",
+    "resource_evidence_status",
+    "completed_stages",
+    "stage_outputs",
+    "scientific_artifacts_modified",
+    "compute_invoked",
+    "receipt_sha256"
+  ],
+  "title": "BioModStack ONT FASTQ-QC reconciliation receipt v1",
+  "type": "object",
+  "x-bms-digest-domains": {
+    "helper": "D(label,value)=SHA256(UTF8(\"bms.ont-fastq-qc-reconciliation.v1\\0\"+label+\"\\0\")||RFC8785(value))",
+    "labels": [
+      "normalized-request",
+      "database-identity",
+      "result-root-identity",
+      "protected-row-preimage",
+      "backup-source-preimage",
+      "completed-stages-preimage",
+      "stage-outputs-preimage",
+      "provenance-preimage",
+      "completed-stages-postimage",
+      "stage-outputs-postimage",
+      "receipt-free-provenance-postimage",
+      "receipt"
+    ]
+  }
+}

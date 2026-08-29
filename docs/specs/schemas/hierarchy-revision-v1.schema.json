@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.global.hierarchy-revision.v1",
+  "title": "Exact immutable hierarchy revision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "resource_kind", "project_id", "global_experiment_id", "domain_experiment_id", "resource_id", "revision_id", "revision_number", "payload_schema_id", "payload_sha256", "payload", "created_by", "created_at"],
+  "properties": {
+    "schema": {"const": "bms.global.hierarchy-revision.v1"},
+    "resource_kind": {"enum": ["project", "global_experiment", "domain_experiment"]},
+    "project_id": {"$ref": "#/$defs/id"},
+    "global_experiment_id": {"$ref": "#/$defs/nullableId"},
+    "domain_experiment_id": {"$ref": "#/$defs/nullableId"},
+    "resource_id": {"$ref": "#/$defs/id"},
+    "revision_id": {"$ref": "#/$defs/id"},
+    "revision_number": {"type": "integer", "minimum": 0},
+    "payload_schema_id": {"type": "string", "pattern": "^bms\\.[A-Za-z0-9_.-]+$", "maxLength": 255},
+    "payload_sha256": {"$ref": "#/$defs/sha256"},
+    "payload": {"type": "object"},
+    "created_by": {"type": "string", "minLength": 1, "maxLength": 255},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {"if": {"properties": {"resource_kind": {"const": "project"}}, "required": ["resource_kind"]}, "then": {"properties": {"global_experiment_id": {"type": "null"}, "domain_experiment_id": {"type": "null"}}}},
+    {"if": {"properties": {"resource_kind": {"const": "global_experiment"}}, "required": ["resource_kind"]}, "then": {"properties": {"global_experiment_id": {"$ref": "#/$defs/id"}, "domain_experiment_id": {"type": "null"}}}},
+    {"if": {"properties": {"resource_kind": {"const": "domain_experiment"}}, "required": ["resource_kind"]}, "then": {"properties": {"global_experiment_id": {"$ref": "#/$defs/id"}, "domain_experiment_id": {"$ref": "#/$defs/id"}}}}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "nullableId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

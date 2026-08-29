@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.run-clone-request.v1",
+  "title": "Closed run-intent clone request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source_run_id", "source_attempt_id", "new_workflow_name", "change_summary", "expected_domain_revision_id", "expected_run_group_generation", "idempotency_key"],
+  "properties": {
+    "schema": {"const": "bms.run-clone-request.v1"},
+    "expected_run_group_generation": {"type": "integer", "minimum": 0},
+    "source_run_id": {"$ref": "#/$defs/id"},
+    "source_attempt_id": {"$ref": "#/$defs/id"},
+    "new_workflow_name": {"type": "string", "minLength": 1, "maxLength": 255},
+    "change_summary": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "expected_domain_revision_id": {"$ref": "#/$defs/id"},
+    "idempotency_key": {"type": "string", "minLength": 16, "maxLength": 128}
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128}
+  }
+}

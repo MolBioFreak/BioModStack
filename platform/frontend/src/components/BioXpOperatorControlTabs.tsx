@@ -9,6 +9,7 @@ import {
     useAssessBioXpOperatorAction,
     useBioXpOperatorActionAdmission,
     useBioXpOperatorControlCatalog,
+    useBioXpOperatorDashboard,
     useInvokeBioXpOperatorAction,
 } from '../lib/bioxpClient';
 
@@ -53,6 +54,25 @@ function criticalGroup(action: BioXpOperatorActionSpec): Exclude<PrimitiveGroup,
 
 function isCriticalAction(action: BioXpOperatorActionSpec): boolean {
     return criticalGroup(action) !== null;
+}
+
+const retiredGenericYMutationPaths = new Set([
+    '/motion/oem/manual/relative',
+    '/motion/oem/manual/absolute',
+    '/motion/oem/manual/home',
+    '/motion/oem/manual/sethome',
+    '/motion/axis/relative',
+    '/motion/axis/absolute',
+    '/motion/axis/home',
+    '/motion/axis/zero',
+    '/motion/diagnostics/stop',
+    '/motion/reference/mark_referenced',
+]);
+
+function isDedicatedYMutation(action: BioXpOperatorActionSpec): boolean {
+    return action.action_id.startsWith('oem.y.')
+        || action.action_id.startsWith('oem.xy.')
+        || retiredGenericYMutationPaths.has(action.informational_path);
 }
 
 function initialInputs(action: BioXpOperatorActionSpec | undefined): Record<string, unknown> {
@@ -117,7 +137,12 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
-    const catalogQuery = useBioXpOperatorControlCatalog(generation, connected);
+    const dashboardQuery = useBioXpOperatorDashboard(generation, connected);
+    const catalogQuery = useBioXpOperatorControlCatalog(
+        generation,
+        connected,
+        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+    );
     const historyQuery = useBioXpOperatorActionHistory(generation, connected);
     const invoke = useInvokeBioXpOperatorAction();
     const assess = useAssessBioXpOperatorAction();
@@ -137,7 +162,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const authoritativeCatalog = !connected || catalogQuery.error ? undefined : catalogQuery.data;
     const authoritativeHistory = !connected || historyQuery.error ? undefined : historyQuery.data;
     const primitiveActions = useMemo(
-        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive'),
+        () => (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === 'primitive' && !isDedicatedYMutation(action)),
         [authoritativeCatalog?.actions],
     );
     const subsystemOptions = useMemo(
@@ -164,7 +189,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         [browseActions],
     );
     const paneActions = pane === 'meta'
-        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane)
+        ? (authoritativeCatalog?.actions ?? []).filter((action) => action.kind === pane && !isDedicatedYMutation(action))
         : pane === 'primitive' ? primitiveActions : [];
     const selected = paneActions.find((action) => action.action_id === selectedId) ?? paneActions[0];
     const normalizedForAdmission = useMemo(() => {
@@ -181,6 +206,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         authoritativeCatalog?.ownership_generation ?? 0,
         normalizedForAdmission,
         connected,
+        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
     );
     const actionEnabled = admission.error ? false : (admission.data?.enabled ?? (selected ? selected.enabled : false));
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
@@ -189,15 +215,19 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
         ? invoke.data ?? authoritativeHistory.receipts[0]
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
-    const xLifecycle = authoritativeCatalog?.dashboard.x_axis.provider.lifecycle;
+    const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
     const awaitingXObservationReceiptId = xLifecycle?.state === 'awaiting_operator_observation'
         ? xLifecycle.awaiting_observation_receipt_id ?? null
         : null;
-    const latestUsesProviderObservation = latestReceipt?.action_id.startsWith('oem.x.') === true
-        || latestReceipt?.action_id.startsWith('oem.xy.') === true;
+    const latestUsesProviderObservation = typeof latestReceipt?.action_id === 'string'
+        && (latestReceipt.action_id.startsWith('oem.x.') || latestReceipt.action_id.startsWith('oem.xy.'));
     const assessmentAuthorityKey = `${String(connected)}:${generation}:${authoritativeCatalog?.ownership_generation ?? 0}:${authoritativeCatalog?.registry_sha256 ?? ''}:${authoritativeCatalog?.evidence_lock_sha256 ?? ''}`;
     const isSafetyInterrupt = selected?.safety_class === 'stop' || selected?.safety_class === 'emergency';
-    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true || isSafetyInterrupt;
+    const isExactXzAction = selected?.action_id.startsWith('oem.x.') === true
+        || selected?.action_id.startsWith('oem.z.') === true;
+    const sourceAuthorityAllowsAction = authoritativeCatalog?.source_authority_verified === true
+        || isSafetyInterrupt
+        || isExactXzAction;
     const currentConfirmationFingerprint = selected && normalizedForAdmission !== null
         ? buildActionConfirmationFingerprint({
             actionId: selected.action_id,

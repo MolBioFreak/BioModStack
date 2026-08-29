@@ -16,7 +16,7 @@ if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
 import database  # noqa: E402
-from database import Base, Job  # noqa: E402
+from database import Base, Design, Job  # noqa: E402
 from routers import designs as designs_router  # noqa: E402
 from routers import jobs as jobs_router  # noqa: E402
 from services import analysis_autorun  # noqa: E402
@@ -72,6 +72,44 @@ async def test_design_list_routes_reject_limits_above_500(tmp_path: Path) -> Non
     engine, _factory, client = await _client_for(tmp_path, (designs_router, "/api/designs"))
     assert client.get("/api/designs", params={"limit": 501}).status_code == 422
     assert client.get("/api/designs/by-job/missing", params={"limit": 501}).status_code == 422
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reusable_structure_list_is_bounded_to_existing_completed_designs(tmp_path: Path) -> None:
+    engine, factory, client = await _client_for(tmp_path, (designs_router, "/api/designs"))
+    usable = tmp_path / "usable.pdb"
+    usable.write_text(
+        "ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n",
+        encoding="utf-8",
+    )
+    missing = tmp_path / "missing.pdb"
+    async with factory() as session:
+        session.add_all([
+            Job(id="completed-job", name="completed", status="completed", model_id="boltz2", mode="predict", params={}),
+            Job(id="running-job", name="running", status="running", model_id="boltz2", mode="predict", params={}),
+            Design(id="usable-design", job_id="completed-job", name="usable design", pdb_path=str(usable)),
+            Design(id="missing-design", job_id="completed-job", name="missing design", pdb_path=str(missing)),
+            Design(id="running-design", job_id="running-job", name="running design", pdb_path=str(usable)),
+        ])
+        await session.commit()
+
+    response = client.get("/api/designs/reusable-structures", params={"limit": 2})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "structures": [{
+            "design_id": "usable-design",
+            "design_name": "usable design",
+            "job_id": "completed-job",
+            "job_name": "completed",
+            "model_id": "boltz2",
+            "completed_at": None,
+            "structure_url": "/api/designs/usable-design/pdb",
+        }],
+        "limit": 2,
+    }
+    assert client.get("/api/designs/reusable-structures", params={"limit": 51}).status_code == 422
     await engine.dispose()
 
 

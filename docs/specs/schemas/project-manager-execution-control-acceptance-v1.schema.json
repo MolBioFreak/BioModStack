@@ -1,0 +1,341 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.execution-control-acceptance.v1",
+  "title": "Fenced launch cancellation crash and resource acceptance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "execution_control_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "cases",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.execution-control-acceptance.v1"
+    },
+    "execution_control_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "prepare-creates-no-job"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "single-launch-single-job"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "retry-fresh-attempt-fence"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "resubmit-fresh-group"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "clone-creates-intent-no-job"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "cancel-before-submit"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "submit-before-cancel"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "crash-replay-winner-preserved"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "stale-token-rejected"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "resource-denial-no-queue"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "terminal-resource-release-once"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/case"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "case_id": {
+                  "const": "pagination-complete-no-duplicate"
+                }
+              },
+              "required": [
+                "case_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "request_evidence",
+        "response_evidence",
+        "authority_evidence",
+        "expected_assertions",
+        "verifier_assertion"
+      ],
+      "properties": {
+        "case_id": {
+          "enum": [
+            "prepare-creates-no-job",
+            "single-launch-single-job",
+            "retry-fresh-attempt-fence",
+            "resubmit-fresh-group",
+            "clone-creates-intent-no-job",
+            "cancel-before-submit",
+            "submit-before-cancel",
+            "crash-replay-winner-preserved",
+            "stale-token-rejected",
+            "resource-denial-no-queue",
+            "terminal-resource-release-once",
+            "pagination-complete-no-duplicate"
+          ]
+        },
+        "request_evidence": {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+        },
+        "response_evidence": {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+        },
+        "authority_evidence": {
+          "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+        },
+        "expected_assertions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "verifier_assertion": {
+          "allOf": [
+            {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "const": "bms-execution-control-verifier-v1"
+                }
+              },
+              "required": [
+                "principal_id"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

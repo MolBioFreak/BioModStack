@@ -41,6 +41,7 @@ RFD3_SCIENTIFIC_PARAM_KEYS = {
     "redesign_ranges",
     "region_mode",
     "sequence_policy",
+    "select_unfixed_sequence",
     "insertion_anchor",
     "insertion_min_length",
     "insertion_max_length",
@@ -438,9 +439,13 @@ def normalize_local_redesign_params(
     unexpected = sorted(str(key) for key in normalized if key not in RFD3_SCIENTIFIC_PARAM_KEYS)
     if unexpected:
         raise ContractError(f"unsupported local-redesign parameters: {', '.join(unexpected)}")
-    if normalized.get("sequence_policy") not in {None, "", "skip"}:
-        raise ContractError("native local redesign requires sequence_policy=skip")
-    normalized["sequence_policy"] = "skip"
+    redesign_mode = str(normalized.get("redesign_mode") or "partial_diffusion")
+    sequence_policy = normalized.get("sequence_policy")
+    if sequence_policy in {None, ""}:
+        sequence_policy = "insert_only" if redesign_mode == "minimal_insertion" else "preserve"
+    if sequence_policy not in {"preserve", "explicit_positions", "insert_only", "skip"}:
+        raise ContractError(f"unsupported native local-redesign sequence_policy '{sequence_policy}'")
+    normalized["sequence_policy"] = sequence_policy
     normalized["write_full_json"] = True
     input_value = (
         normalized.get("input_structure")

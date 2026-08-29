@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.health-acceptance.v1",
+  "title": "Managed Development health acceptance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "health_acceptance_receipt_id",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "endpoints",
+    "outcome",
+    "observed_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.health-acceptance.v1"
+    },
+    "health_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "deployed_build_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "endpoints": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/endpoint"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "endpoint_id": {
+                  "const": "development-api-health"
+                }
+              },
+              "required": [
+                "endpoint_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/endpoint"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "endpoint_id": {
+                  "const": "development-frontend-root"
+                }
+              },
+              "required": [
+                "endpoint_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/endpoint"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "endpoint_id": {
+                  "const": "development-workflow-adapter-health"
+                }
+              },
+              "required": [
+                "endpoint_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint_id",
+        "response_sha256",
+        "response_size_bytes",
+        "status_code",
+        "outcome"
+      ],
+      "properties": {
+        "endpoint_id": {
+          "enum": [
+            "development-api-health",
+            "development-frontend-root",
+            "development-workflow-adapter-health"
+          ]
+        },
+        "response_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "response_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "status_code": {
+          "const": 200
+        },
+        "outcome": {
+          "const": "pass"
+        }
+      }
+    }
+  }
+}

@@ -19,6 +19,11 @@ from services.ngs_molbio_capabilities import (
     capability_record,
     validate_domain_experiment,
 )
+from services.protein_project_capabilities import (
+    CAPABILITY_ID as PROTEIN_ESMFOLD2_CAPABILITY_ID,
+    protein_capability_record,
+    protein_parameter_schema,
+)
 from model_registry import get_registry
 from scripts.rfd3_local_redesign.contract import ContractError
 from services.rfd3_local_redesign import (
@@ -247,9 +252,13 @@ def _validate_input_receipt_contract_authority(
 def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
     """Build the exact server-owned capability contract pinned by a new Plan."""
     try:
-        capability = capability_record(capability_id)
-        parameter_schema = capability_parameter_schema(capability_id)
-    except NgsMolBioCapabilityError as exc:
+        if capability_id == PROTEIN_ESMFOLD2_CAPABILITY_ID:
+            capability = protein_capability_record(capability_id)
+            parameter_schema = protein_parameter_schema(capability_id)
+        else:
+            capability = capability_record(capability_id)
+            parameter_schema = capability_parameter_schema(capability_id)
+    except (NgsMolBioCapabilityError, ValueError) as exc:
         raise ValidationFailure(str(exc)) from exc
     if capability.get("plannable") is not True or capability.get("exposure_state") != "accepted":
         raise ValidationFailure("capability is not accepted for Workflow Plan launch")
@@ -283,6 +292,59 @@ def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
         "allowed_model_modes": _capability_model_modes(capability),
     }
     return json.loads(canonical_json(contract))
+
+
+def initial_workflow_plan_payload(
+    *,
+    plan_name: str,
+    capability_contract: dict[str, Any],
+    domain_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Build one editable server-owned draft from pinned capability authority."""
+    capability = capability_contract["capability"]
+    if capability.get("workflow_family") != "typed_core_job":
+        raise ValidationFailure("server-owned initial Plan drafts require typed core Job authority")
+    parameter_schema = capability_contract["parameter_schema"]
+    properties = parameter_schema.get("properties")
+    if not isinstance(properties, dict):
+        raise ValidationFailure("initial Plan parameter schema is unavailable")
+    parameters: dict[str, Any] = {}
+    for name, raw_schema in properties.items():
+        if not isinstance(raw_schema, dict):
+            raise ValidationFailure("initial Plan parameter schema is malformed")
+        if "const" in raw_schema:
+            parameters[name] = copy.deepcopy(raw_schema["const"])
+        elif "default" in raw_schema:
+            parameters[name] = copy.deepcopy(raw_schema["default"])
+    raw_domain = domain_payload.get("domain_payload")
+    target = raw_domain.get("target") if isinstance(raw_domain, dict) else None
+    source_receipt_ids = target.get("source_receipt_ids") if isinstance(target, dict) else []
+    if not isinstance(source_receipt_ids, list) or any(
+        not isinstance(receipt_id, str) or not receipt_id for receipt_id in source_receipt_ids
+    ):
+        raise ValidationFailure("Protein Domain target source receipt authority is malformed")
+    allowed = capability_contract["allowed_model_modes"]
+    if not isinstance(allowed, list) or len(allowed) != 1:
+        raise ValidationFailure("initial Plan requires one exact model/mode authority")
+    model_mode = allowed[0]
+    adapter_id = str(capability["workflow_adapter_id"])
+    return {
+        "schema": "bms.workflow.typed_core_job.v1",
+        "workflow_family": "typed_core_job",
+        "contract_version": "1",
+        "adapter_id": adapter_id,
+        "nodes": [{"id": "native_job", "kind": "typed_core_job", "adapter_id": adapter_id}],
+        "edges": [],
+        "parameters": parameters,
+        "scheduler": {
+            "name": plan_name,
+            "model_id": model_mode["model_id"],
+            "mode": model_mode["mode"],
+            "params": {**parameters, "workflow_adapter": adapter_id},
+        },
+        "source_receipt_ids": list(source_receipt_ids),
+        "expected_cardinality": 1,
+    }
 
 
 def decode_workflow_plan_capability_contract(
@@ -420,6 +482,22 @@ async def persist_workflow_plan_authority(
         created_at=now(),
     )
     session.add(authority)
+    await session.flush()
+    draft = await session.scalar(
+        select(ExperimentWorkflowDraft).where(ExperimentWorkflowDraft.workflow_id == workflow_id)
+    )
+    if draft is None or draft.canonical_payload != "{}":
+        raise ValidationFailure("new Workflow Plan draft authority is unavailable")
+    try:
+        decoded_domain_payload = json.loads(revision.canonical_payload)
+    except json.JSONDecodeError as exc:
+        raise ValidationFailure("Workflow Plan Domain revision authority is malformed") from exc
+    draft.canonical_payload = canonical_json(initial_workflow_plan_payload(
+        plan_name=head.display_name,
+        capability_contract=contract,
+        domain_payload=decoded_domain_payload,
+    ))
+    draft.updated_at = now()
     await session.flush()
     return authority, contract
 
@@ -1157,24 +1235,39 @@ async def save_workflow_draft(
 def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise ValidationFailure("aggregate payload must be an object")
-    expected_schema = {
-        "workspace": "bms.project.v1",
-        "experiment": "bms.global-experiment.v1",
-        "domain_experiment": payload.get("schema"),
+    expected_schemas = {
+        "workspace": {"bms.project.v1", "bms.project.v2"},
+        "experiment": {"bms.global-experiment.v1", "bms.global-experiment.v2"},
+        "domain_experiment": {payload.get("schema")},
     }[aggregate_kind]
-    if payload.get("schema") != expected_schema:
-        raise ValidationFailure(f"{aggregate_kind} payload schema must be {expected_schema}")
+    if payload.get("schema") not in expected_schemas:
+        raise ValidationFailure(f"{aggregate_kind} payload schema is unsupported")
     required = {
         "workspace": {"name", "description", "research_objective", "status", "needs_metadata_review"},
         "experiment": {"name", "objective", "scientific_question", "description", "status", "priority", "success_criteria", "needs_metadata_review"},
         "domain_experiment": {"domain_kind", "domain_contract_version", "name", "objective", "status", "domain_payload"},
     }[aggregate_kind]
+    if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+        required |= {
+            "schema", "project_scope", "owner", "contributors", "tags", "start_date",
+            "target_end_date", "external_references", "created_by", "change_summary",
+        }
+    if aggregate_kind == "experiment" and payload.get("schema") == "bms.global-experiment.v2":
+        required |= {
+            "schema", "hypothesis", "tags", "shared_source_receipt_ids", "shared_dataset_ids",
+            "comparison_plan", "review_summary", "conclusion", "created_by", "change_summary",
+        }
     missing = sorted(field for field in required if field not in payload)
     if missing:
         raise ValidationFailure(f"{aggregate_kind} payload missing required fields: {', '.join(missing)}")
     statuses = PROJECT_STATUSES if aggregate_kind == "workspace" else EXPERIMENT_STATUSES
     if payload.get("status") not in statuses:
         raise ValidationFailure(f"invalid {aggregate_kind} lifecycle status")
+    if aggregate_kind == "workspace" and payload.get("schema") == "bms.project.v2":
+        if payload.get("project_scope") not in {"global", "ngs_molbio_local"}:
+            raise ValidationFailure("Project v2 project_scope is invalid")
+        if not isinstance(payload.get("needs_metadata_review"), bool):
+            raise ValidationFailure("Project v2 needs_metadata_review must be boolean")
     if aggregate_kind == "experiment":
         if payload.get("status") == "active":
             criteria = payload.get("success_criteria")
@@ -1187,6 +1280,14 @@ def _validate_hierarchy_payload(aggregate_kind: str, payload: dict[str, Any]) ->
         domain_kind = payload.get("domain_kind")
         if domain_kind not in DOMAIN_KINDS:
             raise ValidationFailure("domain_kind must be protein_in_silico or ngs_molbio")
+        if payload.get("domain_contract_version") == "3":
+            if payload.get("schema") != "bms.domain-experiment.v4":
+                raise ValidationFailure("Domain v3 requires bms.domain-experiment.v4")
+            try:
+                validate_domain_experiment(payload)
+            except NgsMolBioCapabilityError as exc:
+                raise ValidationFailure(str(exc)) from exc
+            return
         if payload.get("domain_contract_version") == "2":
             if payload.get("schema") != "bms.domain-experiment.v2":
                 raise ValidationFailure("Domain v2 requires bms.domain-experiment.v2")
@@ -1265,7 +1366,7 @@ def _hierarchy_reference_ids(
         target.extend((role, value) for value in values)
 
     schema = payload.get("schema")
-    if schema == "bms.global-experiment.v1":
+    if schema in {"bms.global-experiment.v1", "bms.global-experiment.v2"}:
         collect(
             "shared_source_receipt_ids",
             role="shared_source_receipt",
@@ -1273,7 +1374,7 @@ def _hierarchy_reference_ids(
             source=payload,
         )
         collect("shared_dataset_ids", role="shared_dataset", target=dataset_references, source=payload)
-    elif schema in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}:
+    elif schema in {"bms.domain-experiment.v1", "bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}:
         collect("source_receipt_ids", role="source_receipt", target=receipt_references, source=payload)
         if schema == "bms.domain-experiment.v1":
             collect("dataset_ids", role="dataset", target=dataset_references, source=payload)
@@ -1290,12 +1391,20 @@ def _hierarchy_reference_ids(
             if isinstance(targets, list):
                 for target_index, target_payload in enumerate(targets):
                     if isinstance(target_payload, dict):
-                        collect(
-                            "entity_receipt_ids",
-                            role=f"target_entity_receipt:{target_index}",
-                            target=receipt_references,
-                            source=target_payload,
-                        )
+                        if domain_payload.get("schema") == "bms.protein-in-silico-experiment.v3":
+                            collect(
+                                "source_receipt_ids",
+                                role=f"target_source_receipt:{target_index}",
+                                target=receipt_references,
+                                source=target_payload,
+                            )
+                        else:
+                            collect(
+                                "entity_receipt_ids",
+                                role=f"target_entity_receipt:{target_index}",
+                                target=receipt_references,
+                                source=target_payload,
+                            )
     return receipt_references, dataset_references, dataset_revision_references
 
 
@@ -1309,7 +1418,13 @@ async def _resolve_hierarchy_references(
 ) -> list[dict[str, str | int]]:
     receipt_references, dataset_references, dataset_revision_references = _hierarchy_reference_ids(payload)
     bindings: list[dict[str, str | int]] = []
-    exact_v2_authority = payload.get("schema") == "bms.domain-experiment.v2"
+    exact_v2_authority = payload.get("schema") in {
+        "bms.project.v2",
+        "bms.global-experiment.v2",
+        "bms.domain-experiment.v2",
+        "bms.domain-experiment.v3",
+        "bms.domain-experiment.v4",
+    }
     allowed_authority_ids = {workspace_id, aggregate_id}
     if parent_id is not None:
         allowed_authority_ids.add(parent_id)
@@ -1475,6 +1590,19 @@ def _validate_lifecycle_transition(
                 f"invalid lifecycle transition for {aggregate_kind}: {current_status} -> {requested_status}"
             )
         return
+    if lifecycle_operation == "domain_contract_upgrade":
+        if aggregate_kind != "domain_experiment" or current_status == "archived" or requested_status != current_status:
+            raise ValidationFailure(
+                f"invalid Domain contract upgrade lifecycle: {current_status} -> {requested_status}"
+            )
+        return
+    if lifecycle_operation in {"workspace_contract_upgrade", "experiment_contract_upgrade"}:
+        expected_kind = "workspace" if lifecycle_operation == "workspace_contract_upgrade" else "experiment"
+        if aggregate_kind != expected_kind or current_status == "archived" or requested_status != current_status:
+            raise ValidationFailure(
+                f"invalid {expected_kind} contract upgrade lifecycle: {current_status} -> {requested_status}"
+            )
+        return
     if lifecycle_operation is not None:
         raise ValidationFailure(f"unsupported lifecycle operation: {lifecycle_operation}")
     transitions = (
@@ -1505,6 +1633,7 @@ async def _save_revision(
         )
     workspace_id = await _resource_workspace(session, aggregate_id)
     hierarchy_bindings: list[dict[str, str | int]] = []
+    parent_global_revision: ExperimentRevision | None = None
     previous_status: str | None = None
     if aggregate_kind == "workflow":
         plan_authority = await load_workflow_plan_authority(
@@ -1539,9 +1668,33 @@ async def _save_revision(
             if current_payload.get("domain_kind") != payload.get("domain_kind"):
                 raise ValidationFailure("domain_kind is immutable; create a new Domain Experiment")
             if current_payload.get("schema") != payload.get("schema"):
-                raise ValidationFailure("Domain Experiment schema is immutable")
+                if not (
+                    lifecycle_operation == "domain_contract_upgrade"
+                    and current_payload.get("schema") in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}
+                    and payload.get("schema") == "bms.domain-experiment.v4"
+                ):
+                    raise ValidationFailure("Domain Experiment schema is immutable")
             if current_payload.get("domain_contract_version") != payload.get("domain_contract_version"):
-                raise ValidationFailure("Domain Experiment contract version is immutable")
+                if not (
+                    lifecycle_operation == "domain_contract_upgrade"
+                    and current_payload.get("domain_contract_version") in {"1", "2"}
+                    and payload.get("domain_contract_version") == "3"
+                ):
+                    raise ValidationFailure("Domain Experiment contract version is immutable")
+        if aggregate_kind == "workspace" and current_payload is not None and current_payload.get("schema") != payload.get("schema"):
+            if not (
+                lifecycle_operation == "workspace_contract_upgrade"
+                and current_payload.get("schema") == "bms.project.v1"
+                and payload.get("schema") == "bms.project.v2"
+            ):
+                raise ValidationFailure("Project schema is immutable")
+        if aggregate_kind == "experiment" and current_payload is not None and current_payload.get("schema") != payload.get("schema"):
+            if not (
+                lifecycle_operation == "experiment_contract_upgrade"
+                and current_payload.get("schema") == "bms.global-experiment.v1"
+                and payload.get("schema") == "bms.global-experiment.v2"
+            ):
+                raise ValidationFailure("Global Experiment schema is immutable")
         if payload.get("status") == "archived" and lifecycle_operation != "archive":
             raise ValidationFailure("archival is a lifecycle operation; use the archive route")
         if head.lifecycle_state == "archived" and lifecycle_operation != "restore":
@@ -1553,6 +1706,34 @@ async def _save_revision(
             parent_id=head.parent_id,
             payload=payload,
         )
+        if aggregate_kind == "domain_experiment":
+            parent_head = await _head(session, str(head.parent_id), "experiment")
+            if (
+                parent_head.workspace_id != workspace_id
+                or parent_head.current_revision_id is None
+            ):
+                raise ValidationFailure(
+                    "Domain Experiment parent has no current Global Experiment revision"
+                )
+            parent_global_revision = await session.get(
+                ExperimentRevision, parent_head.current_revision_id
+            )
+            parent_global_resource = await session.get(
+                ExperimentResource, parent_head.current_revision_id
+            )
+            if (
+                parent_global_revision is None
+                or parent_global_revision.subject_id != parent_head.aggregate_id
+                or parent_global_resource is None
+                or parent_global_resource.kind != "revision"
+                or parent_global_resource.workspace_id != workspace_id
+                or parent_global_resource.lifecycle_owner_id != parent_head.aggregate_id
+                or sha256_text(parent_global_revision.canonical_payload)
+                != parent_global_revision.payload_sha256
+            ):
+                raise ValidationFailure(
+                    "Domain Experiment parent Global revision authority is invalid"
+                )
     payload_json = canonical_json(payload)
     graph_json = canonical_json(
         {
@@ -1581,6 +1762,10 @@ async def _save_revision(
                 schema_version=(
                     str(payload.get("contract_version") or "1")
                     if aggregate_kind == "workflow"
+                    else str(payload.get("domain_contract_version") or "1")
+                    if aggregate_kind == "domain_experiment"
+                    else "2"
+                    if str(payload.get("schema") or "").endswith(".v2")
                     else "1"
                 ),
                 canonical_payload=payload_json,
@@ -1599,6 +1784,17 @@ async def _save_revision(
                         role=str(binding["role"]),
                         ordinal=int(binding["ordinal"]),
                         expected_sha256=str(binding["expected_sha256"]),
+                        metadata_json=canonical_json({"authority": "server_resolved"}),
+                    )
+                )
+            if parent_global_revision is not None:
+                session.add(
+                    ExperimentRevisionEdge(
+                        revision_id=revision.resource_id,
+                        target_resource_id=parent_global_revision.resource_id,
+                        role="parent_global_revision",
+                        ordinal=0,
+                        expected_sha256=parent_global_revision.payload_sha256,
                         metadata_json=canonical_json({"authority": "server_resolved"}),
                     )
                 )
@@ -1888,6 +2084,7 @@ async def save_hierarchy_revision(
     payload: dict[str, Any],
     *,
     expected_head_generation: int,
+    lifecycle_operation: str | None = None,
 ) -> ExperimentRevision:
     if aggregate_kind not in {"workspace", "experiment", "domain_experiment"}:
         raise ValidationFailure("unsupported hierarchy aggregate kind")
@@ -1897,6 +2094,7 @@ async def save_hierarchy_revision(
         aggregate_kind=aggregate_kind,
         payload=payload,
         expected_head_generation=expected_head_generation,
+        lifecycle_operation=lifecycle_operation,
     )
 
 

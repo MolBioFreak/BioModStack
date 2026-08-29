@@ -583,6 +583,25 @@ def test_cm3_004b_caller_cannot_set_server_authority(authority: str) -> None:
         validate_request_params(params)
 
 
+def test_cm_request_builder_derives_canonical_frustrampnn_structure_normalization() -> None:
+    from services.frustrampnn.settings import default_settings
+
+    params = _request_params("confornets")
+    settings = default_settings().model_dump(mode="json", exclude_none=False)
+    settings["source_structure"] = {
+        "selected_model_number": 9,
+        "preferred_altloc": "B",
+    }
+    params["frustrampnn_settings"] = settings
+
+    validated = validate_request_params(params)
+
+    assert validated.request_fields["frustrampnn_settings"]["source_structure"] == {
+        "selected_model_number": 1,
+        "preferred_altloc": "",
+    }
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

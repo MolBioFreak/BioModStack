@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.exact-tree-review.v2",
+  "title": "Three-authority exact-package review receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "exact_tree_review_receipt_id",
+    "source_commit",
+    "source_tree",
+    "outer_package_sha256",
+    "reviewer_registry",
+    "review_results",
+    "accepted_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.exact-tree-review.v2"
+    },
+    "exact_tree_review_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "outer_package_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewer_registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.reviewer-registry.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "review_results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent_child",
+        "schema_truth_table",
+        "adversarial_cross_package"
+      ],
+      "properties": {
+        "parent_child": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reviewer_id",
+            "reviewer_registry_entry_sha256",
+            "review_body",
+            "start_package_sha256",
+            "end_package_sha256",
+            "verdict",
+            "blocker_count",
+            "major_count",
+            "reviewer_assertion"
+          ],
+          "properties": {
+            "reviewer_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "reviewer_registry_entry_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "review_body": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+            },
+            "start_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "end_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verdict": {
+              "const": "pass"
+            },
+            "blocker_count": {
+              "const": 0
+            },
+            "major_count": {
+              "const": 0
+            },
+            "reviewer_assertion": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            }
+          }
+        },
+        "schema_truth_table": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reviewer_id",
+            "reviewer_registry_entry_sha256",
+            "review_body",
+            "start_package_sha256",
+            "end_package_sha256",
+            "verdict",
+            "blocker_count",
+            "major_count",
+            "reviewer_assertion"
+          ],
+          "properties": {
+            "reviewer_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "reviewer_registry_entry_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "review_body": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+            },
+            "start_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "end_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verdict": {
+              "const": "pass"
+            },
+            "blocker_count": {
+              "const": 0
+            },
+            "major_count": {
+              "const": 0
+            },
+            "reviewer_assertion": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            }
+          }
+        },
+        "adversarial_cross_package": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reviewer_id",
+            "reviewer_registry_entry_sha256",
+            "review_body",
+            "start_package_sha256",
+            "end_package_sha256",
+            "verdict",
+            "blocker_count",
+            "major_count",
+            "reviewer_assertion"
+          ],
+          "properties": {
+            "reviewer_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "reviewer_registry_entry_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "review_body": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/canonicalJsonArtifact"
+            },
+            "start_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "end_package_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verdict": {
+              "const": "pass"
+            },
+            "blocker_count": {
+              "const": 0
+            },
+            "major_count": {
+              "const": 0
+            },
+            "reviewer_assertion": {
+              "$ref": "bms.project-manager.operational-evidence.v1#/$defs/writerAssertion"
+            }
+          }
+        }
+      }
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete body with only receipt_sha256 omitted."
+    }
+  }
+}

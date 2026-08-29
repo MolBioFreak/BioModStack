@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from fastapi import HTTPException, UploadFile
 
 
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +21,14 @@ if str(API_ROOT) not in sys.path:
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from services.nextflow import build_nextflow_command
+from services.nextflow import (
+    build_nextflow_command,
+    normalize_plr_input_pdb_path,
+    normalize_plr_structure_validators,
+    resolve_nextflow_executable,
+)
 from services import rfd3_local_redesign as rfd3_service
+import routers.files as files_router
 from services.result_ingester import _local_redesign_validate_native_request_artifact
 from scripts.rfd3_local_redesign.contract import ContractError, build_request, request_sha256, write_request
 
@@ -41,6 +49,114 @@ SOURCE_IDENTITIES = [
         ],
     },
 ]
+
+
+@pytest.mark.asyncio
+async def test_content_addressed_structure_upload_is_atomic_immutable_and_hash_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs_root = tmp_path / "inputs"
+    inputs_root.mkdir()
+    monkeypatch.setattr(files_router, "get_allowed_roots", lambda: {"inputs": inputs_root})
+    monkeypatch.setattr(files_router, "resolve_allowed_path", files_router._allowed_lexical_path)
+    monkeypatch.setattr(
+        files_router,
+        "to_allowed_relative",
+        lambda value: f"inputs/{value.relative_to(inputs_root)}",
+    )
+
+    payload = b"ATOM      1  CA  GLY A   1       0.000   0.000   0.000  1.00 10.00           C\nEND\n"
+    digest = hashlib.sha256(payload).hexdigest()
+    filename = f"source-{digest}.pdb"
+    first = await files_router.upload_immutable_structure(
+        path="inputs/protein_local_redesign",
+        sha256=digest,
+        file=UploadFile(filename=filename, file=io.BytesIO(payload)),
+        governed_roots=(),
+    )
+    stored = inputs_root / "protein_local_redesign" / filename
+    assert stored.read_bytes() == payload
+    assert first == {
+        "filename": filename,
+        "path": f"inputs/protein_local_redesign/{filename}",
+        "size": len(payload),
+        "sha256": digest,
+        "existing": False,
+    }
+
+    second = await files_router.upload_immutable_structure(
+        path="inputs/protein_local_redesign",
+        sha256=digest,
+        file=UploadFile(filename=filename, file=io.BytesIO(payload)),
+        governed_roots=(),
+    )
+    assert second["existing"] is True
+
+    with pytest.raises(HTTPException, match="filename must end with its SHA-256"):
+        await files_router.upload_immutable_structure(
+            path="inputs/protein_local_redesign",
+            sha256=hashlib.sha256(b"different").hexdigest(),
+            file=UploadFile(filename=filename, file=io.BytesIO(b"different")),
+            governed_roots=(),
+        )
+    assert stored.read_bytes() == payload
+
+    wrong_digest = "0" * 64
+    wrong_name = f"wrong-{wrong_digest}.pdb"
+    with pytest.raises(HTTPException, match="content SHA-256 mismatch"):
+        await files_router.upload_immutable_structure(
+            path="inputs/protein_local_redesign",
+            sha256=wrong_digest,
+            file=UploadFile(filename=wrong_name, file=io.BytesIO(payload)),
+            governed_roots=(),
+        )
+    assert not (inputs_root / "protein_local_redesign" / wrong_name).exists()
+
+    with pytest.raises(HTTPException, match="immutable structure upload route"):
+        await files_router.upload_file(
+            path="inputs/protein_local_redesign",
+            file=UploadFile(filename=filename, file=io.BytesIO(b"tampered")),
+            governed_roots=(),
+        )
+    assert stored.read_bytes() == payload
+
+
+def test_normalize_plr_input_pdb_path_absolutizes_provisioned_relative_path(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "protein_local_redesign" / "source.pdb"
+    params = normalize_plr_input_pdb_path(
+        {"input_pdb": "inputs/protein_local_redesign/source.pdb"},
+        resolve_relative=lambda rel: (tmp_path / rel).resolve(),
+    )
+    assert params["input_pdb"] == str(source.resolve())
+
+
+def test_normalize_plr_input_pdb_path_passes_absolute_paths_through() -> None:
+    def must_not_resolve(_rel: str) -> str:
+        raise AssertionError("absolute input_pdb must pass through untouched")
+
+    params = normalize_plr_input_pdb_path(
+        {"input_pdb": "/abs/source.pdb"},
+        resolve_relative=must_not_resolve,
+    )
+    assert params["input_pdb"] == "/abs/source.pdb"
+
+
+def test_normalize_plr_input_pdb_path_propagates_resolution_errors() -> None:
+    def reject(_rel: str) -> str:
+        raise ValueError("Root not allowed: nope")
+
+    with pytest.raises(ValueError, match="Root not allowed"):
+        normalize_plr_input_pdb_path({"input_pdb": "nope/x.pdb"}, resolve_relative=reject)
+
+
+def test_normalize_plr_input_pdb_path_ignores_missing_empty_and_non_string() -> None:
+    assert normalize_plr_input_pdb_path({}, resolve_relative=lambda rel: None) == {}
+    assert normalize_plr_input_pdb_path(
+        {"input_pdb": ""}, resolve_relative=lambda rel: None
+    ) == {"input_pdb": ""}
+    assert normalize_plr_input_pdb_path(
+        {"input_pdb": 5}, resolve_relative=lambda rel: None
+    ) == {"input_pdb": 5}
 
 
 def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path) -> None:
@@ -69,9 +185,14 @@ def test_native_request_artifact_must_equal_the_immutable_request(tmp_path: Path
         )
 
 
-def test_native_job_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
+def test_all_protein_local_ingress_bypasses_antibody_defaults_before_contract_validation() -> None:
     jobs_source = (API_ROOT / "routers" / "jobs.py").read_text(encoding="utf-8")
-    expected = '''if not (normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"):
+    expected = '''is_protein_local_redesign = (
+            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
+        ) or (
+            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
+        )
+        if not is_protein_local_redesign:
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":'''
@@ -95,6 +216,7 @@ def test_partial_diffusion_fixes_every_atom_outside_the_editable_region() -> Non
         "A3": ["ALL"],
         "B1": ["ALL"],
     }
+    assert request["sequence_policy"] == "preserve"
 
 
 def test_partial_diffusion_rejects_custom_fixed_atom_overrides() -> None:
@@ -142,6 +264,7 @@ def test_minimal_insertion_contig_is_source_derived_and_claim_bound() -> None:
     )
     assert request["rfd3"]["contig"] == "A1-2,1-3,A3,/0,B1"
     assert request["selection"]["insertion_anchor"] == "A2"
+    assert request["sequence_policy"] == "insert_only"
 
     with pytest.raises(ContractError, match="does not match"):
         build_request(
@@ -179,6 +302,7 @@ def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
             "redesign_mode": "partial_diffusion",
             "design_chains": ["A"],
             "redesign_ranges": "A2",
+            "sequence_policy": "preserve",
             "source_residue_identities": [
                 {
                     "chain_id": "A",
@@ -190,11 +314,46 @@ def test_api_derives_fixed_scaffold_from_the_bound_source_structure(
     )
 
     assert normalized["source_residue_identities"] == request["selection"]["source_residue_identities"]
+    assert request["sequence_policy"] == "preserve"
+    assert "select_unfixed_sequence" not in request["rfd3"]
     assert request["rfd3"]["select_fixed_atoms"] == {
         "A1": ["ALL"],
         "A2": [],
         "B1": ["ALL"],
     }
+
+    _explicit_normalized, explicit_request, _explicit_digest = (
+        rfd3_service.normalize_local_redesign_params(
+            {
+                "input_structure": str(source),
+                "redesign_mode": "partial_diffusion",
+                "design_chains": ["A"],
+                "redesign_ranges": "A2",
+                "sequence_policy": "explicit_positions",
+                "select_unfixed_sequence": "A2",
+            },
+            job_name="explicit-sequence-recall",
+        )
+    )
+    assert explicit_request["sequence_policy"] == "explicit_positions"
+    assert explicit_request["rfd3"]["select_unfixed_sequence"] == "A2"
+
+    _insertion_normalized, insertion_request, _insertion_digest = (
+        rfd3_service.normalize_local_redesign_params(
+            {
+                "input_structure": str(source),
+                "redesign_mode": "minimal_insertion",
+                "design_chains": ["A"],
+                "context_chains": ["B"],
+                "insertion_anchor": "A1",
+                "insertion_min_length": 1,
+                "insertion_max_length": 1,
+                "sequence_policy": "insert_only",
+            },
+            job_name="minimal-insertion-sequence-policy",
+        )
+    )
+    assert insertion_request["sequence_policy"] == "insert_only"
     output_dir = tmp_path / "job-output"
     output_dir.mkdir()
     materialized, materialized_request, materialized_digest, request_path = (
@@ -397,8 +556,9 @@ def test_protein_local_redesign_is_first_class_native_model() -> None:
 
     assert "id: 'protein_modification_experimental'" in frontend_text
     assert "id: 'protein_local_redesign'" in frontend_text
-    assert "label: 'RFD3 Local Redesign'" in modification_modes_text
-    assert "RFD3LocalRedesignResultsPane" in results_text
+    assert "label: 'RFD3 Iteration Workbench'" in modification_modes_text
+    assert "ProteinLocalRedesignResultsPane" in results_text
+    assert "isProteinLocalRedesignResultJob" in results_text
     assert "id: protein_local_redesign" in model_text
     assert "workflow PROTEIN_LOCAL_REDESIGN" in workflow_text
     assert "workflow {" in workflow_text
@@ -470,6 +630,93 @@ def test_build_nextflow_command_maps_protein_local_redesign_params() -> None:
     assert "--boltz_recycling_steps" not in joined
     assert "--input_pdb /tmp/input.pdb" not in joined
     assert "--design_chains A" not in joined
+
+
+def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
+    cmd = build_nextflow_command(
+        "protein_modification_experimental",
+        "region_redesign",
+        {
+            "input_pdb": "/tmp/input.pdb",
+            "design_chains": "A",
+            "structure_validators": ["esmfold2", "protenix_v2"],
+            "msa_provider": "local",
+        },
+        "/tmp/out",
+        job_id="job-123",
+    )
+
+    joined = " ".join(cmd)
+    assert "--plr_structure_validators esmfold2,protenix_v2" in joined
+    assert "--plr_validator_suite_active true" in joined
+    assert "--protenix_msa_backend local" in joined
+
+
+@pytest.mark.parametrize(
+    ("selected", "expected"),
+    [
+        (["protenix_v2"], ["protenix_v2"]),
+        (["esmfold2", "protenix_v2"], ["esmfold2", "protenix_v2"]),
+        (["boltz2", "esmfold2", "protenix_v2"], ["boltz2", "esmfold2", "protenix_v2"]),
+    ],
+)
+def test_protein_local_validator_selection_accepts_any_supported_subset(
+    selected: list[str], expected: list[str]
+) -> None:
+    normalized = normalize_plr_structure_validators({"structure_validators": selected})
+
+    assert normalized["structure_validators"] == expected
+
+
+def test_protein_local_validator_selection_defaults_to_protenix_v2() -> None:
+    normalized = normalize_plr_structure_validators({})
+
+    assert normalized["structure_validators"] == ["protenix_v2"]
+
+
+@pytest.mark.parametrize(
+    "selected",
+    [
+        [],
+        ["esmfold2", "esmfold2"],
+        ["unsupported"],
+        "esmfold2",
+        ["boltz2", "esmfold2", "protenix_v2", "unsupported"],
+    ],
+)
+def test_protein_local_validator_selection_rejects_invalid_suites(selected: object) -> None:
+    with pytest.raises(ValueError, match="structure_validators"):
+        normalize_plr_structure_validators({"structure_validators": selected})
+
+
+def test_experimental_region_redesign_uses_protein_local_review_contract() -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from routers.jobs import _is_protein_local_redesign_job
+
+    assert _is_protein_local_redesign_job(
+        cast(Any, SimpleNamespace(model_id="protein_modification_experimental", mode="region_redesign"))
+    )
+    assert not _is_protein_local_redesign_job(
+        cast(Any, SimpleNamespace(model_id="protein_modification_experimental", mode="de_novo"))
+    )
+
+
+def test_protein_local_validator_selection_rejects_unavailable_models() -> None:
+    from fastapi import HTTPException
+
+    from routers.jobs import _validate_plr_validator_availability
+
+    class Registry:
+        def get_model(self, model_id: str) -> object | None:
+            return object() if model_id in {"esmfold2", "protenix"} else None
+
+    _validate_plr_validator_availability(
+        Registry(), {"structure_validators": ["esmfold2", "protenix_v2"]}
+    )
+    with pytest.raises(HTTPException, match="disabled or unavailable"):
+        _validate_plr_validator_availability(Registry(), {"structure_validators": ["boltz2"]})
 
 
 def test_native_rfd3_command_uses_exact_canonical_execution_controls() -> None:
@@ -657,6 +904,8 @@ def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) ->
             "manual_ranges",
             "--redesign_ranges",
             "1-2",
+            "--sequence_redesign_ranges",
+            "A2",
             "--output_seed_pdb",
             str(seed_pdb),
             "--output_manifest",
@@ -670,11 +919,38 @@ def test_resolve_redesign_regions_accepts_plain_manual_ranges(tmp_path: Path) ->
 
     assert manifest["design_chain"] == "A"
     assert manifest["movable_positions_spec"] == "A1-2"
+    assert manifest["sequence_redesign_positions_spec"] == "A2"
+    assert "A1" not in manifest["fixed_positions_spec"]
+    assert "A1" in manifest["sequence_fixed_positions_spec"]
     assert "A3" in manifest["fixed_positions_spec"]
     assert "B1" in manifest["fixed_positions_spec"]
     assert "2-2" in manifest["contig_spec"]
     assert "ATOM" in seed_text
     assert " B " not in seed_text
+
+    mpnn_input = tmp_path / "mpnn_input"
+    mpnn_output = tmp_path / "mpnn_output"
+    mpnn_input.mkdir()
+    (mpnn_input / "candidate.pdb").write_text(seed_text, encoding="utf-8")
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "add_fixed_labels_from_spec.py"),
+            "--input_dir",
+            str(mpnn_input),
+            "--output_dir",
+            str(mpnn_output),
+            "--manifest",
+            str(manifest_path),
+        ],
+        check=True,
+    )
+    labels_by_residue: dict[int, set[float]] = {}
+    for line in (mpnn_output / "candidate.pdb").read_text(encoding="utf-8").splitlines():
+        if not line.startswith(("ATOM", "HETATM")):
+            continue
+        labels_by_residue.setdefault(int(line[22:26]), set()).add(float(line[60:66]))
+    assert labels_by_residue == {1: {0.0}, 2: {1.0}, 3: {0.0}}
 
 
 def test_plr_rfd3_input_normalizes_legacy_contigs(tmp_path: Path) -> None:
@@ -784,9 +1060,11 @@ def test_native_rfd3_registry_matches_the_canonical_launch_contract() -> None:
     params = {entry["name"]: entry for entry in registry["params"]}
 
     assert params["redesign_mode"]["enum"] == ["partial_diffusion", "minimal_insertion"]
+    assert params["sequence_policy"]["enum"] == ["preserve", "explicit_positions", "insert_only"]
     assert "select_fixed_atoms" not in mode_params
-    assert "select_unfixed_sequence" not in mode_params
-    assert "select_unfixed_sequence" not in params
+    assert "select_unfixed_sequence" in mode_params
+    assert params["select_unfixed_sequence"]["type"] == "string"
+    assert "select_unfixed_sequence" in rfd3_service.RFD3_SCIENTIFIC_PARAM_KEYS
     assert {
         "design_chains",
         "context_chains",
@@ -860,3 +1138,24 @@ def test_native_rfd3_ingester_requires_exact_candidate_assignment_and_receipt() 
     assert '"native_producer_input"' in ingester_source
     assert "RFD3 local-redesign native producer input path is invalid" in ingester_source
     assert "not source.is_relative_to(data_root)" in ingester_source
+
+
+def test_plr_profile_does_not_override_scheduler_gpu_concurrency() -> None:
+    rendered = subprocess.run(
+        [
+            resolve_nextflow_executable(),
+            "config",
+            "-profile",
+            "protein_local_redesign,workstation_ryzen7960x",
+            "-flat",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    assert "process.'withName:ESMFold2FromPdb'.maxForks" not in rendered
+    assert "process.'withName:ProtenixFromComplex'.maxForks" not in rendered
+    assert "params.gpu_id" in rendered
+    assert "params.num_parallel_jobs" in rendered

@@ -93,7 +93,7 @@ const effectiveSettings = {
         normalized_pdb_sha256: hashes.c,
     },
     value_sources: {
-        protein_selection: { mode: 'operator_request', entities: 'operator_request', residues: 'operator_request' },
+        protein_selection: { mode: 'operator_request', entities: 'operator_request', regions: 'operator_request', residues: 'operator_request' },
         source_structure: { selected_model_number: 'operator_request', preferred_altloc: 'operator_request' },
         classification_policy: { mode: 'operator_request', high_max: 'operator_request', minimal_min: 'operator_request' },
     },
@@ -105,6 +105,13 @@ const resultDetail = {
     parent_job_id: 'job-1',
     parent_workflow_id: 'structure_prediction',
     candidate_id: 'candidate-1',
+    operator_label: 'Candidate 1',
+    source_identity: {
+        design_id: null,
+        artifact_id: null,
+        artifact_sha256: hashes.a,
+        candidate_id: 'candidate-1',
+    },
     design_id: null,
     requiredness: 'required',
     source_artifact_id: null,
@@ -338,6 +345,54 @@ const handoffReceipt = {
     },
 };
 
+test('structure dataset fan-out parser exposes every scheduler child and smaller remainder', () => {
+    const parseFanout = (frustraMpnnApi as unknown as {
+        parseFrustraMpnnStructureDatasetFanout: (value: unknown) => {
+            child_jobs: Array<{ child_job_id: string; structure_count: number }>;
+        };
+    }).parseFrustraMpnnStructureDatasetFanout;
+    assert.equal(typeof parseFanout, 'function');
+    const child = ({ id, count }: { id: string; count: number }) => ({
+        ...handoffReceipt,
+        job_id: id,
+        child_job_id: id,
+        result_job_id: id,
+        name: `FrustraMPNN ${id}`,
+        trigger: 'design_analyze',
+        handoff: undefined,
+        structure_count: count,
+    });
+    const parsed = parseFanout({
+        schema_name: 'bms.structure-dataset-fanout.v1',
+        fanout_id: hashes.f,
+        parent_job_id: 'job-1',
+        selected_structure_count: 3,
+        structures_per_job: 2,
+        replayed: false,
+        child_jobs: [child({ id: 'child-1', count: 2 }), child({ id: 'child-2', count: 1 })].map(({ handoff: _handoff, ...value }) => value),
+    });
+    assert.deepEqual(parsed.child_jobs.map((item) => [item.child_job_id, item.structure_count]), [
+        ['child-1', 2],
+        ['child-2', 1],
+    ]);
+    for (const counts of [[1, 2], [1, 1, 1], [2, 1, 1]]) {
+        assert.throws(
+            () => parseFanout({
+                schema_name: 'bms.structure-dataset-fanout.v1',
+                fanout_id: hashes.f,
+                parent_job_id: 'job-1',
+                selected_structure_count: counts.reduce((total, count) => total + count, 0),
+                structures_per_job: 2,
+                replayed: false,
+                child_jobs: counts.map((count, index) => child({ id: `invalid-${index}`, count }))
+                    .map(({ handoff: _handoff, ...value }) => value),
+            }),
+            /canonical partition/i,
+        );
+    }
+});
+
+
 test('handoff parser preserves exact backend metadata and rejects legacy or malformed handoff contracts', () => {
     const parsed = parseFrustraMpnnChildReceipt(handoffReceipt, true);
     assert.deepEqual(parsed.handoff, handoffReceipt.handoff);
@@ -456,6 +511,32 @@ test('closed v2 result detail preserves authority, settings, statistics, and saf
         malformed.effective_settings_json.resolved_chains[0]!.residues[0]![field] = invalid;
         assert.throws(() => parseFrustraMpnnResultDetail(malformed), new RegExp(field));
     }
+});
+
+test('closed v3 result detail opens before derived statistics complete', () => {
+    const current = structuredClone(resultDetail);
+    current.authority_version = 'v3';
+    current.statistics_available = false;
+    current.missing_fields = [
+        'statistics_sha256',
+        'statistics_json',
+        'comparison_compatibility_id',
+    ];
+    current.statistics_sha256 = null;
+    current.statistics_json = null;
+    current.comparison_compatibility_id = null;
+    current.component_contract_version = '3.0';
+    current.summary.schema_version = 3;
+    current.summary.execution_configuration_id = 'frustrampnn_execution_configuration_v3';
+    current.terminal_result.schema_version = 3;
+    current.terminal_result.component_contract_version = '3.0';
+    current.terminal_result.result_payload.schema_version = 3;
+    current.execution_receipt.schema_version = 3;
+
+    const parsed = parseFrustraMpnnResultDetail(current);
+    assert.equal(parsed.authority_version, 'v3');
+    assert.equal(parsed.summary.schema_version, 3);
+    assert.equal(parsed.statistics_json, null);
 });
 
 test('v2 result summary enforces canonical minima, nonempty chain support, and closed finite fields', () => {
@@ -834,6 +915,7 @@ test('requested-effective settings summary preserves safe identities, counts, th
             protein_selection: {
                 mode: 'selected_residues',
                 entities: [],
+                regions: [],
                 residues: [{
                     entity_instance_id: 'entity-1', source_entity_id: '1', label_asym_id: 'AA', auth_asym_id: 'A',
                     auth_seq_id: 10, insertion_code: '', sequence_index: 1,
@@ -859,13 +941,42 @@ test('requested-effective settings summary preserves safe identities, counts, th
         origins: { mode: 'operator_request', highMax: 'operator_request', minimalMin: 'operator_request' },
     });
     assert.deepEqual(summary.counts, {
-        selectedEntities: 0, selectedResidues: 1, resolvedEntities: 1, resolvedChains: 1, resolvedResidues: 1,
+        selectedEntities: 0, selectedRegions: 0, selectedResidues: 1,
+        resolvedEntities: 1, resolvedChains: 1, resolvedResidues: 1,
     });
     assert.match(summary.selectedResidues[0]!, /entity-1.*A:10.*sequence 1/i);
     assert.match(summary.resolvedResidues[0]!, /entity-1.*A:10.*G.*model position 0/i);
-    assert.equal(Object.keys(summary.valueOrigins).length, 8);
+    assert.equal(Object.keys(summary.valueOrigins).length, 9);
     assert.equal(JSON.stringify(summary).includes('/private/'), false);
 });
+
+test('requested-effective settings summary reports source sequence regions separately', async () => {
+    const { buildFrustraMpnnRequestedEffectiveSummary } = await import(
+        '../src/components/frustrampnn/frustraMpnnSettingsSummary.js'
+    );
+    const resolved = {
+        ...effectiveSettings,
+        requested_settings: {
+            ...persistedRequestedSettings,
+            protein_selection: {
+                mode: 'selected_regions',
+                entities: [],
+                regions: [{
+                    entity_instance_id: 'entity-1', source_entity_id: '1',
+                    label_asym_id: null, auth_asym_id: null,
+                    sequence_start: 10, sequence_end: 24,
+                }],
+                residues: [],
+            },
+        },
+    } as const;
+
+    const summary = buildFrustraMpnnRequestedEffectiveSummary(resolved as never);
+    assert.equal(summary.counts.selectedRegions, 1);
+    assert.match(summary.selectedRegions[0]!, /source instance entity-1.*sequence 10–24/i);
+    assert.equal(summary.valueOrigins['selected regions'], 'operator_request');
+});
+
 
 test('all standard launch surfaces own one typed settings panel and the typed statistics route', () => {
     const apiSource = readFileSync('src/lib/frustraMpnnApi.ts', 'utf8');

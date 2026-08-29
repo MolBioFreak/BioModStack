@@ -158,8 +158,8 @@ def _decode_metadata(
         "producer_candidate_key",
         "requiredness",
     }
-    if request_version not in {1, 2}:
-        raise ValueError("request_version must be 1 or 2")
+    if request_version not in {1, 3}:
+        raise ValueError("request_version must be 1 or 3")
     required = common_required | ({"checkpoint_id"} if request_version == 1 else set())
     producer_fields = {
         "producer_method",
@@ -234,7 +234,7 @@ def _source_identity_authority(source: Path, source_bytes: bytes) -> tuple[dict[
     raise ValueError("candidate source must be PDB or mmCIF")
 
 
-def _prepare_candidate_v2(
+def _prepare_candidate_v3(
     *,
     source: Path,
     output_pdb: Path,
@@ -288,9 +288,9 @@ def _prepare_candidate_v2(
         configuration_payload = configuration.model_dump(mode="json", exclude_none=False)
         request = {
             "schema_name": "workflow_component_request",
-            "schema_version": 2,
+            "schema_version": 3,
             "component_id": "frustrampnn",
-            "component_contract_version": "2.0",
+            "component_contract_version": "3.0",
             "invocation_id": f"frustrampnn:{candidate_id}",
             "parent_job_id": str(metadata["parent_job_id"]),
             "parent_workflow_id": str(metadata["parent_workflow_id"]),
@@ -354,7 +354,7 @@ def _prepare_candidate_v2(
                     "normalized_pdb_sha256": normalized_sha,
                 },
             }
-        validate_schema("workflow_component_request_v2", request)
+        validate_schema("workflow_component_request_v3", request)
         request_path.write_bytes(canonical_json_bytes(request))
         return request
     except Exception:
@@ -376,16 +376,16 @@ def prepare_candidate(
     settings_sha256: str | None = None,
     settings_value_origin: str | None = None,
 ) -> dict[str, Any]:
-    if request_version == 2:
+    if request_version == 3:
         if settings_value_origin not in {"bms_default", "operator_request"}:
             raise ValueError(
-                "v2 preparation requires a canonical settings value origin"
+                "v3 preparation requires a canonical settings value origin"
             )
         if structure_map_path is None or settings_payload is None or settings_sha256 is None:
             raise ValueError(
-                "v2 preparation requires structure map and exact settings bytes/hash"
+                "v3 preparation requires structure map and exact settings bytes/hash"
             )
-        return _prepare_candidate_v2(
+        return _prepare_candidate_v3(
             source=source,
             output_pdb=output_pdb,
             structure_map_path=structure_map_path,
@@ -396,7 +396,7 @@ def prepare_candidate(
             settings_value_origin=settings_value_origin,
         )
     if request_version != 1:
-        raise ValueError("request_version must be 1 or 2")
+        raise ValueError("request_version must be 1 or 3")
     producer_fields = {
         "producer_method",
         "producer_sample",
@@ -495,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-pdb", required=True, type=Path)
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--metadata-base64", required=True)
-    parser.add_argument("--request-version", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--request-version", type=int, choices=(1, 3), default=1)
     parser.add_argument("--structure-map", type=Path)
     parser.add_argument("--settings-base64")
     parser.add_argument("--settings-sha256")

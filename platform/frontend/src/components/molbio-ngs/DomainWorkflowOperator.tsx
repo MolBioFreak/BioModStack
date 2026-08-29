@@ -3,12 +3,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
     cancelDomainRunGroup,
+    cloneDomainRunIntent,
     createDomainWorkflowPlan,
     getDomainRunGroup,
     getDomainWorkflowPlan,
     getNgsMolBioBinding,
     initializeNgsMolBioBinding,
     issuePreparedLaunchContext,
+    internalRouteHref,
     launchDomainRunGroup,
     listDomainCapabilities,
     listDomainWorkflowPlanRevisions,
@@ -31,7 +33,15 @@ import {
     type JsonValue,
     type PreparationLaunchRequest,
     type PreparedLaunchContext,
+    type RunCloneReceipt,
 } from '../../lib/projectManager';
+import {
+    type DomainStateRevisionPayload,
+    fetchMolBioNgsDomainState,
+    initializeMolBioNgsDomainState,
+    saveMolBioNgsStateRevision,
+} from '../../lib/api';
+import ExperimentReferenceLinks from './ExperimentReferenceLinks';
 
 interface DomainWorkflowOperatorProps {
     projectId: string;
@@ -50,6 +60,33 @@ const INPUT_CLASS = 'w-full rounded-md border border-border-primary bg-surface p
 const BUTTON_CLASS = 'rounded-md border border-border-primary bg-surface-secondary px-3 py-2 text-sm font-medium text-content-primary hover:border-primary/60 disabled:cursor-not-allowed disabled:opacity-40';
 const PRIMARY_BUTTON_CLASS = 'rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40';
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'awaiting_input']);
+
+const EMPTY_DOMAIN_STATE_PAYLOAD: DomainStateRevisionPayload = {
+    schema: 'bms.molbio-ngs.domain-state-revision.v1',
+    design: {
+        sample_revision_ids: [],
+        conditions: [],
+        replicates: [],
+        expected_molecule_roles: [],
+    },
+    reference_policy: {
+        required_roles: [],
+        coordinate_policy: 'exact_revision',
+    },
+    acquisition_policy: {
+        platform: 'none',
+        required_terminal_manifest: false,
+    },
+    analysis_policy: {
+        allowed_workflow_ids: [],
+        required_manifest_schemas: [],
+    },
+    assessment_policy: {
+        rule_id: 'server-owned-rule',
+        completion_is_scientific_pass: false,
+    },
+    notes: 'Initial empty state for a Project Manager governed Domain workflow.',
+};
 
 interface SelectedPreparation {
     preparation: DomainWorkflowPreparation;
@@ -1401,6 +1438,10 @@ export default function DomainWorkflowOperator({
 }: DomainWorkflowOperatorProps) {
     const queryClient = useQueryClient();
     const scope = [projectId, globalExperimentId, domainExperimentId] as const;
+    const routeParameters = new URLSearchParams(window.location.search);
+    const routedCloneAction = routeParameters.get('run_group_action') === 'clone';
+    const routedCloneRunId = routedCloneAction ? routeParameters.get('source_run_id')?.trim() ?? '' : '';
+    const routedCloneAttemptId = routedCloneAction ? routeParameters.get('source_attempt_id')?.trim() ?? '' : '';
     const [selectedPlanId, setSelectedPlanId] = useState('');
     const [selectedPlanRevisionId, setSelectedPlanRevisionId] = useState('');
     const [planName, setPlanName] = useState('');
@@ -1421,6 +1462,11 @@ export default function DomainWorkflowOperator({
     const [activeRunGroupId, setActiveRunGroupId] = useState(initialRunGroupId?.trim() ?? '');
     const [runGroupLookupId, setRunGroupLookupId] = useState(initialRunGroupId?.trim() ?? '');
     const [cancelReason, setCancelReason] = useState('Operator cancelled from the NGS/MolBio Domain workspace');
+    const [cloneSourceRunId, setCloneSourceRunId] = useState(routedCloneRunId);
+    const [cloneSourceAttemptId, setCloneSourceAttemptId] = useState(routedCloneAttemptId);
+    const [clonePlanName, setClonePlanName] = useState('Cloned Workflow Plan intent');
+    const [cloneChangeSummary, setCloneChangeSummary] = useState('Clone exact immutable run intent for revision');
+    const [cloneReceipt, setCloneReceipt] = useState<RunCloneReceipt | null>(null);
     const [resultSurfaces, setResultSurfaces] = useState<Record<string, DomainResultSurface>>({});
     const selectionAuthorityKey = JSON.stringify([
         projectId,
@@ -1439,7 +1485,11 @@ export default function DomainWorkflowOperator({
 
     useEffect(() => {
         setRetryPreparationByRunId({});
-    }, [activeRunGroupId]);
+        const initialGroup = initialRunGroupId?.trim() ?? '';
+        setCloneSourceRunId(activeRunGroupId === initialGroup ? routedCloneRunId : '');
+        setCloneSourceAttemptId(activeRunGroupId === initialGroup ? routedCloneAttemptId : '');
+        setCloneReceipt(null);
+    }, [activeRunGroupId, initialRunGroupId, routedCloneAttemptId, routedCloneRunId]);
 
     const removeSelectedPreparation = (preparationId: string) => {
         setSelectedPreparations((current) => current.filter(
@@ -1539,7 +1589,10 @@ export default function DomainWorkflowOperator({
             setSelectedPlanId('');
             return;
         }
-        if (!plans.some((plan) => plan.plan_id === selectedPlanId)) setSelectedPlanId(plans[0].plan_id);
+        if (!plans.some((plan) => plan.plan_id === selectedPlanId)) {
+            const preferred = plans.find((plan) => Boolean(plan.current_revision_id) || (plan.draft_generation ?? 0) > 0) ?? plans[0];
+            setSelectedPlanId(preferred.plan_id);
+        }
     }, [plansQuery.data?.items, selectedPlanId]);
 
     useEffect(() => {
@@ -1600,8 +1653,33 @@ export default function DomainWorkflowOperator({
     };
 
     const initializeBindingMutation = useMutation({
-        mutationFn: () => initializeNgsMolBioBinding(...scope, domainRevisionId as string),
-        onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['ngs-molbio-binding', ...scope] }),
+        mutationFn: async () => {
+            if (!domainRevisionId) throw new Error('The exact Domain revision is unavailable.');
+            const bindingStatus = await initializeNgsMolBioBinding(...scope, domainRevisionId);
+            if (bindingStatus.provisioning_state !== 'ready') {
+                throw new Error('The managed connector is still establishing binding authority. Refresh and retry after it is ready.');
+            }
+            const state = await initializeMolBioNgsDomainState(domainExperimentId, {
+                global_domain_experiment_revision_id: domainRevisionId,
+                idempotency_key: `project-manager-state-init:${domainExperimentId}:${domainRevisionId}`,
+            });
+            if (state.current_state_revision_id) return state;
+            await saveMolBioNgsStateRevision(domainExperimentId, {
+                global_domain_experiment_revision_id: domainRevisionId,
+                expected_head_generation: state.head_generation,
+                parent_revision_id: null,
+                idempotency_key: `project-manager-state-revision:${domainExperimentId}:${domainRevisionId}`,
+                payload: EMPTY_DOMAIN_STATE_PAYLOAD,
+                members: [],
+            });
+            return fetchMolBioNgsDomainState(domainExperimentId);
+        },
+        onSuccess: async () => Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['ngs-molbio-binding', ...scope] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-project-domain-experiments', projectId] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-domain-state', domainExperimentId] }),
+            queryClient.invalidateQueries({ queryKey: ['molbio-ngs-state-revisions', domainExperimentId] }),
+        ]),
     });
     const reverifyBindingMutation = useMutation({
         mutationFn: () => reverifyNgsMolBioBinding(...scope, domainRevisionId as string, binding?.binding_revision_id as string),
@@ -1638,7 +1716,14 @@ export default function DomainWorkflowOperator({
             ) {
                 throw new Error('Workflow draft readback lacks the closed server-authored workflow envelope.');
             }
-            const payload = { ...draft, parameters: parameterValues } as JsonObject;
+            const payload = {
+                ...draft,
+                parameters: parameterValues,
+                scheduler: {
+                    ...((isObject(draft.scheduler) ? draft.scheduler : {}) as JsonObject),
+                    params: { ...parameterValues, workflow_adapter: draft.adapter_id },
+                },
+            } as JsonObject;
             return replaceDomainWorkflowPlanDraft(
                 ...scope,
                 selectedPlanId,
@@ -1870,6 +1955,28 @@ export default function DomainWorkflowOperator({
             setRunGroupLookupId(group.run_group_id);
         },
     });
+    const cloneMutation = useMutation({
+        mutationFn: async () => {
+            if (!canMutate) throw new Error(mutationBlocker ?? 'Mutation authority is unavailable.');
+            const group = runGroupQuery.data;
+            if (!group || !domainRevisionId) throw new Error('Load one exact Run Group and current Domain revision.');
+            if (!cloneSourceRunId || !cloneSourceAttemptId) throw new Error('Select one exact source run and attempt.');
+            if (!clonePlanName.trim() || !cloneChangeSummary.trim()) throw new Error('Plan name and change summary are required.');
+            return cloneDomainRunIntent(...scope, group.run_group_id, {
+                expected_run_group_generation: group.generation,
+                source_run_id: cloneSourceRunId,
+                source_attempt_id: cloneSourceAttemptId,
+                new_workflow_name: clonePlanName.trim(),
+                change_summary: cloneChangeSummary.trim(),
+                expected_domain_revision_id: domainRevisionId,
+            });
+        },
+        onSuccess: (receipt) => {
+            setCloneReceipt(receipt);
+            void queryClient.invalidateQueries({ queryKey: ['domain-workflow-plans', ...scope] });
+            setSelectedPlanId(receipt.new_workflow_plan_id);
+        },
+    });
     const cancelMutation = useMutation({
         mutationFn: () => {
             const group = runGroupQuery.data as DomainRunGroup;
@@ -1889,6 +1996,17 @@ export default function DomainWorkflowOperator({
     const selectedPlan = planQuery.data;
     const selectedRevision = revisionsQuery.data?.items.find((revision) => revision.revision_id === selectedPlanRevisionId) ?? null;
     const runGroup = runGroupQuery.data;
+    const cloneSourceRun = runGroup?.runs.find((run) => run.run_id === cloneSourceRunId) ?? null;
+    const cloneSourceAttempt = cloneSourceRun?.attempts.find((attempt) => attempt.attempt_id === cloneSourceAttemptId) ?? null;
+    const cloneBlocker = !runGroup
+        ? 'Load one exact Run Group.'
+        : !domainRevisionId
+            ? 'The exact current Domain revision is unavailable.'
+            : !cloneSourceRun || !cloneSourceAttempt
+                ? 'Select one exact source run and attempt.'
+                : !clonePlanName.trim() || !cloneChangeSummary.trim()
+                    ? 'Plan name and change summary are required.'
+                    : null;
     const retryEligibleRuns = eligibleFailedRuns(runGroup);
     const retryBlocker = retryPreparationMappingError(
         runGroup,
@@ -1930,6 +2048,7 @@ export default function DomainWorkflowOperator({
         ?? launchMutation.error
         ?? retryMutation.error
         ?? resubmitMutation.error
+        ?? cloneMutation.error
         ?? cancelMutation.error
         ?? reopenResultMutation.error;
 
@@ -1963,6 +2082,7 @@ export default function DomainWorkflowOperator({
                     </span>
                 </div>
                 <ErrorBanner error={bindingQuery.error} />
+                <ErrorBanner error={initializeBindingMutation.error} />
             </Panel>
 
             <ErrorBanner error={activeError ?? draftError} />
@@ -2201,6 +2321,13 @@ export default function DomainWorkflowOperator({
                     <Link className={BUTTON_CLASS} to={projectReturnUri}>Return to Project</Link>
                 </div>
                 <ErrorBanner error={runGroupQuery.error} />
+                <div className="mt-4">
+                    <ExperimentReferenceLinks
+                        domainExperimentId={domainExperimentId}
+                        stateRevisionId={selectedStateRevisionId || currentStateRevisionId}
+                        title="Exact molecular references for this Domain Plans/Runs context"
+                    />
+                </div>
                 {runGroup && (
                     <div className="mt-4 space-y-3">
                         <dl className="grid gap-2 md:grid-cols-4">
@@ -2232,6 +2359,63 @@ export default function DomainWorkflowOperator({
                                 </div>
                             </div>
                         ))}
+                        <div className="rounded-md border border-border-primary bg-surface p-3">
+                            <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">Clone exact run intent into a fresh Plan draft</h4>
+                            <p className="mt-1 text-xs text-content-secondary">
+                                This operation imports the exact immutable source Plan payload and pinned capability contract into a new generation-0 editable draft. It creates no preparation, launch context, dispatch, or Job.
+                            </p>
+                            <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <label className="text-xs font-semibold text-content-secondary">Source Workflow Run
+                                    <select
+                                        className={`${INPUT_CLASS} mt-1`}
+                                        value={cloneSourceRunId}
+                                        onChange={(event) => {
+                                            setCloneSourceRunId(event.target.value);
+                                            setCloneSourceAttemptId('');
+                                            setCloneReceipt(null);
+                                        }}
+                                    >
+                                        <option value="">Select exact run</option>
+                                        {runGroup.runs.filter((run) => run.attempts.length > 0).map((run) => (
+                                            <option key={run.run_id} value={run.run_id}>{run.run_id} · {run.state}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Source Attempt
+                                    <select
+                                        className={`${INPUT_CLASS} mt-1`}
+                                        value={cloneSourceAttemptId}
+                                        onChange={(event) => { setCloneSourceAttemptId(event.target.value); setCloneReceipt(null); }}
+                                        disabled={!cloneSourceRun}
+                                    >
+                                        <option value="">Select exact attempt</option>
+                                        {(cloneSourceRun?.attempts ?? []).map((attempt) => (
+                                            <option key={attempt.attempt_id} value={attempt.attempt_id}>#{attempt.attempt_number} · {attempt.attempt_id} · {attempt.state}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Fresh Plan name
+                                    <input className={`${INPUT_CLASS} mt-1`} value={clonePlanName} onChange={(event) => setClonePlanName(event.target.value)} />
+                                </label>
+                                <label className="text-xs font-semibold text-content-secondary">Change summary
+                                    <input className={`${INPUT_CLASS} mt-1`} value={cloneChangeSummary} onChange={(event) => setCloneChangeSummary(event.target.value)} />
+                                </label>
+                            </div>
+                            {cloneBlocker && <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">Clone blocked: {cloneBlocker}</p>}
+                            <button type="button" className={`${PRIMARY_BUTTON_CLASS} mt-3`} disabled={!canMutate || Boolean(cloneBlocker) || cloneMutation.isPending} onClick={() => cloneMutation.mutate()}>
+                                {cloneMutation.isPending ? 'Cloning exact intent…' : 'Clone into fresh editable Plan draft'}
+                            </button>
+                            {cloneReceipt && (
+                                <div className="mt-3 grid gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 md:grid-cols-3">
+                                    <KeyValue label="Clone receipt" value={cloneReceipt.clone_receipt_id} />
+                                    <KeyValue label="Fresh Plan" value={cloneReceipt.new_workflow_plan_id} />
+                                    <KeyValue label="Fresh draft" value={cloneReceipt.new_draft_id} />
+                                    <KeyValue label="Copied payload digest" value={cloneReceipt.copied_payload_sha256} />
+                                    <KeyValue label="Lineage edge" value={cloneReceipt.lineage_edge_id} />
+                                    <KeyValue label="Receipt digest" value={cloneReceipt.receipt_sha256} />
+                                </div>
+                            )}
+                        </div>
                         {runGroup.state === 'failed' && (
                             <div className="rounded-md border border-border-primary bg-surface p-3">
                                 <h4 className="text-xs font-semibold uppercase tracking-wide text-content-muted">Complete retry preparation mapping</h4>
@@ -2304,7 +2488,7 @@ export default function DomainWorkflowOperator({
                                                 {surface?.route && (
                                                     <Link
                                                         className={BUTTON_CLASS}
-                                                        to={contextHref(surface.route, {
+                                                        to={contextHref(internalRouteHref(surface.route), {
                                                             launch_context_id: launchContextId,
                                                             run_group_id: runGroup.run_group_id,
                                                         })}

@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.final-acceptance.v4",
+  "title": "Project Manager final Development acceptance receipt v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_commit",
+    "source_tree",
+    "deployed_build_sha256",
+    "shared_package_acceptance_receipt",
+    "development_runtime_receipt",
+    "exact_tree_review_receipt",
+    "health_acceptance_receipt",
+    "restart_reopen_receipt",
+    "browser_acceptance_receipt",
+    "operator_visual_acceptance_receipt",
+    "accepted_at",
+    "finalizer_assertion",
+    "self_digest_algorithm",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.final-acceptance.v4"
+    },
+    "source_commit": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "source_tree": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "deployed_build_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "shared_package_acceptance_receipt": {
+      "$ref": "#/$defs/sharedPackagePointer"
+    },
+    "development_runtime_receipt": {
+      "$ref": "#/$defs/developmentRuntimePointer"
+    },
+    "exact_tree_review_receipt": {
+      "$ref": "#/$defs/exactTreeReviewPointer"
+    },
+    "health_acceptance_receipt": {
+      "$ref": "#/$defs/healthPointer"
+    },
+    "restart_reopen_receipt": {
+      "$ref": "#/$defs/restartPointer"
+    },
+    "browser_acceptance_receipt": {
+      "$ref": "#/$defs/browserPointer"
+    },
+    "operator_visual_acceptance_receipt": {
+      "$ref": "#/$defs/operatorVisualPointer"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "content_sha256": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ],
+      "description": "SHA-256 of RFC 8785 UTF-8 for the complete signed document after all assertions are inserted, with only content_sha256 omitted."
+    },
+    "finalizer_assertion": {
+      "allOf": [
+        {
+          "$ref": "bms.project-manager.operational-evidence.v2#/$defs/writerAssertion"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "const": "bms-pm12-finalizer-v1"
+            }
+          },
+          "required": [
+            "principal_id"
+          ]
+        }
+      ]
+    },
+    "self_digest_algorithm": {
+      "const": "sha256-rfc8785-complete-signed-document-omit-self-digest-v2"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "pointerBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "sharedPackagePointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.shared-global-package-acceptance.v5"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "developmentRuntimePointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.project-manager.development-runtime.v3"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "exactTreeReviewPointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.project-manager.exact-tree-review.v3"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "healthPointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.project-manager.health-acceptance.v3"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "restartPointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.project-manager.restart-reopen-acceptance.v3"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "browserPointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.project-manager.browser-acceptance.v3"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    },
+    "operatorVisualPointer": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/pointerBase"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receipt_schema_id": {
+              "const": "bms.operator-visual-acceptance.v4"
+            }
+          },
+          "required": [
+            "receipt_schema_id"
+          ]
+        }
+      ]
+    }
+  }
+}

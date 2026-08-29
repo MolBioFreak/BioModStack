@@ -39,13 +39,17 @@ def _effective(*, model_position: int = 9, selected_model_number: int = 1):
             "entity_instance_id": "entity-1",
             "source_entity_id": "1",
             "label_asym_id": "A",
+            "label_seq_id": 10,
             "auth_asym_id": "A",
             "auth_seq_id": 10,
             "insertion_code": "",
             "sequence_index": 10,
             "wt": "L",
             "pdb_chain_id": "A",
+            "pdb_residue_id": 10,
+            "pdb_insertion_code": "",
             "model_position": model_position,
+            "residue_name": "LEU",
         }
     )
     chain = FrustraMPNNResolvedChainSelection.model_validate(
@@ -114,7 +118,7 @@ def test_historical_v1_validation_still_rejects_runtime_or_hash_tampering() -> N
         module.validate_configuration(tampered_runtime)
 
 
-def test_execution_configuration_v2_is_one_exact_per_request_receipt() -> None:
+def test_execution_configuration_v3_is_one_exact_per_request_receipt() -> None:
     module = _configuration()
     from services.frustrampnn.settings import runtime_identity_sha256
 
@@ -122,10 +126,10 @@ def test_execution_configuration_v2_is_one_exact_per_request_receipt() -> None:
     receipt = module.execution_configuration(effective)
     payload = receipt.model_dump(mode="json")
 
-    assert isinstance(receipt, module.FrustraMPNNExecutionConfigurationV2)
-    assert receipt.configuration_id == "frustrampnn_execution_configuration_v2"
+    assert isinstance(receipt, module.FrustraMPNNExecutionConfigurationV3)
+    assert receipt.configuration_id == "frustrampnn_execution_configuration_v3"
     assert receipt.schema_name == "frustrampnn_execution_configuration"
-    assert receipt.schema_version == 2
+    assert receipt.schema_version == 3
     assert receipt.effective_settings == effective
     assert receipt.requested_settings_sha256 == effective.settings_sha256
     assert receipt.effective_settings_sha256 == effective.effective_settings_sha256
@@ -167,7 +171,7 @@ def test_execution_configuration_requires_one_validated_effective_object() -> No
     payload = effective.model_dump(mode="json")
     payload["effective_settings_sha256"] = "0" * 64
     with pytest.raises(ValidationError, match="effective settings SHA-256"):
-        module.FrustraMPNNExecutionConfigurationV2.model_validate(
+        module.FrustraMPNNExecutionConfigurationV3.model_validate(
             {
                 **module.execution_configuration(effective).model_dump(mode="json"),
                 "effective_settings": payload,

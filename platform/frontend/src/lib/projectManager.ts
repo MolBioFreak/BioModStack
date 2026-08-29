@@ -129,6 +129,37 @@ export interface DomainRunGroup {
     updated_at: string;
 }
 
+export interface RunCloneReceipt {
+    schema: 'bms.run-clone-receipt.v1';
+    clone_receipt_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    domain_experiment_revision_id: string;
+    source_run_group_id: string;
+    source_run_id: string;
+    source_attempt_id: string;
+    source_preparation_id: string;
+    source_workflow_plan_id: string;
+    source_workflow_revision_id: string;
+    source_capability_contract_sha256: string;
+    source_requested_settings_sha256: string;
+    source_effective_settings_sha256: string;
+    new_workflow_plan_id: string;
+    new_draft_id: string;
+    new_draft_generation: 0;
+    copied_payload_sha256: string;
+    lineage_edge_id: string;
+    lineage_mode: 'derived_from';
+    lineage_source_resource_id: string;
+    lineage_target_resource_id: string;
+    lineage_edge_key: 'cloned-plan-intent';
+    normalized_request_sha256: string;
+    created_by: string;
+    created_at: string;
+    receipt_sha256: string;
+}
+
 export interface RunControlCommandDocument {
     schema: 'bms.run-control-command.v1';
     command_id: string;
@@ -145,15 +176,7 @@ export interface RunControlCommandDocument {
     conflict?: JsonObject;
 }
 
-export interface DomainResultSurface {
-    schema: string;
-    receipt_id: string;
-    route: string | null;
-    readiness: string;
-    surface_kind: string;
-    native_summary: JsonObject;
-    available_actions: string[];
-}
+export type DomainResultSurface = ResultSurface;
 
 export type DomainCapabilityLaunchMode = 'managed_materialization' | 'typed_launcher_handoff';
 
@@ -335,11 +358,13 @@ export interface ProjectSearchOptions {
     archive?: 'active' | 'archived' | 'all';
     cursor?: string;
     limit?: number;
+    projectScope?: 'global' | 'ngs_molbio_local' | 'all';
     signal?: AbortSignal;
 }
 
 export interface ProjectHeadSummary {
     id: string;
+    project_scope: 'global' | 'ngs_molbio_local';
     name: string;
     objective: string;
     lifecycle_state: string;
@@ -398,6 +423,32 @@ export interface ProjectMapEdge {
     accessible_label: string;
 }
 
+export interface InternalRoute {
+    template_id: string;
+    path: string;
+    query: Record<string, string>;
+}
+
+export function internalRouteHref(route: InternalRoute): string {
+    const query = new URLSearchParams(route.query).toString();
+    return query ? `${route.path}?${query}` : route.path;
+}
+
+export interface TypedPayload {
+    schema_id: string;
+    content_sha256: string;
+    canonical_size_bytes: number;
+    payload: JsonObject;
+}
+
+export interface ResultComparison {
+    state: 'available' | 'not_applicable' | 'incompatible' | 'unavailable';
+    reason: string | null;
+    authority: JsonObject | null;
+}
+
+export type ResultLineageEdgeKey = 'cloned-plan-intent' | `terminal-output:${string}`;
+
 export interface ResultSurface {
     schema: 'bms.result-surface.v1';
     receipt_id: string;
@@ -406,15 +457,17 @@ export interface ResultSurface {
     contract_id: string;
     content_digest: string;
     surface_kind: ResultSurfaceKind;
-    route: string | null;
+    route: InternalRoute | null;
     readiness: ResultReadiness;
-    native_summary: JsonObject;
+    native_summary: TypedPayload;
     scientific_acceptance: {
         state: ScientificAcceptanceState;
         reason: string | null;
     };
-    provenance: JsonObject;
+    provenance: TypedPayload;
+    comparison: ResultComparison;
     available_actions: string[];
+    lineage_edge_key?: ResultLineageEdgeKey;
 }
 
 export interface ProjectSelection {
@@ -566,6 +619,11 @@ export interface AdapterSearchResult {
     next_cursor: string | null;
 }
 
+export interface AdapterReceiptIssueResult {
+    receipt_id: string;
+    receipt: JsonObject;
+}
+
 export interface AttachExistingRequest {
     adapter_id: string;
     entity_id: string;
@@ -614,6 +672,7 @@ export interface LaunchContext {
     canonical_job_id?: string | null;
     recovery_job_id?: string | null;
     binding_receipt?: JsonObject | null;
+    pinned_scheduler?: JsonObject | null;
     issued_at: string;
     expires_at: string;
 }
@@ -646,7 +705,7 @@ export interface ProjectSummaryOptions {
     signal?: AbortSignal;
 }
 
-export interface ProjectCreateRequest {
+export interface ProjectV1CreateRequest {
     schema: 'bms.project.v1';
     name: string;
     description?: string;
@@ -659,9 +718,53 @@ export interface ProjectCreateRequest {
     target_end_date?: string | null;
     created_by?: string | null;
     change_summary?: string;
+    project_scope?: 'global' | 'ngs_molbio_local';
 }
 
-export interface GlobalExperimentCreateRequest {
+export interface ProjectV2CreateRequest {
+    schema: 'bms.project.v2';
+    project_scope: 'global' | 'ngs_molbio_local';
+    name: string;
+    description?: string;
+    research_objective?: string;
+    owner?: string | null;
+    contributors?: string[];
+    tags?: string[];
+    status?: 'draft' | 'active' | 'on_hold' | 'completed' | 'archived';
+    start_date?: string | null;
+    target_end_date?: string | null;
+    created_by?: string | null;
+    change_summary?: string;
+}
+
+export type ProjectCreateRequest = ProjectV1CreateRequest | ProjectV2CreateRequest;
+
+export type ProjectUpgradeRequest = ProjectV2CreateRequest & { expected_head_generation: number };
+
+export interface NgsMolBioProjectLink {
+    schema: 'bms.ngs-molbio-project-link.v1';
+    link_id: string;
+    local_project_id: string;
+    global_project_id: string;
+    experiment_ids: string[];
+    result_ids: string[];
+    change_summary: string;
+    created_at: string;
+}
+
+export interface NgsMolBioShareableResult {
+    result_receipt_id: string;
+    experiment_id: string;
+    store_id: string;
+    entity_kind: string;
+    entity_id: string;
+    generation_or_revision: string;
+    content_digest: string;
+    availability: string;
+    created_at: string;
+}
+
+export interface GlobalExperimentV1CreateRequest {
     schema: 'bms.global-experiment.v1';
     name: string;
     objective?: string;
@@ -675,7 +778,30 @@ export interface GlobalExperimentCreateRequest {
     change_summary?: string;
 }
 
-export interface DomainExperimentCreateRequest {
+export interface GlobalExperimentV2CreateRequest {
+    schema: 'bms.global-experiment.v2';
+    name: string;
+    objective?: string;
+    scientific_question?: string;
+    hypothesis?: string | null;
+    description?: string;
+    status?: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked' | 'archived';
+    priority?: 'low' | 'normal' | 'high' | 'critical';
+    tags?: string[];
+    shared_source_receipt_ids?: string[];
+    shared_dataset_ids?: string[];
+    comparison_plan?: string | null;
+    success_criteria?: string[];
+    review_summary?: string | null;
+    conclusion?: string | null;
+    change_summary?: string;
+}
+
+export type GlobalExperimentCreateRequest = GlobalExperimentV1CreateRequest | GlobalExperimentV2CreateRequest;
+
+export type GlobalExperimentUpgradeRequest = GlobalExperimentV2CreateRequest & { expected_head_generation: number };
+
+export interface DomainExperimentV2CreateRequest {
     schema: 'bms.domain-experiment.v2';
     domain_kind: 'protein_in_silico' | 'ngs_molbio';
     domain_contract_version: '2';
@@ -688,6 +814,22 @@ export interface DomainExperimentCreateRequest {
     change_summary: string;
     domain_payload: JsonObject;
 }
+
+export interface DomainExperimentV4CreateRequest {
+    schema: 'bms.domain-experiment.v4';
+    domain_kind: 'protein_in_silico' | 'ngs_molbio';
+    domain_contract_version: '3';
+    name: string;
+    objective: string;
+    status: 'draft' | 'planned' | 'active' | 'analysis' | 'review' | 'completed' | 'blocked';
+    tags: string[];
+    source_receipt_ids: string[];
+    dataset_revision_ids: string[];
+    change_summary: string;
+    domain_payload: JsonObject;
+}
+
+export type DomainExperimentCreateRequest = DomainExperimentV2CreateRequest | DomainExperimentV4CreateRequest;
 
 export interface HierarchyMutationResult {
     id: string;
@@ -725,6 +867,41 @@ export interface ResearchRecordRequest {
     author?: string | null;
     source_receipt_ids?: string[];
     supersedes_record_id?: string | null;
+}
+
+export interface FrustraMpnnExperimentScopeItem {
+    result_receipt_id: string;
+    parent_job_id: string | null;
+    invocation_id: string | null;
+    candidate_id: string;
+    operator_label: string;
+    source_identity: {
+        design_id: string | null;
+        artifact_id: string;
+        artifact_sha256: string;
+        candidate_id: string;
+    };
+    state: 'completed' | 'failed' | 'missing' | 'skipped';
+    diagnostic: string | null;
+    statistics_analysis: {
+        state: 'not_started' | 'queued' | 'running' | 'completed' | 'failed';
+        diagnostic: string | null;
+    };
+    manifest_sha256: string | null;
+    content_digest: string;
+    reopen_uri: string | null;
+}
+
+export interface FrustraMpnnExperimentScope {
+    schema: 'bms.project-frustrampnn-result-scope.v1';
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    global_experiment_revision_id: string;
+    domain_revision_id: string;
+    items: FrustraMpnnExperimentScopeItem[];
+    count: number;
+    bounded: true;
 }
 
 const segment = (value: string) => encodeURIComponent(value);
@@ -769,6 +946,17 @@ function requireBoolean(value: unknown, label: string): boolean {
 function requireLiteral<T extends string>(value: unknown, label: string, values: readonly T[]): T {
     if (typeof value !== 'string' || !values.includes(value as T)) throw new Error(`${label} has an unsupported value.`);
     return value as T;
+}
+
+function requireResultLineageEdgeKey(value: unknown, label: string): ResultLineageEdgeKey {
+    if (value === 'cloned-plan-intent') return value;
+    if (
+        typeof value === 'string'
+        && /^terminal-output:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
+    ) {
+        return value as `terminal-output:${string}`;
+    }
+    throw new Error(`${label} has an unsupported value.`);
 }
 
 function requireArray<T>(value: unknown, label: string, parse: (item: unknown, itemLabel: string) => T): T[] {
@@ -841,8 +1029,32 @@ function parseReconciliation(value: unknown, label: string): Reconciliation {
 export function parseResultSurface(value: unknown, label = 'result surface'): ResultSurface {
     const record = exactRecord(value, label, [
         'schema', 'receipt_id', 'entity_kind', 'entity_id', 'contract_id', 'content_digest', 'surface_kind',
-        'route', 'readiness', 'native_summary', 'scientific_acceptance', 'provenance', 'available_actions',
-    ]);
+        'route', 'readiness', 'native_summary', 'scientific_acceptance', 'provenance', 'comparison', 'available_actions',
+    ], ['lineage_edge_key']);
+    const route = record.route === null ? null : exactRecord(record.route, `${label}.route`, ['template_id', 'path', 'query']);
+    const query = route === null ? null : exactRecord(route.query, `${label}.route.query`, Object.keys(requireJsonObject(route.query, `${label}.route.query`)));
+    const parsedQuery: Record<string, string> = {};
+    if (query) for (const [key, item] of Object.entries(query)) parsedQuery[key] = requireString(item, `${label}.route.query.${key}`);
+    const typedPayload = (input: unknown, payloadLabel: string): TypedPayload => {
+        const payload = exactRecord(input, payloadLabel, ['schema_id', 'content_sha256', 'canonical_size_bytes', 'payload']);
+        return {
+            schema_id: requireString(payload.schema_id, `${payloadLabel}.schema_id`),
+            content_sha256: requireSha256(payload.content_sha256, `${payloadLabel}.content_sha256`),
+            canonical_size_bytes: requireInteger(payload.canonical_size_bytes, `${payloadLabel}.canonical_size_bytes`),
+            payload: requireJsonObject(payload.payload, `${payloadLabel}.payload`),
+        };
+    };
+    const comparison = exactRecord(record.comparison, `${label}.comparison`, ['state', 'reason', 'authority']);
+    let comparisonAuthority: JsonObject | null = null;
+    if (comparison.authority !== null) {
+        const authority = exactRecord(comparison.authority, `${label}.comparison.authority`, ['adapter_id', 'adapter_version', 'receipt_id', 'receipt_sha256']);
+        comparisonAuthority = {
+            adapter_id: requireString(authority.adapter_id, `${label}.comparison.authority.adapter_id`),
+            adapter_version: requireString(authority.adapter_version, `${label}.comparison.authority.adapter_version`),
+            receipt_id: requireString(authority.receipt_id, `${label}.comparison.authority.receipt_id`),
+            receipt_sha256: requireSha256(authority.receipt_sha256, `${label}.comparison.authority.receipt_sha256`),
+        };
+    }
     const acceptance = exactRecord(record.scientific_acceptance, `${label}.scientific_acceptance`, ['state', 'reason']);
     return {
         schema: requireLiteral(record.schema, `${label}.schema`, ['bms.result-surface.v1']),
@@ -852,15 +1064,31 @@ export function parseResultSurface(value: unknown, label = 'result surface'): Re
         contract_id: requireString(record.contract_id, `${label}.contract_id`),
         content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
         surface_kind: requireLiteral(record.surface_kind, `${label}.surface_kind`, ['protein_design', 'molecular_dynamics', 'conformational_mapping', 'frustrampnn', 'ngs', 'molbio', 'artifact', 'unsupported']),
-        route: requireNullableString(record.route, `${label}.route`),
+        route: route === null ? null : {
+            template_id: requireString(route.template_id, `${label}.route.template_id`),
+            path: (() => {
+                const path = requireString(route.path, `${label}.route.path`);
+                if (!path.startsWith('/') || path.startsWith('//')) throw new Error(`${label}.route.path must be a same-origin path.`);
+                return path;
+            })(),
+            query: parsedQuery,
+        },
         readiness: requireLiteral(record.readiness, `${label}.readiness`, ['running', 'partial', 'ready', 'failed', 'blocked', 'unsupported']),
-        native_summary: requireJsonObject(record.native_summary, `${label}.native_summary`),
+        native_summary: typedPayload(record.native_summary, `${label}.native_summary`),
         scientific_acceptance: {
             state: requireLiteral(acceptance.state, `${label}.scientific_acceptance.state`, ['passed', 'failed', 'review', 'unavailable', 'not_applicable']),
             reason: requireNullableString(acceptance.reason, `${label}.scientific_acceptance.reason`),
         },
-        provenance: requireJsonObject(record.provenance, `${label}.provenance`),
+        provenance: typedPayload(record.provenance, `${label}.provenance`),
+        comparison: {
+            state: requireLiteral(comparison.state, `${label}.comparison.state`, ['available', 'not_applicable', 'incompatible', 'unavailable']),
+            reason: requireNullableString(comparison.reason, `${label}.comparison.reason`),
+            authority: comparisonAuthority,
+        },
         available_actions: requireArray(record.available_actions, `${label}.available_actions`, (item, itemLabel) => requireLiteral(item, itemLabel, ['open', 'download', 'compare', 'attach_evidence'])),
+        ...(record.lineage_edge_key === undefined ? {} : {
+            lineage_edge_key: requireResultLineageEdgeKey(record.lineage_edge_key, `${label}.lineage_edge_key`),
+        }),
     };
 }
 
@@ -1007,7 +1235,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         'adapter_versions', 'reconciliation', 'counts', 'status_summary', 'recent_activity', 'result_previews', 'pagination',
         'project', 'tree', 'map', 'selection', 'runs', 'warnings', 'allowed_actions',
     ]);
-    const project = exactRecord(record.project, `${label}.project`, ['id', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
+    const project = exactRecord(record.project, `${label}.project`, ['id', 'project_scope', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
     const tree = exactRecord(record.tree, `${label}.tree`, ['nodes']);
     const map = exactRecord(record.map, `${label}.map`, ['focus_node_key', 'nodes', 'edges', 'truncated', 'next_cursor']);
     const runs = exactRecord(record.runs, `${label}.runs`, ['items', 'next_cursor']);
@@ -1055,6 +1283,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
         },
         project: {
             id: requireString(project.id, `${label}.project.id`),
+            project_scope: requireLiteral(project.project_scope, `${label}.project.project_scope`, ['global', 'ngs_molbio_local']),
             name: requireString(project.name, `${label}.project.name`),
             objective: requireString(project.objective, `${label}.project.objective`),
             lifecycle_state: requireString(project.lifecycle_state, `${label}.project.lifecycle_state`),
@@ -1083,7 +1312,7 @@ export function parseLaunchContext(value: unknown): LaunchContext {
         value,
         label,
         ['schema', 'launch_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'workflow_id', 'workflow_revision_id', 'pinned_gpu', 'return_uri', 'source_receipt_id', 'state', 'issued_at', 'expires_at'],
-        ['preparation_id', 'run_attempt_id', 'normalized_request_sha256', 'validation_receipt_id', 'validation_receipt_sha256', 'canonical_job_id', 'recovery_job_id', 'binding_receipt'],
+        ['preparation_id', 'run_attempt_id', 'normalized_request_sha256', 'validation_receipt_id', 'validation_receipt_sha256', 'canonical_job_id', 'recovery_job_id', 'binding_receipt', 'pinned_scheduler'],
     );
     const pinnedGpu = record.pinned_gpu === null ? null : requireInteger(record.pinned_gpu, `${label}.pinned_gpu`);
     if (pinnedGpu !== null && pinnedGpu < 0) throw new Error(`${label}.pinned_gpu must be non-negative.`);
@@ -1107,6 +1336,7 @@ export function parseLaunchContext(value: unknown): LaunchContext {
         canonical_job_id: record.canonical_job_id === undefined ? undefined : requireNullableString(record.canonical_job_id, `${label}.canonical_job_id`),
         recovery_job_id: record.recovery_job_id === undefined ? undefined : requireNullableString(record.recovery_job_id, `${label}.recovery_job_id`),
         binding_receipt: record.binding_receipt === undefined ? undefined : record.binding_receipt === null ? null : requireJsonObject(record.binding_receipt, `${label}.binding_receipt`),
+        pinned_scheduler: record.pinned_scheduler === undefined ? undefined : record.pinned_scheduler === null ? null : requireJsonObject(record.pinned_scheduler, `${label}.pinned_scheduler`),
         issued_at: requireString(record.issued_at, `${label}.issued_at`),
         expires_at: requireString(record.expires_at, `${label}.expires_at`),
     };
@@ -1188,6 +1418,82 @@ function parseAttachmentReceipt(value: unknown): AttachmentReceipt {
     };
 }
 
+function parseFrustraMpnnExperimentScopeItem(value: unknown, label: string): FrustraMpnnExperimentScopeItem {
+    const record = exactRecord(value, label, [
+        'result_receipt_id', 'parent_job_id', 'invocation_id', 'candidate_id', 'operator_label',
+        'source_identity', 'state', 'diagnostic', 'statistics_analysis',
+        'manifest_sha256', 'content_digest', 'reopen_uri',
+    ]);
+    const sourceIdentity = exactRecord(record.source_identity, `${label}.source_identity`, [
+        'design_id', 'artifact_id', 'artifact_sha256', 'candidate_id',
+    ]);
+    const statisticsAnalysis = exactRecord(record.statistics_analysis, `${label}.statistics_analysis`, ['state', 'diagnostic']);
+    const state = requireLiteral(record.state, `${label}.state`, ['completed', 'failed', 'missing', 'skipped']);
+    const parentJobId = requireNullableString(record.parent_job_id, `${label}.parent_job_id`);
+    const invocationId = requireNullableString(record.invocation_id, `${label}.invocation_id`);
+    const reopenUri = requireNullableString(record.reopen_uri, `${label}.reopen_uri`);
+    const manifestSha256 = record.manifest_sha256 === null
+        ? null
+        : requireSha256(record.manifest_sha256, `${label}.manifest_sha256`);
+    const hasExecution = parentJobId !== null || invocationId !== null || reopenUri !== null;
+    if (hasExecution && (parentJobId === null || invocationId === null || reopenUri === null)) {
+        throw new Error(`${label} execution identity and reopen URI must be supplied together.`);
+    }
+    if ((state === 'completed') !== (manifestSha256 !== null)) {
+        throw new Error(`${label}.manifest_sha256 must exist only for a completed core result.`);
+    }
+    return {
+        result_receipt_id: requireString(record.result_receipt_id, `${label}.result_receipt_id`),
+        parent_job_id: parentJobId,
+        invocation_id: invocationId,
+        candidate_id: requireString(record.candidate_id, `${label}.candidate_id`),
+        operator_label: requireString(record.operator_label, `${label}.operator_label`),
+        source_identity: {
+            design_id: requireNullableString(sourceIdentity.design_id, `${label}.source_identity.design_id`),
+            artifact_id: requireString(sourceIdentity.artifact_id, `${label}.source_identity.artifact_id`),
+            artifact_sha256: requireSha256(sourceIdentity.artifact_sha256, `${label}.source_identity.artifact_sha256`),
+            candidate_id: requireString(sourceIdentity.candidate_id, `${label}.source_identity.candidate_id`),
+        },
+        state,
+        diagnostic: requireNullableString(record.diagnostic, `${label}.diagnostic`),
+        statistics_analysis: {
+            state: requireLiteral(statisticsAnalysis.state, `${label}.statistics_analysis.state`, ['not_started', 'queued', 'running', 'completed', 'failed']),
+            diagnostic: requireNullableString(statisticsAnalysis.diagnostic, `${label}.statistics_analysis.diagnostic`),
+        },
+        manifest_sha256: manifestSha256,
+        content_digest: requireSha256(record.content_digest, `${label}.content_digest`),
+        reopen_uri: reopenUri,
+    };
+}
+
+export function parseFrustraMpnnExperimentScope(value: unknown): FrustraMpnnExperimentScope {
+    const label = 'FrustraMPNN experiment scope';
+    const record = exactRecord(value, label, [
+        'schema', 'project_id', 'global_experiment_id', 'domain_experiment_id',
+        'global_experiment_revision_id', 'domain_revision_id',
+        'items', 'count', 'bounded',
+    ]);
+    const items = requireArray(record.items, `${label}.items`, parseFrustraMpnnExperimentScopeItem);
+    const count = requireInteger(record.count, `${label}.count`);
+    if (count !== items.length || count > 256) {
+        throw new Error(`${label}.count must equal the bounded item cardinality.`);
+    }
+    if (requireBoolean(record.bounded, `${label}.bounded`) !== true) {
+        throw new Error(`${label}.bounded must be true.`);
+    }
+    return {
+        schema: requireLiteral(record.schema, `${label}.schema`, ['bms.project-frustrampnn-result-scope.v1']),
+        project_id: requireString(record.project_id, `${label}.project_id`),
+        global_experiment_id: requireString(record.global_experiment_id, `${label}.global_experiment_id`),
+        domain_experiment_id: requireString(record.domain_experiment_id, `${label}.domain_experiment_id`),
+        global_experiment_revision_id: requireString(record.global_experiment_revision_id, `${label}.global_experiment_revision_id`),
+        domain_revision_id: requireString(record.domain_revision_id, `${label}.domain_revision_id`),
+        items,
+        count,
+        bounded: true,
+    };
+}
+
 export async function listProjects(signal?: AbortSignal): Promise<ProjectListPage> {
     const response = await api.get<ProjectListPage>('/api/projects', { params: { limit: 100 }, signal });
     return response.data;
@@ -1201,6 +1507,7 @@ export async function searchProjects(options: ProjectSearchOptions = {}): Promis
             archive: options.archive ?? 'active',
             cursor: options.cursor,
             limit: options.limit ?? 50,
+            project_scope: options.projectScope ?? 'all',
         },
         signal: options.signal,
     });
@@ -1212,11 +1519,19 @@ export async function getProject(projectId: string, signal?: AbortSignal): Promi
 }
 
 export async function listGlobalExperiments(projectId: string, signal?: AbortSignal): Promise<HierarchyMutationResult[]> {
-    return (await api.get<HierarchyMutationResult[]>(`/api/projects/${segment(projectId)}/experiments`, { signal })).data;
+    const response = await api.get<{ items: HierarchyMutationResult[] }>(
+        `/api/projects/${segment(projectId)}/experiments`,
+        { signal },
+    );
+    return response.data.items;
 }
 
 export async function listDomainExperiments(projectId: string, experimentId: string, signal?: AbortSignal): Promise<HierarchyMutationResult[]> {
-    return (await api.get<HierarchyMutationResult[]>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains`, { signal })).data;
+    const response = await api.get<{ items: HierarchyMutationResult[] }>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains`,
+        { signal },
+    );
+    return response.data.items;
 }
 
 export async function getGlobalExperiment(projectId: string, experimentId: string, signal?: AbortSignal): Promise<HierarchyMutationResult> {
@@ -1225,6 +1540,37 @@ export async function getGlobalExperiment(projectId: string, experimentId: strin
 
 export async function getDomainExperiment(projectId: string, experimentId: string, domainId: string, signal?: AbortSignal): Promise<HierarchyMutationResult> {
     return (await api.get<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}`, { signal })).data;
+}
+
+export async function fetchDomainFrustraMpnnResults(
+    projectId: string,
+    experimentId: string,
+    domainId: string,
+    globalExperimentRevisionId: string,
+    domainRevisionId: string,
+    signal?: AbortSignal,
+): Promise<FrustraMpnnExperimentScope> {
+    const response = await api.get<unknown>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/domains/${segment(domainId)}/frustrampnn-results`,
+        {
+            params: {
+                global_experiment_revision_id: globalExperimentRevisionId,
+                domain_revision_id: domainRevisionId,
+            },
+            signal,
+        },
+    );
+    const parsed = parseFrustraMpnnExperimentScope(response.data);
+    if (
+        parsed.project_id !== projectId
+        || parsed.global_experiment_id !== experimentId
+        || parsed.domain_experiment_id !== domainId
+        || parsed.global_experiment_revision_id !== globalExperimentRevisionId
+        || parsed.domain_revision_id !== domainRevisionId
+    ) {
+        throw new Error('FrustraMPNN experiment scope does not match the requested Project hierarchy.');
+    }
+    return parsed;
 }
 
 export async function getProjectSummary(projectId: string, options: ProjectSummaryOptions = {}): Promise<ProjectManagerReadModel> {
@@ -1265,6 +1611,18 @@ export async function searchAdapterEntities(adapterId: string, query: string, li
         signal,
     });
     return parseAdapterSearchResult(response.data);
+}
+
+export async function issueAdapterReceipt(adapterId: string, entityId: string, projectId: string): Promise<AdapterReceiptIssueResult> {
+    const response = await api.post<unknown>(
+        `/api/domain-adapters/${segment(adapterId)}/entities/${segment(entityId)}/receipt`,
+        { project_id: projectId },
+    );
+    const record = exactRecord(response.data, 'adapter receipt issue result', ['receipt_id', 'receipt']);
+    return {
+        receipt_id: requireString(record.receipt_id, 'adapter receipt issue result.receipt_id'),
+        receipt: requireJsonObject(record.receipt, 'adapter receipt issue result.receipt'),
+    };
 }
 
 export async function attachExistingEntity(
@@ -1313,8 +1671,38 @@ export async function createProject(request: ProjectCreateRequest): Promise<Hier
     return (await api.post<HierarchyMutationResult>('/api/projects', request)).data;
 }
 
+export async function listNgsMolBioProjectLinks(projectId: string, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
+    const response = await api.get<{ items: NgsMolBioProjectLink[] }>(
+        `/api/projects/${segment(projectId)}/ngs-molbio-links`,
+        { signal },
+    );
+    return response.data.items;
+}
+
+export async function listNgsMolBioShareableResults(projectId: string, signal?: AbortSignal): Promise<NgsMolBioShareableResult[]> {
+    const response = await api.get<{ items: NgsMolBioShareableResult[] }>(
+        `/api/projects/${segment(projectId)}/ngs-molbio-shareable-results`,
+        { signal },
+    );
+    return response.data.items;
+}
+
+export async function linkNgsMolBioProject(
+    globalProjectId: string,
+    request: { local_project_id: string; experiment_ids: string[]; result_ids: string[]; change_summary: string },
+): Promise<NgsMolBioProjectLink> {
+    return (await api.post<NgsMolBioProjectLink>(
+        `/api/projects/${segment(globalProjectId)}/ngs-molbio-links`,
+        request,
+    )).data;
+}
+
 export async function updateProject(projectId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
     return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}`, request)).data;
+}
+
+export async function upgradeProject(projectId: string, request: ProjectUpgradeRequest): Promise<HierarchyMutationResult> {
+    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/upgrade`, request)).data;
 }
 
 export async function archiveProject(projectId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
@@ -1331,6 +1719,10 @@ export async function createGlobalExperiment(projectId: string, request: GlobalE
 
 export async function updateGlobalExperiment(projectId: string, experimentId: string, request: HierarchyPatch): Promise<HierarchyMutationResult> {
     return (await api.patch<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}`, request)).data;
+}
+
+export async function upgradeGlobalExperiment(projectId: string, experimentId: string, request: GlobalExperimentUpgradeRequest): Promise<HierarchyMutationResult> {
+    return (await api.post<HierarchyMutationResult>(`/api/projects/${segment(projectId)}/experiments/${segment(experimentId)}/upgrade`, request)).data;
 }
 
 export async function archiveGlobalExperiment(projectId: string, experimentId: string, expectedHeadGeneration: number): Promise<HierarchyMutationResult> {
@@ -1739,6 +2131,30 @@ export async function resubmitDomainRunGroup(
             preparation_launches: preparationLaunches,
         },
         { headers: { 'Idempotency-Key': crypto.randomUUID() } },
+    )).data;
+}
+
+export async function cloneDomainRunIntent(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    runGroupId: string,
+    request: {
+        expected_run_group_generation: number;
+        source_run_id: string;
+        source_attempt_id: string;
+        new_workflow_name: string;
+        change_summary: string;
+        expected_domain_revision_id: string;
+    },
+): Promise<RunCloneReceipt> {
+    return (await api.post<RunCloneReceipt>(
+        `${domainOperatorPath(projectId, globalExperimentId, domainExperimentId)}/run-groups/${segment(runGroupId)}/clone`,
+        {
+            schema: 'bms.run-clone-request.v1',
+            ...request,
+            idempotency_key: crypto.randomUUID(),
+        },
     )).data;
 }
 

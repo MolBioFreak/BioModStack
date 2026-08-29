@@ -1,0 +1,1502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.shared-global-package-acceptance.v2",
+  "title": "Shared global package acceptance receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_sha256",
+    "specification_documents",
+    "schema_manifest_count",
+    "schema_manifest",
+    "schema_manifest_sha256",
+    "outer_package_algorithm",
+    "outer_package_sha256",
+    "package_file_count",
+    "migration_receipts",
+    "connector_acceptance_receipt",
+    "workflow_acceptance_receipts",
+    "payload_ownership_audit_receipt",
+    "backup_receipt",
+    "restoration_receipt",
+    "export_receipt",
+    "focused_check_receipts",
+    "no_active_jobs",
+    "outcome",
+    "accepted_at",
+    "accepted_by",
+    "content_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.shared-global-package-acceptance.v2"
+    },
+    "source_commit": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "source_tree": {
+      "$ref": "#/$defs/gitSha"
+    },
+    "runtime_implementation_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "specification_documents": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/specificationDocument"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 0
+                },
+                "path": {
+                  "const": "docs/specs/global-bms-project-experiment-manager.md"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/specificationDocument"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 1
+                },
+                "path": {
+                  "const": "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "schema_manifest_count": {
+      "const": 40
+    },
+    "schema_manifest": {
+      "type": "array",
+      "minItems": 40,
+      "maxItems": 40,
+      "uniqueItems": true,
+      "items": false,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 0
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 1
+                },
+                "path": {
+                  "const": "docs/specs/schemas/global-experiment-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.global-experiment.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 2
+                },
+                "path": {
+                  "const": "docs/specs/schemas/hierarchy-revision-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.global.hierarchy-revision.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 3
+                },
+                "path": {
+                  "const": "docs/specs/schemas/attachment-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.global.attachment-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 4
+                },
+                "path": {
+                  "const": "docs/specs/schemas/external-entity-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.global.external-entity-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 5
+                },
+                "path": {
+                  "const": "docs/specs/schemas/launch-context-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.launch-context.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 6
+                },
+                "path": {
+                  "const": "docs/specs/schemas/ngs-molbio-project-link-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.ngs-molbio-project-link.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 7
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-read-model-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.read-model.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 8
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-run-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.run.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 9
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-continuation-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.continuation.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 10
+                },
+                "path": {
+                  "const": "docs/specs/schemas/research-record-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.research-record.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 11
+                },
+                "path": {
+                  "const": "docs/specs/schemas/result-surface-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.result-surface.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 12
+                },
+                "path": {
+                  "const": "docs/specs/schemas/run-clone-request-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.run-clone-request.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 13
+                },
+                "path": {
+                  "const": "docs/specs/schemas/run-clone-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.run-clone-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 14
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-file-manifest-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.file-manifest.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 15
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-backup-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.backup-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 16
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-restoration-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.restoration-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 17
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-export-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.export-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 18
+                },
+                "path": {
+                  "const": "docs/specs/schemas/operator-visual-acceptance-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.operator-visual-acceptance.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 19
+                },
+                "path": {
+                  "const": "docs/specs/schemas/shared-global-package-acceptance-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.shared-global-package-acceptance.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 20
+                },
+                "path": {
+                  "const": "docs/specs/schemas/project-manager-final-acceptance-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.project-manager.final-acceptance.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 21
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/domain-experiment-v3.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.domain-experiment.v3"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 22
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/ngs-molbio-experiment-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.ngs-molbio-experiment.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 23
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-in-silico-experiment-v3.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-in-silico-experiment.v3"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 24
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/evidence-requirement-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.evidence-requirement.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 25
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/evidence-requirement-native-receipt-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.evidence-requirement.native-receipt.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 26
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/evidence-requirement-operator-observation-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.evidence-requirement.operator-observation.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 27
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/evidence-requirement-result-artifact-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.evidence-requirement.result-artifact.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 28
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/ngs-molbio-group-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.ngs-molbio.group.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 29
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/ngs-molbio-group-member-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.ngs-molbio.group-member.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 30
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-comparison-group-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-comparison-group.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 31
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-comparison-member-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-comparison-member.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 32
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-constraint-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-constraint.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 33
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-dataset-member-ref-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-dataset-member-ref.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 34
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-entity-map-reference-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-entity-map-reference.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 35
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/protein-target-v3.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.protein-target.v3"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 36
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/scientific-criterion-v2.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.scientific-criterion.v2"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 37
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/scientific-criterion-artifact-presence-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.scientific-criterion.artifact-presence.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 38
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/scientific-criterion-manual-review-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.scientific-criterion.manual-review.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/schemaManifestRow"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ordinal": {
+                  "const": 39
+                },
+                "path": {
+                  "const": "schemas/ngs_molbio/scientific-criterion-metric-threshold-v1.schema.json"
+                },
+                "schema_id": {
+                  "const": "bms.scientific-criterion.metric-threshold.v1"
+                }
+              },
+              "required": [
+                "ordinal",
+                "path",
+                "schema_id"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "schema_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "outer_package_algorithm": {
+      "const": "sha256-path-nul-raw-digest-v1"
+    },
+    "outer_package_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "package_file_count": {
+      "const": 42
+    },
+    "migration_receipts": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/migrationReceiptPointer"
+      },
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "store_id": {
+                "const": "global-experiments"
+              }
+            },
+            "required": [
+              "store_id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "store_id": {
+                "const": "molbio-domain"
+              }
+            },
+            "required": [
+              "store_id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "store_id": {
+                "const": "molbio-ngs-domain"
+              }
+            },
+            "required": [
+              "store_id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "store_id": {
+                "const": "core-ngs"
+              }
+            },
+            "required": [
+              "store_id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "connector_acceptance_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "workflow_acceptance_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/receiptPointer"
+      }
+    },
+    "payload_ownership_audit_receipt": {
+      "$ref": "#/$defs/receiptPointer"
+    },
+    "backup_receipt": {
+      "$ref": "#/$defs/backupReceiptPointer"
+    },
+    "restoration_receipt": {
+      "$ref": "#/$defs/restorationReceiptPointer"
+    },
+    "export_receipt": {
+      "$ref": "#/$defs/exportReceiptPointer"
+    },
+    "focused_check_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/receiptPointer"
+      }
+    },
+    "no_active_jobs": {
+      "const": true
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "accepted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "content_sha256": {
+      "$ref": "#/$defs/sha256",
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON for the complete receipt with only content_sha256 omitted."
+    }
+  },
+  "$defs": {
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "specificationDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "path",
+        "raw_sha256"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "path": {
+          "enum": [
+            "docs/specs/global-bms-project-experiment-manager.md",
+            "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md"
+          ]
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "schemaManifestRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ordinal",
+        "path",
+        "schema_id",
+        "raw_sha256",
+        "external_refs"
+      ],
+      "properties": {
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 39
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^(docs/specs/schemas|schemas/ngs_molbio)/[A-Za-z0-9._/-]+\\.schema\\.json$",
+          "maxLength": 512
+        },
+        "schema_id": {
+          "type": "string",
+          "pattern": "^bms\\.[A-Za-z0-9_.-]+$",
+          "maxLength": 255
+        },
+        "raw_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "external_refs": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^bms\\.[A-Za-z0-9_.-]+$",
+            "maxLength": 255
+          }
+        }
+      }
+    },
+    "migrationReceiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "store_id": {
+          "enum": [
+            "global-experiments",
+            "molbio-domain",
+            "molbio-ngs-domain",
+            "core-ngs"
+          ]
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "receiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "backupReceiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.backup-receipt.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "restorationReceiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.restoration-receipt.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    },
+    "exportReceiptPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_schema_id",
+        "receipt_id",
+        "receipt_sha256",
+        "native_identity"
+      ],
+      "properties": {
+        "receipt_schema_id": {
+          "const": "bms.project-manager.export-receipt.v1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "native_identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      }
+    }
+  }
+}

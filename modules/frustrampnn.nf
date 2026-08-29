@@ -103,9 +103,9 @@ process CanonicalFrustraMPNNV2Task {
     tuple path(component_request), path(source_structure), path(structure_map)
 
     output:
-    tuple path('candidate_bundle/workflow_component_result_v2.json'), \
+    tuple path('candidate_bundle/workflow_component_result_v3.json'), \
         path('candidate_bundle'), \
-        path('candidate_bundle/frustrampnn_result_manifest_v2.json'), emit: result
+        path('candidate_bundle/frustrampnn_result_manifest_v3.json'), emit: result
 
     script:
     def assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
@@ -148,11 +148,11 @@ result = {
     'invocation_id': request['invocation_id'],
     'status': 'succeeded',
 }
-pathlib.Path('candidate_bundle/workflow_component_result_v2.json').write_text(
+pathlib.Path('candidate_bundle/workflow_component_result_v3.json').write_text(
     json.dumps(result, sort_keys=True, separators=(',', ':')) + '\\n',
     encoding='utf-8',
 )
-pathlib.Path('candidate_bundle/frustrampnn_result_manifest_v2.json').write_text(
+pathlib.Path('candidate_bundle/frustrampnn_result_manifest_v3.json').write_text(
     json.dumps({'candidate_id': request['candidate_id']}, sort_keys=True, separators=(',', ':')) + '\\n',
     encoding='utf-8',
 )

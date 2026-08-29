@@ -7,13 +7,17 @@ Two execution paths:
 """
 from __future__ import annotations
 
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -21,8 +25,9 @@ import pytest
 API_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = API_ROOT.parent.parent
 
-# Path to the dorado.sif container
-SIF_PATH = REPO_ROOT / "apptainer" / "dorado.sif"
+# Path to the dorado.sif container. The managed runtime path can be supplied
+# without creating a repository-local symlink or copying the governed image.
+SIF_PATH = Path(os.environ.get("BMS_NGS_RUNTIME_SIF", str(REPO_ROOT / "apptainer" / "dorado.sif")))
 
 # Known tool paths (sandbox PATH is limited; tools live outside it)
 MICROMAMBA_BIN = Path("/home/dalab/micromamba/bin")
@@ -57,10 +62,10 @@ def _detect_execution_mode() -> str:
     """Return 'local', 'container', or 'skip' based on available tooling."""
     # Prefer local mode when minimap2/samtools are available — the Singularity
     # SIF extraction path fails in Alpine-based Nextflow containers (liblzo2).
-    if _which("minimap2") is not None and _which("samtools") is not None:
+    if all(_which(command) is not None for command in ("minimap2", "samtools", "create_report")):
         return "local"
     if MICROMAMBA_BIN.exists():
-        if (MICROMAMBA_BIN / "minimap2").exists() and (MICROMAMBA_BIN / "samtools").exists():
+        if all((MICROMAMBA_BIN / command).exists() for command in ("minimap2", "samtools", "create_report")):
             return "local"
 
     has_container_engine = (
@@ -85,6 +90,8 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
 
     mode = _detect_execution_mode()
     assert mode in ("container", "local"), f"unexpected mode: {mode}"
+    if mode == "local":
+        _require_runtime_command("create_report")
 
     # Explicit worktree-safe launchers can use pytest's disposable directory.
     # The legacy container wrapper only mounts /tmp and its configured checkout,
@@ -100,7 +107,9 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
 
     seq = "ACGT" * 200
     ref.write_text(f">tiny_plasmid\n{seq}\n")
-    fastq.write_text(f"@read_1\n{seq}\n+\n{'I' * len(seq)}\n")
+    fastq.write_text(
+        "".join(f"@read_{index}\n{seq}\n+\n{'I' * len(seq)}\n" for index in range(1, 11))
+    )
 
     # ── Build command ────────────────────────────────────────────────
     cmd = [
@@ -115,6 +124,10 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         str(ref),
         "--out_dir",
         str(out_dir),
+        "--job_id",
+        "test-ont-fastq-qc-runtime",
+        "--reference_sequence_sha256",
+        hashlib.sha256(seq.encode("ascii")).hexdigest(),
         "--code_root",
         str(REPO_ROOT),
         "--expected_plasmid_size",
@@ -132,6 +145,7 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         "CURL_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
         "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
     })
+
     # Add known tool dirs to PATH so subprocess can find nextflow + tools
     extra = ":".join(str(d) for d in TOOL_DIRS)
     if extra:
@@ -139,6 +153,34 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
 
     # Ensure work_dir exists before writing temp config files
     work_dir.mkdir(parents=True, exist_ok=True)
+    real_python3 = shutil.which("python3")
+    assert real_python3 is not None
+    stage_reports: list[dict[str, object]] = []
+
+    class StageReporterHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            parsed = urlsplit(self.path)
+            stage = parse_qs(parsed.query).get("stage", [""])[0]
+            stage_reports.append({
+                "path": parsed.path,
+                "stage": stage,
+                "authorization": self.headers.get("Authorization"),
+                "body": json.loads(body.decode("utf-8")) if body else None,
+            })
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    reporter_server = ThreadingHTTPServer(("127.0.0.1", 0), StageReporterHandler)
+    reporter_thread = threading.Thread(target=reporter_server.serve_forever, daemon=True)
+    reporter_thread.start()
+    env["API_BASE_URL"] = f"http://127.0.0.1:{reporter_server.server_address[1]}"
+    env["BMS_STAGE_REPORT_TOKEN"] = "test-stage-reporter-token"
 
     if mode == "container":
         # Container mode with local SIF — override container_dir to local path,
@@ -175,17 +217,30 @@ def test_ont_fastq_qc_runtime_emits_core_artifacts(tmp_path: Path):
         cmd.extend(["-profile", "ont_fastq_qc", "-c", override_cfg.name])
 
     # ── Execute ──────────────────────────────────────────────────────
-    completed = subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=180,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=180,
+            check=False,
+        )
+    finally:
+        reporter_server.shutdown()
+        reporter_server.server_close()
+        reporter_thread.join(timeout=5)
     assert completed.returncode == 0, completed.stdout
+    assert {(item["path"], item["stage"]) for item in stage_reports} == {
+        (f"/api/jobs/test-ont-fastq-qc-runtime/stage-complete", "fastq_align"),
+        (f"/api/jobs/test-ont-fastq-qc-runtime/stage-complete", "dimer_qc"),
+        (f"/api/jobs/test-ont-fastq-qc-runtime/stage-complete", "fastq_qc"),
+        (f"/api/jobs/test-ont-fastq-qc-runtime/stage-complete", "construct_verification"),
+    }
+    assert all(item["authorization"] == "Bearer test-stage-reporter-token" for item in stage_reports)
+    assert all(isinstance(item["body"], list) and item["body"] for item in stage_reports)
 
     # ── Assert expected artifacts ────────────────────────────────────
     expected = [

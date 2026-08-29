@@ -1,0 +1,490 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.package-acceptance.v1",
+  "title": "Bounded PM package acceptance receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "package_acceptance_receipt_id",
+    "package_id",
+    "source_commit",
+    "source_tree",
+    "coverage",
+    "evidence_receipts",
+    "evidence_manifest_algorithm",
+    "evidence_manifest_sha256",
+    "outcome",
+    "accepted_at",
+    "accepted_by",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.package-acceptance.v1"
+    },
+    "package_acceptance_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "package_id": {
+      "enum": [
+        "PM-01",
+        "PM-02",
+        "PM-03A",
+        "PM-03B",
+        "PM-04",
+        "PM-05",
+        "PM-06",
+        "PM-07",
+        "PM-08A",
+        "PM-08B",
+        "PM-09",
+        "PM-10A",
+        "PM-10B"
+      ]
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "coverage": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$",
+        "maxLength": 64
+      }
+    },
+    "evidence_receipts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "receipt_schema_id",
+          "receipt_id",
+          "receipt_sha256",
+          "native_identity"
+        ],
+        "properties": {
+          "receipt_schema_id": {
+            "type": "string",
+            "pattern": "^bms\\.[a-z0-9.-]+\\.v[0-9]+$",
+            "maxLength": 255
+          },
+          "receipt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "receipt_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "native_identity": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        }
+      }
+    },
+    "evidence_manifest_algorithm": {
+      "const": "sha256-rfc8785-evidence-pointers-v1"
+    },
+    "evidence_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "outcome": {
+      "const": "pass"
+    },
+    "accepted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "accepted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-01"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "responsive-geometry",
+              "semantic-control-denominator",
+              "keyboard-accessibility",
+              "deep-link-reload"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-02"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "source-denominator",
+              "runtime-registry",
+              "capability-dataset-exposure",
+              "operator-trust-registry",
+              "negative-drift"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-03A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "project-v2",
+              "global-experiment-v2",
+              "protein-domain-v3",
+              "hierarchy-revisions"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-03B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "ngs-domain-v3",
+              "local-projects",
+              "domain-provisioning",
+              "project-links"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-04"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "attachment-receipts",
+              "literal-deep-links",
+              "cross-project-denials",
+              "zero-payload-copy"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-05"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "samples",
+              "managed-references",
+              "evidence",
+              "datasets",
+              "plans-preparations"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-06"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "composite-read-model",
+              "pagination",
+              "eln-records",
+              "adapter-versions",
+              "maintained-projections"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-07"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "receipt-freshness",
+              "successor-receipts",
+              "domain-lineage",
+              "restart-reverification"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-08A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "plan-execution",
+              "launch-context-v2",
+              "launch-fencing",
+              "retry-resubmit-clone-cancel"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-08B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "protein-adapters",
+              "molecular-dynamics-adapters",
+              "compatible-comparison",
+              "native-result-chain"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-09"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "validation-artifacts",
+              "bounded-attempt-logs",
+              "result-surfaces",
+              "native-viewers"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-10A"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "connector-commands",
+              "inbox-outbox",
+              "acknowledgements",
+              "lease-retry-reconciliation"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "package_id": {
+            "const": "PM-10B"
+          }
+        },
+        "required": [
+          "package_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "coverage": {
+            "const": [
+              "worker-convergence",
+              "backup-v2",
+              "restoration-v2",
+              "export-v2",
+              "payload-ownership-audit"
+            ]
+          }
+        },
+        "required": [
+          "coverage"
+        ]
+      }
+    }
+  ]
+}

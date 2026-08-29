@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,12 +24,15 @@ from routers import workflow_adapter as adapter_router
 from services import execution_ownership as ownership
 from services import nextflow
 import workflow_job_runner as runner
+from tests.ont_ngs_completion_fixture import configure_valid_ont_terminal_completion
+from tests.resource_usage_receipt_fixture import valid_resource_receipt_authority
 
 
 class _Result:
-    def __init__(self, job=None, jobs=None):
+    def __init__(self, job=None, jobs=None, *, rowcount: int = 1):
         self.job = job
         self.jobs = jobs if jobs is not None else ([job] if job is not None else [])
+        self.rowcount = rowcount
 
     def scalar_one_or_none(self):
         return self.job
@@ -51,12 +55,25 @@ class _Session:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    async def execute(self, _query):
+    async def execute(self, query):
+        if getattr(query, "is_update", False):
+            values = query.compile().params
+            for name in ("params", "status", "queue_status", "error_message", "completed_at", "assigned_gpu"):
+                if name in values:
+                    setattr(self.job, name, values[name])
         return _Result(self.job, self.jobs)
+
+    async def refresh(self, _job):
+        return None
+
+    async def get(self, _model, _job_id):
+        return self.job
+
+    async def flush(self):
+        return None
 
     async def commit(self):
         return None
-
 
 def _unit(lane: str = "development", job_id: str = "job-1") -> str:
     return ownership.deterministic_unit_name(lane, job_id, 1)
@@ -164,6 +181,132 @@ def test_runner_completion_does_not_depend_on_adapter_lifecycle(
     assert launch_calls[0]["model_id"] == "boltz2"
     assert launch_calls[0]["output_dir"] == "/lane/results/job-1"
     assert ownership.latest_execution_attempt(job.params)["state"] == "completed"
+
+
+def test_runner_hands_ont_success_resource_receipt_to_terminal_cas(
+    monkeypatch: pytest.MonkeyPatch,
+    transient_identity,
+    tmp_path: Path,
+) -> None:
+    template = _job(model_id="nanopore")
+    template.params.update({"ont_workflow_id": "ont_fastq_qc", "ont_input_mode": "fastq"})
+    configure_valid_ont_terminal_completion(monkeypatch, template, tmp_path, production_validation=True)
+    execution = ownership.latest_execution_attempt(template.params)
+    assert execution is not None
+    authority_params, receipt = valid_resource_receipt_authority(
+        job_id=str(template.id),
+        generation=int(execution["generation"]),
+        attempt=int(execution["attempt"]),
+        unit=str(execution["unit"]),
+        invocation_id=str(execution["invocation_id"]),
+        owner_nonce=str(execution["owner_nonce"]),
+        execution_attempts=template.params["execution_attempts"],
+    )
+    authority_params["resource_usage_receipts"] = []
+    template.params = {**template.params, **authority_params}
+    assert template.params["resource_usage_receipts"] == []
+    result_root = tmp_path / "state" / "bms_results" / str(template.id)
+
+    async def scenario() -> None:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runner-terminal.db'}")
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            session.add(
+                Job(
+                    id=template.id,
+                    name="runner-terminal",
+                    model_id=template.model_id,
+                    mode=template.mode,
+                    params=template.params,
+                    output_dir=str(result_root),
+                    status="running",
+                    queue_status="running",
+                    started_at=datetime.utcnow(),
+                    nextflow_run_id=template.nextflow_run_id,
+                    provenance=template.provenance,
+                    completed_stages=template.completed_stages,
+                    stage_outputs=template.stage_outputs,
+                    paused=False,
+                    current_stage=template.current_stage,
+                    stage_progress=None,
+                )
+            )
+            await session.commit()
+
+        monkeypatch.setattr(database, "async_session", factory)
+        monkeypatch.setattr(
+            runner,
+            "show_unit_properties",
+            lambda *_args: ownership.UnitProperties(
+                "active", "running", "", "42", "0", "success",
+                ownership.workflow_slice_for_lane("development"), "invocation-1",
+            ),
+        )
+
+        class FakeMonitor:
+            finish_calls = 0
+
+            def start(self):
+                return None
+
+            def finish(self, *, outcome: str):
+                self.finish_calls += 1
+                assert outcome == "completed"
+                return dict(receipt)
+
+        monitor = FakeMonitor()
+        monkeypatch.setattr(
+            runner,
+            "WorkflowResourceMonitor",
+            SimpleNamespace(from_job=lambda _job: monitor),
+        )
+
+        async def forbid_late_persistence(*_args, **_kwargs):
+            raise AssertionError("resource receipt persisted after terminal completion")
+
+        monkeypatch.setattr(runner, "_persist_resource_usage_receipt", forbid_late_persistence)
+        monkeypatch.setattr(nextflow, "preflight_nextflow_java", lambda _env: (True, "ok"))
+        monkeypatch.setattr(
+            nextflow,
+            "build_nextflow_command",
+            lambda *_args, **_kwargs: ["/bin/true"],
+        )
+
+        class FakeProcess:
+            pid = 4321
+
+            async def wait(self):
+                return 0
+
+        async def fake_create_subprocess_exec(*_args, **_kwargs):
+            return FakeProcess()
+
+        monkeypatch.setattr(nextflow.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        return_code = await runner.run_workflow_job("job-1", "development")
+        if return_code != 0:
+            async with factory() as diagnostic_session:
+                failed_job = await diagnostic_session.get(Job, "job-1")
+                pytest.fail(
+                    f"runner returned {return_code}: "
+                    f"status={getattr(failed_job, 'status', None)!r} "
+                    f"queue={getattr(failed_job, 'queue_status', None)!r} "
+                    f"error={getattr(failed_job, 'error_message', None)!r}"
+                )
+        assert monitor.finish_calls == 1
+        async with factory() as session:
+            final_job = await session.get(Job, "job-1")
+            assert final_job is not None
+            assert (final_job.status, final_job.queue_status) == ("completed", "completed")
+            assert final_job.params["resource_usage_receipts"] == [receipt]
+            final_attempt = ownership.latest_execution_attempt(final_job.params)
+            assert final_attempt is not None
+            assert final_attempt["state"] == "completed"
+        await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_runner_uses_authoritative_msa_job_and_keeps_it_inside_unit(

@@ -16,7 +16,7 @@ process PreparePersistedFrustraMPNNCandidate {
     tuple val(record_base64), path(request_snapshot), path(source_snapshot), path(structure_map_snapshot)
 
     output:
-    tuple path('workflow_component_request_v2.json'), path('canonical_source.pdb'), \
+    tuple path('workflow_component_request_v3.json'), path('canonical_source.pdb'), \
         path('frustrampnn_structure_map_v1.json'), emit: prepared
 
     script:
@@ -27,10 +27,10 @@ process PreparePersistedFrustraMPNNCandidate {
       --request '${request_snapshot}' \
       --source '${source_snapshot}' \
       --structure-map '${structure_map_snapshot}' \
-      --output-request .prepared_workflow_component_request_v2.json \
+      --output-request .prepared_workflow_component_request_v3.json \
       --output-source .prepared_canonical_source.pdb \
       --output-structure-map .prepared_frustrampnn_structure_map_v1.json
-    mv .prepared_workflow_component_request_v2.json workflow_component_request_v2.json
+    mv .prepared_workflow_component_request_v3.json workflow_component_request_v3.json
     mv .prepared_canonical_source.pdb canonical_source.pdb
     mv .prepared_frustrampnn_structure_map_v1.json frustrampnn_structure_map_v1.json
     """
@@ -64,6 +64,60 @@ process PublishPersistedFrustraMPNNChildBundle {
     """
 }
 
+process RunPersistedFrustraMPNNGroupedBatch {
+    tag 'frustrampnn-grouped-predict-batch'
+    label 'frustrampnn_gpu'
+    errorStrategy 'terminate'
+    maxRetries 0
+
+    input:
+    val batch_manifest_path
+
+    output:
+    path 'grouped_results', emit: results
+
+    script:
+    def assigned_gpu = params.frustrampnn_physical_gpu_id?.toString()
+    if (!(assigned_gpu ==~ /(?:0|[1-9][0-9]*)/)) {
+        error('grouped FrustraMPNN requires explicit scheduler-assigned physical GPU ID')
+    }
+    def apptainer_bin = params.get('apptainer_bin') ?: 'apptainer'
+    """
+    set -euo pipefail
+    export CUDA_VISIBLE_DEVICES='${assigned_gpu}'
+    '${params.api_python}' '${params.code_root}/scripts/run_frustrampnn_grouped_batch.py' \
+      --batch-manifest '${batch_manifest_path}' \
+      --job-root '${params.out_dir}' \
+      --container '${params.container_dir}/frustrampnn.sif' \
+      --apptainer '${apptainer_bin}' \
+      --physical-gpu-id '${assigned_gpu}' > grouped_batch_terminal.json
+    test -d grouped_results
+    """
+}
+
+process PublishPersistedFrustraMPNNGroupedBundles {
+    tag 'frustrampnn-grouped-publish'
+    label 'CPU'
+    stageInMode 'copy'
+    errorStrategy 'terminate'
+    maxRetries 0
+
+    input:
+    path grouped_results
+
+    output:
+    path 'published_*.json', emit: marker
+
+    script:
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/publish_frustrampnn_grouped_results.py' \
+      --grouped-root '${grouped_results}' \
+      --job-root '${params.out_dir}' \
+      --marker-root .
+    """
+}
+
 process ReportPersistedFrustraMPNNComplete {
     label 'CPU'
     stageInMode 'copy'
@@ -82,11 +136,14 @@ process ReportPersistedFrustraMPNNComplete {
     mapfile -t outputs < <('${params.api_python}' \
       '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
       --job-root '${params.out_dir}' \
+      --status-output frustrampnn_stage_status \
       published_*.json)
     test \"\${#outputs[@]}\" -gt 0
+    status=\$(<frustrampnn_stage_status)
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+      '${params.job_id}' frustrampnn \"\${status}\" \"\${outputs[@]}\"
     : > frustrampnn_complete.reported
+    test \"\${status}\" = complete
     """
 }
 
@@ -99,12 +156,26 @@ workflow {
     }
     def manifestPath = file(params.frustrampnn_batch_manifest_path)
     def batch = new JsonSlurper().parse(manifestPath)
+    def batchKeys = [
+        'schema_name', 'schema_version', 'execution_owner_job_id',
+        'batching_enabled', 'structures_per_job', 'settings_sha256',
+        'expected_cardinality', 'records'
+    ] as Set
     if (
+        !(batch instanceof Map) ||
+        (batch.keySet() as Set) != batchKeys ||
         batch.schema_name != 'bms_frustrampnn_scheduler_batch' ||
-        batch.schema_version != 2 ||
+        batch.schema_version != 3 ||
         batch.execution_owner_job_id?.toString() != params.job_id.toString() ||
+        !(batch.batching_enabled instanceof Boolean) ||
+        !(batch.structures_per_job instanceof Integer) ||
+        batch.structures_per_job < 1 || batch.structures_per_job > 250 ||
+        !(batch.settings_sha256 ==~ /[a-f0-9]{64}/) ||
         !(batch.records instanceof List) ||
-        batch.records.isEmpty()
+        batch.records.isEmpty() ||
+        batch.expected_cardinality != batch.records.size() ||
+        batch.records.size() > batch.structures_per_job ||
+        (!batch.batching_enabled && batch.records.size() != 1)
     ) {
         throw new IllegalArgumentException('invalid persisted FrustraMPNN scheduler batch manifest')
     }
@@ -128,7 +199,7 @@ workflow {
         def requestRelative = record.request_relative_path?.toString()
         def sourceRelative = record.source_relative_path?.toString()
         def structureMapRelative = record.structure_map_relative_path?.toString()
-        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+\/workflow_component_request_v2\.json/) ||
+        if (!(requestRelative ==~ /inputs\/requests\/[A-Za-z0-9._-]+\/workflow_component_request_v3\.json/) ||
             !(sourceRelative ==~ /inputs\/sources\/[A-Za-z0-9._-]+\/canonical_source\.pdb/) ||
             !(structureMapRelative ==~ /inputs\/maps\/[A-Za-z0-9._-]+\/frustrampnn_structure_map_v1\.json/)) {
             throw new IllegalArgumentException('invalid persisted FrustraMPNN snapshot path')
@@ -141,9 +212,16 @@ workflow {
             file(authorityRoot.resolve(structureMapRelative))
         )
     }
-    preparedInputs = Channel.fromList(persisted)
-    PreparePersistedFrustraMPNNCandidate(preparedInputs)
-    CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)
-    PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNNV2.out.result)
-    ReportPersistedFrustraMPNNComplete(PublishPersistedFrustraMPNNChildBundle.out.marker.collect())
+    if (batch.batching_enabled && batch.records.size() > 1) {
+        RunPersistedFrustraMPNNGroupedBatch(manifestPath.toString())
+        PublishPersistedFrustraMPNNGroupedBundles(RunPersistedFrustraMPNNGroupedBatch.out.results)
+        publicationMarkers = PublishPersistedFrustraMPNNGroupedBundles.out.marker
+    } else {
+        preparedInputs = Channel.fromList(persisted)
+        PreparePersistedFrustraMPNNCandidate(preparedInputs)
+        CanonicalFrustraMPNNV2(PreparePersistedFrustraMPNNCandidate.out.prepared)
+        PublishPersistedFrustraMPNNChildBundle(CanonicalFrustraMPNNV2.out.result)
+        publicationMarkers = PublishPersistedFrustraMPNNChildBundle.out.marker
+    }
+    ReportPersistedFrustraMPNNComplete(publicationMarkers.flatten().collect())
 }

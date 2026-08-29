@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bms.project-manager.quiescence.v1",
+  "title": "Project Manager pre-seal quiescence receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "quiescence_receipt_id",
+    "source_commit",
+    "source_tree",
+    "runtime_implementation_sha256",
+    "fence_id",
+    "observed_from",
+    "observed_until",
+    "active_job_count",
+    "active_connector_lease_count",
+    "open_launch_fence_count",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": "bms.project-manager.quiescence.v1"
+    },
+    "quiescence_receipt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "source_tree": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runtime_implementation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fence_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "observed_from": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "observed_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "active_job_count": {
+      "const": 0
+    },
+    "active_connector_lease_count": {
+      "const": 0
+    },
+    "open_launch_fence_count": {
+      "const": 0
+    },
+    "receipt_sha256": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      ],
+      "description": "SHA-256 of UTF-8 RFC 8785 canonical JSON with only receipt_sha256 omitted."
+    }
+  }
+}

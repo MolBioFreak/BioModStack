@@ -391,6 +391,19 @@ def test_runtime_port_settings_preserve_profile_and_save_dev_and_prod_ports(tmp_
 
 def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "biomodstack"
+    policy_path = (
+        project_root
+        / "platform"
+        / "api"
+        / "config"
+        / "ont_signal_workbench"
+        / "runtime_policy_v1.json"
+    )
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        '{"runtime_id":"sha256:' + ("a" * 64) + '","oci_digest":"sha256:' + ("a" * 64) + '"}',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         services,
         "install_profile_snapshot",
@@ -423,6 +436,8 @@ def test_render_user_units_exports_configured_dev_frontend_port(tmp_path: Path, 
     assert "Environment=BMS_COLABFOLD_DB=/srv/biomodstack-dev/colabfold_db" not in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_LIVE_CONVERSION_ENABLED=1" in units[services.API_SERVICE]
     assert "Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY=pod5_and_blow5" in units[services.API_SERVICE]
+    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE=sha256:{'a' * 64}" in units[services.API_SERVICE]
+    assert f"Environment=BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={'a' * 64}" in units[services.API_SERVICE]
     assert "ExecStartPre=/usr/bin/mkdir -p /srv/biomodstack-dev" in units[services.API_SERVICE]
     assert "Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:18279" in units[services.FRONTEND_SERVICE]
     assert "Environment=BMS_DEV_WEB_HOST_PORT=18278" in units[services.FRONTEND_SERVICE]
@@ -626,6 +641,7 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
         services.API_SERVICE,
         services.FRONTEND_SERVICE,
         services.TELEMETRY_SERVICE,
+        services.MOBILE_UPDATE_PUBLISHER_SERVICE,
         services.TAILNET_GLOBAL_SERVICE,
         services.DEV_TARGET_UNIT,
     }
@@ -692,6 +708,118 @@ def test_render_user_units_include_repo_owned_execstart_paths(tmp_path: Path, mo
     )
     assert services.TAILNET_GLOBAL_SERVICE not in target_unit
     assert "WantedBy=default.target" in target_unit
+
+
+def test_mobile_update_publisher_unit_is_outside_both_runtime_targets(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "biomodstack"
+    monkeypatch.delenv("BMS_TELEMETRY_DB_PATH", raising=False)
+    monkeypatch.setattr(
+        services,
+        "install_profile_snapshot",
+        lambda project_root=None: {
+            "resolved": {
+                "data_root": "/mnt/BioModStack",
+                "db_path": "/mnt/BioModStack/biomodstack.db",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        services,
+        "git_build_identity",
+        lambda root: {
+            "revision": "0123456789abcdef0123456789abcdef01234567",
+            "build_id": "test-0123456789ab",
+            "build_time": "2026-08-26T12:00:00Z",
+        },
+        raising=False,
+    )
+
+    service_name = getattr(services, "MOBILE_UPDATE_PUBLISHER_SERVICE", None)
+    assert service_name == "biomodstack-mobile-update-publisher.service"
+    assert getattr(services, "MOBILE_UPDATE_PUBLISHER_PORT", None) == 18003
+
+    development_units = services.render_user_units(project_root, runtime_mode="dev")
+    production_units = services.render_user_units(project_root, runtime_mode="container")
+    assert service_name in development_units
+    assert service_name not in production_units
+
+    unit = development_units[service_name]
+    assert "WantedBy=default.target" in unit
+    assert f"EnvironmentFile=-{Path.home() / '.config' / 'biomodstack' / 'mobile-update-publisher.env'}" in unit
+    assert "core-runtime.env" not in unit
+    assert f"Wants=network-online.target {services.TAILNET_GLOBAL_SERVICE}" in unit
+    assert f"Before={services.TAILNET_GLOBAL_SERVICE}" in unit
+    assert f"PartOf={services.DEV_TARGET_UNIT}" not in unit
+    assert f"PartOf={services.TARGET_UNIT}" not in unit
+    assert "Environment=BMS_MOBILE_UI_UPDATES_DIR=/mnt/BioModStack/mobile-ui-updates" in unit
+    assert "Environment=BMS_MOBILE_APK_UPDATES_DIR=/mnt/BioModStack/mobile-apk-updates" in unit
+    assert "Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT=18003" in unit
+    assert f"ExecStart={project_root / 'scripts' / 'run_biomodstack_mobile_update_publisher.sh'}" in unit
+    assert service_name not in development_units[services.DEV_TARGET_UNIT]
+
+
+def test_start_all_dev_enables_global_publisher_without_runtime_ownership(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(services, "install_profile_snapshot", lambda project_root=None: {"resolved": {}})
+    monkeypatch.setattr(services, "assert_runtime_listener_preflight", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        services,
+        "ensure_user_units",
+        lambda root, runtime_mode=None: calls.append(("ensure", runtime_mode)),
+    )
+    monkeypatch.setattr(
+        services,
+        "service_is_active",
+        lambda service_name, project_root=None: service_name
+        in {services.TELEMETRY_SERVICE, services.API_SERVICE, services.FRONTEND_SERVICE},
+    )
+    monkeypatch.setattr(services, "url_is_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: calls.append(("systemctl", args))
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(
+        services,
+        "wait_for_http",
+        lambda url, timeout_seconds=30.0: calls.append(("wait", url)),
+    )
+
+    services.start_all(
+        project_root=project_root,
+        runtime_mode="dev",
+        skip_api_wait=True,
+        skip_workflow_adapter_wait=True,
+    )
+
+    assert calls == [
+        ("ensure", "dev"),
+        ("wait", "http://127.0.0.1:18082/"),
+        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
+    ]
+
+
+def test_stop_all_dev_never_stops_global_mobile_update_publisher(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "repo"
+    systemctl_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(services, "ensure_user_units", lambda *args, **kwargs: None)
+    monkeypatch.setattr(services, "service_is_active", lambda *args, **kwargs: False)
+    monkeypatch.setattr(services, "cleanup_legacy_listener", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        services,
+        "run_systemctl",
+        lambda *args, **kwargs: systemctl_calls.append(args)
+        or SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    services.stop_all(project_root=project_root, runtime_mode="dev")
+
+    assert systemctl_calls == [("stop", services.DEV_TARGET_UNIT, services.FRONTEND_SERVICE)]
+    assert all(services.MOBILE_UPDATE_PUBLISHER_SERVICE not in call for call in systemctl_calls)
 
 
 def test_container_telemetry_path_tracks_resolved_data_root(tmp_path: Path, monkeypatch) -> None:
@@ -1230,6 +1358,9 @@ def test_start_all_dev_mode_keeps_container_runtime_and_starts_only_dev_frontend
         ("systemctl", ("start", services.TELEMETRY_SERVICE, services.FRONTEND_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", "http://127.0.0.1:18082/"),
+        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
 
 
@@ -1263,6 +1394,9 @@ def test_start_all_dev_mode_starts_missing_telemetry_when_api_and_frontend_are_a
         ("systemctl", ("start", services.TELEMETRY_SERVICE, services.DEV_TARGET_UNIT)),
         ("wait", services.runtime_api_health_url("dev", project_root=project_root)),
         ("wait", services.runtime_frontend_url("dev")),
+        ("systemctl", ("enable", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("systemctl", ("start", services.MOBILE_UPDATE_PUBLISHER_SERVICE)),
+        ("wait", services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL),
     ]
 
 
@@ -1533,20 +1667,27 @@ def test_restart_all_dev_waits_for_adapter_before_api_and_frontend(
             "wait",
             (
                 services.workflow_adapter_health_url_for_lane(services.DEVELOPMENT_LANE),
-                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+                services.DEV_HTTP_WAIT_TIMEOUT_SECONDS,
             ),
         ),
         (
             "wait",
             (
                 services.runtime_api_health_url("dev", project_root=project_root),
-                services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
+                services.DEV_HTTP_WAIT_TIMEOUT_SECONDS,
             ),
         ),
         (
             "wait",
             (
                 services.runtime_frontend_url("dev", project_root=project_root),
+                services.DEV_HTTP_WAIT_TIMEOUT_SECONDS,
+            ),
+        ),
+        (
+            "wait",
+            (
+                services.MOBILE_UPDATE_PUBLISHER_HEALTH_URL,
                 services.DEFAULT_HTTP_WAIT_TIMEOUT_SECONDS,
             ),
         ),

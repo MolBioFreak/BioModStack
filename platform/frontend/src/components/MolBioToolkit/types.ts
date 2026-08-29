@@ -65,6 +65,8 @@ export interface NucleotideSequenceResponse {
 
 export interface NucleotideSequenceListItem {
     id: string;
+    revision_id?: string;
+    reopen_href?: string;
     name: string;
     description: string | null;
     sequence_type: 'dna' | 'rna';

@@ -132,6 +132,22 @@ class TestModuleIncludes:
         content = (root / "workflows/ngs/ont_construct_screening.nf").read_text()
         assert "RunCloneValidation" in content
 
+    def test_construct_screening_clone_artifacts_are_conditional(self, root):
+        spec = CANONICAL_ONT_WORKFLOWS["ont_construct_screening"]
+        assert ("run_assembly=true", ("clone_validation_assembly", "clone_validation_report")) in spec.artifact_conditions
+        assert "optional run_assembly=true" in spec.description
+
+        content = (root / "workflows/ngs/ont_construct_screening.nf").read_text()
+        assert "def runAssembly = params.run_assembly == true" in content
+        assert "if (runAssembly) {" in content
+        assert "reportStage(params, \"wf_clone_validation\"" in content
+
+    def test_construct_screening_documents_optional_clone_validation(self, root):
+        content = (root / "workflows/ngs/ont_construct_screening.nf").read_text()
+        assert "alignment evidence; run_assembly=true additionally runs CloneValidation" in content
+        assert "optional CloneValidation" in content
+        assert "run_fastq_qc controls the optional FASTQ plasmid-QC evidence branch" in content
+
     def test_methylation_includes_modkit(self, root):
         """Methylation analysis includes ModkitPileup."""
         content = (root / "workflows/ngs/ont_methylation_analysis.nf").read_text()

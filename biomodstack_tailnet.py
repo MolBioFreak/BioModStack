@@ -64,8 +64,14 @@ LEGACY_GLOBAL_SERVE_HANDLERS: Mapping[str, frozenset[str]] = {
     # application now lives at /stats; allow only this exact prior target to be
     # migrated transactionally while continuing to reject foreign owners.
     "/stats/embed": frozenset({STATS_TOOLKIT_TARGET}),
-    "/api/mobile-apk": frozenset({"http://127.0.0.1:8000/api/mobile-apk"}),
-    "/api/mobile-ui": frozenset({"http://127.0.0.1:8000/api/mobile-ui"}),
+    "/api/mobile-apk": frozenset({
+        "http://127.0.0.1:8000/api/mobile-apk",
+        "http://127.0.0.1:18000/api/mobile-apk",
+    }),
+    "/api/mobile-ui": frozenset({
+        "http://127.0.0.1:8000/api/mobile-ui",
+        "http://127.0.0.1:18000/api/mobile-ui",
+    }),
 }
 DEPRECATED_SERVE_HANDLERS: Mapping[str, str] = {
     "/am": "http://127.0.0.1:5174/am",
@@ -127,8 +133,8 @@ LEGACY_CONTROL_TARGETS = frozenset({
 })
 GLOBAL_SERVE_HANDLERS: Mapping[str, str] = {
     CONTROL_PATH: CONTROL_TARGET,
-    "/api/mobile-apk": "http://127.0.0.1:18000/api/mobile-apk",
-    "/api/mobile-ui": "http://127.0.0.1:18000/api/mobile-ui",
+    "/api/mobile-apk": "http://127.0.0.1:18003/api/mobile-apk",
+    "/api/mobile-ui": "http://127.0.0.1:18003/api/mobile-ui",
     "/stats/embed": f"{STATS_TOOLKIT_TARGET}/stats",
     "/stats/assets": f"{STATS_TOOLKIT_TARGET}/stats/assets",
     "/stats/embed/health/live": f"{STATS_TOOLKIT_TARGET}/health/live",

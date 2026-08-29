@@ -241,8 +241,17 @@ class ModelRegistry:
             param_def = next((p for p in model.params if p.name == param_name), None)
             if param_def:
                 # Type validation
-                if param_def.enum and value not in param_def.enum:
-                    errors.append(f"Invalid value for {param_name}: must be one of {param_def.enum}")
+                if param_def.enum:
+                    if param_def.type == "string_list":
+                        if not isinstance(value, list) or any(
+                            not isinstance(member, str) or member not in param_def.enum
+                            for member in value
+                        ):
+                            errors.append(
+                                f"Invalid value for {param_name}: members must be one of {param_def.enum}"
+                            )
+                    elif value not in param_def.enum:
+                        errors.append(f"Invalid value for {param_name}: must be one of {param_def.enum}")
                 if param_def.pattern and (
                     not isinstance(value, str)
                     or re.fullmatch(param_def.pattern, value) is None

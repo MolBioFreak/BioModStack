@@ -98,15 +98,27 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error }: BioXp
 
                     <h4 style={{ marginBottom: 6 }}>Pipettes</h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-                        {(data.pipettes.channels ?? []).map((channel, index) => (
-                            <div key={String(channel.channel ?? index)} style={panelStyle}>
-                                <strong>Pipette {Number(channel.channel ?? index) + 1}</strong>
-                                <div>{channel.available === false ? 'Unavailable' : 'Live'}</div>
-                                <div>Tip loaded: {yesNoUnknown(channel.tip_loaded as boolean | null | undefined)}</div>
-                                <div>Position: {value(channel.position_steps)} steps</div>
-                                <div>Pressure: {value(channel.pressure)}</div>
-                            </div>
-                        ))}
+                        {(data.pipettes.channels ?? []).map((channel, index) => {
+                            const hardwareTip = channel.hardware_tip_status?.ok === true
+                                && channel.hardware_tip_status.hardware_truth_level === 'hardware_query'
+                                && typeof channel.hardware_tip_status.tip_loaded === 'boolean'
+                                ? channel.hardware_tip_status.tip_loaded
+                                : null;
+                            const hardwarePressure = channel.hardware_pressure?.ok === true
+                                && channel.hardware_pressure.hardware_truth_level === 'hardware_query'
+                                && typeof channel.hardware_pressure.pressure === 'number'
+                                ? channel.hardware_pressure.pressure
+                                : null;
+                            return (
+                                <div key={String(channel.channel ?? index)} style={panelStyle}>
+                                    <strong>Pipette {Number(channel.channel ?? index) + 1}</strong>
+                                    <div>{channel.available === false ? 'Transport unavailable' : 'Cached transport projection'}</div>
+                                    <div>Software tip shadow: {yesNoUnknown(channel.software_tip_loaded)}</div>
+                                    <div>Hardware tip readback: {hardwareTip === null ? 'No valid hardware readback' : yesNoUnknown(hardwareTip)}</div>
+                                    <div>Hardware pressure: {hardwarePressure === null ? 'No valid hardware readback' : hardwarePressure}</div>
+                                </div>
+                            );
+                        })}
                         {(data.pipettes.channels ?? []).length === 0 && <div style={panelStyle}>Pipette status not reported.</div>}
                     </div>
                 </>
