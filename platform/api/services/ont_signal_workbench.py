@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
+import pysam
 from sqlalchemy import and_, event, or_, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -108,6 +109,102 @@ def _selected_read_span(
     ):
         raise OntSignalError("selected read mapping authority is unavailable")
     return normalized
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _selected_read_span_from_indexed_artifact(
+    artifact: OntSignalMappingArtifact | Any,
+    selected_read_id: str,
+    reference_contig: str,
+    reference_start: int,
+    reference_end: int,
+) -> dict[str, Any]:
+    """Resolve one read span from the verified indexed realignment artifact."""
+    receipt = artifact.validation_receipt if isinstance(artifact.validation_receipt, Mapping) else {}
+    expected_index_sha256 = receipt.get("index_sha256")
+    expected_index_size = receipt.get("index_size_bytes")
+    expected_record_count = receipt.get("record_count")
+    if (
+        artifact.kind != "realign_paf"
+        or not isinstance(artifact.sha256, str)
+        or not HEX64.fullmatch(artifact.sha256)
+        or isinstance(artifact.size_bytes, bool)
+        or not isinstance(artifact.size_bytes, int)
+        or artifact.size_bytes <= 0
+        or not isinstance(expected_index_sha256, str)
+        or not HEX64.fullmatch(expected_index_sha256)
+        or isinstance(expected_index_size, bool)
+        or not isinstance(expected_index_size, int)
+        or expected_index_size <= 0
+        or isinstance(expected_record_count, bool)
+        or not isinstance(expected_record_count, int)
+        or expected_record_count <= 0
+        or expected_record_count > 1_000_000
+    ):
+        raise OntSignalError("selected read mapping authority is unavailable")
+    root = (get_results_dir() / "ont_signal_workbench").resolve()
+    artifact_path = Path(str(artifact.managed_relative_path))
+    if not artifact_path.is_absolute():
+        artifact_path = root / artifact_path
+    try:
+        artifact_path = artifact_path.resolve(strict=True)
+        artifact_path.relative_to(root)
+    except (OSError, ValueError):
+        raise OntSignalError("selected read mapping authority is unavailable") from None
+    index_path = Path(f"{artifact_path}.tbi")
+    try:
+        artifact_stat = artifact_path.lstat()
+        index_stat = index_path.lstat()
+    except OSError:
+        raise OntSignalError("selected read mapping authority is unavailable") from None
+    if (
+        not stat.S_ISREG(artifact_stat.st_mode)
+        or not stat.S_ISREG(index_stat.st_mode)
+        or artifact_stat.st_size != artifact.size_bytes
+        or index_stat.st_size != expected_index_size
+        or _sha256_path(artifact_path) != artifact.sha256
+        or _sha256_path(index_path) != expected_index_sha256
+    ):
+        raise OntSignalError("selected read mapping authority is unavailable")
+    matches: list[dict[str, Any]] = []
+    try:
+        with pysam.TabixFile(str(artifact_path), index=str(index_path)) as indexed:
+            for count, line in enumerate(
+                indexed.fetch(reference_contig, reference_start - 1, reference_end), start=1
+            ):
+                if count > expected_record_count:
+                    raise OntSignalError("selected read mapping authority is unavailable")
+                fields = line.split("\t")
+                if len(fields) < 12 or fields[0] != selected_read_id:
+                    continue
+                target_length, target_start, target_end = map(int, (fields[6], fields[7], fields[8]))
+                if (
+                    fields[4] not in {"+", "-"}
+                    or fields[5] != reference_contig
+                    or target_length <= 0
+                    or target_start < 0
+                    or target_end <= target_start
+                    or target_end > target_length
+                ):
+                    raise OntSignalError("selected read mapping authority is unavailable")
+                matches.append({
+                    "contig": reference_contig,
+                    "start": target_start + 1,
+                    "end": target_end,
+                    "strand": fields[4],
+                })
+    except (OSError, ValueError):
+        raise OntSignalError("selected read mapping authority is unavailable") from None
+    if len(matches) != 1:
+        raise OntSignalError("selected read mapping authority is unavailable")
+    return matches[0]
 
 
 def _derive_ideal_comparison_compatibility(
@@ -3853,7 +3950,17 @@ async def preview_signal_comparison(
     if profile.molecule_type != simulated_profile["molecule_type"]:
         raise OntSignalError("incompatible Squigulator molecule profile")
     validation_receipt = artifact.validation_receipt if isinstance(artifact.validation_receipt, dict) else {}
-    span = _selected_read_span(validation_receipt, selected_read_id, reference_contig)
+    if "read_spans" in validation_receipt:
+        span = _selected_read_span(validation_receipt, selected_read_id, reference_contig)
+    else:
+        span = await asyncio.to_thread(
+            _selected_read_span_from_indexed_artifact,
+            artifact,
+            selected_read_id,
+            reference_contig,
+            reference_start,
+            reference_end,
+        )
     strand = span.get("strand")
     orientation = "reverse" if strand in {"reverse", "-"} else "forward"
     padding = max(

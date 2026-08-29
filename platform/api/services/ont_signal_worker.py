@@ -2515,8 +2515,19 @@ class OntSignalWorker:
             base_shift = int(ont_signal_workbench._mapping_profile_base_shift_authority(profile)["effective_value"])
             padding = max(int(profile.kmer_length) - 1 + abs(base_shift), simulated_kmer - 1)
             window_start, window_end = job.reference_start - padding, job.reference_end + padding
-            spans = artifact.validation_receipt.get("read_spans", {}) if isinstance(artifact.validation_receipt, dict) else {}
-            span = spans.get(job.selected_read_id) if isinstance(spans, dict) else None
+            validation_receipt = artifact.validation_receipt if isinstance(artifact.validation_receipt, dict) else {}
+            if "read_spans" in validation_receipt:
+                spans = validation_receipt.get("read_spans", {})
+                span = spans.get(job.selected_read_id) if isinstance(spans, dict) else None
+            else:
+                span = await asyncio.to_thread(
+                    ont_signal_workbench._selected_read_span_from_indexed_artifact,
+                    artifact,
+                    job.selected_read_id,
+                    job.reference_contig,
+                    job.reference_start,
+                    job.reference_end,
+                )
             if (
                 window_start < 1 or window_end - window_start + 1 > 2048 or not isinstance(span, dict)
                 or span.get("contig") != job.reference_contig

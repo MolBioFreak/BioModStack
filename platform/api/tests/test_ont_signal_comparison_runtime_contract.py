@@ -263,6 +263,43 @@ def test_selected_read_span_authority_fails_closed_when_absent() -> None:
         service._selected_read_span({}, "read-1", "plasmid")
 
 
+def test_selected_read_span_resolves_from_verified_indexed_mapping_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pysam
+
+    root = tmp_path / "results"
+    mapping_dir = root / "ont_signal_workbench" / "mappings" / "mapping-1"
+    mapping_dir.mkdir(parents=True)
+    paf = mapping_dir / "realign.paf"
+    paf.write_text(
+        "read-1\t5000\t100\t4900\t+\tplasmid\t6000\t99\t2200\t2000\t2100\t255\tss:Z:1D\n",
+        encoding="utf-8",
+    )
+    compressed = Path(str(paf) + ".gz")
+    pysam.tabix_compress(str(paf), str(compressed), force=True)
+    pysam.tabix_index(
+        str(compressed), seq_col=5, start_col=7, end_col=8, zerobased=True, force=True
+    )
+    index = Path(str(compressed) + ".tbi")
+    monkeypatch.setattr(service, "get_results_dir", lambda: root)
+    artifact = SimpleNamespace(
+        kind="realign_paf",
+        managed_relative_path=str(compressed),
+        sha256=hashlib.sha256(compressed.read_bytes()).hexdigest(),
+        size_bytes=compressed.stat().st_size,
+        validation_receipt={
+            "index_sha256": hashlib.sha256(index.read_bytes()).hexdigest(),
+            "index_size_bytes": index.stat().st_size,
+            "record_count": 1,
+        },
+    )
+
+    assert service._selected_read_span_from_indexed_artifact(
+        artifact, "read-1", "plasmid", 100, 120
+    ) == {"contig": "plasmid", "start": 100, "end": 2200, "strand": "+"}
+
+
 @pytest.mark.parametrize("start,end", [
     (None, 20), (1, None), (True, 20), (1, False), ("1", 20),
     (1, "20"), (0, 20), (-1, 20), (20, 19),
@@ -844,8 +881,7 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         sha256=hashlib.sha256(files["mapping.paf.gz"].read_bytes()).hexdigest(),
         size_bytes=files["mapping.paf.gz"].stat().st_size,
         validation_receipt={"index_sha256": hashlib.sha256(files["mapping.paf.gz.tbi"].read_bytes()).hexdigest(),
-                            "index_size_bytes": files["mapping.paf.gz.tbi"].stat().st_size,
-                            "read_spans": {"read-1": {"contig": "plasmid", "start": 1, "end": 2200, "strand": "forward"}}},
+                            "index_size_bytes": files["mapping.paf.gz.tbi"].stat().st_size},
         parent_identities={"raw_manifest_sha256": raw.manifest_sha256,
                            "move_bam_sha256": source.artifact_sha256,
                            "move_read_inventory_sha256": source.read_inventory_sha256})
@@ -927,6 +963,16 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
         lambda *_args: _async_value(([(files["real.blow5"], files["real.blow5.idx"])], {"blow5": []})))
 
     calls = []
+    span_lookups = []
+
+    def selected_span(_artifact, read_id, contig, start, end):
+        span_lookups.append((read_id, contig, start, end))
+        return {"contig": "plasmid", "start": 1, "end": 2200, "strand": "forward"}
+
+    monkeypatch.setattr(
+        service, "_selected_read_span_from_indexed_artifact", selected_span
+    )
+
     async def fake_invoke(parents, arguments, kind, _item, _token, output, _allowed=None):
         aliases = {parent.alias for parent in parents.parents}; calls.append((kind, aliases, arguments))
         if kind == "squigulator_producer":
@@ -977,6 +1023,7 @@ async def test_comparison_worker_retains_every_real_and_generated_parent_before_
     assert [kind for kind, _aliases, _arguments in calls] == [
         "squigulator_producer", "squigualiser_comparison_renderer"
     ]
+    assert span_lookups == [("read-1", "plasmid", 100, 120)]
     assert job.state == "ready"
     assert job.generated_read_id == "generated-read-1"
     assert job.output_manifest["parents"]["real_blow5"] == {
