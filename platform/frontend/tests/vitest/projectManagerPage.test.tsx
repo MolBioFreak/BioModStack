@@ -347,6 +347,10 @@ describe('ProjectManager', () => {
                 id: 'digest-1', persistence: 'saved', kind: 'restriction_digest', plasmid_sequence_id: 'sequence-pl1480',
                 plasmid_sequence_ids: ['sequence-pl1480'], input_sequence_ids: ['sequence-pl1480'], output_sequence_ids: [],
                 plasmid_name: 'PL1480', title: 'EcoRI digest', status: 'saved', created_at: '2026-08-28T00:00:00Z', reopen_href: '/designer?molbio_operation_id=digest-1',
+            }, {
+                id: 'digest-unassigned', persistence: 'saved', kind: 'restriction_digest', plasmid_sequence_id: '',
+                plasmid_sequence_ids: [], input_sequence_ids: [], output_sequence_ids: [],
+                plasmid_name: 'Unassigned DNA sequence', title: 'Detached saved digest', status: 'saved', created_at: '2026-08-28T01:00:00Z', reopen_href: '/designer?molbio_operation_id=digest-unassigned',
             }],
             results: [{
                 id: 'result-1', plasmid_sequence_id: 'sequence-pl1480', plasmid_name: 'PL1480', type: 'Clone assessment',
@@ -368,6 +372,7 @@ describe('ProjectManager', () => {
         expect(container.textContent).toContain('EcoRI digest');
         expect(container.textContent).toContain('Clone assessment');
         expect(container.textContent).toContain('Unassigned Project records');
+        expect(container.textContent).toContain('Detached saved digest');
         expect(container.textContent).toContain('Unassigned QC result');
         expect(container.textContent).not.toContain('relationship map');
         expect(container.textContent).not.toContain('Hide tree');

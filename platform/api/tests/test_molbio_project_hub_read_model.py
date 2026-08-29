@@ -262,6 +262,25 @@ async def test_project_hub_classifies_saved_assembly_input_and_output_constructs
             input_revisions=[(source_revision, "fragment", None)],
             output_revisions=[(product_revision, "product", None)],
         )
+        detached = NucleotideSequence(
+            id="sequence-detached", name="Detached source", description="Not a current Project member",
+            sequence="AACCGGTT", sequence_type="dna", molecule_strandedness="double",
+            molecule_orientation="forward", is_circular=False, length=8, features=[], primers=[],
+            analysis_tracks=[], organism=None, version=1, gc_content=50.0,
+        )
+        session.add(detached)
+        detached_revision = await record_sequence_revision(session, detached, change_kind="create")
+        unassigned_operation = await create_operation(
+            session, operation_kind="digest", implementation="test.unassigned",
+            parameters={"summary": {"title": "Detached saved digest"}},
+            provenance={"save_contract": "explicit"}, idempotency_key="detached-op",
+            request_fingerprint="e" * 64,
+        )
+        await add_operation_edges(
+            session, unassigned_operation,
+            input_revisions=[(detached_revision, "template", None)],
+            output_revisions=[],
+        )
         await session.commit()
 
     async with native_factory() as native_session, molbio_factory() as session:
@@ -295,6 +314,24 @@ async def test_project_hub_classifies_saved_assembly_input_and_output_constructs
             id="gibson-edge", workspace_id=project.id, source_resource_id=domain.id,
             target_resource_id="gibson-receipt", edge_mode="attached", edge_key="gibson",
         ))
+        session.add(ExperimentResource(
+            id="detached-operation-receipt", kind="external_entity_receipt",
+            workspace_id=project.id, lifecycle_owner_id=project.id,
+        ))
+        await session.flush()
+        session.add(ExperimentExternalEntityReceipt(
+            id="detached-operation-receipt", workspace_id=project.id, resource_id="detached-operation-receipt",
+            store_id="molbio", entity_kind="molecular_operation", entity_id=unassigned_operation.id,
+            generation_or_revision="1", content_digest="8" * 64, availability="available",
+            verification_authority="test", acknowledgement_json=_canonical({
+                "reopen_uri": f"/designer?molbio_operation_id={unassigned_operation.id}",
+                "metadata": {"title": "Detached saved digest"},
+            }),
+        ))
+        session.add(ExperimentLineageEdge(
+            id="detached-operation-edge", workspace_id=project.id, source_resource_id=domain.id,
+            target_resource_id="detached-operation-receipt", edge_mode="attached", edge_key="detached-digest",
+        ))
         await session.commit()
 
     app = _app(experiment_factory, native_factory, molbio_factory)
@@ -313,6 +350,13 @@ async def test_project_hub_classifies_saved_assembly_input_and_output_constructs
     assert assembly["plasmid_sequence_ids"] == ["sequence-gibson-product", "sequence-pl1480"]
     product_summary = next(item for item in payload["plasmids"] if item["sequence_id"] == product.id)
     assert product_summary["saved_experiment_count"] == 1
+    unassigned = next(item for item in payload["experiments"] if item["id"] == unassigned_operation.id)
+    assert unassigned["title"] == "Detached saved digest"
+    assert unassigned["plasmid_sequence_id"] == ""
+    assert unassigned["plasmid_name"] == "Unassigned DNA sequence"
+    assert unassigned["plasmid_sequence_ids"] == []
+    assert unassigned["input_sequence_ids"] == []
+    assert unassigned["output_sequence_ids"] == []
 
 
 @pytest.mark.asyncio

@@ -114,10 +114,13 @@ const readModel = {
         import_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data&action=import-ont',
         launcher_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data',
     },
-    experiments: [
-        { id: 'pcr-1', persistence: 'saved', kind: 'pcr', plasmid_sequence_id: 'sequence-pl2190', plasmid_sequence_ids: ['sequence-pl2190'], plasmid_name: 'PL2190', title: 'Validation PCR', status: 'saved', created_at: '2026-08-25T12:00:00Z', reopen_href: '/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1' },
-        { id: 'alignment-draft', persistence: 'unsaved', kind: 'alignment', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], plasmid_name: 'PL1480 / PL2190', title: 'Transient alignment', status: 'draft', created_at: '2026-08-25T12:00:00Z', reopen_href: null },
-    ],
+            experiments: [{
+                id: 'pcr-1', persistence: 'saved', kind: 'pcr', plasmid_sequence_id: 'sequence-pl2190', plasmid_sequence_ids: ['sequence-pl2190'], input_sequence_ids: ['sequence-pl2190'], output_sequence_ids: [], plasmid_name: 'PL2190', title: 'Validation PCR', status: 'saved', created_at: '2026-08-25T12:00:00Z', reopen_href: '/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1',
+            }, {
+                id: 'gibson-1', persistence: 'saved', kind: 'gibson', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], input_sequence_ids: ['sequence-pl1480'], output_sequence_ids: ['sequence-pl2190'], plasmid_name: 'PL1480', title: 'Saved Gibson assembly', status: 'saved', created_at: '2026-08-25T13:00:00Z', reopen_href: '/designer?molbio_operation_id=gibson-1',
+            }, {
+                id: 'alignment-draft', persistence: 'unsaved', kind: 'alignment', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], input_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], output_sequence_ids: [], plasmid_name: 'PL1480 / PL2190', title: 'Transient alignment', status: 'draft', created_at: '2026-08-25T12:00:00Z', reopen_href: null,
+            }],
     results: [],
     activity: [
         { id: 'activity-1', summary: 'PL1480 added to the project', occurred_at: '2026-08-24T12:00:00Z', technical_event_type: 'molecular_member_attached', receipt_id: 'receipt-1', envelope_sha256: 'event-digest' },
@@ -274,6 +277,9 @@ describe('mounted MolBio project hub', () => {
         await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl2190');
 
         expect(container.textContent).toContain('Validation PCR');
+        expect(container.textContent).toContain('Saved Gibson assembly');
+        expect(container.textContent).toContain('Inputs: PL1480');
+        expect(container.textContent).toContain('Outputs: PL2190');
         expect(container.textContent).not.toContain('Transient alignment');
         expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('PL2190');
         expect(container.textContent).toContain('Syenex New Plasmids');

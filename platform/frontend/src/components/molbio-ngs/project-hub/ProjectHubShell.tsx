@@ -307,7 +307,7 @@ function ExperimentsTab({ model, selectedPlasmidId, onNavigate }: { model: Proje
             <div className="mt-4 flex flex-wrap gap-2"><button type="button" aria-pressed={!selectedPlasmidId} onClick={() => onNavigate({ plasmid: null })} className={`${BUTTON} ${!selectedPlasmidId ? 'border-accent bg-accent/10 text-accent' : ''}`}>All DNA sequences</button>{model.plasmids.map((plasmid) => <button key={plasmid.sequence_id} type="button" aria-pressed={selectedPlasmidId === plasmid.sequence_id} onClick={() => onNavigate({ plasmid: plasmid.sequence_id })} className={`${BUTTON} ${selectedPlasmidId === plasmid.sequence_id ? 'border-accent bg-accent/10 text-accent' : ''}`}>{plasmid.name}</button>)}</div>
             <div className="mt-3 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">{EXPERIMENT_LANES.map((lane) => {
                 const items = visible.filter((item) => item.kind === lane.kind);
-                return <section key={lane.kind} className={`${PANEL} flex min-h-48 flex-col p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{items.length} saved</span><h3 className="mt-1 font-semibold text-content">{lane.label}</h3><p className="mt-2 text-xs leading-relaxed text-content-secondary">{lane.description}</p><div className="mt-3 space-y-2">{items.length ? items.map((item) => <ExperimentItem key={item.id} item={item} />) : <EmptyInline title={lane.empty} />}</div><Link className={`${BUTTON} mt-auto`} to="/molbio">{lane.action}</Link></section>;
+                return <section key={lane.kind} className={`${PANEL} flex min-h-48 flex-col p-4`}><span className="text-[10px] font-semibold uppercase tracking-wide text-accent">{items.length} saved</span><h3 className="mt-1 font-semibold text-content">{lane.label}</h3><p className="mt-2 text-xs leading-relaxed text-content-secondary">{lane.description}</p><div className="mt-3 space-y-2">{items.length ? items.map((item) => <ExperimentItem key={item.id} item={item} model={model} />) : <EmptyInline title={lane.empty} />}</div><Link className={`${BUTTON} mt-auto`} to="/molbio">{lane.action}</Link></section>;
             })}</div>
             <section className={`${PANEL} mt-4 p-4`}>
                 <h2 className="text-lg font-bold text-content">Sequence revision history</h2>
@@ -321,8 +321,16 @@ function ExperimentsTab({ model, selectedPlasmidId, onNavigate }: { model: Proje
     );
 }
 
-function ExperimentItem({ item }: { item: ProjectHubExperimentSummary }) {
-    const body = <><strong className="block text-xs text-content">{item.title}</strong><span className="mt-1 block text-[10px] text-content-muted">{item.plasmid_name} · {formatDate(item.created_at)}</span></>;
+function ExperimentItem({ item, model }: { item: ProjectHubExperimentSummary; model: ProjectHubReadModel }) {
+    const names = new Map(model.plasmids.map((sequence) => [sequence.sequence_id, sequence.name]));
+    const inputNames = (item.input_sequence_ids ?? []).map((sequenceId) => names.get(sequenceId) ?? sequenceId);
+    const outputNames = (item.output_sequence_ids ?? []).map((sequenceId) => names.get(sequenceId) ?? sequenceId);
+    const body = <>
+        <strong className="block text-xs text-content">{item.title}</strong>
+        <span className="mt-1 block text-[10px] text-content-muted">{item.plasmid_name} · {formatDate(item.created_at)}</span>
+        {inputNames.length > 0 && <span className="mt-2 block text-[10px] text-content-secondary"><strong>Inputs:</strong> {inputNames.join(', ')}</span>}
+        {outputNames.length > 0 && <span className="mt-1 block text-[10px] text-content-secondary"><strong>Outputs:</strong> {outputNames.join(', ')}</span>}
+    </>;
     return item.reopen_href ? <Link to={item.reopen_href} className="block rounded-lg border border-border-primary bg-surface p-3 hover:border-accent/50">{body}</Link> : <div className="rounded-lg border border-border-primary bg-surface p-3">{body}</div>;
 }
 

@@ -715,15 +715,13 @@ async def project_hub(
             if sequence_id in names_by_sequence
         )
         sequence_ids = sorted(set(input_sequence_ids) | set(output_sequence_ids))
-        if not sequence_ids:
-            continue
-        sequence_id = input_sequence_ids[0] if input_sequence_ids else sequence_ids[0]
+        sequence_id = input_sequence_ids[0] if input_sequence_ids else sequence_ids[0] if sequence_ids else ""
         operation_kind = operation.operation_kind if operation is not None else "pcr"
         summary = dict(operation.parameters or {}).get("summary") if operation is not None else None
         title = metadata.get("title") or (summary.get("title") if isinstance(summary, dict) else None) or operation_kind.replace("_", " ").title()
         experiments.append({
             "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
-            "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, sequence_id),
+            "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, "Unassigned DNA sequence"),
             "plasmid_sequence_ids": sequence_ids,
             "input_sequence_ids": input_sequence_ids,
             "output_sequence_ids": output_sequence_ids,
