@@ -2904,6 +2904,20 @@ export function NGSToolkit() {
         setIgvRangeError(null);
         navigateToVerifiedLocus(Number(coordinates[1]), Number(coordinates[2]), source);
     }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
+    const focusReadableIgvRange = useCallback(() => {
+        const reference = selectedAlignmentSession?.reference;
+        if (!reference) {
+            setIgvRangeError('Cannot focus reference bases: authoritative reference bounds are unavailable.');
+            return;
+        }
+        const currentStart = igvCurrentLocus?.contig === reference.contig ? igvCurrentLocus.start : 1;
+        const currentEnd = igvCurrentLocus?.contig === reference.contig ? igvCurrentLocus.end : Math.min(reference.length_bp, 100);
+        const center = Math.floor((currentStart + currentEnd) / 2);
+        let start = Math.max(1, center - 49);
+        let end = Math.min(reference.length_bp, start + 99);
+        start = Math.max(1, end - 99);
+        navigateToLocalIgvRange(`${reference.contig}:${start}-${end}`, 'Read bases');
+    }, [igvCurrentLocus, navigateToLocalIgvRange, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
     const igvMissingReason = alignmentSessionsError
         ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
@@ -5447,7 +5461,7 @@ export function NGSToolkit() {
             {igvModalOpen && (
                 <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm ${igvIsFullscreen ? 'p-0' : 'p-4'}`}>
                     <div ref={igvFullscreenShellRef} data-ngs-igv-fullscreen-shell className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
-                        <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
+                        <div className="ngs-igv-toolbar flex flex-wrap items-center gap-2 px-3 py-2 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">IGV · Read and Signal Workbench</span>
                                 {selectedJob && (
@@ -5500,6 +5514,15 @@ export function NGSToolkit() {
                                         className="rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-primary)] disabled:opacity-50"
                                     >
                                         Go
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={focusReadableIgvRange}
+                                        disabled={igvLoading || !selectedAlignmentSession?.ready}
+                                        title="Show a 100-base window so reference bases are readable"
+                                        className="rounded border border-[var(--accent-primary)]/60 px-2 py-0.5 text-[11px] text-[var(--accent-primary)] disabled:opacity-50"
+                                    >
+                                        Read bases
                                     </button>
                                 </form>
                                 <select
@@ -5592,7 +5615,7 @@ export function NGSToolkit() {
                             <div className="relative w-full h-full">
                                 <div
                                     ref={igvContainerRef}
-                                    className="absolute inset-0 bg-[var(--bg-primary)]"
+                                    className="ngs-readable-igv absolute inset-0 bg-[var(--bg-primary)]"
                                 />
                                 {igvLoading && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]/65 text-[var(--text-secondary)] text-xs">

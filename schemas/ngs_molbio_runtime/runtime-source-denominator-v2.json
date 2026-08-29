@@ -1,5 +1,5 @@
 {
-  "content_sha256": "3b46809d917db27b982e9b17f741cdb08b531f0a3ec781944c6d8c3dc4f7b26e",
+  "content_sha256": "c1fdd88413cd91b66ccf5c2e2cd0ec1b3277dcfe597f56c009b75c4f6e8ac872",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -155,6 +155,7 @@
     "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
     "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
     "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
+    "platform/frontend/src/index.css",
     "platform/frontend/src/lib/api.ts",
     "platform/frontend/src/lib/nanoporeCloneState.ts",
     "platform/frontend/src/lib/nanoporeLaunchPayload.ts",

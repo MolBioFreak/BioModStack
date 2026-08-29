@@ -305,6 +305,17 @@ test('local IGV Range parser accepts only the exact backend-bound contig and bou
     assert.equal(parseRange!('TP53', 'eGFP_plasmid', 5570), null);
 });
 
+test('NGS viewer exposes a readable base-scale view and legible IGV chrome', () => {
+    const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8');
+
+    assert.match(source, /Read bases/u);
+    assert.match(source, /focusReadableIgvRange/u);
+    assert.match(source, /ngs-readable-igv/u);
+    assert.match(css, /\.ngs-readable-igv/u);
+    assert.match(css, /font-size:\s*14px\s*!important/u);
+});
+
 test('NGS viewer opens compactly with explicit Range, fullscreen, and read-inspector controls', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     const openStart = source.indexOf('const openIgvModal');
