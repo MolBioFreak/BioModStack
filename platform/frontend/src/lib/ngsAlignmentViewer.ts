@@ -195,6 +195,26 @@ export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | und
     };
 }
 
+export interface BrowserAlignmentTrackInput {
+    jobId: string;
+    sessionId: string;
+    alignmentUrl: string;
+    alignmentIndexUrl: string;
+    alignmentSizeBytes: number | null | undefined;
+}
+
+export function resolveBrowserAlignmentTrackUrls(input: BrowserAlignmentTrackInput): {
+    bamUrl: string;
+    baiUrl: string;
+    preview: boolean;
+} {
+    if (alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad) {
+        return { bamUrl: input.alignmentUrl, baiUrl: input.alignmentIndexUrl, preview: false };
+    }
+    const base = `/api/jobs/${encodeURIComponent(input.jobId)}/alignment-sessions/${encodeURIComponent(input.sessionId)}/preview`;
+    return { bamUrl: `${base}/bam`, baiUrl: `${base}/bai`, preview: true };
+}
+
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
     const alignmentTracks = input.bamUrl && input.baiUrl
         ? [{

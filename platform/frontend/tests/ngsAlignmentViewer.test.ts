@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
-import { alignmentTrackAutoLoadDisposition, resolveAlignmentViewerArtifacts } from '../src/lib/ngsAlignmentViewer.js';
+import { alignmentTrackAutoLoadDisposition, resolveAlignmentViewerArtifacts, resolveBrowserAlignmentTrackUrls } from '../src/lib/ngsAlignmentViewer.js';
 
 const files = [
     { path: 'fastq_qc/aligned.bam' },
@@ -32,6 +32,20 @@ test('large governed BAM avoids unsafe automatic browser allocation', () => {
         reason: 'Alignment is 780.4 MiB; browser track loading is disabled. Use Inspect reads instead.',
     });
     assert.deepEqual(alignmentTrackAutoLoadDisposition(65_536), { autoLoad: true, reason: null });
+});
+
+test('large governed BAM resolves to the source-bound preview endpoints', () => {
+    assert.deepEqual(resolveBrowserAlignmentTrackUrls({
+        jobId: 'job-a',
+        sessionId: 'session-a',
+        alignmentUrl: '/source.bam',
+        alignmentIndexUrl: '/source.bam.bai',
+        alignmentSizeBytes: 818_274_983,
+    }), {
+        bamUrl: '/api/jobs/job-a/alignment-sessions/session-a/preview/bam',
+        baiUrl: '/api/jobs/job-a/alignment-sessions/session-a/preview/bai',
+        preview: true,
+    });
 });
 
 test('dimer candidate session is opt-in and remains independently bound', () => {

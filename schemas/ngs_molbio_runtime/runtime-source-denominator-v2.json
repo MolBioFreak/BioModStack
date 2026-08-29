@@ -1,5 +1,5 @@
 {
-  "content_sha256": "c1fdd88413cd91b66ccf5c2e2cd0ec1b3277dcfe597f56c009b75c4f6e8ac872",
+  "content_sha256": "babe2dd2185fb7c59cf7823f2a9ff0d64be1ff8bd4d1b03cf82ea48b6cd8355d",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -124,6 +124,7 @@
     "platform/api/tests/test_biomodstack_services.py",
     "platform/api/tests/test_core_runtime_workflow_guard.py",
     "platform/api/tests/test_migration_runner_version_reconciliation.py",
+    "platform/api/tests/test_ngs_alignment_sessions.py",
     "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
     "platform/api/tests/test_ont_signal_comparison.py",
     "platform/api/tests/test_ont_signal_comparison_runtime_contract.py",

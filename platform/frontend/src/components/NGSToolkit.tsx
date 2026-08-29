@@ -16,6 +16,7 @@ import {
     removeIgvBrowser,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
+    resolveBrowserAlignmentTrackUrls,
     resolveIgvReadLocus,
     resolvePendingSessionLocus,
     resolveSessionAuxiliaryTracks,
@@ -2789,12 +2790,23 @@ export function NGSToolkit() {
         setIgvCurrentLocus(null);
     }, [selectedAlignmentSession?.session_id]);
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
-    const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
-    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(
-        selectedAlignmentSession?.artifacts.alignment?.size_bytes,
-    );
+    const browserAlignmentTrack = selectedJob
+        && selectedAlignmentSession?.artifacts.alignment
+        && selectedAlignmentSession.artifacts.alignment_index
+        ? resolveBrowserAlignmentTrackUrls({
+            jobId: selectedJob.id,
+            sessionId: selectedAlignmentSession.session_id,
+            alignmentUrl: selectedAlignmentSession.artifacts.alignment.url,
+            alignmentIndexUrl: selectedAlignmentSession.artifacts.alignment_index.url,
+            alignmentSizeBytes: selectedAlignmentSession.artifacts.alignment.size_bytes,
+        })
+        : null;
+    const activeIgvBamUrl = browserAlignmentTrack?.bamUrl || null;
+    const igvAlignmentLoadDisposition = browserAlignmentTrack?.preview
+        ? { autoLoad: true, reason: 'Showing a governed 2,000-read preview of the full alignment.' }
+        : alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
-    const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
+    const activeIgvBaiUrl = browserAlignmentTrack?.baiUrl || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
     const activeIgvFastaUrl = selectedAlignmentSession?.artifacts.reference?.url || null;
     const activeIgvFaiPath = selectedAlignmentSession?.artifacts.reference_index

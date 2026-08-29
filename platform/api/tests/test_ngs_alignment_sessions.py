@@ -115,6 +115,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "/api/jobs/{job_id}/ngs-artifacts/{artifact_id}",
         "/api/jobs/{job_id}/alignment-artifacts/{artifact_id}",
         "/api/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}",
+        "/api/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}",
     ):
         exact_statuses[(path, "get")] = binary_statuses
         exact_statuses[(path, "head")] = binary_statuses
@@ -128,6 +129,58 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         if statuses == binary_statuses:
             assert responses["206"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
             assert responses["416"]["headers"]["Content-Range"]["schema"] == {"type": "string"}
+
+
+def test_alignment_preview_is_deterministic_and_source_bound(tmp_path: Path) -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    source_bam = tmp_path / "source.bam"
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "plasmid", "LN": 1000}]}
+    with pysam.AlignmentFile(source_bam, "wb", header=header) as output:
+        for index in range(12):
+            read = pysam.AlignedSegment()
+            read.query_name = f"read-{index:02d}"
+            read.query_sequence = "ACGT" * 10
+            read.flag = 0
+            read.reference_id = 0
+            read.reference_start = index * 10
+            read.mapping_quality = 60
+            read.cigar = ((0, 40),)
+            read.query_qualities = pysam.qualitystring_to_array("I" * 40)
+            output.write(read)
+    pysam.index(str(source_bam))
+    source_index = Path(f"{source_bam}.bai")
+    bam_sha, bam_size = service._sha256_file_and_size(source_bam)
+    index_sha, index_size = service._sha256_file_and_size(source_index)
+
+    first = service.build_alignment_preview(
+        source_bam,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=source_index,
+        index_sha256=index_sha,
+        index_size_bytes=index_size,
+        cache_root=tmp_path / "cache",
+        target_reads=3,
+    )
+    second = service.build_alignment_preview(
+        source_bam,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=source_index,
+        index_sha256=index_sha,
+        index_size_bytes=index_size,
+        cache_root=tmp_path / "cache",
+        target_reads=3,
+    )
+
+    assert first[1]["sha256"] == second[1]["sha256"]
+    assert first[3]["sha256"] == second[3]["sha256"]
+    assert first[1]["source_alignment_sha256"] == bam_sha
+    assert first[1]["source_index_sha256"] == index_sha
+    with pysam.AlignmentFile(first[0], "rb") as preview:
+        assert preview.count(until_eof=True) == 3
 
 
 def test_samtools_command_uses_pinned_no_network_ont_runtime(

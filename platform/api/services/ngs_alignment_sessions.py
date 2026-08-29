@@ -6,6 +6,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import random
 import re
 import shutil
 import stat
@@ -19,8 +20,9 @@ from pathlib import Path
 from typing import Any, BinaryIO, Iterator, cast
 
 import rfc8785
+import pysam
 
-from paths import get_results_dir
+from paths import get_analysis_cache_dir, get_results_dir
 from services.ont_ngs_contract import DORADO_LOCK_PATH
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
@@ -31,6 +33,9 @@ MAX_READ_PAGE = 200
 MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
+ALIGNMENT_PREVIEW_TARGET_READS = 2_000
+ALIGNMENT_PREVIEW_POLICY = "deterministic-reservoir-v1"
+_alignment_preview_lock = threading.Lock()
 LINKED_REPORT_ROLES = frozenset(
     {
         "alignment",
@@ -2062,6 +2067,158 @@ def resolve_session_alignment_bundle(
             index = session["artifacts"]["alignment_index"]
             return alignment["_path"], alignment, index["_path"], index
     raise AlignmentSessionError("ready alignment session not found")
+
+
+def _preview_metadata(
+    path: Path,
+    *,
+    kind: str,
+    sha256: str,
+    size_bytes: int,
+    source_alignment_sha256: str,
+    source_index_sha256: str,
+    policy_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "artifact_id": f"{kind}-{policy_sha256}",
+        "kind": kind,
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        "mime_type": "application/octet-stream",
+        "range_capable": True,
+        "content_disposition": "inline",
+        "filename_extension": "bam.bai" if kind.endswith("index") else "bam",
+        "source_manifest_sha256": policy_sha256,
+        "source_alignment_sha256": source_alignment_sha256,
+        "source_index_sha256": source_index_sha256,
+        "policy": ALIGNMENT_PREVIEW_POLICY,
+        "_path": path,
+    }
+
+
+def build_alignment_preview(
+    bam: Path,
+    *,
+    bam_sha256: str,
+    bam_size_bytes: int,
+    index: Path,
+    index_sha256: str,
+    index_size_bytes: int,
+    cache_root: Path | None = None,
+    target_reads: int = ALIGNMENT_PREVIEW_TARGET_READS,
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+    """Build one deterministic, source-bound BAM subset for browser IGV."""
+    if target_reads < 1 or target_reads > 10_000:
+        raise AlignmentSessionError("alignment preview read bound is invalid")
+    source_authority = {
+        "schema": "bms.ngs.alignment-preview-authority.v1",
+        "policy": ALIGNMENT_PREVIEW_POLICY,
+        "target_reads": target_reads,
+        "source_alignment_sha256": bam_sha256,
+        "source_alignment_size_bytes": bam_size_bytes,
+        "source_index_sha256": index_sha256,
+        "source_index_size_bytes": index_size_bytes,
+    }
+    policy_sha256 = hashlib.sha256(rfc8785.dumps(source_authority)).hexdigest()
+    root = (cache_root or (get_analysis_cache_dir() / "ngs_alignment_previews")).resolve()
+    destination = root / policy_sha256
+    preview_bam = destination / "alignment-preview.bam"
+    preview_index = destination / "alignment-preview.bam.bai"
+    manifest_path = destination / "manifest.json"
+
+    def resolved() -> tuple[Path, dict[str, Any], Path, dict[str, Any]] | None:
+        if not all(path.is_file() and not path.is_symlink() for path in (preview_bam, preview_index, manifest_path)):
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if manifest.get("authority") != source_authority or manifest.get("policy_sha256") != policy_sha256:
+            return None
+        bam_digest, bam_size = _sha256_file_and_size(preview_bam)
+        index_digest, index_size = _sha256_file_and_size(preview_index)
+        if manifest.get("preview_bam") != {"sha256": bam_digest, "size_bytes": bam_size}:
+            return None
+        if manifest.get("preview_index") != {"sha256": index_digest, "size_bytes": index_size}:
+            return None
+        return (
+            preview_bam,
+            _preview_metadata(
+                preview_bam, kind="alignment_preview", sha256=bam_digest, size_bytes=bam_size,
+                source_alignment_sha256=bam_sha256, source_index_sha256=index_sha256,
+                policy_sha256=policy_sha256,
+            ),
+            preview_index,
+            _preview_metadata(
+                preview_index, kind="alignment_preview_index", sha256=index_digest, size_bytes=index_size,
+                source_alignment_sha256=bam_sha256, source_index_sha256=index_sha256,
+                policy_sha256=policy_sha256,
+            ),
+        )
+
+    with _alignment_preview_lock:
+        cached = resolved()
+        if cached is not None:
+            return cached
+        root.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=f".{policy_sha256}-", dir=root))
+        temporary_bam = temporary / "alignment-preview.bam"
+        try:
+            bam_snapshot = open_verified_artifact_snapshot(
+                bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256,
+            )
+            index_snapshot = open_verified_artifact_snapshot(
+                index, expected_size=index_size_bytes, expected_sha256=index_sha256,
+            )
+            try:
+                randomizer = random.Random(int(bam_sha256[:16], 16))
+                reservoir: list[Any] = []
+                with pysam.AlignmentFile(_descriptor_path(bam_snapshot.fileno()), "rb") as source:
+                    header = source.header.to_dict()
+                    for ordinal, read in enumerate(source.fetch(until_eof=True)):
+                        if ordinal < target_reads:
+                            reservoir.append(read)
+                        else:
+                            selected = randomizer.randrange(ordinal + 1)
+                            if selected < target_reads:
+                                reservoir[selected] = read
+                reservoir.sort(key=lambda read: (
+                    read.reference_id if read.reference_id >= 0 else 2**31,
+                    read.reference_start if read.reference_start >= 0 else 2**31,
+                    read.query_name or "",
+                    read.flag,
+                ))
+                with pysam.AlignmentFile(temporary_bam, "wb", header=header) as output:
+                    for read in reservoir:
+                        output.write(read)
+                pysam.index(str(temporary_bam))
+            finally:
+                index_snapshot.close()
+                bam_snapshot.close()
+            temporary_index = Path(f"{temporary_bam}.bai")
+            preview_bam_sha, preview_bam_size = _sha256_file_and_size(temporary_bam)
+            preview_index_sha, preview_index_size = _sha256_file_and_size(temporary_index)
+            manifest = {
+                "schema": "bms.ngs.alignment-preview-manifest.v1",
+                "authority": source_authority,
+                "policy_sha256": policy_sha256,
+                "selected_read_count": len(reservoir),
+                "preview_bam": {"sha256": preview_bam_sha, "size_bytes": preview_bam_size},
+                "preview_index": {"sha256": preview_index_sha, "size_bytes": preview_index_size},
+            }
+            (temporary / "manifest.json").write_bytes(rfc8785.dumps(manifest))
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(temporary, destination)
+        except Exception as exc:
+            shutil.rmtree(temporary, ignore_errors=True)
+            if isinstance(exc, AlignmentSessionError):
+                raise
+            raise AlignmentSessionError(f"alignment preview generation failed: {exc}") from exc
+        built = resolved()
+        if built is None:
+            raise AlignmentSessionError("alignment preview failed integrity validation")
+        return built
 
 
 def _iter_sam_lines(

@@ -268,6 +268,7 @@ _GOVERNED_OPENAPI_SUFFIXES = (
     "/ngs-artifacts",
     "/alignment-artifacts",
     "/alignment-session-artifacts",
+    "/preview/{kind}",
     "/reads",
     "/sequence-qc-manifest",
     "/manifest",
@@ -1247,6 +1248,49 @@ async def get_alignment_session_artifact(
                 pinned_root_descriptor=True,
             )
             return await _serve_artifact(path, metadata, request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_preview(
+    job_id: str,
+    session_id: str,
+    kind: str,
+    request: Request,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    if kind not in {"bam", "bai"}:
+        raise OntNgsRouteError(
+            status_code=404,
+            code="NGS_RESOURCE_NOT_FOUND",
+            message="The governed alignment preview was not found.",
+            job_id=job_id,
+            resource="artifact",
+        )
+    try:
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+                service.resolve_session_alignment_bundle,
+                job_id,
+                session_id,
+                **_job_authority(authorized_job),
+                job_output_dir=pinned_root,
+                pinned_root_descriptor=True,
+            )
+            preview_bam, preview_bam_metadata, preview_index, preview_index_metadata = await run_in_threadpool(
+                service.build_alignment_preview,
+                bam,
+                bam_sha256=bam_metadata["sha256"],
+                bam_size_bytes=bam_metadata["size_bytes"],
+                index=index,
+                index_sha256=index_metadata["sha256"],
+                index_size_bytes=index_metadata["size_bytes"],
+            )
+            if kind == "bam":
+                return await _serve_artifact(preview_bam, preview_bam_metadata, request, job_id=job_id)
+            return await _serve_artifact(preview_index, preview_index_metadata, request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
