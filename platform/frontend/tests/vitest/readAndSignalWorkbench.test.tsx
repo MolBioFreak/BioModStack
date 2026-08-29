@@ -752,6 +752,39 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(container.textContent).toContain('external_move_source_validated');
     });
 
+    it('shows the ready external source first and keeps failed predecessors in collapsed attempt history', async () => {
+        const failedExternalSource: OntMoveTableSource = {
+            ...moveSource,
+            move_source_id: 'external-moves-failed-history',
+            source_job_id: null,
+            external_registration_receipt_id: 'ont-external-move-receipt-history',
+            state: 'failed',
+            reason_code: 'external_move_source_validation_failed',
+        };
+        const readySuccessor: OntMoveTableSource = {
+            ...failedExternalSource,
+            move_source_id: 'external-moves-ready-active',
+            attempt_number: 2,
+            predecessor_move_source_id: failedExternalSource.move_source_id,
+            state: 'ready',
+            reason_code: 'external_move_source_validated',
+        };
+        apiMocks.fetchMoveSources.mockResolvedValue({ items: [failedExternalSource, readySuccessor] });
+
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+        await waitUntil(() => expect(container.textContent).toContain('external-moves-ready-active'));
+
+        const history = Array.from(container.querySelectorAll('details')).find(
+            (candidate) => candidate.querySelector('summary')?.textContent?.trim() === 'Attempt history (1)',
+        );
+        expect(history).toBeDefined();
+        expect(history?.hasAttribute('open')).toBe(false);
+        expect(history?.textContent).toContain('external-moves-failed-history');
+        expect(history?.textContent).not.toContain('external-moves-ready-active');
+        expect(container.querySelector('[data-active-external-move-source]')?.textContent).toContain('external-moves-ready-active');
+    });
+
     it('does not offer a fourth external move-source attempt', async () => {
         const failedAttemptThree: OntMoveTableSource = {
             ...moveSource,

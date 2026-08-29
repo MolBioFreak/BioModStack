@@ -44,6 +44,7 @@ import { NanoporeTemplate } from './NanoporeTemplate';
 import { OntInstrumentPanel } from './ngs/OntInstrumentPanel';
 import { RawReadInspector } from './ngs/RawReadInspector';
 import { ReadAndSignalWorkbench } from './ngs/ReadAndSignalWorkbench';
+import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngs/ngsFullscreenOwner';
 import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
@@ -1893,11 +1894,6 @@ function resizeIgvAlignmentTrackToContainer(browser: UntypedApiValue, container:
     trackView.repaintViews?.();
 }
 
-async function requestDocumentFullscreen(): Promise<void> {
-    if (!document.fullscreenEnabled || document.fullscreenElement) return;
-    await document.documentElement.requestFullscreen();
-}
-
 async function exitDocumentFullscreen(): Promise<void> {
     if (!document.fullscreenElement) return;
     await document.exitFullscreen();
@@ -2255,6 +2251,7 @@ export function NGSToolkit() {
     const [motifMinCoverage, setMotifMinCoverage] = useState<number>(DEFAULT_MOTIF_MIN_COVERAGE);
     const [requireStrandConcordance, setRequireStrandConcordance] = useState(true);
     const igvContainerRef = useRef<HTMLDivElement | null>(null);
+    const igvFullscreenShellRef = useRef<HTMLDivElement | null>(null);
     const runInspectorRef = useRef<HTMLDivElement | null>(null);
     const igvLoadTokenRef = useRef(0);
     const igvBrowserRef = useRef<UntypedApiValue | null>(null);
@@ -2305,11 +2302,7 @@ export function NGSToolkit() {
 
     const toggleIgvFullscreen = useCallback(async () => {
         try {
-            if (document.fullscreenElement) {
-                await exitDocumentFullscreen();
-            } else {
-                await requestDocumentFullscreen();
-            }
+            await toggleOwnedFullscreen(igvFullscreenShellRef.current);
         } catch (fullscreenError: unknown) {
             setIgvError(`Fullscreen request failed: ${fullscreenError instanceof Error ? fullscreenError.message : String(fullscreenError)}`);
         }
@@ -2317,12 +2310,15 @@ export function NGSToolkit() {
 
     useEffect(() => {
         const handleFullscreenChange = () => {
-            setIgvIsFullscreen(Boolean(document.fullscreenElement));
+            setIgvIsFullscreen(isOwnedFullscreen(igvFullscreenShellRef.current));
         };
+        const handleFullscreenError = () => setIgvError('Fullscreen request failed: the browser rejected the viewer request.');
         document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('fullscreenerror', handleFullscreenError);
         handleFullscreenChange();
         return () => {
             document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            document.removeEventListener('fullscreenerror', handleFullscreenError);
         };
     }, []);
 
@@ -5444,7 +5440,7 @@ export function NGSToolkit() {
 
             {igvModalOpen && (
                 <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm ${igvIsFullscreen ? 'p-0' : 'p-4'}`}>
-                    <div className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
+                    <div ref={igvFullscreenShellRef} data-ngs-igv-fullscreen-shell className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
                         <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">IGV · Read and Signal Workbench</span>

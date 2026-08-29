@@ -179,6 +179,22 @@ export function ReadAndSignalWorkbench({
     const activeRawRepresentationId = viewerSession
         ? viewerSession.raw_representation_id
         : capabilities?.resolved.raw_representation_id || null;
+    const externalMoveSources = useMemo(
+        () => moveSources.filter((item) => item.external_registration_receipt_id),
+        [moveSources],
+    );
+    const displayedActiveExternalMoveSource = useMemo(() => {
+        const resolvedMoveSourceId = capabilities?.resolved.move_source_id || registeredExternalMoveSourceId;
+        return externalMoveSources.find((item) => item.move_source_id === resolvedMoveSourceId && item.state === 'ready')
+            || [...externalMoveSources]
+                .filter((item) => item.state === 'ready')
+                .sort((left, right) => right.attempt_number - left.attempt_number)[0]
+            || null;
+    }, [capabilities?.resolved.move_source_id, externalMoveSources, registeredExternalMoveSourceId]);
+    const externalMoveSourceHistory = useMemo(
+        () => externalMoveSources.filter((item) => item.move_source_id !== displayedActiveExternalMoveSource?.move_source_id),
+        [displayedActiveExternalMoveSource?.move_source_id, externalMoveSources],
+    );
 
     const identityKey = `${datasetId}:${runId}:${observedGeneration}:${alignmentJobId}:${alignmentSession?.session_id || ''}:${referenceRevisionId || ''}:${viewerSession?.viewer_session_id || ''}`;
     const viewerAlignmentSessionId = alignmentSession?.ready && alignmentSession.session_id && referenceRevisionId
@@ -1050,24 +1066,36 @@ export function ReadAndSignalWorkbench({
                     <div className="text-[10px] text-[var(--text-secondary)]">
                         {externalMoveBamAvailability || 'Selection binds immutable bytes to this exact run, generation, and raw representation before independent move-tag validation.'}
                     </div>
-                    {moveSources.filter((item) => item.external_registration_receipt_id).map((item) => (
-                        <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
-                            <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
-                            {item.state === 'failed'
-                                && item.attempt_number < 3
-                                && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
-                                && (
-                                    <button
-                                        type="button"
-                                        onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
-                                        disabled={busy}
-                                        className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
-                                    >
-                                        Create fresh attempt
-                                    </button>
-                                )}
+                    {displayedActiveExternalMoveSource && (
+                        <div data-active-external-move-source className="flex flex-wrap items-center gap-1 break-all text-[10px] text-[var(--text-secondary)]">
+                            <span>Active external source <code>{displayedActiveExternalMoveSource.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(displayedActiveExternalMoveSource.state)}`}>{displayedActiveExternalMoveSource.state}</span> · {displayedActiveExternalMoveSource.reason_code}</span>
                         </div>
-                    ))}
+                    )}
+                    {externalMoveSourceHistory.length > 0 && (
+                        <details className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
+                            <summary className="cursor-pointer">Attempt history ({externalMoveSourceHistory.length})</summary>
+                            <div className="mt-1 space-y-1">
+                                {externalMoveSourceHistory.map((item) => (
+                                    <div key={item.move_source_id} className="flex flex-wrap items-center gap-1 break-all">
+                                        <span>External source <code>{item.move_source_id}</code> · <span className={`rounded px-1 ${stateBadge(item.state)}`}>{item.state}</span> · {item.reason_code}</span>
+                                        {item.state === 'failed'
+                                            && item.attempt_number < 3
+                                            && !moveSources.some((candidate) => candidate.predecessor_move_source_id === item.move_source_id)
+                                            && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void createFreshExternalMoveSourceAttempt(item.move_source_id)}
+                                                    disabled={busy}
+                                                    className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40"
+                                                >
+                                                    Create fresh attempt
+                                                </button>
+                                            )}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    )}
                 </section>
 
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">

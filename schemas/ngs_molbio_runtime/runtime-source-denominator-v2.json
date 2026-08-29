@@ -1,5 +1,5 @@
 {
-  "content_sha256": "5b2122056b43b2f44025bdfa926e1df578f363f44ea020bd5272f8f53da57c0a",
+  "content_sha256": "d9f2c43b3f915f2a2ffbf967e3599d000e7425219724b002aa3dc03943da455c",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -151,6 +151,7 @@
     "platform/frontend/src/components/ngs/OntSignalIdealComparison.tsx",
     "platform/frontend/src/components/ngs/RawReadInspector.tsx",
     "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
+    "platform/frontend/src/components/ngs/ngsFullscreenOwner.ts",
     "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
     "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
     "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
@@ -160,6 +161,7 @@
     "platform/frontend/src/lib/ngsResultRouting.ts",
     "platform/frontend/src/lib/projectManager.ts",
     "platform/frontend/src/pages/ProjectManager.tsx",
+    "platform/frontend/tests/ngsFullscreenOwner.test.ts",
     "platform/frontend/tests/vitest/ontSignalIdealComparison.test.tsx",
     "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
     "platform/frontend/vite.config.ts",
