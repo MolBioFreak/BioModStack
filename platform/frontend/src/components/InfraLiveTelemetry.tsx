@@ -34,6 +34,7 @@ import {
     resolveTelemetryGapBreakMs,
     resolveTelemetryNominalDomain,
     resolveTelemetryPlotDomain,
+    resolveTelemetryPlotX,
     resolveTelemetryStaleAfterMs,
     resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
@@ -859,7 +860,6 @@ function buildTelemetrySvgPath(
 ): string {
     const xValues = line.x ?? [];
     const yValues = line.y ?? [];
-    const xRange = Math.max(1, xMax - xMin);
     const yRange = Math.max(Number.EPSILON, yMax - yMin);
     let path = '';
     let drawing = false;
@@ -867,12 +867,12 @@ function buildTelemetrySvgPath(
     for (let index = 0; index < Math.min(xValues.length, yValues.length); index += 1) {
         const timestampMs = parseSeriesTimestamp(xValues[index]);
         const value = yValues[index];
-        if (timestampMs == null || value == null || !Number.isFinite(value)) {
+        const x = timestampMs == null ? null : resolveTelemetryPlotX(timestampMs, xMin, xMax);
+        if (x == null || value == null || !Number.isFinite(value)) {
             drawing = false;
             continue;
         }
 
-        const x = Math.max(0, Math.min(1000, ((timestampMs - xMin) / xRange) * 1000));
         const y = Math.max(0, Math.min(100, 100 - ((value - yMin) / yRange) * 100));
         path += `${drawing ? ' L' : ' M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
         drawing = true;
@@ -1488,7 +1488,7 @@ export function InfraLiveTelemetry({
     const [windowMinutes, setWindowMinutes] = useState<WindowPreset>(restoredState.windowMinutes);
     const usesRangeAwareDisplay = windowMinutes >= 10;
     const displayIntervalMs = resolveTelemetryDisplayIntervalMs(windowMinutes, pollIntervalMs);
-    const bucketIntervalMs = resolveTelemetryBucketIntervalMs(windowMinutes);
+    const bucketIntervalMs = resolveTelemetryBucketIntervalMs(windowMinutes, pollIntervalMs);
     const historyQueryKey = [
         'compact-telemetry-chart-history',
         windowMinutes,

@@ -56,15 +56,26 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.doesNotMatch(historySource, /bms_infra_live_telemetry_v1|samples: LiveSample\[\]|persistTelemetryState/);
 });
 
-test('telemetry windows use stable range-aware display and bucket cadences', () => {
+test('telemetry windows use stable range-aware display and selected short-window cadences', () => {
     assert.equal(resolveTelemetryDisplayIntervalMs(1, 1000), 1000);
     assert.equal(resolveTelemetryDisplayIntervalMs(10, 1000), 5_000);
     assert.equal(resolveTelemetryDisplayIntervalMs(15, 1000), 10_000);
     assert.equal(resolveTelemetryDisplayIntervalMs(30, 1000), 15_000);
     assert.equal(resolveTelemetryDisplayIntervalMs(60, 1000), 30_000);
     assert.deepEqual(
-        ([1, 3, 5, 10, 15, 30, 60] as const).map(resolveTelemetryBucketIntervalMs),
-        [1_000, 2_000, 3_000, 5_000, 10_000, 15_000, 30_000],
+        ([1, 3, 5, 10, 15, 30, 60] as const).map(
+            (windowMinutes) => resolveTelemetryBucketIntervalMs(windowMinutes, 1000),
+        ),
+        [1_000, 1_000, 1_000, 5_000, 10_000, 15_000, 30_000],
+        'a selected one-second poll must retain one-second points for every bounded short window',
+    );
+    assert.deepEqual(
+        ([1, 3, 5] as const).map((windowMinutes) => resolveTelemetryBucketIntervalMs(windowMinutes, 2000)),
+        [2_000, 2_000, 2_000],
+    );
+    assert.deepEqual(
+        ([1, 3, 5] as const).map((windowMinutes) => resolveTelemetryBucketIntervalMs(windowMinutes, 5000)),
+        [5_000, 5_000, 5_000],
     );
 
     const first = resolveTelemetryWindowBounds(125_000, 60, 30_000);
@@ -102,8 +113,8 @@ test('fresh plotted telemetry reaches the right edge while stale telemetry prese
 
     assert.deepEqual(
         resolveTelemetryPlotDomain(nominalDomain, 119_000, true),
-        [59_000, 119_000],
-        'a fresh plotted bucket must own the right edge without changing the selected window width',
+        nominalDomain,
+        'fresh telemetry must use the cadence-owned wall-clock domain instead of waiting for a bucket timestamp',
     );
     assert.deepEqual(
         resolveTelemetryPlotDomain(nominalDomain, 119_000, false),
@@ -115,6 +126,22 @@ test('fresh plotted telemetry reaches the right edge while stale telemetry prese
         nominalDomain,
         'a future sample must not expand the wall-clock domain',
     );
+});
+
+test('chart geometry rejects timestamps outside the selected wall-clock domain', () => {
+    const xResolver = (
+        telemetryHistory as typeof telemetryHistory & {
+            resolveTelemetryPlotX?: (timestampMs: number, xMin: number, xMax: number) => number | null;
+        }
+    ).resolveTelemetryPlotX;
+
+    assert.equal(typeof xResolver, 'function', 'chart geometry needs an explicit domain-clipping boundary');
+    if (!xResolver) return;
+    assert.equal(xResolver(59_999, 60_000, 120_000), null);
+    assert.equal(xResolver(120_001, 60_000, 120_000), null);
+    assert.equal(xResolver(60_000, 60_000, 120_000), 0);
+    assert.equal(xResolver(90_000, 60_000, 120_000), 500);
+    assert.equal(xResolver(120_000, 60_000, 120_000), 1000);
 });
 
 test('live status ages telemetry freshness between slow history fetches', () => {
