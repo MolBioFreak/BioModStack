@@ -950,7 +950,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(inputs[1]?.max).toBe('2147483647');
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const stop = buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement;
+        const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(false);
         expect(stop.disabled).toBe(false);
         await act(async () => movePositive.click());
@@ -997,7 +997,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         const movePositive = buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement;
-        const stop = buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement;
+        const stop = buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement;
         expect(movePositive.disabled).toBe(true);
         expect(movePositive.title).toBe('Robot denied Y movement.');
         expect(stop.disabled).toBe(false);
@@ -1061,7 +1061,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(false);
-        expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).not.toContain('matching v2 catalog and dashboard authority is unavailable');
     });
 
@@ -1095,7 +1095,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
-        expect((buttons.find((button) => button.textContent === 'STOP Y') as HTMLButtonElement).disabled).toBe(false);
+        expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
         expect(section.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
 
@@ -1178,9 +1178,11 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
         const panel = container.querySelector('[data-testid="serial206-xy-oem-panel"]') as HTMLElement;
         expect(panel).not.toBeNull();
+        expect(panel.textContent).toContain('Combined XY Capability');
+        expect(panel.textContent).toContain('one backend OEM moveXY transaction');
         const buttons = [...panel.querySelectorAll('button')] as HTMLButtonElement[];
-        const move = buttons.find((button) => button.textContent === 'OEM moveXY') as HTMLButtonElement;
-        const home = buttons.find((button) => button.textContent === 'OEM HomeXY') as HTMLButtonElement;
+        const move = buttons.find((button) => button.textContent === 'Move X + Y together') as HTMLButtonElement;
+        const home = buttons.find((button) => button.textContent === 'Home X + Y') as HTMLButtonElement;
         expect(move.disabled).toBe(false);
         expect(home.disabled).toBe(false);
         await act(async () => move.click());

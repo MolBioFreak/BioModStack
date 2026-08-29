@@ -794,17 +794,32 @@ export function BioXpCockpit() {
                     >Show OEM position table</button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                    <article data-testid="serial206-y-authority-panel" className="rounded-lg border border-emerald-700/60 bg-emerald-950/20 p-3">
+                    <article data-testid="serial206-y-authority-panel" style={{ order: 2 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
                                 <h3 className="font-semibold">Y Axis</h3>
-                                <p className="mt-1 text-xs text-slate-300">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
                             </div>
-                            <div className="text-right text-xs text-slate-400">
-                                <div>Board epoch: <span className="font-mono text-slate-100">{yAxisV2?.active_board_epoch ?? '—'}</span></div>
-                                <div>Lifecycle: <span className="font-mono text-slate-100">{yAxisV2?.lifecycle_state ?? '—'}</span></div>
-                            </div>
+                            <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-1.5 text-sm font-semibold hover:bg-red-700 disabled:opacity-35">Stop</button>
                         </div>
+                        <div className="mt-3 grid gap-2">
+                            <label className="block text-xs text-slate-300">Relative move steps<input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                            <div className="flex flex-wrap gap-1" aria-label="Y step presets">
+                                {[1000, 5000, 10000, 25000].map((steps) => (
+                                    <button key={steps} type="button" onClick={() => setYStepInput(steps)} className={`rounded px-2 py-1 text-xs ${yStepInput === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>{steps.toLocaleString()}</button>
+                                ))}
+                            </div>
+                            <label className="block text-xs text-slate-300">OEM absolute target (steps)<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
+                            <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} className={actionClass}>Home</button>
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} className={actionClass}>Move +</button>
+                            <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} className={actionClass}>Go absolute</button>
+                        </div>
+                        <details className="mt-3 rounded border border-slate-800 bg-slate-950/40 p-2 text-xs">
+                            <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
+                            <p className="mt-2 text-slate-300">Robot-owned Serial-206 Y authority. Controller completion and physical observation stay separate.</p>
+                            <div className="mt-2 text-slate-400">Board epoch: <span className="font-mono text-slate-100">{yAxisV2?.active_board_epoch ?? '—'}</span> · Lifecycle: <span className="font-mono text-slate-100">{yAxisV2?.lifecycle_state ?? '—'}</span></div>
                         <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Position</dt><dd className="font-mono">{yAxisV2?.position_steps ?? '—'}</dd><dd className={yAxisV2?.position_reply_valid ? 'text-emerald-300' : 'text-amber-200'}>{yAxisV2 ? `${yAxisV2.position_reply_valid ? 'Valid' : 'Invalid'} reply · status ${yAxisV2.position_status_code ?? 'not reported'}` : 'Reply unavailable'}</dd></div>
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Reference</dt><dd className="font-mono">{yAxisV2?.reference_state ?? '—'}</dd></div>
@@ -814,17 +829,7 @@ export function BioXpCockpit() {
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Updated</dt><dd className="font-mono">{yAxisV2 ? new Date(yAxisV2.updated_at * 1000).toISOString() : '—'}</dd></div>
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Physical proof</dt><dd className="font-mono text-amber-200">{yAxisV2?.physical_position_verified ? 'observed' : 'not observed'}</dd></div>
                         </dl>
-                        <div className="mt-3 grid gap-2">
-                            <label className="block text-xs text-slate-300">Step magnitude<input type="number" min={0} max={BIOXP_Y_RELATIVE_MAX_STEPS} value={yStepInput} onChange={(event) => setYStepInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
-                            <label className="block text-xs text-slate-300">Absolute target<input type="number" min={BIOXP_Y_ABSOLUTE_MIN_STEPS} max={BIOXP_Y_ABSOLUTE_MAX_STEPS} value={yTargetInput} onChange={(event) => setYTargetInput(Number(event.target.value))} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm" /></label>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(-Math.abs(yStepInput))} className={actionClass}>Move −</button>
-                            <button type="button" disabled={yMutationDisabled('oem.y.manual_panel_home')} title={yActionDisabledReason('oem.y.manual_panel_home', 'Y manual-panel home unavailable.')} onClick={() => invokeYHome('oem.y.manual_panel_home')} className={actionClass}>Manual-panel Home</button>
-                            <button type="button" disabled={yMutationDisabled('oem.y.move_steps')} title={yActionDisabledReason('oem.y.move_steps', 'Y relative move unavailable.')} onClick={() => invokeYMoveSteps(Math.abs(yStepInput))} className={actionClass}>Move +</button>
-                            <button type="button" disabled={yMutationDisabled('oem.y.move_absolute')} title={yActionDisabledReason('oem.y.move_absolute', 'Y absolute move unavailable.')} onClick={() => invokeYMoveAbsolute(yTargetInput)} className="rounded bg-indigo-700 px-3 py-2 text-sm font-semibold disabled:opacity-35">Absolute</button>
-                            <button type="button" disabled={yStopDisabled} title="Addressed Y STOP remains independent of normal command submission and treats observed generations as evidence only." onClick={interruptY} className="rounded bg-red-800 px-3 py-2 text-sm font-semibold disabled:opacity-35">STOP Y</button>
-                        </div>
+                        </details>
                         <YOperatorError label="Y enqueue" error={invokeYAction.error} />
                         <YOperatorError label="Y STOP" error={interruptYStop.error} />
                         {yPendingActionId && !yCommandId && <p role="status" className="mt-2 text-xs text-cyan-200">Submitting <span className="font-mono">{yPendingActionId}</span>; awaiting durable robot command ID.</p>}
@@ -845,22 +850,22 @@ export function BioXpCockpit() {
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
                         {!v2AuthorityCoherent && <p className="mt-2 text-xs text-amber-200">Fresh v2 catalog or dashboard authority is unavailable. Normal Y controls remain disabled; addressed STOP remains independent.</p>}
                     </article>
-                    <article data-testid="serial206-xy-oem-panel" className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3">
-                        <h3 className="font-semibold">Recovered OEM XY Composite</h3>
-                        <p className="mt-1 text-xs text-slate-300">Runs literal <code>ClassControlInterface.moveXY</code> and <code>HomeXY</code> through the robot method queue. X and Y keep their independent controller semantics.</p>
+                    <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
+                        <h3 className="font-semibold">Combined XY Capability</h3>
+                        <p className="mt-1 text-xs text-slate-300">Submits one backend OEM <code>moveXY</code> transaction so X and Y execute the robot-owned combined move. Use this for named XY destinations such as tip waste rather than issuing two independent axis commands.</p>
                         <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">X target</dt><dd className="font-mono">{absoluteTargets.x}</dd></div>
                             <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Y target</dt><dd className="font-mono">{yTargetInput}</dd></div>
                         </dl>
                         <div className="mt-3 flex flex-wrap gap-2">
-                            <button type="button" disabled={xyMoveDisabled} onClick={invokeXYMove} className={actionClass}>OEM moveXY</button>
-                            <button type="button" disabled={xyHomeDisabled} onClick={invokeXYHome} className={actionClass}>OEM HomeXY</button>
+                            <button type="button" disabled={xyMoveDisabled} onClick={invokeXYMove} className={actionClass}>Move X + Y together</button>
+                            <button type="button" disabled={xyHomeDisabled} onClick={invokeXYHome} className={actionClass}>Home X + Y</button>
                         </div>
                         <YOperatorError label="XY method" error={invokeXYMethod.error} />
                         {invokeXYMethod.data && <details className="mt-2 text-xs"><summary>Latest XY method receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(invokeXYMethod.data, null, 2)}</pre></details>}
                     </article>
                     {AXES.map(({ axis, label, controls }) => (
-                        <article key={axis} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+                        <article key={axis} style={{ order: axis === 'x' ? 3 : axis === 'z' ? 4 : axis === 'g' ? 5 : 6 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="font-semibold">{label}</h3>
                                 <div className="flex gap-2">
@@ -917,18 +922,16 @@ export function BioXpCockpit() {
                                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm"
                                         />
                                     </label>
-                                    {axis === 'z' && (
-                                        <div className="flex flex-wrap gap-1" aria-label="Z step presets">
-                                            {[1000, 5000, 10000, 25000].map((steps) => (
-                                                <button
-                                                    key={steps}
-                                                    type="button"
-                                                    onClick={() => setManualSteps((current) => ({ ...current, z: steps }))}
-                                                    className={`rounded px-2 py-1 text-xs ${manualSteps.z === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
-                                                >{steps.toLocaleString()}</button>
-                                            ))}
-                                        </div>
-                                    )}
+                                    <div className="flex flex-wrap gap-1" aria-label={`${label} step presets`}>
+                                        {[1000, 5000, 10000, 25000].map((steps) => (
+                                            <button
+                                                key={steps}
+                                                type="button"
+                                                onClick={() => setManualSteps((current) => ({ ...current, [axis]: steps }))}
+                                                className={`rounded px-2 py-1 text-xs ${manualSteps[axis] === steps ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}
+                                            >{steps.toLocaleString()}</button>
+                                        ))}
+                                    </div>
                                     <label className="block text-xs text-slate-300">
                                         OEM absolute target (steps)
                                         <div className="mt-1 flex gap-2">
@@ -957,8 +960,9 @@ export function BioXpCockpit() {
                                         </div>
                                         </label>
                                         {axis === 'x' && (
-                                        <div className="rounded border border-sky-800/70 bg-sky-950/20 p-3 text-xs text-sky-100">
-                                            <h4 className="font-semibold text-sky-50">X OEM authority</h4>
+                                        <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-sky-100">
+                                            <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
+                                            <h4 className="mt-2 font-semibold text-sky-50">X OEM authority</h4>
                                             <p className="mt-1"><strong>Position:</strong> {xPosition} · <strong>Software reference state (not physical proof):</strong> {xReference}</p>
                                             <p className="mt-1"><strong>Lifecycle:</strong> {xLifecycle} · <strong>Authority:</strong> {xAuthority}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {xLeftSwitchState} / {xRightSwitchState} · <strong>GAP13/12 disabled:</strong> {String(xLeftSwitchDisabled)} / {String(xRightSwitchDisabled)}</p>
@@ -973,11 +977,12 @@ export function BioXpCockpit() {
                                             </div>
                                             {xLastFailure != null && <details className="mt-2"><summary className="cursor-pointer text-red-200">Last X failure</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(xLastFailure, null, 2)}</pre></details>}
                                             {xReceipt != null && <details className="mt-2"><summary className="cursor-pointer">Latest X authority receipt</summary><pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-sky-200/80">{JSON.stringify(xReceipt, null, 2)}</pre></details>}
-                                        </div>
+                                        </details>
                                         )}
                                         {axis === 'z' && (
-                                        <div className="rounded border border-cyan-800/70 bg-cyan-950/20 p-3 text-xs text-cyan-100">
-                                            <p><strong>Dynamic OEM pseudo-home floor:</strong> OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
+                                        <details className="rounded border border-slate-800 bg-slate-950/40 p-2 text-xs text-cyan-100">
+                                            <summary className="cursor-pointer font-semibold text-slate-200">Axis status and evidence</summary>
+                                            <p className="mt-2"><strong>Dynamic OEM pseudo-home floor:</strong> OEM moveZ applies the robot-owned PSUDO_Z_HOME as a dynamic minimum target. A request below the current value is replaced with that value before dispatch. Z does not automatically return to pseudo-home after every movement.</p>
                                             <p className="mt-1"><strong>Clear and Home:</strong> Z Clear returns to the selected pseudo-home. Manual Home follows the OEM homing sequence and establishes controller coordinate 0.</p>
                                             <p className="mt-1"><strong>Position:</strong> {dashboard?.z_axis.status?.position_steps ?? 'unknown'} · <strong>Reference:</strong> {dashboard?.z_axis.status?.reference ?? 'unknown'} · <strong>Authority state:</strong> {dashboard?.z_axis.provider.state ?? 'unknown'}</p>
                                             <p className="mt-1"><strong>GAP9/10:</strong> {dashboard?.z_axis.status?.left_switch_state ?? 'unknown'} / {dashboard?.z_axis.status?.right_switch_state ?? 'unknown'} · <strong>GAP13/12 disabled:</strong> {String(dashboard?.z_axis.status?.left_switch_disabled ?? 'unknown')} / {String(dashboard?.z_axis.status?.right_switch_disabled ?? 'unknown')}</p>
@@ -995,7 +1000,7 @@ export function BioXpCockpit() {
                                                 >Z Clear (automatic OEM position)</button>
                                             </div>
                                             {dashboard?.z_axis.last_failure != null && <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-red-200">{JSON.stringify(dashboard.z_axis.last_failure, null, 2)}</pre>}
-                                        </div>
+                                        </details>
                                     )}
                                 </div>
                             )}
