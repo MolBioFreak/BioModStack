@@ -64,7 +64,12 @@ from paths import (
     resolve_runtime_data_path,
     to_allowed_relative,
 )
-from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
+from runtime_policy import (
+    acquire_workflow_mutation_lease,
+    run_with_workflow_mutation_lease,
+    workflow_launch_block_detail,
+    workflow_launches_allowed,
+)
 from schemas import JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
@@ -7860,9 +7865,17 @@ async def annotate_cdr_regions(
     total_count = len(designs)
     
     logger.info(f"[CDR ANNOTATE] Starting background annotation on {len(pdb_paths)} designs for job {job_id}")
-    asyncio.create_task(
-        annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job_id))
-    )
+    mutation_lease = acquire_workflow_mutation_lease()
+    try:
+        asyncio.create_task(
+            run_with_workflow_mutation_lease(
+                mutation_lease,
+                annotate_and_update_designs(pdb_paths, design_ids, job_id=str(job_id)),
+            )
+        )
+    except BaseException:
+        mutation_lease.close()
+        raise
     
     return {
         "message": f"CDR annotation started for {len(pdb_paths)} designs (running in background)",

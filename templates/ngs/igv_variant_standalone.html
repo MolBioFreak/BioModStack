@@ -3,6 +3,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
     <meta http-equiv="Pragma" content="no-cache"/>
     <meta http-equiv="Expires" content="0"/>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; connect-src data: blob:; img-src data: blob:; media-src data: blob:; font-src data:; script-src 'unsafe-inline' blob:; style-src 'unsafe-inline'; worker-src blob:">
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -200,7 +201,7 @@
         for (let j = 1; j < headers.length; j++) {
             var cell = document.createElement("th")
             headerRow.appendChild(cell)
-            cell.innerHTML = headers[j]
+            cell.textContent = headers[j]
         }
 
 
@@ -236,7 +237,7 @@
             for (let j = 1; j < headers.length; j++) {
                 cell = document.createElement("td")
                 row.appendChild(cell)
-                cell.innerHTML = rowData[j]
+                cell.textContent = rowData[j]
             }
         }
 

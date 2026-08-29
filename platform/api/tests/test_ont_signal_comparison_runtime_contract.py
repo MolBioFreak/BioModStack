@@ -1064,6 +1064,9 @@ def test_runtime_source_denominator_v2_covers_comparison_surface_and_preserves_v
         "platform/frontend/src/components/ngs/OntSignalIdealComparison.tsx",
         "platform/frontend/tests/vitest/ontSignalIdealComparison.test.tsx",
         "docs/Lab_Automation_MolBio_and_Sequencing.md",
+        "nextflow.config",
+        "platform/api/runtime_policy.py",
+        "scripts/biomodstack_dev_sync.py",
         "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
     }
     assert required <= set(v2["paths"])

@@ -2,10 +2,75 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+import fcntl
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Awaitable, Generic, Iterator, TextIO, TypeVar
 
 CORE_RUNTIME_MODE_ENV = "BMS_CORE_RUNTIME_MODE"
+DEPLOYMENT_ADMISSION_LOCK_ENV = "BMS_DEPLOYMENT_ADMISSION_LOCK"
+DEFAULT_DEPLOYMENT_ADMISSION_LOCK = (
+    Path.home() / ".local" / "state" / "biomodstack" / "deployment-admission.lock"
+)
 logger = logging.getLogger(__name__)
+
+
+class WorkflowAdmissionBlocked(RuntimeError):
+    """A managed Development cutover currently owns the admission fence."""
+
+
+T = TypeVar("T")
+
+
+class WorkflowMutationLease(Generic[T]):
+    """A transferable shared lock held for detached mutation work."""
+
+    def __init__(self, lock: TextIO) -> None:
+        self._lock: TextIO | None = lock
+
+    def close(self) -> None:
+        lock, self._lock = self._lock, None
+        if lock is None:
+            return
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock.close()
+
+
+def acquire_workflow_mutation_lease() -> WorkflowMutationLease[Any]:
+    lock_path = Path(
+        os.getenv(DEPLOYMENT_ADMISSION_LOCK_ENV, str(DEFAULT_DEPLOYMENT_ADMISSION_LOCK))
+    ).expanduser()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock.close()
+        raise WorkflowAdmissionBlocked(
+            "BioModStack Development deployment is in progress; retry after coherence is restored"
+        ) from exc
+    return WorkflowMutationLease(lock)
+
+
+async def run_with_workflow_mutation_lease(
+    lease: WorkflowMutationLease[T],
+    operation: Awaitable[T],
+) -> T:
+    try:
+        return await operation
+    finally:
+        lease.close()
+
+
+@contextmanager
+def workflow_mutation_admission() -> Iterator[None]:
+    lease = acquire_workflow_mutation_lease()
+    try:
+        yield
+    finally:
+        lease.close()
 
 
 TRUE_STRINGS = {"1", "true", "yes", "on"}

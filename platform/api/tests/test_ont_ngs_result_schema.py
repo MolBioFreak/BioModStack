@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +38,12 @@ def test_file_projection_is_producer_bound_and_contract_validated(
         "/home/dalab/.biomodstack-dev/inputs/ngs/bfx6nb-fastq-qc/"
         "BFX6NB_1_JAN26-EL-Q2-01.fastq.gz"
     )
-    runtime_sif = Path("/mnt/BioModStack/dev/apptainer/dorado-v1.3.1-samtools-v1.24.sif")
+    runtime_sif = Path(
+        os.environ.get(
+            "BMS_NGS_RUNTIME_SIF",
+            "/mnt/BioModStack/dev/apptainer/dorado-v1.3.1-samtools-v1.24.sif",
+        )
+    )
     if not result_root.is_dir() or not source_fastq.is_file() or not runtime_sif.is_file():
         pytest.skip("Development retry3 acceptance package is unavailable")
     monkeypatch.setenv("BMS_RESULTS_DIR", str(result_root.parent))

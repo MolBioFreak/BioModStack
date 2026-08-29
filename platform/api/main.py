@@ -23,7 +23,12 @@ from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
 from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
-from runtime_policy import workflow_launch_block_detail, workflow_launches_allowed
+from runtime_policy import (
+    WorkflowAdmissionBlocked,
+    workflow_launch_block_detail,
+    workflow_launches_allowed,
+    workflow_mutation_admission,
+)
 from biomodstack_runtime_profile import install_feature_enabled
 from services.analysis_worker import AnalysisWorker
 from services.boltz_api_jobs import BoltzApiJobWorker
@@ -268,6 +273,17 @@ app.add_exception_handler(
 
 app.add_middleware(FrustraMPNNUploadLimitMiddleware)
 app.add_middleware(DevIssueScreenshotUploadLimitMiddleware)
+
+
+@app.middleware("http")
+async def deployment_admission_fence(request: Request, call_next):
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return await call_next(request)
+    try:
+        with workflow_mutation_admission():
+            return await call_next(request)
+    except WorkflowAdmissionBlocked as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 # Allow Private Network Access (PNA) preflights from secure origins
 @app.middleware("http")
