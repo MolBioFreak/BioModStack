@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 
 import {
     DEFAULT_ONT_SIGNAL_RENDER_PARAMS,
@@ -45,7 +45,18 @@ import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
 const TERMINAL_STATES = new Set(['ready', 'failed', 'cancelled']);
+const MIN_SIGNAL_WORKBENCH_WIDTH = 320;
+const MIN_IGV_WORKSPACE_WIDTH = 320;
 type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
+
+function clampSignalWorkbenchWidth(width: number, viewportWidth = window.innerWidth): number {
+    const maximum = Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH);
+    return Math.min(maximum, Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, width));
+}
+
+function initialSignalWorkbenchWidth(): number {
+    return clampSignalWorkbenchWidth(Math.min(560, window.innerWidth * 0.38));
+}
 
 interface ReadAndSignalWorkbenchProps {
     datasetId: string;
@@ -169,6 +180,39 @@ export function ReadAndSignalWorkbench({
     const [provenanceOpen, setProvenanceOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [panelWidth, setPanelWidth] = useState(initialSignalWorkbenchWidth);
+    const panelWidthRef = useRef(panelWidth);
+    const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+    const updatePanelWidth = useCallback((nextWidth: number) => {
+        const bounded = clampSignalWorkbenchWidth(nextWidth);
+        panelWidthRef.current = bounded;
+        setPanelWidth(bounded);
+    }, []);
+
+    const beginPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        resizeCleanupRef.current?.();
+        const startX = event.clientX;
+        const startWidth = panelWidthRef.current;
+        const move = (moveEvent: PointerEvent) => updatePanelWidth(startWidth + startX - moveEvent.clientX);
+        const stop = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', stop);
+            resizeCleanupRef.current = null;
+        };
+        resizeCleanupRef.current = stop;
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', stop);
+    }, [updatePanelWidth]);
+
+    const resizePanelByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        updatePanelWidth(panelWidthRef.current + (event.key === 'ArrowLeft' ? 32 : -32));
+    }, [updatePanelWidth]);
+
+    useEffect(() => () => resizeCleanupRef.current?.(), []);
 
     const persistedReadMappingJobId = typeof viewerSession?.signal_state.read_mapping_job_id === 'string'
         ? viewerSession.signal_state.read_mapping_job_id
@@ -971,7 +1015,25 @@ export function ReadAndSignalWorkbench({
     };
 
     return (
-        <aside className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[48%] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col">
+        <aside
+            data-signal-workbench-panel
+            style={{ '--signal-workbench-width': `${panelWidth}px` } as CSSProperties}
+            className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[var(--signal-workbench-width)] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col"
+        >
+            <div
+                role="separator"
+                aria-label="Resize Read and Signal Workbench"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_SIGNAL_WORKBENCH_WIDTH}
+                aria-valuemax={Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, window.innerWidth - MIN_IGV_WORKSPACE_WIDTH)}
+                aria-valuenow={Math.round(panelWidth)}
+                tabIndex={0}
+                onPointerDown={beginPanelResize}
+                onKeyDown={resizePanelByKeyboard}
+                className="absolute inset-y-0 -left-1 z-30 hidden w-2 cursor-col-resize touch-none items-center justify-center lg:flex focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+            >
+                <span className="h-12 w-0.5 rounded bg-[var(--border-primary)] hover:bg-[var(--accent-primary)]" />
+            </div>
             <header className="border-b border-[var(--border-primary)] px-3 py-2 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                     <div>

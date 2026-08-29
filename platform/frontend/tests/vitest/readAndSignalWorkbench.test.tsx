@@ -667,6 +667,31 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
+    it('provides a draggable and keyboard-accessible vertical resize separator', async () => {
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+
+        const panel = container.querySelector('[data-signal-workbench-panel]') as HTMLElement | null;
+        const separator = container.querySelector('[role="separator"][aria-orientation="vertical"]') as HTMLElement | null;
+        expect(panel).not.toBeNull();
+        expect(separator).not.toBeNull();
+        const initialWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+
+        await act(async () => {
+            separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 600 }));
+            window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 520 }));
+            window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 520 }));
+        });
+        const draggedWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(draggedWidth).toBeGreaterThan(initialWidth);
+
+        await act(async () => {
+            separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
+        });
+        const keyboardWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(keyboardWidth).toBeLessThan(draggedWidth);
+    });
+
     it('discovers and mounts ideal comparison inside the existing workbench', async () => {
         await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42' }) });
         await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));
