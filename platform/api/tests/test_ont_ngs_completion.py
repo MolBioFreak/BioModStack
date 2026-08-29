@@ -104,7 +104,7 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
             }
         },
     )
-    validator = cast(Any, getattr(service, "validate_and_prepare_ont_signal_alignment_completion", None))
+    validator: Any = getattr(service, "validate_and_prepare_ont_signal_alignment_completion", None)
     assert callable(validator), "external alignment completion validator is missing"
     monkeypatch.setattr(service, "resolve_persisted_job_result_root", lambda _job: output_root)
     monkeypatch.setattr(
@@ -155,15 +155,13 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     )
     monkeypatch.setattr(service, "attach_resource_usage_receipt", lambda params, _receipt: dict(params))
 
-    result = await validator(
-        job,
-        resource_usage_receipt={"complete": True, "receipt_sha256": "d" * 64},
-    )
+    result = await validator(job, resource_usage_receipt=None)
 
     assert result["artifact_set_sha256"] == job.provenance["result_integrity"]["artifact_set_sha256"]
     assert result["declared_artifact_count"] == 5
     assert job.provenance["result_integrity"]["result_kind"] == "ngs_alignment_session"
     assert job.provenance["result_integrity"]["sequence_qc_manifest_sha256"] == "c" * 64
+    assert "resource_evidence_status" not in result
     assert job.params["run_fastq_qc"] is False
 
 

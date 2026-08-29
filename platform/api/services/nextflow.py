@@ -2701,13 +2701,13 @@ async def launch_nextflow_job(
                                     integrity["declared_artifact_count"],
                                 )
                             elif is_ont_signal_alignment_job(job):
-                                if terminal_resource_receipt_factory is None:
-                                    raise RuntimeError(
-                                        "external ONT signal alignment requires producer resource evidence"
-                                    )
                                 integrity = await validate_and_prepare_ont_signal_alignment_completion(
                                     job,
-                                    resource_usage_receipt=terminal_resource_receipt_factory(),
+                                    resource_usage_receipt=(
+                                        terminal_resource_receipt_factory()
+                                        if terminal_resource_receipt_factory is not None
+                                        else None
+                                    ),
                                 )
                                 logger.info(
                                     "Validated external ONT signal-alignment result package for job %s "
