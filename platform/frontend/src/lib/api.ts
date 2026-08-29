@@ -5549,7 +5549,7 @@ export const updateOntSignalViewerSession = (
 ));
 
 export type ProjectHubSection = 'overview' | 'plasmids' | 'sequence-data' | 'experiments' | 'results' | 'activity';
-export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change';
+export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change' | 'ligation' | 'gibson' | 'golden_gate';
 export type ProjectHubMapTone = 'accent' | 'success' | 'info' | 'warning' | 'secondary';
 
 export interface ProjectHubMapSegment {
@@ -5561,12 +5561,13 @@ export interface ProjectHubMapSegment {
     strand: 'forward' | 'reverse' | 'unknown';
 }
 
-export interface ProjectHubPlasmidSummary {
+export interface ProjectHubDNASequenceSummary {
     sequence_id: string;
     revision_id: string;
     receipt_id: string;
     receipt_sha256: string;
     content_digest: string;
+    current_content_sha256?: string | null;
     source_store_id: string;
     schema_name: string;
     revision_number: number;
@@ -5614,10 +5615,13 @@ export interface ProjectHubExperimentSummary {
     status: string;
     created_at: string;
     reopen_href: string | null;
+    input_sequence_ids?: string[];
+    output_sequence_ids?: string[];
 }
 
 export interface ProjectHubResultSummary {
     id: string;
+    plasmid_sequence_id?: string;
     plasmid_name: string;
     type: string;
     status: string;
@@ -5635,6 +5639,8 @@ export interface ProjectHubActivitySummary {
     receipt_id: string;
     envelope_sha256: string;
 }
+
+export type ProjectHubPlasmidSummary = ProjectHubDNASequenceSummary;
 
 export interface ProjectHubReadModel {
     schema: 'bms.project-hub.v1';
@@ -5660,7 +5666,8 @@ export interface ProjectHubReadModel {
         binding_status: string;
         adapter_status: string;
     };
-    plasmids: ProjectHubPlasmidSummary[];
+    /** Compatibility field name. Items are DNA sequences; plasmid is one possible sequence role. */
+    plasmids: ProjectHubDNASequenceSummary[];
     sequence_data: {
         items: ProjectHubSequenceDataItem[];
         import_href: string;

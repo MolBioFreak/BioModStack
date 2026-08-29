@@ -1671,10 +1671,10 @@ export async function createProject(request: ProjectCreateRequest): Promise<Hier
     return (await api.post<HierarchyMutationResult>('/api/projects', request)).data;
 }
 
-export async function listNgsMolBioProjectLinks(projectId: string, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
+export async function listNgsMolBioProjectLinks(projectId: string, limit = 100, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
     const response = await api.get<{ items: NgsMolBioProjectLink[] }>(
         `/api/projects/${segment(projectId)}/ngs-molbio-links`,
-        { signal },
+        { params: { limit }, signal },
     );
     return response.data.items;
 }

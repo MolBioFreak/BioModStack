@@ -37,6 +37,7 @@ from molbio_models import (
     MolecularDocument,
     MolecularOperation,
     MolecularOperationInput,
+    MolecularOperationOutput,
     MolecularRevision,
     NucleotideSequence,
     ProjectPlasmidMetadata,
@@ -474,8 +475,8 @@ def _project_hub_molecular_href(
     domain_id: str,
     state_revision_id: str,
     sequence_id: str,
-    revision_id: str,
 ) -> str:
+    """Open the stable sequence at its latest editable server head."""
     return "/designer?" + urlencode({
         "workspace_id": project_id,
         "global_experiment_id": experiment_id,
@@ -483,7 +484,6 @@ def _project_hub_molecular_href(
         "state_revision_id": state_revision_id,
         "section": "plasmids",
         "molbio_sequence_id": sequence_id,
-        "molbio_revision_id": revision_id,
     })
 
 
@@ -517,12 +517,26 @@ async def project_hub(
     if len(member_rows) > 100:
         raise HTTPException(413, detail={"code": "project_hub_member_limit"})
     molecular_receipts = [receipt for _member, receipt in member_rows if receipt.entity_kind == "molecular_revision"]
-    revision_ids = [receipt.entity_id for receipt in molecular_receipts]
-    revisions = {
+    attached_revision_ids = [receipt.entity_id for receipt in molecular_receipts]
+    attached_revisions = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularRevision).where(MolecularRevision.id.in_(revision_ids))
+            select(MolecularRevision).where(MolecularRevision.id.in_(attached_revision_ids))
         )).all()
-    } if revision_ids else {}
+    } if attached_revision_ids else {}
+    attached_sequence_ids = sorted({row.document_id for row in attached_revisions.values()})
+    molecular_documents = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularDocument).where(MolecularDocument.id.in_(attached_sequence_ids))
+        )).all()
+    } if attached_sequence_ids else {}
+    current_revision_ids = [
+        row.current_revision_id for row in molecular_documents.values() if row.current_revision_id
+    ]
+    current_revisions = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularRevision).where(MolecularRevision.id.in_(current_revision_ids))
+        )).all()
+    } if current_revision_ids else {}
     metadata_rows = list((await molbio.scalars(
         select(ProjectPlasmidMetadata).where(
             ProjectPlasmidMetadata.project_id == project_id,
@@ -545,17 +559,25 @@ async def project_hub(
     input_rows = list((await molbio.scalars(
         select(MolecularOperationInput).where(MolecularOperationInput.operation_id.in_(operation_ids))
     )).all()) if operation_ids else []
+    output_rows = list((await molbio.scalars(
+        select(MolecularOperationOutput).where(MolecularOperationOutput.operation_id.in_(operation_ids))
+    )).all()) if operation_ids else []
     operation_sequence_ids: dict[str, set[str]] = {}
-    if input_rows:
-        input_revisions = {
-            row.id: row for row in (await molbio.scalars(
-                select(MolecularRevision).where(MolecularRevision.id.in_([item.revision_id for item in input_rows]))
-            )).all()
-        }
-        for item in input_rows:
-            revision = input_revisions.get(item.revision_id)
-            if revision is not None:
-                operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+    operation_output_sequence_ids: dict[str, set[str]] = {}
+    edge_revision_ids = [item.revision_id for item in [*input_rows, *output_rows]]
+    edge_revisions = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularRevision).where(MolecularRevision.id.in_(edge_revision_ids))
+        )).all()
+    } if edge_revision_ids else {}
+    for item in input_rows:
+        revision = edge_revisions.get(item.revision_id)
+        if revision is not None:
+            operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+    for item in output_rows:
+        revision = edge_revisions.get(item.revision_id)
+        if revision is not None:
+            operation_output_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
     receipt_sequence_ids: dict[str, set[str]] = {}
     for row in operation_receipts:
         linked = set(operation_sequence_ids.get(row.entity_id, set()))
@@ -575,7 +597,13 @@ async def project_hub(
     plasmids: list[dict[str, Any]] = []
     names_by_sequence: dict[str, str] = {}
     for receipt in molecular_receipts:
-        revision = revisions.get(receipt.entity_id)
+        attached_revision = attached_revisions.get(receipt.entity_id)
+        document = molecular_documents.get(attached_revision.document_id) if attached_revision is not None else None
+        revision = (
+            current_revisions.get(document.current_revision_id)
+            if document is not None and document.current_revision_id
+            else None
+        ) or attached_revision
         if revision is None or not isinstance(revision.snapshot, dict):
             try:
                 destination = json.loads(receipt.reopen_destination)
@@ -586,7 +614,8 @@ async def project_hub(
             plasmids.append({
                 "sequence_id": sequence_id, "revision_id": receipt.entity_id,
                 "receipt_id": receipt.receipt_id, "receipt_sha256": receipt.receipt_sha256,
-                "content_digest": receipt.content_digest, "source_store_id": receipt.source_store_id,
+                "content_digest": receipt.content_digest, "current_content_sha256": None,
+                "source_store_id": receipt.source_store_id,
                 "schema_name": receipt.schema_name, "revision_number": 0,
                 "name": sequence_id, "description": "Molecular member unavailable",
                 "availability": "unavailable", "unavailable_reason": "Molecular member unavailable",
@@ -596,7 +625,7 @@ async def project_hub(
                 "organism_host_context": None, "project_tags": [], "project_notes": "",
                 "reopen_href": _project_hub_molecular_href(
                     project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
-                    state_revision_id=selected.id, sequence_id=sequence_id, revision_id=receipt.entity_id,
+                    state_revision_id=selected.id, sequence_id=sequence_id,
                 ),
                 "map_segments": [],
             })
@@ -608,7 +637,11 @@ async def project_hub(
         sequence_id = revision.document_id
         name = str(snapshot.get("name") or sequence_id)
         names_by_sequence[sequence_id] = name
-        saved_count = sum(sequence_id in receipt_sequence_ids.get(row.id, set()) for row in operation_receipts)
+        saved_count = sum(
+            sequence_id in receipt_sequence_ids.get(row.id, set())
+            or sequence_id in operation_output_sequence_ids.get(row.entity_id, set())
+            for row in operation_receipts
+        )
         map_segments = [
             {
                 "start": int(item.get("start", 0)),
@@ -627,6 +660,7 @@ async def project_hub(
             "receipt_id": receipt.receipt_id,
             "receipt_sha256": receipt.receipt_sha256,
             "content_digest": receipt.content_digest,
+            "current_content_sha256": revision.content_sha256,
             "source_store_id": receipt.source_store_id,
             "schema_name": receipt.schema_name,
             "revision_number": revision.revision_number,
@@ -653,23 +687,37 @@ async def project_hub(
                 domain_id=domain_id,
                 state_revision_id=selected.id,
                 sequence_id=sequence_id,
-                revision_id=revision.id,
             ),
             "map_segments": map_segments,
         })
 
     experiments: list[dict[str, Any]] = []
-    kind_map = {"digest": "restriction_digest", "alignment": "alignment", "pcr": "pcr"}
+    kind_map = {
+        "digest": "restriction_digest",
+        "alignment": "alignment",
+        "pcr": "pcr",
+        "ligation": "ligation",
+        "gibson": "gibson",
+        "golden_gate": "golden_gate",
+    }
     for row in operation_receipts:
         ack = _hub_acknowledgement(row)
         metadata = ack.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
         operation = operations.get(row.entity_id)
-        sequence_ids = sorted(sequence_id for sequence_id in receipt_sequence_ids.get(row.id, set()) if sequence_id in names_by_sequence)
+        input_sequence_ids = sorted(
+            sequence_id for sequence_id in receipt_sequence_ids.get(row.id, set())
+            if sequence_id in names_by_sequence
+        )
+        output_sequence_ids = sorted(
+            sequence_id for sequence_id in operation_output_sequence_ids.get(row.entity_id, set())
+            if sequence_id in names_by_sequence
+        )
+        sequence_ids = sorted(set(input_sequence_ids) | set(output_sequence_ids))
         if not sequence_ids:
             continue
-        sequence_id = sequence_ids[0]
+        sequence_id = input_sequence_ids[0] if input_sequence_ids else sequence_ids[0]
         operation_kind = operation.operation_kind if operation is not None else "pcr"
         summary = dict(operation.parameters or {}).get("summary") if operation is not None else None
         title = metadata.get("title") or (summary.get("title") if isinstance(summary, dict) else None) or operation_kind.replace("_", " ").title()
@@ -677,6 +725,8 @@ async def project_hub(
             "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
             "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, sequence_id),
             "plasmid_sequence_ids": sequence_ids,
+            "input_sequence_ids": input_sequence_ids,
+            "output_sequence_ids": output_sequence_ids,
             "title": str(title), "status": operation.status if operation is not None else "saved",
             "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
         })
@@ -705,7 +755,7 @@ async def project_hub(
             })
         if row.entity_kind in result_kinds:
             result_items.append({
-                "id": row.entity_id, "plasmid_name": plasmid_name,
+                "id": row.entity_id, "plasmid_sequence_id": sequence_id, "plasmid_name": plasmid_name,
                 "type": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
                 "status": str(metadata.get("status") or row.availability), "owner": str(metadata.get("owner") or row.entity_id),
                 "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": ack.get("reopen_uri"),
