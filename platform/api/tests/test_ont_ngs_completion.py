@@ -163,6 +163,20 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     assert job.provenance["result_integrity"]["sequence_qc_manifest_sha256"] == "c" * 64
     assert "resource_evidence_status" not in result
     assert job.params["run_fastq_qc"] is False
+    assert job.status == "completed"
+    assert job.queue_status == "completed"
+    assert job.current_stage == "Complete"
+    assert job.completed_stages == ["dorado_align"]
+    assert job.stage_outputs == {
+        "dorado_align": [
+            f"bms_results/{output_root.name}/align/aligned.bam",
+            f"bms_results/{output_root.name}/align/aligned.bam.bai",
+            f"bms_results/{output_root.name}/align/reference.fasta",
+            f"bms_results/{output_root.name}/align/reference.fasta.fai",
+            f"bms_results/{output_root.name}/align/align.log",
+            f"bms_results/{output_root.name}/qc_manifest.json",
+        ]
+    }
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(

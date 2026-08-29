@@ -285,6 +285,14 @@ async def _validate_signal_alignment_from_pinned_root(
     updated_provenance = dict(provenance)
     updated_provenance["result_integrity"] = result_integrity
     job.provenance = updated_provenance
+    job.completed_stages = [_EXTERNAL_SIGNAL_ALIGNMENT_STAGE]
+    job.stage_outputs = {_EXTERNAL_SIGNAL_ALIGNMENT_STAGE: list(outputs)}
+    job.status = "completed"
+    job.queue_status = "completed"
+    job.paused = False
+    job.current_stage = "Complete"
+    job.stage_progress = None
+    job.error_message = None
     return result_integrity
 
 
