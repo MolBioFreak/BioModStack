@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import * as molecularWorkspaceState from '../src/components/MolBioToolkit/utils/molecularWorkspaceState.js';
+
 import {
     deserializeMolecularWorkspaceIdentity,
     molecularWorkspaceId,
@@ -10,6 +12,16 @@ import {
     upsertStableMolecularWorkspace,
     type PersistedMolecularWorkspace,
 } from '../src/components/MolBioToolkit/utils/molecularWorkspaceState.js';
+
+test('exact molecular authority requires approval unless an exact lens is already active', () => {
+    const resolveAuthority = (molecularWorkspaceState as Record<string, unknown>).resolveExactMolecularAuthority;
+    assert.equal(typeof resolveAuthority, 'function');
+    if (typeof resolveAuthority !== 'function') return;
+
+    assert.equal(resolveAuthority(false, true, false), false);
+    assert.equal(resolveAuthority(true, true, false), true);
+    assert.equal(resolveAuthority(false, false, true), true);
+});
 
 test('molecular query routing distinguishes current, exact, and revision-only recovery', () => {
     assert.deepEqual(resolveMolecularOpenRequest(new URLSearchParams('molbio_sequence_id=seq-1')), {

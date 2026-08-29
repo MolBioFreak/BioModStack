@@ -25,6 +25,19 @@ test('MolBioToolkit wires stable identity-only restore and persistence before di
     assert.match(source, /assertExactMolecularRevisionIdentity\(/);
 });
 
+test('raw exact-query state cannot clear dirty work before the request is approved', () => {
+    assert.match(source, /const isExactMolecularAuthority = resolveExactMolecularAuthority\(/);
+});
+
+test('workspace restoration uses the StrictMode-safe mounted effect owner and side-effect-free fetch', () => {
+    assert.doesNotMatch(source, /workspaceRestoreStartedRef/);
+    assert.match(source, /useMolecularWorkspaceRestoreEffect\(/);
+    assert.match(source, /loadMolecularWorkspaceRestore/);
+    assert.match(source, /publishMolecularWorkspaceRestore/);
+    assert.match(source, /loadMolecularWorkspaceCurrentSequence\(/);
+    assert.doesNotMatch(source, /getSequence\(persisted\.sequenceId\)/);
+});
+
 test('MolBioToolkit guards dirty close, switch, route leave, and browser leave', () => {
     assert.match(source, /beforeunload/);
     assert.match(source, /Save and continue/);

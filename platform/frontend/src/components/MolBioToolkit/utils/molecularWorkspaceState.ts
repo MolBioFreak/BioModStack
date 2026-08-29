@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 export const MOLECULAR_WORKSPACE_STORAGE_KEY = 'bms.molbio.workspaces.v1';
 
 export type MolecularWorkspaceLens = 'current' | 'historical';
@@ -22,6 +24,58 @@ export type MolecularOpenRequest =
     | { kind: 'current'; sequenceId: string }
     | { kind: 'exact'; sequenceId: string; revisionId: string }
     | { kind: 'invalid'; reason: 'revision_without_sequence' };
+
+export function resolveExactMolecularAuthority(
+    requestApproved: boolean,
+    hasExactRequest: boolean,
+    hasActiveExactLens: boolean,
+): boolean {
+    return (requestApproved && hasExactRequest) || hasActiveExactLens;
+}
+
+export function useMolecularWorkspaceRestoreEffect<T>(
+    enabled: boolean,
+    load: () => Promise<T>,
+    publish: (value: T) => void,
+): { restoring: boolean; error: string | null } {
+    const [state, setState] = useState<{ restoring: boolean; error: string | null }>({
+        restoring: false,
+        error: null,
+    });
+
+    useEffect(() => {
+        if (!enabled) return undefined;
+        let cancelled = false;
+        setState({ restoring: true, error: null });
+        void load().then((value) => {
+            if (cancelled) return;
+            publish(value);
+            setState({ restoring: false, error: null });
+        }).catch((error: unknown) => {
+            if (cancelled) return;
+            setState({
+                restoring: false,
+                error: error instanceof Error ? error.message : 'Molecular workspace restoration failed.',
+            });
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [enabled, load, publish]);
+
+    return state;
+}
+
+export async function loadMolecularWorkspaceCurrentSequence<T>(
+    sequenceId: string,
+    fetchSequence: (sequenceId: string) => Promise<T>,
+): Promise<T | null> {
+    try {
+        return await fetchSequence(sequenceId);
+    } catch {
+        return null;
+    }
+}
 
 export interface RestoredMolecularWorkspaceIdentity {
     tabs: PersistedMolecularWorkspace[];

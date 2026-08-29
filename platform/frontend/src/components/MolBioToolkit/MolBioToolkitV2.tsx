@@ -51,6 +51,7 @@ import {
     calculatePrimerTm,
     fetchProjectHub,
     fetchMolecularRevision,
+    fetchNucleotideSequence,
     fetchPrimerTmOptions,
     type MolecularRevision,
     type SequenceAnalysisTrack,
@@ -112,11 +113,14 @@ import {
 import {
     MOLECULAR_WORKSPACE_STORAGE_KEY,
     deserializeMolecularWorkspaceIdentity,
+    loadMolecularWorkspaceCurrentSequence,
     molecularWorkspaceId,
+    resolveExactMolecularAuthority,
     resolveMolecularOpenRequest,
     runDirtyWorkspaceTransition,
     serializeMolecularWorkspaceIdentity,
     upsertStableMolecularWorkspace,
+    useMolecularWorkspaceRestoreEffect,
     type DirtyWorkspaceChoice,
     type MolecularOpenRequest,
     type PersistedMolecularWorkspace,
@@ -716,7 +720,6 @@ export function MolBioToolkitV2() {
     const [workspaceTransitionError, setWorkspaceTransitionError] = useState<string | null>(null);
     const [workspaceRestoreNotice, setWorkspaceRestoreNotice] = useState<string | null>(null);
     const [workspaceRestoreComplete, setWorkspaceRestoreComplete] = useState(false);
-    const workspaceRestoreStartedRef = useRef(false);
     const browserLeaveApprovedRef = useRef(false);
     const [colorPalette, setColorPalette] = useState<ColorPaletteName>('classic');
     const [visibleFrames, setVisibleFrames] = useState<Set<1 | 2 | 3 | -1 | -2 | -3>>(new Set([1]));
@@ -791,7 +794,11 @@ export function MolBioToolkitV2() {
         ?? (hasExactMolecularPair
             ? (activeExactMatchesRequest ? activeExactMolecularRevision : null)
             : activeExactMolecularRevision);
-    const isExactMolecularAuthority = hasExactMolecularPair || activeExactMolecularRevision !== null;
+    const isExactMolecularAuthority = resolveExactMolecularAuthority(
+        molecularOpenRequestApproved,
+        hasExactMolecularPair,
+        activeExactMolecularRevision !== null,
+    );
     const exactMolecularAuthorityRef = useRef(isExactMolecularAuthority);
     exactMolecularAuthorityRef.current = isExactMolecularAuthority;
     const [activeDisplayStrand, setActiveDisplayStrand] = useState<NucleotideDisplayStrand>(() => sourceDisplayStrandForSequenceData(EMPTY_SEQUENCE));
@@ -1814,14 +1821,15 @@ export function MolBioToolkitV2() {
     }, [activeWorkspaceId]);
     const effectiveViewMode: ViewMode = viewMode;
 
-    useEffect(() => {
-        if (workspaceRestoreStartedRef.current) return;
-        workspaceRestoreStartedRef.current = true;
+    type MolecularWorkspaceRestorePayload = {
+        restored: ReturnType<typeof deserializeMolecularWorkspaceIdentity>;
+        loaded: Array<WorkspaceTab | null>;
+    };
+    const loadMolecularWorkspaceRestore = useCallback(async (): Promise<MolecularWorkspaceRestorePayload> => {
         const restored = deserializeMolecularWorkspaceIdentity(
             window.localStorage.getItem(MOLECULAR_WORKSPACE_STORAGE_KEY),
         );
-        let cancelled = false;
-        void Promise.all(restored.tabs.map(async (persisted): Promise<WorkspaceTab | null> => {
+        const loaded = await Promise.all(restored.tabs.map(async (persisted): Promise<WorkspaceTab | null> => {
             try {
                 if (persisted.lens === 'historical' && persisted.exactRevisionId) {
                     const revision = await fetchMolecularRevision(persisted.sequenceId, persisted.exactRevisionId);
@@ -1841,7 +1849,13 @@ export function MolBioToolkitV2() {
                         exactMolecularRevision: revision,
                     };
                 }
-                const current = await getSequence(persisted.sequenceId);
+                const current = await loadMolecularWorkspaceCurrentSequence(
+                    persisted.sequenceId,
+                    async (sequenceId) => {
+                        const response = await fetchNucleotideSequence(sequenceId);
+                        return response.data as NucleotideSequenceResponse;
+                    },
+                );
                 if (!current) return null;
                 const data = sequenceDataFromApiRecord(current);
                 return {
@@ -1856,40 +1870,45 @@ export function MolBioToolkitV2() {
             } catch {
                 return null;
             }
-        })).then((loaded) => {
-            if (cancelled) return;
-            const tabs = loaded.filter((tab): tab is WorkspaceTab => tab !== null);
-            const failedCount = restored.tabs.length - tabs.length;
-            if (restored.notice || failedCount > 0) {
-                setWorkspaceRestoreNotice('Some saved molecular workspaces could not be restored and were skipped.');
-            }
-            if (tabs.length > 0) {
-                const nextActiveId = restored.activeWorkspaceId && tabs.some((tab) => tab.id === restored.activeWorkspaceId)
-                    ? restored.activeWorkspaceId
-                    : tabs[0].id;
-                const active = tabs.find((tab) => tab.id === nextActiveId) ?? tabs[0];
-                setWorkspaceTabs(tabs);
-                setActiveWorkspaceId(active.id);
-                hydrate(active.historyState);
-                setSelectedSequenceId(active.sequenceId);
-                setIsDirty(false);
-                setActiveDisplayStrand(sourceDisplayStrandForSequenceData(active.historyState.present));
-                const restoredViewModes: Record<string, ViewMode> = {};
-                restored.tabs.forEach((persisted) => {
-                    const mode = persisted.viewContext.viewMode;
-                    if (mode === 'linear' || mode === 'circular' || mode === 'both') restoredViewModes[persisted.id] = mode;
-                });
-                setWorkspaceViewModes(restoredViewModes);
-                const activeIdentity = restored.tabs.find((persisted) => persisted.id === active.id);
-                const panel = activeIdentity?.viewContext.activePanel;
-                if (panel) setActivePanel(panel as ActivePanel);
-                const strand = activeIdentity?.viewContext.displayStrand;
-                if (strand === 'plus' || strand === 'minus') setActiveDisplayStrand(strand);
-            }
-            setWorkspaceRestoreComplete(true);
-        });
-        return () => { cancelled = true; };
-    }, [getSequence, hydrate]);
+        }));
+        return { restored, loaded };
+    }, []);
+    const publishMolecularWorkspaceRestore = useCallback(({ restored, loaded }: MolecularWorkspaceRestorePayload) => {
+        const tabs = loaded.filter((tab): tab is WorkspaceTab => tab !== null);
+        const failedCount = restored.tabs.length - tabs.length;
+        if (restored.notice || failedCount > 0) {
+            setWorkspaceRestoreNotice('Some saved molecular workspaces could not be restored and were skipped.');
+        }
+        if (tabs.length > 0) {
+            const nextActiveId = restored.activeWorkspaceId && tabs.some((tab) => tab.id === restored.activeWorkspaceId)
+                ? restored.activeWorkspaceId
+                : tabs[0].id;
+            const active = tabs.find((tab) => tab.id === nextActiveId) ?? tabs[0];
+            setWorkspaceTabs(tabs);
+            setActiveWorkspaceId(active.id);
+            hydrate(active.historyState);
+            setSelectedSequenceId(active.sequenceId);
+            setIsDirty(false);
+            setActiveDisplayStrand(sourceDisplayStrandForSequenceData(active.historyState.present));
+            const restoredViewModes: Record<string, ViewMode> = {};
+            restored.tabs.forEach((persisted) => {
+                const mode = persisted.viewContext.viewMode;
+                if (mode === 'linear' || mode === 'circular' || mode === 'both') restoredViewModes[persisted.id] = mode;
+            });
+            setWorkspaceViewModes(restoredViewModes);
+            const activeIdentity = restored.tabs.find((persisted) => persisted.id === active.id);
+            const panel = activeIdentity?.viewContext.activePanel;
+            if (panel) setActivePanel(panel as ActivePanel);
+            const strand = activeIdentity?.viewContext.displayStrand;
+            if (strand === 'plus' || strand === 'minus') setActiveDisplayStrand(strand);
+        }
+        setWorkspaceRestoreComplete(true);
+    }, [hydrate]);
+    useMolecularWorkspaceRestoreEffect(
+        !workspaceRestoreComplete,
+        loadMolecularWorkspaceRestore,
+        publishMolecularWorkspaceRestore,
+    );
 
     useEffect(() => {
         if (!workspaceRestoreComplete) return;
