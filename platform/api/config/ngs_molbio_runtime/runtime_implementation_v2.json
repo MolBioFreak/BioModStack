@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "4a984d192a146bf7a2a94185c005146254a8b8b1f946e2161ce5094698e3b3e1",
+  "content_sha256": "3d187e0b7287a96630ae353f27a9198170a6d7ce3116d6a649785d64180030f1",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -414,8 +414,8 @@
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
-      "sha256": "8e90b4b8a167f8367c80122f8f55f3d2b5b489f00c9281dbb56fe65ded3b4f47",
-      "size_bytes": 74602
+      "sha256": "b3d13ca66a8e68acdf0b8d973495930425ee15c1d48c48ab91d8b880ec990d53",
+      "size_bytes": 77005
     },
     {
       "path": "platform/api/routers/nucleotide_sequences.py",
@@ -444,8 +444,8 @@
     },
     {
       "path": "platform/api/routers/projects.py",
-      "sha256": "bc74b43d909b0dde4d0b96f52a99e8e1ec66297c3279e6cb714149c2503e18ad",
-      "size_bytes": 85556
+      "sha256": "bd0d656d08d06c03956880b342797d05719aabc0486f2ebe7ab6d3415b33e735",
+      "size_bytes": 85633
     },
     {
       "path": "platform/api/routers/queue.py",
@@ -709,8 +709,8 @@
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
-      "sha256": "62d04e26ba3a1ec1bf8f62619d552c275949f9730fe4c9ae7427859285409cba",
-      "size_bytes": 160137
+      "sha256": "4fd95a5a8aeac8a971b752037c460fc943339240e764aa70b7e5bf89ef1a57c9",
+      "size_bytes": 160145
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/indexV2.ts",
@@ -824,8 +824,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "d20dd7640c95328e6e98393423adfbb32a53b183357e65ab8870ca5371ac3828",
-      "size_bytes": 195782
+      "sha256": "4ce751376cc0f53dc5b9559006b74ce932acd8b2e5ffb63c3b23cdd6cbebf693",
+      "size_bytes": 196150
     },
     {
       "path": "platform/frontend/src/lib/nanoporeCloneState.ts",
@@ -849,13 +849,13 @@
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
-      "sha256": "deee80a388b048d09e3e0219d8496b596ba1660452c482696d615e11c56acb24",
-      "size_bytes": 101598
+      "sha256": "383616e830829c67e03c2cb5ad1e02185c19e5eadefcfa1e3d18a9330dc755ab",
+      "size_bytes": 101630
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "6051af7c312dd6e8086fe111d2729bceb4a6c28c5770a83f665d3f6662d5e179",
-      "size_bytes": 62854
+      "sha256": "6c6b7edda6590f501734302772732bf1b76d55ae2a4506921a513d98c560a269",
+      "size_bytes": 62430
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
@@ -1067,8 +1067,8 @@
     "content_sha256": "3b46809d917db27b982e9b17f741cdb08b531f0a3ec781944c6d8c3dc4f7b26e",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "1564cf2af8850ffe31fafcf4f729b20c587bf3bb",
-  "successor_source_tree": "b73157b7b38640cfb515997cd14fb570280501c5",
+  "successor_source_commit": "75d4016a135a52e98677d44c3cfc8851563b4239",
+  "successor_source_tree": "d75901a63d3d4d7dcbca28332f21f76ae3ea9e24",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
