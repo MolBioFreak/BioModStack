@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "21f9d58756b9286066b0f064672aee933f45d9ad6fd4d3654132d6c1af66caa1",
+  "content_sha256": "cdb8e089893cb0db71af3303731cfd47534f9370a1cebc3f0facdfc5ce77e2e7",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -799,8 +799,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
-      "sha256": "d2fd9aafab4729a26430c67f871417532e979654f35a75871a705f2b13011b49",
-      "size_bytes": 77451
+      "sha256": "cc825aa97c7e58cfaf82a4b01f9df6341574b2e53a375b4d71afa95877d542c2",
+      "size_bytes": 80596
     },
     {
       "path": "platform/frontend/src/components/ngs/ngsFullscreenOwner.ts",
@@ -874,8 +874,8 @@
     },
     {
       "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
-      "sha256": "b230d6722b246605ccecd2dfe00cf26c8ae8d6eacf9df6a4e53ff35bf1239238",
-      "size_bytes": 131074
+      "sha256": "21d3479b8d5a939c3a43442e39b8948dca12bec6584a5a75fabee6f72d9ece82",
+      "size_bytes": 132526
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -1067,8 +1067,8 @@
     "content_sha256": "3b46809d917db27b982e9b17f741cdb08b531f0a3ec781944c6d8c3dc4f7b26e",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "acd70319c13dc1a4730433107170fdf4f0557c36",
-  "successor_source_tree": "a0ada617c8245d75c63fce77e2809a05679368a7",
+  "successor_source_commit": "5f903751b1a38307084e7748aa58165721aae7f9",
+  "successor_source_tree": "e8ef711d293519804daeb82162c100be5c7415c8",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
