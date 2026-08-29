@@ -2885,7 +2885,7 @@ export function NGSToolkit() {
     }, [navigateToVerifiedLocus, selectedAlignmentSession?.reference?.contig]);
     const navigateToLocalIgvRange = useCallback((value: string, source: string) => {
         const referenceContig = selectedAlignmentSession?.reference?.contig;
-        const referenceLength = ontFastqQcResultState.result?.verification.summary.reference_length;
+        const referenceLength = selectedAlignmentSession?.reference?.length_bp;
         if (!referenceContig || typeof referenceLength !== 'number') {
             setIgvRangeError(`Cannot navigate ${source}: authoritative reference bounds are unavailable.`);
             return;
@@ -2903,7 +2903,7 @@ export function NGSToolkit() {
         setIgvRangeInput(locus);
         setIgvRangeError(null);
         navigateToVerifiedLocus(Number(coordinates[1]), Number(coordinates[2]), source);
-    }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
+    }, [navigateToVerifiedLocus, selectedAlignmentSession]);
     const focusReadableIgvRange = useCallback(() => {
         const reference = selectedAlignmentSession?.reference;
         if (!reference) {

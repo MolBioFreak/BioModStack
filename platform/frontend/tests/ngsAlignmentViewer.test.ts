@@ -311,6 +311,10 @@ test('NGS viewer exposes a readable base-scale view and legible IGV chrome', () 
 
     assert.match(source, /Read bases/u);
     assert.match(source, /focusReadableIgvRange/u);
+    assert.match(source, /selectedAlignmentSession\?\.reference\?\.length_bp/u);
+    const rangeStart = source.indexOf('const navigateToLocalIgvRange');
+    const rangeEnd = source.indexOf('const focusReadableIgvRange');
+    assert.doesNotMatch(source.slice(rangeStart, rangeEnd), /ontFastqQcResultState/u);
     assert.match(source, /ngs-readable-igv/u);
     assert.match(css, /\.ngs-readable-igv/u);
     assert.match(css, /font-size:\s*14px\s*!important/u);
