@@ -25,7 +25,12 @@ from routers.experiment_workspaces import _authenticated_principal, _require_mut
 from ont_ngs_result_response import OntFastqQcResultResponse
 from services import alignment_access
 from services import ngs_alignment_sessions as service
-from services.ont_ngs_completion import OntNgsCompletionError, is_ont_fastq_qc_job
+from services.ont_ngs_completion import (
+    OntNgsCompletionError,
+    canonical_ngs_package_authority,
+    is_ont_fastq_qc_job,
+    is_ont_signal_alignment_job,
+)
 from services.ont_ngs_results import (
     OntNgsResultError,
     _build_file_projection_from_pinned_root,
@@ -547,7 +552,32 @@ async def _validated_pinned_result_root(job: Job):
         pinned_root = Path(f"/proc/self/fd/{descriptor}")
         if isinstance(job, Job):
             try:
-                await run_in_threadpool(_build_file_projection_from_pinned_root, job, pinned_root)
+                if is_ont_signal_alignment_job(job):
+                    package_authority = _job_package_authority(job)
+                    descriptors = await run_in_threadpool(
+                        service.build_ngs_package_artifacts,
+                        str(job.id),
+                        **package_authority,
+                        job_output_dir=pinned_root,
+                        pinned_root_descriptor=True,
+                    )
+                    observed_authority = canonical_ngs_package_authority(descriptors)
+                    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+                    integrity = provenance.get("result_integrity")
+                    if not isinstance(integrity, dict) or any(
+                        integrity.get(field) != observed_authority[field]
+                        for field in (
+                            "artifact_set_sha256",
+                            "declared_artifact_count",
+                            "present_artifact_count",
+                            "unavailable_artifact_count",
+                        )
+                    ):
+                        raise service.AlignmentSessionError(
+                            "current signal-alignment package differs from persisted authority"
+                        )
+                else:
+                    await run_in_threadpool(_build_file_projection_from_pinned_root, job, pinned_root)
             except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
                 raise service.AlignmentSessionError("current NGS package differs from persisted authority") from exc
         yield pinned_root

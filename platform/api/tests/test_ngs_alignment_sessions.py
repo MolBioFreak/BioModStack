@@ -859,6 +859,75 @@ def test_reconciled_fastq_qc_session_authority_uses_the_validated_historical_rec
     assert router._job_session_authority(cast(Any, job))["package_artifact_set_sha256"] == digest
 
 
+@pytest.mark.asyncio
+async def test_pinned_result_root_validates_external_signal_alignment_package_without_fastq_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from database import Job
+    from services.ont_ngs_results import OntNgsResultError
+    from routers import ngs_alignment_sessions as router
+
+    result_root = tmp_path / "external-alignment"
+    result_root.mkdir()
+    authority = {
+        "artifact_set_sha256": "a" * 64,
+        "declared_artifact_count": 5,
+        "present_artifact_count": 5,
+        "unavailable_artifact_count": 0,
+    }
+    job = Job(
+        id="external-alignment-job",
+        name="external alignment",
+        model_id="nanopore",
+        mode="plasmid_qc",
+        status="completed",
+        queue_status="completed",
+        output_dir=str(result_root),
+        params={
+            "ont_workflow_id": "ont_plasmid_qc",
+            "ont_input_mode": "bam",
+            "reference_sequence_sha256": "b" * 64,
+            "bam_path": str(tmp_path / "source.bam"),
+            "run_fastq_qc": False,
+            "source_move_source_id": "move-source",
+            "source_external_move_registration_receipt_id": "registration-receipt",
+        },
+        provenance={"result_integrity": {"result_kind": "ngs_alignment_session", **authority}},
+        awaiting_input=False,
+        paused=False,
+    )
+    calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(router, "resolve_persisted_job_result_root", lambda _job: result_root)
+    monkeypatch.setattr(router, "is_ont_signal_alignment_job", lambda _job: True, raising=False)
+    monkeypatch.setattr(
+        router,
+        "_build_file_projection_from_pinned_root",
+        lambda *_args: (_ for _ in ()).throw(OntNgsResultError("FASTQ projection must not run")),
+    )
+    monkeypatch.setattr(
+        router.service,
+        "build_ngs_package_artifacts",
+        lambda *_args, **kwargs: calls.append(kwargs) or [{"artifact": "package"}],
+    )
+    monkeypatch.setattr(router, "canonical_ngs_package_authority", lambda _artifacts: authority, raising=False)
+
+    async with router._validated_pinned_result_root(job) as pinned_root:
+        assert pinned_root.name.isdigit()
+
+    assert calls == [
+        {
+            "source_reference_sha256": "b" * 64,
+            "workflow_id": "ont_plasmid_qc",
+            "input_mode": "bam",
+            "source_input_path": str(tmp_path / "source.bam"),
+            "job_output_dir": Path(calls[0]["job_output_dir"]),
+            "pinned_root_descriptor": True,
+        }
+    ]
+
+
 def test_sequence_qc_manifest_wrapper_accepts_the_pinned_result_root_descriptor(tmp_path: Path) -> None:
     from routers import ngs_alignment_sessions as router
 
