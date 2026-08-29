@@ -3042,3 +3042,42 @@ def test_public_ngs_result_route_translates_missing_artifact(
 
     assert response.status_code == 409
     assert response.json()["code"] == "NGS_PACKAGE_INTEGRITY_CONFLICT"
+
+
+def test_rotation_validates_signal_alignment_package_without_fastq_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from routers import ngs_alignment_sessions as router
+
+    validate = cast(Any, getattr(router, "_validate_rotation_package_authority", None))
+    assert callable(validate), "rotation package-authority validator is missing"
+    job = SimpleNamespace(
+        model_id="nanopore",
+        params={
+            "ont_workflow_id": "ont_plasmid_qc",
+            "ont_input_mode": "bam",
+            "run_fastq_qc": False,
+            "source_move_source_id": "ont-moves-exact",
+            "source_external_move_registration_receipt_id": "ont-external-move-exact",
+        },
+    )
+    calls: list[str] = []
+
+    class PinnedPackage:
+        async def __aenter__(self):
+            calls.append("signal")
+            return Path("/proc/self/fd/test-package")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(router, "_validated_pinned_result_root", lambda _job: PinnedPackage())
+
+    async def reject_fastq(_job):
+        raise AssertionError("signal-alignment rotation used the FASTQ-QC package builder")
+
+    monkeypatch.setattr(router, "build_ont_fastq_qc_result", reject_fastq)
+
+    asyncio.run(validate(job))
+
+    assert calls == ["signal"]

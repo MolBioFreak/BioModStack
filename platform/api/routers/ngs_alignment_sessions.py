@@ -633,6 +633,13 @@ def _job_package_authority(job: Job) -> dict[str, str]:
     return {**authority, "source_input_path": source_path}
 
 
+async def _validate_rotation_package_authority(job: Job) -> None:
+    if is_ont_signal_alignment_job(job):
+        async with _validated_pinned_result_root(job):
+            return
+    await build_ont_fastq_qc_result(job)
+
+
 def _require_local_development_browser(request: Request, job_id: str) -> None:
     client_host = request.client.host if request.client is not None else None
     secure_transport = alignment_access.secure_alignment_transport(request)
@@ -719,7 +726,7 @@ async def rotate_alignment_access(
             job_id,
         )
     try:
-        await build_ont_fastq_qc_result(job)
+        await _validate_rotation_package_authority(job)
     except (JobResultRootError, SequenceQcManifestError, OntNgsResultError, service.AlignmentSessionError) as exc:
         raise OntNgsRouteError(
             status_code=409, code="NGS_PACKAGE_INTEGRITY_CONFLICT",
