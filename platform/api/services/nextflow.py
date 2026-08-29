@@ -61,7 +61,7 @@ async def publish_terminal_job_changes(
     changes: dict[str, Any],
 ) -> int:
     """Apply terminal changes only when the complete Job snapshot is unchanged."""
-    from sqlalchemy import and_, update
+    from sqlalchemy import JSON, and_, bindparam, text, update
     from database import Job
 
     columns = {column.name: column for column in Job.__table__.columns}
@@ -79,9 +79,45 @@ async def publish_terminal_job_changes(
     ):
         return 0
     predicates = [Job.id == job_id]
-    for field, value in snapshot.items():
+    for index, (field, value) in enumerate(snapshot.items()):
         column = columns[field]
-        predicates.append(column.is_(None) if value is None else column == value)
+        if isinstance(column.type, JSON):
+            parameter_name = f"snapshot_json_{index}"
+            expected_json = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            column_name = f'jobs."{field}"'
+            predicates.append(
+                text(
+                    f"""
+                    (
+                      ({column_name} IS NULL AND json_type(:{parameter_name}) = 'null')
+                      OR (
+                        {column_name} IS NOT NULL
+                        AND json_valid({column_name})
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM json_tree({column_name}) AS current_json
+                          LEFT JOIN json_tree(:{parameter_name}) AS expected_json
+                            ON expected_json.fullkey = current_json.fullkey
+                          WHERE expected_json.fullkey IS NULL
+                             OR current_json.type IS NOT expected_json.type
+                             OR current_json.atom IS NOT expected_json.atom
+                        )
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM json_tree(:{parameter_name}) AS expected_json
+                          LEFT JOIN json_tree({column_name}) AS current_json
+                            ON current_json.fullkey = expected_json.fullkey
+                          WHERE current_json.fullkey IS NULL
+                             OR current_json.type IS NOT expected_json.type
+                             OR current_json.atom IS NOT expected_json.atom
+                        )
+                      )
+                    )
+                    """
+                ).bindparams(bindparam(parameter_name, expected_json))
+            )
+        else:
+            predicates.append(column.is_(None) if value is None else column == value)
     result = await session.execute(
         update(Job)
         .where(and_(*predicates))

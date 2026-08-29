@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import json
 from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from database import Base, Job
@@ -139,6 +140,51 @@ async def test_terminal_publication_applies_once_when_the_full_snapshot_matches(
                 snapshot=snapshot,
                 changes={"status": "completed", "queue_status": "completed"},
             )
+            assert rowcount == 1
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_publication_matches_semantically_equal_persisted_json(tmp_path) -> None:
+    service = _service()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'terminal-cas-json.db'}")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        async with factory() as session:
+            session.add(_job())
+            await session.commit()
+            await session.execute(
+                text(
+                    "UPDATE jobs SET params=:params, provenance=:provenance, "
+                    "stage_outputs=:stage_outputs, selected_loop_scope='null' WHERE id=:job_id"
+                ),
+                {
+                    "job_id": "terminal-cas-job",
+                    "params": '{ "owner_nonce": "owner-a", "execution_generation": 4 }',
+                    "provenance": json.dumps(
+                        {"execution": {"invocation_id": "invocation-a", "unit": "unit-a"}},
+                        separators=(",", ":"),
+                    ),
+                    "stage_outputs": '{ "fastq_align": [ "bms_results/run/align/aligned.bam" ] }',
+                },
+            )
+            await session.commit()
+            session.expire_all()
+            job = await session.get(Job, "terminal-cas-job")
+            assert job is not None
+            snapshot = service.capture_terminal_job_publication_snapshot(job)
+
+            rowcount = await service.publish_terminal_job_changes(
+                session,
+                job_id=job.id,
+                snapshot=snapshot,
+                changes={"status": "completed", "queue_status": "completed"},
+            )
+
             assert rowcount == 1
             await session.commit()
     finally:
