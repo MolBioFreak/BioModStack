@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "789d3ae665594b14a5415002d371b4e95ea153f93acbd249add25f696c04e2c2",
+  "content_sha256": "9e3066b2d7c9dc356f8cf00b9518afde596e9c28e460b9358ca1da69ddd0ec06",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -559,8 +559,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "08329364aa3e3738a23d7d3e874f1963cab4d7a68ce50bf3fa516bb4fdc5ef7c",
-      "size_bytes": 159776
+      "sha256": "4a2b4d272d2f17373721e4659709e2a620405ef1cc438fa9c4c41f0d88f33b83",
+      "size_bytes": 162948
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -679,8 +679,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "66ca1736a9360e88eedcfb8c2357dc971024d077cde2839882cda2d09c566f2e",
-      "size_bytes": 152194
+      "sha256": "bb51b7c2d528d489682deecd3a6424b0e12db71cdbb5d0098057667bab132704",
+      "size_bytes": 156137
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -749,8 +749,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "47a6f4305b46bb853cafd7b1cbff2f60ed2f91e6bc0922f7cb018da05425d8b9",
-      "size_bytes": 324592
+      "sha256": "42a186306fccc25a691670584c407f4213e652103703b46401fbd38cadd33020",
+      "size_bytes": 327487
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -824,8 +824,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
-      "sha256": "c91bde900fd1bdfcd91767ac6792a1bb72dc87adc614afe7e3696bd7c0f1d458",
-      "size_bytes": 81033
+      "sha256": "49711b5e546e8dab39409c7dab55a30d582f8b05a39d02f4f7eda06acb3b92f5",
+      "size_bytes": 84366
     },
     {
       "path": "platform/frontend/src/components/ngs/ngsFullscreenOwner.ts",
@@ -869,13 +869,13 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentSession.ts",
-      "sha256": "9a74cc6c956625032234a5587cb91d7462acd4a25646cc441f71b5bae2a8bbc3",
-      "size_bytes": 37836
+      "sha256": "c76e415ff3898b191f89bf417bdb0ab74c23e3c402eb3c59feb18cf00aa1f3bf",
+      "size_bytes": 40277
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
-      "sha256": "a171ac04e869c6daa108f6c38e522223ba783521a4276d89df0e6e071955c65a",
-      "size_bytes": 16706
+      "sha256": "db8465a1d8c7dfbc20ba3b5d725360894bfb5fd042f46ae73166a3e31a4e4a5b",
+      "size_bytes": 17666
     },
     {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
@@ -894,8 +894,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "6189963ccd0fd86b989389885d4f748e1f32a3613955ec6de47241094d183773",
-      "size_bytes": 29942
+      "sha256": "a8995257312ffdf573b543ffb47fa44eaa2ad66b6543be515b48dfde31b9e771",
+      "size_bytes": 32342
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -914,8 +914,8 @@
     },
     {
       "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
-      "sha256": "0302adc311e8579666c70ec4f44c6fb4c8685951c3bb2f14d259976d1233cf9c",
-      "size_bytes": 136877
+      "sha256": "e32801e0e4746af9734e39d21fc10b85c91006db31f21de008737154aaa221b6",
+      "size_bytes": 139336
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "1b4d49f975700792760689c88d2885beb6a7ea9d",
-  "successor_source_tree": "e68787698bf5b6af8883c88d8a5241f2074ecdd1",
+  "successor_source_commit": "2664c38b727eaf4ebc31bd9d1b3ae2c4973ee03c",
+  "successor_source_tree": "8f7d497620ac0a4e34236dec4cb4b949afc20643",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

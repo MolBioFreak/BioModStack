@@ -108,16 +108,20 @@ vi.mock('../../src/lib/api', () => ({
     updateOntSignalViewerSession: apiMocks.updateViewerSession,
 }));
 
-vi.mock('../../src/lib/ngsAlignmentSession', () => ({
-    bindAlignmentSessionsToResultAuthority: (sessions: unknown[]) => sessions,
-    describeNgsError: (_reason: unknown, fallback: string) => fallback,
-    disposeAlignmentAccess: alignmentMocks.disposeAccess,
-    fetchAlignmentRead: alignmentMocks.fetchRead,
-    fetchAlignmentReads: alignmentMocks.fetchReads,
-    fetchAlignmentSessions: alignmentMocks.fetchSessions,
-    isAlignmentAccessDenied: alignmentMocks.isAccessDenied,
-    rotateAlignmentAccess: alignmentMocks.rotateAccess,
-}));
+vi.mock('../../src/lib/ngsAlignmentSession', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/ngsAlignmentSession')>();
+    return {
+        ...actual,
+        bindAlignmentSessionsToResultAuthority: (sessions: unknown[]) => sessions,
+        describeNgsError: (_reason: unknown, fallback: string) => fallback,
+        disposeAlignmentAccess: alignmentMocks.disposeAccess,
+        fetchAlignmentRead: alignmentMocks.fetchRead,
+        fetchAlignmentReads: alignmentMocks.fetchReads,
+        fetchAlignmentSessions: alignmentMocks.fetchSessions,
+        isAlignmentAccessDenied: alignmentMocks.isAccessDenied,
+        rotateAlignmentAccess: alignmentMocks.rotateAccess,
+    };
+});
 
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
@@ -711,6 +715,37 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await act(async () => { window.dispatchEvent(new Event('resize')); });
         expect(separator?.getAttribute('aria-valuenow')).toBe('704');
         expect(separator?.getAttribute('aria-valuemax')).toBe('1046');
+    });
+
+    it('loads a bounded searchable read list with provenance-labelled filter presets inside its own scroll owner', async () => {
+        alignmentMocks.fetchReads.mockResolvedValue({
+            reads: [
+                { ...selectedRead, read_id: 'clean-read', mean_quality: 19.4, mapq: 60, cigar: '100M', inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, reference_substitution_count: 1, reference_substitution_rate: 0.01, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.01 },
+                { ...selectedRead, read_id: 'gap-read', mean_quality: 18.1, mapq: 60, cigar: '45M20D55M', inserted_bases: 0, deleted_bases: 20, skipped_reference_bases: 0, clipped_bases: 0, reference_substitution_count: 2, reference_substitution_rate: 0.02, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.18 },
+            ],
+            next_cursor: null, limit: 200, sequence_included: false, scan_truncated: false,
+        });
+        await renderWorkbench({ currentLocus: { contig: 'chr7', start: 401, end: 460 } });
+        const scrollOwner = container.querySelector<HTMLElement>('[data-signal-workbench-scroll]');
+        expect(scrollOwner?.className).toContain('overflow-y-scroll');
+
+        await act(async () => { button('Reads in locus').click(); await Promise.resolve(); });
+        expect(alignmentMocks.fetchReads).toHaveBeenLastCalledWith('alignment-job-1', 'alignment-session-1', {
+            contig: 'chr7', start: 401, end: 460, limit: 200,
+        });
+        await waitUntil(() => expect(container.textContent).toContain('20 bp deletion'));
+
+        const preset = container.querySelector<HTMLSelectElement>('[aria-label="Read filter preset"]');
+        expect(preset).not.toBeNull();
+        expect(preset?.textContent).toContain('Reference-substitution-rich reads');
+        await act(async () => {
+            if (preset) {
+                preset.value = 'indels_gaps';
+                preset.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+        expect(container.querySelector('[role="listbox"]')?.textContent).toContain('20 bp deletion');
+        expect(container.querySelector('[role="listbox"]')?.textContent).not.toContain('clean-read');
     });
 
     it('gives the ready comparison artifact its own fullscreen presentation', async () => {

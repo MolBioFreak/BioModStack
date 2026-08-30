@@ -3389,6 +3389,65 @@ def _mean_quality(quality: str) -> float | None:
     return sum(ord(char) - 33 for char in quality) / len(quality)
 
 
+def _alignment_quality_metrics(cigar: str, optional_fields: list[str], read_length: int | None) -> dict[str, Any]:
+    metric_names = (
+        "aligned_query_bases", "inserted_bases", "deleted_bases", "skipped_reference_bases",
+        "clipped_bases", "edit_distance", "reference_substitution_count", "aligned_fraction",
+        "clipped_fraction", "reference_substitution_rate", "reference_disagreement_rate",
+    )
+    valid_cigar = re.fullmatch(
+        r"(?:[1-9]\d*H)?(?:[1-9]\d*S)?(?:[1-9]\d*[MIDNP=X])+(?:[1-9]\d*S)?(?:[1-9]\d*H)?",
+        cigar,
+    )
+    operations = [(int(length), operation) for length, operation in re.findall(r"(\d+)([MIDNSHP=X])", cigar)]
+    query_sequence_bases = sum(
+        length for length, operation in operations if operation in {"M", "I", "S", "=", "X"}
+    )
+    if (
+        valid_cigar is None
+        or not operations
+        or (read_length is not None and (read_length <= 0 or query_sequence_bases != read_length))
+    ):
+        return {name: None for name in metric_names}
+
+    counts = {operation: sum(length for length, candidate in operations if candidate == operation) for operation in "MIDNSHP=X"}
+    aligned_query_bases = counts["M"] + counts["="] + counts["X"] + counts["I"]
+    aligned_reference_bases = counts["M"] + counts["="] + counts["X"] + counts["D"]
+    clipped_bases = counts["S"] + counts["H"]
+    original_query_length = read_length + counts["H"] if read_length is not None else None
+    disagreement_denominator = aligned_reference_bases + counts["I"]
+
+    nm_fields = [field for field in optional_fields if field.startswith("NM:")]
+    edit_distance = None
+    if len(nm_fields) == 1 and re.fullmatch(r"NM:i:\d+", nm_fields[0]):
+        candidate_edit_distance = int(nm_fields[0][5:])
+        minimum_edit_distance = counts["I"] + counts["D"] + counts["X"]
+        if minimum_edit_distance <= candidate_edit_distance <= disagreement_denominator:
+            edit_distance = candidate_edit_distance
+    reference_substitution_count = (
+        None if edit_distance is None else edit_distance - counts["I"] - counts["D"]
+    )
+    return {
+        "aligned_query_bases": aligned_query_bases,
+        "inserted_bases": counts["I"],
+        "deleted_bases": counts["D"],
+        "skipped_reference_bases": counts["N"],
+        "clipped_bases": clipped_bases,
+        "edit_distance": edit_distance,
+        "reference_substitution_count": reference_substitution_count,
+        "aligned_fraction": aligned_query_bases / original_query_length if original_query_length else None,
+        "clipped_fraction": clipped_bases / original_query_length if original_query_length else None,
+        "reference_substitution_rate": (
+            reference_substitution_count / disagreement_denominator
+            if reference_substitution_count is not None and disagreement_denominator > 0 else None
+        ),
+        "reference_disagreement_rate": (
+            edit_distance / disagreement_denominator
+            if edit_distance is not None and disagreement_denominator > 0 else None
+        ),
+    }
+
+
 def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | None:
     fields = line.split("\t")
     if len(fields) < 11:
@@ -3396,9 +3455,10 @@ def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | 
     flag = int(fields[1])
     sequence = fields[9]
     quality = fields[10]
+    read_length = None if sequence == "*" else len(sequence)
     row: dict[str, Any] = {
         "read_id": fields[0],
-        "length": None if sequence == "*" else len(sequence),
+        "length": read_length,
         "mean_quality": _mean_quality(quality),
         "contig": None if fields[2] == "*" else fields[2],
         "start_1based": int(fields[3]) if fields[3].isdigit() and int(fields[3]) > 0 else None,
@@ -3407,6 +3467,7 @@ def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | 
         "cigar": None if fields[5] == "*" else fields[5],
         "flags": flag,
         "unmapped": bool(flag & 4),
+        **_alignment_quality_metrics(fields[5], fields[11:], read_length),
     }
     if include_sequence:
         row["sequence"] = None if sequence == "*" else sequence

@@ -440,3 +440,29 @@ export async function loadMissingTracksById(
         }
     }
 }
+
+const SAFE_IGV_READ_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
+
+export function resolveIgvClickedReadId(payload: unknown): string | null {
+    if (!Array.isArray(payload)) return null;
+    for (const entry of payload) {
+        if (!entry || typeof entry !== 'object') continue;
+        const name = (entry as { name?: unknown }).name;
+        const value = (entry as { value?: unknown }).value;
+        if (typeof name !== 'string' || name.trim().toLowerCase() !== 'read name' || typeof value !== 'string') continue;
+        const readId = value.trim();
+        return SAFE_IGV_READ_ID.test(readId) ? readId : null;
+    }
+    return null;
+}
+
+export async function publishCurrentIgvReadSelection<T>(
+    isCurrent: () => boolean,
+    createSession: () => Promise<T>,
+    publishSession: (session: T) => void,
+): Promise<boolean> {
+    const session = await createSession();
+    if (!isCurrent()) return false;
+    publishSession(session);
+    return true;
+}

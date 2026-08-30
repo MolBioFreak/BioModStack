@@ -8,11 +8,14 @@ import {
     describeNgsError,
     disposeAlignmentAccess,
     fetchAlignmentRead,
+    filterAlignmentReads,
+    formatAlignmentReadSummary,
     isAlignmentAccessDenied,
     isAlignmentReadScanTruncatedError,
     normalizeAlignmentSessions,
     normalizeAlignmentAccessRotation,
     withAlignmentAccessRecovery,
+    type AlignmentRead,
     type AlignmentSessionArtifact,
     type AlignmentSessionResponse,
 } from '../src/lib/ngsAlignmentSession.js';
@@ -38,6 +41,23 @@ function ngsError(code: string, jobId = 'job-recovery-race', status = 403) {
         },
     };
 }
+
+const filteredReads: AlignmentRead[] = [
+    { read_id: 'clean', length: 1000, mean_quality: 18, contig: 'ref', start_1based: 1, strand: '+', mapq: 60, cigar: '1000M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 4, reference_substitution_count: 4, reference_substitution_rate: 0.004, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.004 },
+    { read_id: 'substitution-rich', length: 1000, mean_quality: 12, contig: 'ref', start_1based: 1, strand: '+', mapq: 50, cigar: '1000M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 80, reference_substitution_count: 80, reference_substitution_rate: 0.08, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.08 },
+    { read_id: 'large-gap', length: 1000, mean_quality: 16, contig: 'ref', start_1based: 1, strand: '+', mapq: 40, cigar: '400M120N600M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 120, clipped_bases: 0, edit_distance: 2, reference_substitution_count: 2, reference_substitution_rate: 0.002, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.002 },
+    { read_id: 'clipped', length: 1000, mean_quality: 17, contig: 'ref', start_1based: 1, strand: '+', mapq: 35, cigar: '150S850M', flags: 0, unmapped: false, aligned_query_bases: 850, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 150, edit_distance: 3, reference_substitution_count: 3, reference_substitution_rate: 3 / 850, aligned_fraction: 0.85, clipped_fraction: 0.15, reference_disagreement_rate: 3 / 850 },
+    { read_id: 'indel-only', length: 1000, mean_quality: 17, contig: 'ref', start_1based: 1, strand: '+', mapq: 45, cigar: '900M100I', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 100, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 100, reference_substitution_count: 0, reference_substitution_rate: 0, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.1 },
+];
+
+test('read presets filter bounded alignment evidence and format operator summaries', () => {
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'clean', '').map((read) => read.read_id), ['clean']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'substitution_rich', '').map((read) => read.read_id), ['substitution-rich']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'indels_gaps', '').map((read) => read.read_id), ['large-gap', 'indel-only']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'clipped', '').map((read) => read.read_id), ['clipped']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'all', 'GAP').map((read) => read.read_id), ['large-gap']);
+    assert.equal(formatAlignmentReadSummary(filteredReads[2]), 'Q16.0 · MAPQ 40 · 2 reference substitutions · 120 bp gap · 100% aligned');
+});
 
 test('alignment access recovery is offered only for the exact capability-denial code', () => {
     assert.equal(isAlignmentAccessDenied(ngsError('NGS_CAPABILITY_DENIED'), 'job-recovery-race'), true);

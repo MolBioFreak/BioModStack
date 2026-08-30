@@ -19,6 +19,8 @@ import {
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
     resolveBrowserAlignmentTrackSource,
+    resolveIgvClickedReadId,
+    publishCurrentIgvReadSelection,
     resolveIgvReadLocus,
     locusMatchesAlignmentSlice,
     resolvePendingSessionLocus,
@@ -31,8 +33,10 @@ import {
 import {
     bindAlignmentSessionsToResultAuthority,
     createAlignmentLocusSlice,
+    createLatestRequestGuard,
     disposeAlignmentAccess,
     describeNgsError,
+    fetchAlignmentRead,
     fetchAlignmentSessions,
     fetchAlignmentPresentation,
     isAlignmentAccessDenied,
@@ -1957,12 +1961,14 @@ function ensureIgvThemeStyles(container: HTMLDivElement | null): void {
         color: var(--text-primary) !important;
       }
       .igv-menu-popup *,
+      .igv-ui-popover *,
       .igv-ui-dropdown *,
       .igv-track-menu-category {
         color: var(--text-primary) !important;
       }
       .igv-navbar,
       .igv-menu-popup,
+      .igv-ui-popover,
       .igv-ui-dropdown,
       .igv-ui-dropdown > div,
       .igv-ui-dropdown > div > div,
@@ -2752,7 +2758,10 @@ export function NGSToolkit() {
             generation: signalWorkbenchIdentityRef.current.generation + 1,
         };
     }, [signalWorkbenchIdentityKey]);
-    const openSignalWorkbenchForRead = useCallback(async (read: AlignmentRead) => {
+    const openSignalWorkbenchForRead = useCallback(async (
+        read: AlignmentRead,
+        selectionIsCurrent: () => boolean = () => true,
+    ) => {
         if (!selectedJob || !selectedAlignmentSession?.ready || !signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration) return;
         const identityGeneration = signalWorkbenchIdentityRef.current.generation;
         const identityKey = signalWorkbenchIdentityRef.current.key;
@@ -2761,7 +2770,9 @@ export function NGSToolkit() {
             && signalWorkbenchIdentityRef.current.key === identityKey
         );
         try {
-            const created = await createOntSignalViewerSession({
+            await publishCurrentIgvReadSelection(
+                () => identityIsCurrent() && selectionIsCurrent(),
+                () => createOntSignalViewerSession({
                 dataset_id: signalDatasetId,
                 run_id: rawSignalRunId,
                 observed_generation: rawSignalObservedGeneration,
@@ -2787,15 +2798,21 @@ export function NGSToolkit() {
                     read_mapping_job_id: null,
                     reference_mapping_job_id: null,
                 },
-            });
-            if (!identityIsCurrent()) return;
-            acceptSignalViewerSession(created);
-            openSignalWorkbench(created.viewer_session_id);
+                }),
+                (created) => {
+                    acceptSignalViewerSession(created);
+                    openSignalWorkbench(created.viewer_session_id);
+                },
+            );
         } catch (reason) {
-            if (!identityIsCurrent()) return;
+            if (!identityIsCurrent() || !selectionIsCurrent()) return;
             setIgvError(`Signal viewer session could not be created: ${reason instanceof Error ? reason.message : String(reason)}`);
         }
     }, [acceptSignalViewerSession, igvAlignmentColorBy, igvAlignmentDisplayMode, igvAlignmentGroupBy, igvCurrentLocus?.contig, igvCurrentLocus?.end, igvCurrentLocus?.start, igvReadsTrackLoaded, openSignalWorkbench, rawSignalObservedGeneration, rawSignalRunId, selectedAlignmentSession, selectedJob, signalDatasetId, signalReferenceRevisionId]);
+    const openSignalWorkbenchForReadRef = useRef(openSignalWorkbenchForRead);
+    const igvReadClickGuardRef = useRef(createLatestRequestGuard());
+    useEffect(() => { openSignalWorkbenchForReadRef.current = openSignalWorkbenchForRead; }, [openSignalWorkbenchForRead]);
+    useEffect(() => { igvCurrentLocusRef.current = igvCurrentLocus; }, [igvCurrentLocus]);
     useEffect(() => {
         const preferred = alignmentSessions.find((session) => session.session_id === persistedAlignmentSessionId)
             || alignmentSessions.find((session) => session.mode === 'primary')
@@ -3935,6 +3952,7 @@ export function NGSToolkit() {
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
         let removeLocusListener: (() => void) | null = null;
+        let removeTrackClickListener: (() => void) | null = null;
         let creationTimedOut = false;
         let timeoutInvalidationToken: number | null = null;
         const loadToken = ++igvLoadTokenRef.current;
@@ -4050,6 +4068,33 @@ export function NGSToolkit() {
                     removeLocusListener = () => {
                         if (typeof igvBrowser?.off === 'function') igvBrowser.off('locuschange', locusHandler);
                     };
+                    const trackClickHandler = (_track: unknown, popoverData: unknown) => {
+                        if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
+                        const readId = resolveIgvClickedReadId(popoverData);
+                        if (!readId || !selectedJob || !selectedAlignmentSession?.ready) return;
+                        const requestToken = igvReadClickGuardRef.current.begin();
+                        const locus = igvCurrentLocusRef.current;
+                        void fetchAlignmentRead(selectedJob.id, selectedAlignmentSession.session_id, readId, {
+                            contig: locus?.contig,
+                            start: locus?.start,
+                            end: locus?.end,
+                        }).then((read) => {
+                            if (igvReadClickGuardRef.current.isCurrent(requestToken) && isCurrentLoad() && !cancelled) {
+                                void openSignalWorkbenchForReadRef.current(read, () => (
+                                    igvReadClickGuardRef.current.isCurrent(requestToken)
+                                    && isCurrentLoad()
+                                    && !cancelled
+                                    && igvBrowserRef.current === igvBrowser
+                                ));
+                            }
+                        }).catch((reason: unknown) => {
+                            if (igvReadClickGuardRef.current.isCurrent(requestToken) && isCurrentLoad() && !cancelled) setIgvError(`Clicked read could not be selected: ${reason instanceof Error ? reason.message : String(reason)}`);
+                        });
+                    };
+                    igvBrowser.on('trackclick', trackClickHandler);
+                    removeTrackClickListener = () => {
+                        if (typeof igvBrowser?.off === 'function') igvBrowser.off('trackclick', trackClickHandler);
+                    };
                 }
 
                 if (isCurrentLoad() && !cancelled) {
@@ -4103,8 +4148,10 @@ export function NGSToolkit() {
 
         return () => {
             cancelled = true;
+            igvReadClickGuardRef.current.reset();
             if (isCurrentLoad()) igvLoadTokenRef.current += 1;
             removeLocusListener?.();
+            removeTrackClickListener?.();
             try {
                 if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
             } catch {
