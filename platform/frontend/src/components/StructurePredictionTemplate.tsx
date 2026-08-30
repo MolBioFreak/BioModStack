@@ -259,11 +259,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         initialValues?.boltz_target_geometry_mode || (initialValues?.boltz_anchor_target ? 'conditioned' : 'flexible')
     );
 
-    // RF3 parameters
-    const [rf3UseMsa, setRf3UseMsa] = useState(initialValues?.rf3_use_msa ?? true);
-    const [rf3NumRecycles, setRf3NumRecycles] = useState(initialValues?.rf3_num_recycles ?? 10);
-    const [rf3NumSamples, setRf3NumSamples] = useState(initialValues?.rf3_num_samples ?? 1);
-
     // Protenix parameters
     const [protenixModelWeights, setProtenixModelWeights] = useState(normalizeProtenixModel(initialValues?.protenix_model_weights));
     const [protenixSeeds, setProtenixSeeds] = useState(initialValues?.protenix_seeds || '42');
@@ -649,13 +644,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     });
     const usesBoltz = predictorFamilies.includes('boltz');
     const usesFoldCp = predictorFamilies.includes('fold_cp');
-    const usesRf3 = predictorFamilies.includes('rf3');
     const usesProtenix = predictorFamilies.includes('protenix');
     const usesEsmFold2 = predictorFamilies.includes('esmfold2');
     const msaNeeded =
         (usesBoltz && !isBoltzApi && boltzUseMsa) ||
         (usesFoldCp && boltzUseMsa) ||
-        (usesRf3 && rf3UseMsa) ||
         (usesProtenix && protenixUseMsa);
 
     useEffect(() => {
@@ -746,12 +739,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.boltz_num_samples = boltzNumSamples;
         }
 
-        if (usesRf3) {
-            params.rf3_use_msa = rf3UseMsa;
-            params.rf3_num_recycles = rf3NumRecycles;
-            params.rf3_num_samples = rf3NumSamples;
-        }
-
         if (usesProtenix) {
             params.protenix_model_weights = protenixModelWeights;
             params.protenix_seeds = protenixSeeds;
@@ -825,7 +812,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -851,7 +838,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (predictor === resolvedPredictorSelection.canonicalSelection) {
             return;
         }
-        if (predictionMode === 'complex' && !resolvedPredictorSelection.valid) {
+        if (!resolvedPredictorSelection.valid) {
             return;
         }
         setPredictor(resolvedPredictorSelection.canonicalSelection);
@@ -1023,13 +1010,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.boltz_recycling_steps = boltzRecyclingSteps;
             params.boltz_sampling_steps = boltzSamplingSteps;
             params.boltz_num_samples = boltzNumSamples;
-        }
-
-        // RF3 parameters
-        if (usesRf3) {
-            params.rf3_use_msa = rf3UseMsa;
-            params.rf3_num_recycles = rf3NumRecycles;
-            params.rf3_num_samples = rf3NumSamples;
         }
 
         // Protenix parameters
@@ -1332,7 +1312,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     };
 
     const showBoltzParams = (usesBoltz || usesFoldCp) && !isBoltzApi;
-    const showRf3Params = usesRf3;
     const showProtenixParams = usesProtenix;
     const showEsmFold2Params = usesEsmFold2;
     const structureTemplateBaseId = 'structure_prediction';
@@ -1340,11 +1319,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];
         const topics: ModelDocumentationTopic[] = [];
         if (usesBoltz) topics.push('boltz2');
-        if (usesRf3) topics.push('rf3');
         if (usesProtenix) topics.push('protenix');
         if (usesEsmFold2) topics.push('esmfold2');
         return topics.length > 0 ? topics : ['boltz2'];
-    }, [isBoltzCpLaunch, usesBoltz, usesRf3, usesProtenix, usesEsmFold2]);
+    }, [isBoltzCpLaunch, usesBoltz, usesProtenix, usesEsmFold2]);
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1362,7 +1340,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         <p className="text-sm text-slate-500">Predict 3D structure from amino acid sequence</p>
                     </div>
                 </div>
-                {onOpenTemplateManager && (
+                {onOpenTemplateManager && resolvedPredictorSelection.valid && (
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
@@ -1508,6 +1486,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             <div className="mt-1 text-xs text-orange-100/80">
                                 Fixed predictor variant.
                             </div>
+                        </div>
+                    )}
+                    {!resolvedPredictorSelection.valid && (
+                        <div role="alert" className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                            <div className="font-semibold">Retired historical predictor</div>
+                            <div className="mt-1 text-xs text-amber-100/80">{resolvedPredictorSelection.error}</div>
                         </div>
                     )}
                 </div>
@@ -2128,48 +2112,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     </div>
                 )}
 
-                {/* RF3 Parameters */}
-                {showRf3Params && (
-                    <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
-                        <h3 className="text-sm font-semibold text-green-400">RoseTTAFold3 Settings</h3>
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Use MSA</label>
-                                <select
-                                    value={rf3UseMsa ? 'true' : 'false'}
-                                    onChange={(e) => setRf3UseMsa(e.target.value === 'true')}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                >
-                                    <option value="true">Yes</option>
-                                    <option value="false">No</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Recycle Iterations</label>
-                                <input
-                                    type="number"
-                                    value={rf3NumRecycles}
-                                    onChange={(e) => setRf3NumRecycles(Math.max(1, Math.min(20, parseInt(e.target.value) || 10)))}
-                                    min={1}
-                                    max={20}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Num Samples</label>
-                                <input
-                                    type="number"
-                                    value={rf3NumSamples}
-                                    onChange={(e) => setRf3NumSamples(Math.max(1, Math.min(32, parseInt(e.target.value) || 1)))}
-                                    min={1}
-                                    max={32}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                )}
-
                 {/* Protenix Parameters */}
                 {showProtenixParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
@@ -2268,7 +2210,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 )}
 
                 {/* MSA Quality Options (Advanced) */}
-                {((showBoltzParams && boltzUseMsa) || (showRf3Params && rf3UseMsa) || (showProtenixParams && protenixUseMsa)) && (
+                {((showBoltzParams && boltzUseMsa) || (showProtenixParams && protenixUseMsa)) && (
                     <div className="border border-[var(--border-primary)] rounded-lg overflow-hidden">
                         <button
                             onClick={() => setShowMsaOptions(!showMsaOptions)}
@@ -2684,7 +2626,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     {/* Right side: Submit button */}
                     <button
                         onClick={handleSubmit}
-                        disabled={!sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
+                        disabled={!resolvedPredictorSelection.valid || !sequence.trim() || submitMutation.isPending || boltzApiSubmitMutation.isPending || boltzApiEstimating || (isBoltzApi && (!boltzApiStatus || boltzApiStatus.available === false))}
                         className="px-6 py-3 bg-gradient-to-r from-blue-600 to-accent-secondary hover:from-blue-500 hover:to-accent disabled:opacity-50 disabled:grayscale text-white font-bold rounded-lg shadow-lg shadow-accent/20 transition-all transform active:scale-95"
                     >
                         {isBoltzApi
