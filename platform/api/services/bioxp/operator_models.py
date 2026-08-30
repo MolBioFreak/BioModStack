@@ -4083,6 +4083,66 @@ class OperatorLegacyReconciliationReceipt(BaseModel):
     status: Literal["reconciliation_required"]
 
 
+class OperatorRestartReconciliationEvidence(BaseModel):
+    """Exact restart evidence attached to schema-5 outcome-unknown rows."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    authority: Literal["restart_reconciliation"]
+    automatic_retry: Literal[False]
+    prior_command_status: Literal["reconciliation_required"]
+    prior_pipette_status: None
+    reason: Literal["process_restart_with_nonterminal_projection"]
+
+
+class OperatorMigratedOutcomeUnknownReceipt(BaseModel):
+    """Schema-2 command history preserved by the schema-5 v1 projection."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action_id: str = Field(min_length=1, max_length=160)
+    automatic_retry: Literal[False]
+    callback_session_id: None
+    caller_class: str = Field(min_length=1, max_length=120)
+    command_id: str = Field(min_length=1, max_length=160)
+    completion_verified: Literal[False]
+    connection_generation: None
+    control_class: str = Field(min_length=1, max_length=120)
+    controller_acknowledged: Literal[False]
+    delivery_verified: Literal[False]
+    duration_ms: StrictFloat | StrictInt = Field(ge=0)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    failure_code: Literal["startup_reconciliation"]
+    finished_at: str = Field(min_length=1, max_length=80)
+    hardware_postcondition_verified: Literal[False]
+    hardware_precondition_verified: Literal[False]
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    idempotency_replay_enabled: Literal[True]
+    lifecycle_stage_id: None
+    operation: str = Field(min_length=1, max_length=160)
+    outcome: Literal["outcome_unknown"]
+    ownership_generation: StrictInt = Field(ge=0)
+    physical_effect_verified: Literal[False]
+    physical_outcome: Literal["ambiguous"]
+    protocol_action_id: None
+    protocol_job_id: None
+    reconciliation: OperatorRestartReconciliationEvidence
+    requested_inputs: dict[str, JsonValue]
+    response: dict[str, JsonValue]
+    semantic_query_response_verified: Literal[False]
+    stage_receipts: list[dict[str, JsonValue]]
+    status: Literal["outcome_unknown"]
+
+
+class OperatorHistoryPipetteReceipt(PipetteReceipt):
+    """Indexed pipette receipt with schema-5 history projection fields."""
+
+    status: str = Field(min_length=1, max_length=80)
+    outcome: str = Field(min_length=1, max_length=2000)
+    controller_acknowledged: StrictBool
+    physical_effect_verified: Literal[False]
+
+
 class OperatorLegacyPipetteRuntimeBinding(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4107,6 +4167,9 @@ class OperatorLegacyUnindexedPipetteReceipt(BaseModel):
     response: dict[str, JsonValue]
     runtime_binding: OperatorLegacyPipetteRuntimeBinding
     stage_receipts: list[dict[str, JsonValue]]
+    status: Literal["failed"]
+    controller_acknowledged: Literal[False]
+    physical_effect_verified: Literal[False]
 
 
 class OperatorActionHistory(BaseModel):
@@ -4115,7 +4178,9 @@ class OperatorActionHistory(BaseModel):
     receipts: list[
         OperatorActionReceipt
         | PipetteReceipt
+        | OperatorHistoryPipetteReceipt
         | OperatorLegacyReconciliationReceipt
+        | OperatorMigratedOutcomeUnknownReceipt
         | OperatorLegacyUnindexedPipetteReceipt
     ] = Field(max_length=500)
 
