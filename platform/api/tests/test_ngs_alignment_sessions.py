@@ -2200,6 +2200,105 @@ def test_paginated_bam_reads_are_bounded_and_sequences_are_opt_in(monkeypatch: p
     assert detailed["reads"][0]["mean_quality"] == pytest.approx(40.0)
 
 
+def test_read_inspection_exposes_bounded_alignment_quality_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services import ngs_alignment_sessions as service
+
+    monkeypatch.setattr(
+        service,
+        "_iter_sam_lines",
+        lambda *_args, **_kwargs: iter([
+            "read-metrics\t0\tref\t10\t42\t5S80M3I7M4D6N5M2S\t*\t0\t0\t"
+            + "A" * 102 + "\t" + "I" * 102 + "\tNM:i:12",
+        ]),
+    )
+    row = service.read_bam_page(Path("unused.bam"), limit=10)["reads"][0]
+
+    assert row["aligned_query_bases"] == 95
+    assert row["inserted_bases"] == 3
+    assert row["deleted_bases"] == 4
+    assert row["skipped_reference_bases"] == 6
+    assert row["clipped_bases"] == 7
+    assert row["edit_distance"] == 12
+    assert row["reference_substitution_count"] == 5
+    assert row["aligned_fraction"] == pytest.approx(95 / 102)
+    assert row["clipped_fraction"] == pytest.approx(7 / 102)
+    assert row["reference_substitution_rate"] == pytest.approx(5 / 99)
+    assert row["reference_disagreement_rate"] == pytest.approx(12 / 99)
+
+
+@pytest.mark.parametrize("cigar", ["*", "90Mgarbage"])
+def test_alignment_metrics_with_missing_or_malformed_cigar_are_unavailable(cigar: str) -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics(cigar, ["NM:i:2"], 90)
+
+    assert all(value is None for value in metrics.values())
+
+
+def test_hard_clipping_uses_original_query_length_as_fraction_denominator() -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics("10H90M", ["NM:i:0"], 90)
+
+    assert metrics["aligned_fraction"] == pytest.approx(0.9)
+    assert metrics["clipped_fraction"] == pytest.approx(0.1)
+    assert metrics["aligned_fraction"] + metrics["clipped_fraction"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("optional_fields", [["NM:i:1"], ["NM:i:5", "NM:i:5"], ["NM:i:not-an-int"]])
+def test_incoherent_or_ambiguous_nm_metrics_are_unavailable(optional_fields: list[str]) -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics("5M3I5M", optional_fields, 13)
+
+    assert metrics["edit_distance"] is None
+    assert metrics["reference_substitution_count"] is None
+    assert metrics["reference_substitution_rate"] is None
+    assert metrics["reference_disagreement_rate"] is None
+
+
+@pytest.mark.parametrize(
+    ("cigar", "optional_fields", "read_length"),
+    [
+        ("5X", ["NM:i:0"], 5),
+        ("5M", ["NM:i:10"], 5),
+    ],
+)
+def test_nm_that_contradicts_cigar_evidence_is_unavailable(
+    cigar: str, optional_fields: list[str], read_length: int,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics(cigar, optional_fields, read_length)
+
+    assert metrics["edit_distance"] is None
+    assert metrics["reference_substitution_count"] is None
+    assert metrics["reference_substitution_rate"] is None
+    assert metrics["reference_disagreement_rate"] is None
+
+
+@pytest.mark.parametrize("cigar", ["90M", "0M", "45M5S45M"])
+def test_structurally_invalid_or_sequence_incoherent_cigar_is_unavailable(cigar: str) -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics(cigar, ["NM:i:0"], 100)
+
+    assert all(value is None for value in metrics.values())
+
+
+def test_missing_nm_preserves_structural_metrics_but_not_reference_disagreement() -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service._alignment_quality_metrics("90M10S", [], 100)
+
+    assert metrics["aligned_query_bases"] == 90
+    assert metrics["clipped_bases"] == 10
+    assert metrics["edit_distance"] is None
+    assert metrics["reference_substitution_count"] is None
+    assert metrics["reference_substitution_rate"] is None
+    assert metrics["reference_disagreement_rate"] is None
+
+
 def test_job_scoped_artifact_route_supports_ranges_and_etags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

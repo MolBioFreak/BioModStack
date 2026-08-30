@@ -160,8 +160,56 @@ export interface AlignmentRead {
     cigar: string | null;
     flags: number;
     unmapped: boolean;
+    aligned_query_bases?: number;
+    inserted_bases?: number;
+    deleted_bases?: number;
+    skipped_reference_bases?: number;
+    clipped_bases?: number;
+    edit_distance?: number | null;
+    reference_substitution_count?: number | null;
+    reference_substitution_rate?: number | null;
+    aligned_fraction?: number | null;
+    clipped_fraction?: number | null;
+    reference_disagreement_rate?: number | null;
     sequence?: string | null;
     quality?: string | null;
+}
+
+export type AlignmentReadFilterPreset = 'all' | 'clean' | 'substitution_rich' | 'indels_gaps' | 'clipped';
+
+export function filterAlignmentReads(
+    reads: AlignmentRead[], preset: AlignmentReadFilterPreset, query: string,
+): AlignmentRead[] {
+    const needle = query.trim().toLowerCase();
+    return reads.filter((read) => {
+        if (needle && !read.read_id.toLowerCase().includes(needle)) return false;
+        if (preset === 'clean') return (read.mean_quality ?? 0) >= 15
+            && (read.mapq ?? 0) >= 30
+            && (read.inserted_bases ?? 0) === 0
+            && (read.deleted_bases ?? 0) === 0
+            && (read.skipped_reference_bases ?? 0) === 0
+            && (read.clipped_fraction ?? 1) <= 0.05
+            && (read.reference_disagreement_rate ?? 1) <= 0.02;
+        if (preset === 'substitution_rich') return (read.reference_substitution_rate ?? 0) >= 0.05;
+        if (preset === 'indels_gaps') return (read.inserted_bases ?? 0) > 0
+            || (read.deleted_bases ?? 0) > 0 || (read.skipped_reference_bases ?? 0) > 0;
+        if (preset === 'clipped') return (read.clipped_fraction ?? 0) >= 0.10;
+        return true;
+    });
+}
+
+export function formatAlignmentReadSummary(read: AlignmentRead): string {
+    const pieces = [
+        `Q${read.mean_quality == null ? 'n/a' : read.mean_quality.toFixed(1)}`,
+        `MAPQ ${read.mapq ?? 'n/a'}`,
+    ];
+    if (read.reference_substitution_count != null) pieces.push(`${read.reference_substitution_count} reference substitutions`);
+    if ((read.inserted_bases ?? 0) > 0) pieces.push(`${read.inserted_bases} bp insertion`);
+    if ((read.deleted_bases ?? 0) > 0) pieces.push(`${read.deleted_bases} bp deletion`);
+    if ((read.skipped_reference_bases ?? 0) > 0) pieces.push(`${read.skipped_reference_bases} bp gap`);
+    if ((read.clipped_bases ?? 0) > 0) pieces.push(`${read.clipped_bases} bp clipped`);
+    if (read.aligned_fraction != null) pieces.push(`${Math.round(read.aligned_fraction * 100)}% aligned`);
+    return pieces.join(' · ');
 }
 
 export interface AlignmentReadPage {

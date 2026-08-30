@@ -235,6 +235,44 @@ test('IGV locus-change payload becomes a bounded one-based read-inspector locus'
     assert.equal(currentLocus!([{ chr: '', start: 0, end: 10 }]), null);
 });
 
+test('IGV alignment popover resolves the clicked read without exposing UUID entry', async () => {
+    const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
+    const resolveRead = module.resolveIgvClickedReadId as ((payload: unknown) => string | null) | undefined;
+    assert.equal(typeof resolveRead, 'function');
+    assert.equal(resolveRead!([
+        { name: 'Read Name', value: '98be5d1a-6ff9-4d9a-85cb-e21fb9cf9ce9' },
+        { name: 'Cigar', value: '200M' },
+    ]), '98be5d1a-6ff9-4d9a-85cb-e21fb9cf9ce9');
+    assert.equal(resolveRead!([{ name: 'Read Name', value: '<script>alert(1)</script>' }]), null);
+    assert.equal(resolveRead!([{ name: 'Mapping Quality', value: '60' }]), null);
+});
+
+test('viewer-session publication rejects an older IGV click after a newer click begins', async () => {
+    const sessionModule = await import('../src/lib/ngsAlignmentSession.js') as Record<string, unknown>;
+    const viewerModule = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
+    const createGuard = sessionModule.createLatestRequestGuard as (() => { begin(): number; isCurrent(token: number): boolean }) | undefined;
+    const publishCurrent = viewerModule.publishCurrentIgvReadSelection as (<T>(isCurrent: () => boolean, create: () => Promise<T>, publish: (value: T) => void) => Promise<boolean>) | undefined;
+    assert.equal(typeof createGuard, 'function');
+    assert.equal(typeof publishCurrent, 'function');
+
+    let resolveA!: (value: string) => void;
+    let resolveB!: (value: string) => void;
+    const createdA = new Promise<string>((resolve) => { resolveA = resolve; });
+    const createdB = new Promise<string>((resolve) => { resolveB = resolve; });
+    const guard = createGuard!();
+    const published: string[] = [];
+    const tokenA = guard.begin();
+    const pendingA = publishCurrent!(() => guard.isCurrent(tokenA), () => createdA, (value) => published.push(value));
+    const tokenB = guard.begin();
+    const pendingB = publishCurrent!(() => guard.isCurrent(tokenB), () => createdB, (value) => published.push(value));
+
+    resolveB('session-b');
+    assert.equal(await pendingB, true);
+    resolveA('session-a');
+    assert.equal(await pendingA, false);
+    assert.deepEqual(published, ['session-b']);
+});
+
 test('timed-out IGV generation owns terminal loading state but cannot clear a newer generation', async () => {
     const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
     const ownsTerminal = module.ownsIgvLoadTerminalState as (
@@ -330,6 +368,8 @@ test('NGS viewer exposes a readable base-scale view and legible IGV chrome', () 
     const rangeEnd = source.indexOf('const focusReadableIgvRange');
     assert.doesNotMatch(source.slice(rangeStart, rangeEnd), /ontFastqQcResultState/u);
     assert.match(source, /ngs-readable-igv/u);
+    assert.match(source, /\.igv-ui-popover \*/u);
+    assert.match(source, /\.igv-ui-popover,/u);
     assert.match(css, /\.ngs-readable-igv/u);
     assert.match(css, /font-size:\s*14px\s*!important/u);
 });
