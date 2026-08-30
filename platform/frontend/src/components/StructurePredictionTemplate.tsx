@@ -1,6 +1,6 @@
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchBoltzCpShardPlans, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type BoltzCpShardPlan, type MsaCacheInfo } from '../lib/api';
+import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
 import { useNavigate } from 'react-router-dom';
 import { parseMolecularDynamicsHandoffUserSequence } from './gen2StartingStructureState';
 import { SequenceManager } from './SequenceManager';
@@ -9,12 +9,9 @@ import { componentIdFromIndex } from './ligandSelectorData';
 import { TargetAntigenSelector, type SelectedTarget } from './TargetAntigenSelector';
 import MolstarViewer from './MolstarViewer';
 import {
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
     BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
     BOLTZ_QUALITY_PRESETS,
-    DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
     DEFAULT_STRUCTURE_MSA_PROVIDER,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MIN_SIZE_GB,
     DEFAULT_STRUCTURE_MSA_TARGET_SHARD_MODE,
@@ -26,14 +23,10 @@ import {
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
-    getBoltzCpLogicalSizeCp,
-    getBoltzCpRuntimeBridgeSummary,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
-    inferBoltzCpShardPlanId,
-    normalizeBoltzCpShardPlanId,
     normalizeMsaTargetShardMinSizeGb,
     normalizeMsaTargetShardMode,
     normalizeMsaTargetShards,
@@ -133,14 +126,6 @@ const resolveInitialPrimaryProteinComponent = (initialValues?: Record<string, Un
 
 const MIN_BOLTZ_NO_MSA_RECYCLING_STEPS = 3;
 const MIN_BOLTZ_NO_MSA_SAMPLING_STEPS = 50;
-const DEFAULT_BOLTZ_CP_SHARD_PLANS: BoltzCpShardPlan[] = BOLTZ_CP_SHARD_PLAN_DEFINITIONS.map((plan) => ({
-    id: plan.id,
-    label: plan.label,
-    topology: plan.id,
-    logical_size_cp: plan.logicalSizeCp,
-    description: plan.description,
-    physical_gpu_resolutions: [],
-}));
 
 const clampBoltzRecyclingSteps = (value: unknown, useMsa: boolean): number => {
     const parsed = Number.parseInt(String(value), 10);
@@ -177,9 +162,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const launchConfig = resolveStructureLaunchConfig(initialValues);
     const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
-    const initialBoltzCpShardPlanId = normalizeBoltzCpShardPlanId(
-        initialValues?.bcp_shard_plan_id ?? initialValues?.shard_plan_id ?? inferBoltzCpShardPlanId(initialBoltzCpSizeCp)
-    );
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
     // Core state
@@ -298,16 +280,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [numParallelJobs, setNumParallelJobs] = useState(initialValues?.num_parallel_jobs ?? 1);
 
     // Boltz-CP-specific settings
-    const [bcpShardPlanId, setBcpShardPlanId] = useState(initialBoltzCpShardPlanId || BOLTZ_CP_DEFAULT_SHARD_PLAN_ID);
-    const [bcpShardPlans, setBcpShardPlans] = useState<BoltzCpShardPlan[]>(DEFAULT_BOLTZ_CP_SHARD_PLANS);
+    const [bcpRequestedSizeCp, setBcpRequestedSizeCp] = useState(
+        Number.isFinite(initialBoltzCpSizeCp) && initialBoltzCpSizeCp > 0 ? initialBoltzCpSizeCp : 4
+    );
     const [bcpOutputFormat, setBcpOutputFormat] = useState<'mmcif' | 'pdb'>(
         String(initialValues?.output_format ?? initialValues?.bcp_output_format ?? 'mmcif').toLowerCase() === 'pdb' ? 'pdb' : 'mmcif'
     );
     const [bcpWriteFullPae, setBcpWriteFullPae] = useState(Boolean(initialValues?.write_full_pae ?? initialValues?.bcp_write_full_pae ?? false));
-    const [bcpContextQueryTileTokens, setBcpContextQueryTileTokens] = useState<number>(
-        Number.parseInt(String(initialValues?.context_query_tile_tokens ?? initialValues?.bcp_context_query_tile_tokens ?? DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS), 10)
-        || DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS
-    );
     const [bcpSeed, setBcpSeed] = useState(initialBoltzCpSeed != null ? String(initialBoltzCpSeed) : '');
 
     // ESMFold2-specific settings intentionally stay compact; inputs reuse the standard structure surface.
@@ -706,29 +685,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     }, [gpuOptions, initialValues?.gpu_ids, initialValues?.bcp_gpu_ids]);
     const boltzCpGpuSettings = deriveBoltzCpGpuLaunchSettings({
         pinnedGpus,
-        requestedSizeCp: getBoltzCpLogicalSizeCp(bcpShardPlanId),
+        requestedSizeCp: bcpRequestedSizeCp,
         fallbackGpuIds: boltzCpFallbackGpuIds,
     });
-    useEffect(() => {
-        if (!isBoltzCpLaunch) return;
-        let cancelled = false;
-        fetchBoltzCpShardPlans()
-            .then(({ data }) => {
-                if (cancelled || !Array.isArray(data?.plans) || data.plans.length === 0) return;
-                setBcpShardPlans(data.plans);
-                if (!data.plans.some((plan) => plan.id === bcpShardPlanId)) {
-                    setBcpShardPlanId(normalizeBoltzCpShardPlanId(data.default_plan_id));
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setBcpShardPlans(DEFAULT_BOLTZ_CP_SHARD_PLANS);
-                }
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [isBoltzCpLaunch, bcpShardPlanId]);
     const boltzQualityState = getBoltzQualitySliderState({
         samplingSteps: boltzSamplingSteps,
         recyclingSteps: boltzRecyclingSteps,
@@ -750,12 +709,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         if (isBoltzCpLaunch) {
             params.structure_launch_variant = 'boltz_cp_experimental';
             Object.assign(params, buildBoltzCpSubmitParams({
-                shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
-                contextQueryTileTokens: bcpContextQueryTileTokens,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
+                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -858,7 +816,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpShardPlanId, bcpOutputFormat, bcpWriteFullPae, bcpContextQueryTileTokens, bcpSeed, boltzCpGpuSettings.gpuIds, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -1023,12 +981,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
 
         if (isBoltzCpLaunch) {
             Object.assign(params, buildBoltzCpSubmitParams({
-                shardPlanId: bcpShardPlanId,
                 outputFormat: bcpOutputFormat,
                 writeFullPae: bcpWriteFullPae,
-                contextQueryTileTokens: bcpContextQueryTileTokens,
                 seed: bcpSeed,
                 gpuIds: boltzCpGpuSettings.gpuIds,
+                sizeCp: boltzCpGpuSettings.sizeCp,
             }));
         }
 
@@ -2015,29 +1972,20 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         {isBoltzCpLaunch && (
                             <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-4 space-y-4">
                                 <div>
-                                    <label className="text-xs text-orange-100/80 block mb-1">Logical shard plan</label>
-                                    <select
-                                        value={bcpShardPlanId}
-                                        onChange={(e) => setBcpShardPlanId(normalizeBoltzCpShardPlanId(e.target.value))}
-                                        className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                    >
-                                        {bcpShardPlans.map((plan) => (
-                                            <option key={plan.id} value={plan.id}>{plan.label}</option>
-                                        ))}
-                                    </select>
+                                    <label className="text-xs text-orange-100/80 block mb-1">Context Parallel Size Request</label>
+                                    <input
+                                        type="number"
+                                        value={bcpRequestedSizeCp}
+                                        onChange={(e) => setBcpRequestedSizeCp(Math.max(1, Math.min(16, Number.parseInt(e.target.value || '1', 10) || 1)))}
+                                        min={1}
+                                        max={16}
+                                        className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    />
                                     <p className="mt-2 text-xs text-slate-400">
-                                        {bcpShardPlans.find((plan) => plan.id === bcpShardPlanId)?.description}
-                                    </p>
-                                    <p className="mt-2 text-xs text-slate-400">
-                                        {getBoltzCpRuntimeBridgeSummary({
-                                            shardPlanId: bcpShardPlanId,
-                                            gpuIds: boltzCpGpuSettings.gpuIds,
-                                            sizeCp: boltzCpGpuSettings.sizeCp,
-                                            autoFallbackLabel: 'auto-selected GPU pool',
-                                        })}
+                                        OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
                                     </p>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div>
                                         <label className="text-xs text-slate-400 block mb-1">Output Format</label>
                                         <select
@@ -2048,17 +1996,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                             <option value="mmcif">mmCIF</option>
                                             <option value="pdb">PDB</option>
                                         </select>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs text-slate-400 block mb-1">Triangle attention query tile tokens</label>
-                                        <input
-                                            type="number"
-                                            value={bcpContextQueryTileTokens}
-                                            onChange={(e) => setBcpContextQueryTileTokens(Math.max(1, parseInt(e.target.value, 10) || DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS))}
-                                            min={1}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                        />
-                                        <p className="mt-1 text-[11px] leading-snug text-slate-500">Reference triangle-attention query tiling inside the true distributed Pairformer path; not output tiling.</p>
                                     </div>
                                     <div>
                                         <label className="text-xs text-slate-400 block mb-1">Seed</label>

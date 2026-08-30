@@ -414,13 +414,6 @@ from antibody_pipeline_contract import (
 )
 
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
-from .boltz_cp_shard_plans import (
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    coerce_boltz_cp_shard_plan_id,
-    get_boltz_cp_logical_size_cp,
-    infer_boltz_cp_shard_plan_id,
-    largest_square_divisor as boltz_cp_largest_square_divisor,
-)
 from .gpu_config import read_scheduler_config
 
 from .ont_ngs_contract import normalize_ont_launch_params, resolve_ont_workflow_alias
@@ -1020,7 +1013,20 @@ def _parse_boltz_cp_gpu_ids(value: object) -> List[int]:
 
 
 def _largest_square_divisor(gpu_count: int, requested_size_cp: object) -> int:
-    return boltz_cp_largest_square_divisor(gpu_count, requested_size_cp)
+    if gpu_count < 1:
+        return 1
+    requested = _coerce_int(requested_size_cp, gpu_count)
+    if requested < 1:
+        requested = gpu_count
+    best = 1
+    for candidate in range(1, gpu_count + 1):
+        if gpu_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
 
 
 def _derive_boltz_cp_gpu_launch_settings(
@@ -4120,29 +4126,15 @@ def build_nextflow_command(
     elif model_id == 'boltz_cp_experimental':
         boltz_cp_mappings = {
             'input_path': 'bcp_input_path',
-            'shard_plan_id': 'bcp_shard_plan_id',
             'gpu_ids': 'bcp_gpu_ids',
+            'size_cp': 'bcp_size_cp',
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
-            'confidence_prediction': 'bcp_confidence_prediction',
             'recycling_steps': 'bcp_recycling_steps',
             'sampling_steps': 'bcp_sampling_steps',
             'diffusion_samples': 'bcp_diffusion_samples',
-            'max_msa_seqs': 'bcp_max_msa_seqs',
-            'max_parallel_samples': 'bcp_max_parallel_samples',
-            'precision': 'bcp_precision',
             'seed': 'bcp_seed',
-            'backend': 'bcp_backend',
-            'triattn_backend': 'bcp_triattn_backend',
-            'context_store_mode': 'bcp_context_store_mode',
-            'context_store_root': 'bcp_context_store_root',
-            'context_query_tile_tokens': 'bcp_context_query_tile_tokens',
-            'context_store_logical_size_cp': 'bcp_context_store_logical_size_cp',
-            'context_store_pair_tile_tokens': 'bcp_context_store_pair_tile_tokens',
-            'context_store_key_tile_tokens': 'bcp_context_store_key_tile_tokens',
-            'context_store_projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
-            'projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -4163,22 +4155,9 @@ def build_nextflow_command(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
-        legacy_size_cp = params.pop('size_cp', None)
-        shard_plan_id = coerce_boltz_cp_shard_plan_id(params.get('bcp_shard_plan_id'))
-        if shard_plan_id is None:
-            shard_plan_id = infer_boltz_cp_shard_plan_id(
-                params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
-                default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-            )
-        params['bcp_shard_plan_id'] = shard_plan_id
-
-        requested_size_cp = get_boltz_cp_logical_size_cp(
-            shard_plan_id,
-            params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
-        )
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
-            requested_size_cp=requested_size_cp,
+            requested_size_cp=params.get('bcp_size_cp'),
             fallback_gpu_ids=params.get('bcp_gpu_ids'),
             scheduler_gpu_id=params.get('gpu_id'),
         )
@@ -4189,14 +4168,33 @@ def build_nextflow_command(
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
-        params.setdefault('bcp_confidence_prediction', False)
-        params.setdefault('bcp_max_msa_seqs', 128)
-        params.setdefault('bcp_max_parallel_samples', 1)
-        params.setdefault('bcp_precision', 'BF16')
-        params.setdefault('bcp_backend', 'true-distributed-context-parallel')
-        params.setdefault('bcp_triattn_backend', 'reference')
-        params.setdefault('bcp_context_store_mode', 'evidence-only')
-        params.setdefault('bcp_context_query_tile_tokens', 512)
+        for retired_key in tuple(params):
+            if retired_key in {
+                'backend',
+                'shard_plan_id',
+                'confidence_prediction',
+                'max_msa_seqs',
+                'max_parallel_samples',
+                'precision',
+                'triattn_backend',
+                'context_store_mode',
+                'context_store_root',
+                'context_query_tile_tokens',
+                'context_store_logical_size_cp',
+                'context_store_pair_tile_tokens',
+                'context_store_key_tile_tokens',
+                'context_store_projection_cache_byte_budget',
+                'projection_cache_byte_budget',
+            } or retired_key.startswith('bcp_context_') or retired_key in {
+                'bcp_backend',
+                'bcp_shard_plan_id',
+                'bcp_confidence_prediction',
+                'bcp_max_msa_seqs',
+                'bcp_max_parallel_samples',
+                'bcp_precision',
+                'bcp_triattn_backend',
+            }:
+                params.pop(retired_key, None)
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),

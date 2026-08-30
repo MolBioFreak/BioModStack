@@ -1,18 +1,13 @@
 import type { Job } from '../../lib/api.js';
 import {
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
     buildBoltzCpSubmitParams,
     deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
-    getBoltzCpLogicalSizeCp,
     getPredictorFamiliesForSelection,
-    inferBoltzCpShardPlanId,
-    normalizeBoltzCpShardPlanId,
     normalizeMsaTargetShardMinSizeGb,
     normalizeMsaTargetShardMode,
     normalizeMsaTargetShards,
     parseBoltzCpGpuIds,
-    type BoltzCpShardPlanId,
     type StructureMsaTargetShardMode,
     type StructurePredictionMode,
     type StructurePredictorFamily,
@@ -46,7 +41,7 @@ export interface StructureReorchestrateSettings {
         enabled: boolean;
         pinnedGpus: number[];
         lockGpus: boolean;
-        shardPlanId: BoltzCpShardPlanId;
+        sizeCp: number;
         outputFormat: StructureBoltzCpOutputFormat;
         writeFullPae: boolean;
         seed: string;
@@ -87,7 +82,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
         enabled: false,
         pinnedGpus: [],
         lockGpus: false,
-        shardPlanId: BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
+        sizeCp: 4,
         outputFormat: 'mmcif',
         writeFullPae: false,
         seed: '',
@@ -142,6 +137,15 @@ const normalizeBoltzCpSeed = (value: unknown): string => {
     if (value === null || value === undefined) return '';
     const normalized = String(value).trim();
     return normalized;
+};
+
+const normalizeBoltzCpSizeCp = (params: Record<string, unknown>): number => {
+    const direct = Number.parseInt(String(params.bcp_size_cp ?? params.size_cp ?? ''), 10);
+    if (Number.isFinite(direct) && direct > 0) return Math.min(16, direct);
+    const historicalPlan = String(params.bcp_shard_plan_id ?? params.shard_plan_id ?? '').trim().toLowerCase();
+    if (historicalPlan === '1x1') return 1;
+    if (historicalPlan === '4x4') return 16;
+    return 4;
 };
 
 const normalizeProtenixModel = (_model?: string): string => 'protenix-v2';
@@ -256,7 +260,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
             enabled: boltzCpEnabled,
             pinnedGpus: boltzCpPinnedGpus,
             lockGpus: boltzCpPinnedGpus.length > 0 && toBoolean(params.lock_gpus, DEFAULTS.boltzCp.lockGpus),
-            shardPlanId: normalizeBoltzCpShardPlanId(params.bcp_shard_plan_id ?? params.shard_plan_id ?? inferBoltzCpShardPlanId(params.bcp_size_cp ?? params.size_cp)),
+            sizeCp: normalizeBoltzCpSizeCp(params),
             outputFormat: normalizeBoltzCpOutputFormat(params.bcp_output_format ?? params.output_format),
             writeFullPae: toBoolean(params.bcp_write_full_pae ?? params.write_full_pae, DEFAULTS.boltzCp.writeFullPae),
             seed: normalizeBoltzCpSeed(params.bcp_seed ?? params.seed),
@@ -321,27 +325,27 @@ export const buildStructureReorchestrateOverrides = (
         const fallbackGpuIds = resolveBoltzCpAutoFallbackGpuIds(job);
         const previousLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: previous.boltzCp.pinnedGpus,
-            requestedSizeCp: getBoltzCpLogicalSizeCp(previous.boltzCp.shardPlanId),
+            requestedSizeCp: previous.boltzCp.sizeCp,
             fallbackGpuIds,
         });
         const nextLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: next.boltzCp.pinnedGpus,
-            requestedSizeCp: getBoltzCpLogicalSizeCp(next.boltzCp.shardPlanId),
+            requestedSizeCp: next.boltzCp.sizeCp,
             fallbackGpuIds,
         });
         const previousParams = buildBoltzCpSubmitParams({
-            shardPlanId: previous.boltzCp.shardPlanId,
             outputFormat: previous.boltzCp.outputFormat,
             writeFullPae: previous.boltzCp.writeFullPae,
             seed: previous.boltzCp.seed,
             gpuIds: previousLaunch.gpuIds,
+            sizeCp: previousLaunch.sizeCp,
         });
         const nextParams = buildBoltzCpSubmitParams({
-            shardPlanId: next.boltzCp.shardPlanId,
             outputFormat: next.boltzCp.outputFormat,
             writeFullPae: next.boltzCp.writeFullPae,
             seed: next.boltzCp.seed,
             gpuIds: nextLaunch.gpuIds,
+            sizeCp: nextLaunch.sizeCp,
         });
 
         maybeSet(
@@ -354,7 +358,7 @@ export const buildStructureReorchestrateOverrides = (
             next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.lockGpus : false,
             previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.lockGpus : false,
         );
-        maybeSet('bcp_shard_plan_id', nextParams.bcp_shard_plan_id, previousParams.bcp_shard_plan_id);
+        maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
         maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
         maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);

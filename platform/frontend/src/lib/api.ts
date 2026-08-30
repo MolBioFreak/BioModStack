@@ -330,25 +330,6 @@ export interface JobLogs {
     nextflow_log_source?: 'job_output' | 'legacy_global' | null;
 }
 
-export interface BoltzCpPhysicalGpuResolution {
-    gpu_count: number;
-    launch_size_cp: number;
-}
-
-export interface BoltzCpShardPlan {
-    id: string;
-    label: string;
-    topology: string;
-    logical_size_cp: number;
-    description: string;
-    physical_gpu_resolutions: BoltzCpPhysicalGpuResolution[];
-}
-
-export interface BoltzCpShardPlanCatalog {
-    default_plan_id: string;
-    plans: BoltzCpShardPlan[];
-}
-
 export interface GPUProcess {
     pid: number;
     name: string;
@@ -508,7 +489,6 @@ export const fetchJobs = (params?: {
         summary: params?.summary ?? true,
     },
 });
-export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
 // Bound live telemetry requests so a half-open connection cannot permanently
 // occupy the shared collector and suppress its recovery/backoff loop.
 export interface TelemetryHistoryPoint {

@@ -33,8 +33,6 @@ under `docs/plans/` and should not be mistaken for the product truth.
 - [Plans README](plans/README.md)
 - [MSA control-plane guardrails and regression checklist](plans/2026-04-22-msa-control-plane-guardrails-and-regression-checklist.md)
 - [Local high-quality MSA target-DB sharding spec](plans/2026-04-23-local-msa-target-db-sharding-spec.md)
-- [DRAM→VRAM tiled runtime proof plan](plans/2026-04-24-dram-vram-tile-runtime-proof.md)
-- [Fold-CP DRAM context-spill workhorse implementation spec](plans/2026-04-24-fold-cp-dram-context-spill-additional-work-spec.md)
 - [RepA local MSA root-cause and fix spec](plans/2026-04-24-repa-local-msa-root-cause-and-fix-spec.md)
 - [MolBio read-QC harmonization implementation plan](plans/2026-04-25-molbio-read-qc-harmonization-spec.md)
 - [Caliby finishing changes specification](plans/2026-04-27-caliby-finishing-changes-spec.md)

@@ -73,15 +73,6 @@ export interface BoltzCpGpuLaunchInput {
     fallbackGpuIds?: string | null;
 }
 
-export type BoltzCpShardPlanId = '1x1' | '2x2' | '4x4';
-
-export interface BoltzCpShardPlanDefinition {
-    id: BoltzCpShardPlanId;
-    label: string;
-    logicalSizeCp: number;
-    description: string;
-}
-
 export interface StructureSubmitTarget {
     modelId: 'boltz2' | 'boltz_api' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
@@ -94,12 +85,11 @@ export interface ResolveStructureSubmitTargetInput {
 }
 
 export interface BoltzCpSubmitParamsInput {
-    shardPlanId: BoltzCpShardPlanId;
     outputFormat: 'mmcif' | 'pdb';
     writeFullPae: boolean;
-    contextQueryTileTokens?: number | string | null;
     seed?: string | null;
     gpuIds?: string | null;
+    sizeCp: number;
 }
 
 export interface StructureMsaSubmitParamsInput {
@@ -175,55 +165,6 @@ export const buildBoltzApiStructureRequest = ({
     num_samples: Math.max(1, Math.min(10, Math.floor(Number(numSamples) || 1))),
     use_msa: useMsa,
 });
-
-export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
-export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
-const BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID: Record<BoltzCpShardPlanId, number> = {
-    '1x1': 1,
-    '2x2': 4,
-    '4x4': 16,
-};
-
-export const BOLTZ_CP_SHARD_PLAN_DEFINITIONS: BoltzCpShardPlanDefinition[] = [
-    {
-        id: '1x1',
-        label: '1×1 (single logical shard)',
-        logicalSizeCp: 1,
-        description: 'No logical sharding; useful for fallback/debug runs.',
-    },
-    {
-        id: '2x2',
-        label: '2×2 (4 logical shards)',
-        logicalSizeCp: 4,
-        description: 'Defines a 2×2 logical tile mesh. The selected logical plan does not change with GPU count.',
-    },
-    {
-        id: '4x4',
-        label: '4×4 (16 logical shards)',
-        logicalSizeCp: 16,
-        description: 'Defines a 4×4 logical tile mesh. The selected logical plan does not change with GPU count.',
-    },
-];
-
-export const normalizeBoltzCpShardPlanId = (value: unknown): BoltzCpShardPlanId => {
-    const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === '1x1' || normalized === '2x2' || normalized === '4x4') {
-        return normalized;
-    }
-    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
-};
-
-export const getBoltzCpLogicalSizeCp = (shardPlanId: unknown): number => (
-    BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID[normalizeBoltzCpShardPlanId(shardPlanId)]
-);
-
-export const inferBoltzCpShardPlanId = (sizeCp: unknown): BoltzCpShardPlanId => {
-    const parsed = Number.parseInt(String(sizeCp), 10);
-    if (parsed === 1) return '1x1';
-    if (parsed === 16) return '4x4';
-    if (parsed === 4) return '2x2';
-    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
-};
 
 export const normalizeMsaTargetShardMode = (value: unknown): StructureMsaTargetShardMode => {
     const normalized = String(value || '').trim().toLowerCase();
@@ -339,25 +280,6 @@ export const deriveBoltzCpGpuLaunchSettings = ({
     };
 };
 
-export const getBoltzCpRuntimeBridgeSummary = ({
-    shardPlanId,
-    gpuIds,
-    sizeCp,
-    autoFallbackLabel = 'auto-selected GPU pool',
-}: {
-    shardPlanId: unknown;
-    gpuIds?: string | null;
-    sizeCp: number;
-    autoFallbackLabel?: string;
-}): string => {
-    const normalizedPlanId = normalizeBoltzCpShardPlanId(shardPlanId);
-    const logicalSizeCp = getBoltzCpLogicalSizeCp(normalizedPlanId);
-    const resolvedGpuLabel = String(gpuIds || '').trim() || autoFallbackLabel;
-    const logicalShardLabel = logicalSizeCp === 1 ? 'logical shard' : 'logical shards';
-    const physicalRankLabel = sizeCp === 1 ? 'CP rank' : 'CP ranks';
-    return `The selected logical plan stays ${normalizedPlanId} (${logicalSizeCp} ${logicalShardLabel}); GPU count only affects the current runtime bridge. ${resolvedGpuLabel} → current physical launch = ${sizeCp} ${physicalRankLabel}.`;
-};
-
 export const resolveStructureSubmitTarget = ({
     launchConfig,
     predictionMode,
@@ -386,26 +308,20 @@ export const resolveStructureSubmitTarget = ({
 };
 
 export const buildBoltzCpSubmitParams = ({
-    shardPlanId,
     outputFormat,
     writeFullPae,
-    contextQueryTileTokens,
     seed,
     gpuIds,
+    sizeCp,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
     const params: BoltzCpSubmitParams = {
         structure_launch_variant: 'boltz_cp_experimental',
         num_parallel_jobs: 1,
         bcp_input_format: 'config_files',
-        bcp_shard_plan_id: normalizeBoltzCpShardPlanId(shardPlanId),
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
-        bcp_context_query_tile_tokens: DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+        bcp_size_cp: sizeCp,
     };
-    const parsedContextQueryTileTokens = Number.parseInt(String(contextQueryTileTokens ?? ''), 10);
-    if (Number.isFinite(parsedContextQueryTileTokens) && parsedContextQueryTileTokens > 0) {
-        params.bcp_context_query_tile_tokens = parsedContextQueryTileTokens;
-    }
     if (gpuIds && gpuIds.trim()) {
         params.bcp_gpu_ids = gpuIds.trim();
     }

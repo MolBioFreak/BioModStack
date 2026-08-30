@@ -3,9 +3,6 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
-    DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
     DEFAULT_STRUCTURE_MSA_PROVIDER,
     BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT,
     BOLTZ_NUM_SAMPLES_HELP_TEXT,
@@ -14,13 +11,10 @@ import {
     buildTargetPreviewSelection,
     buildTargetPreviewSelections,
     deriveBoltzCpGpuLaunchSettings,
-    getBoltzCpLogicalSizeCp,
-    getBoltzCpRuntimeBridgeSummary,
     getBoltzQualityPresetValues,
     getBoltzQualitySliderState,
     getPredictorFamiliesForSelection,
     getStructurePredictorOptions,
-    inferBoltzCpShardPlanId,
     inferTargetStructureFormat,
     resolveBoltzSamplingStepsFromSlider,
     resolveStructureLaunchConfig,
@@ -187,12 +181,12 @@ test('esmfold2 controls are driven by the parent structure predictor selection',
 
 test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to a valid square divisor', () => {
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('2x2') }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [0, 1, 2, 3], requestedSizeCp: 4 }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4') }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [2, 3], requestedSizeCp: 16 }),
         { gpuIds: '2,3', sizeCp: 1 },
     );
 
@@ -202,88 +196,57 @@ test('boltz cp gpu launch settings use pinned gpus directly and clamp size_cp to
     );
 
     assert.deepEqual(
-        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: getBoltzCpLogicalSizeCp('4x4'), fallbackGpuIds: '0,1,2,3' }),
+        deriveBoltzCpGpuLaunchSettings({ pinnedGpus: [], requestedSizeCp: 16, fallbackGpuIds: '0,1,2,3' }),
         { gpuIds: '0,1,2,3', sizeCp: 4 },
     );
 });
 
-test('boltz cp shard plan helpers expose stable logical topologies and non-collapsing plan descriptions', () => {
-    assert.equal(BOLTZ_CP_DEFAULT_SHARD_PLAN_ID, '2x2');
-    assert.equal(getBoltzCpLogicalSizeCp('1x1'), 1);
-    assert.equal(getBoltzCpLogicalSizeCp('2x2'), 4);
-    assert.equal(getBoltzCpLogicalSizeCp('4x4'), 16);
-    assert.equal(inferBoltzCpShardPlanId(1), '1x1');
-    assert.equal(inferBoltzCpShardPlanId(4), '2x2');
-    assert.equal(inferBoltzCpShardPlanId(16), '4x4');
-    assert.match(BOLTZ_CP_SHARD_PLAN_DEFINITIONS.find((plan) => plan.id === '4x4')?.description || '', /does not change with GPU count/i);
-});
-
-test('boltz cp runtime bridge summary makes the logical plan primary and bridge sizing secondary', () => {
-    assert.equal(
-        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '4x4', gpuIds: '0,1,2,3', sizeCp: 4 }),
-        'The selected logical plan stays 4x4 (16 logical shards); GPU count only affects the current runtime bridge. 0,1,2,3 → current physical launch = 4 CP ranks.',
-    );
-    assert.match(
-        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
-        /selected logical plan stays 2x2/i,
-    );
-    assert.match(
-        getBoltzCpRuntimeBridgeSummary({ shardPlanId: '2x2', gpuIds: '', sizeCp: 1 }),
-        /auto-selected GPU pool → current physical launch = 1 CP rank/i,
-    );
-});
-
-test('boltz cp submit params expose reference triangle query tiling default and override', () => {
-    assert.equal(DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS, 512);
-
+test('boltz cp submit params use the OEM context-parallel contract', () => {
     assert.deepEqual(
         buildBoltzCpSubmitParams({
-            shardPlanId: '4x4',
             outputFormat: 'pdb',
             writeFullPae: true,
             seed: '17',
             gpuIds: '0,1,2,3',
-            contextQueryTileTokens: 256,
+            sizeCp: 4,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
-            bcp_shard_plan_id: '4x4',
             bcp_output_format: 'pdb',
             bcp_write_full_pae: true,
-            bcp_context_query_tile_tokens: 256,
             bcp_gpu_ids: '0,1,2,3',
+            bcp_size_cp: 4,
             bcp_seed: 17,
         },
     );
 
     assert.deepEqual(
         buildBoltzCpSubmitParams({
-            shardPlanId: '1x1',
             outputFormat: 'mmcif',
             writeFullPae: false,
             seed: '  ',
             gpuIds: '',
+            sizeCp: 1,
         }),
         {
             structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
-            bcp_shard_plan_id: '1x1',
             bcp_output_format: 'mmcif',
             bcp_write_full_pae: false,
-            bcp_context_query_tile_tokens: 512,
+            bcp_size_cp: 1,
         },
     );
 });
 
-test('boltz cp template component exposes query tiling as live UI control', () => {
+test('boltz cp template exposes only the OEM context-parallel control', () => {
     const componentText = readFileSync('src/components/StructurePredictionTemplate.tsx', 'utf8');
 
-    assert.match(componentText, /Triangle attention query tile/);
-    assert.match(componentText, /setBcpContextQueryTileTokens/);
-    assert.match(componentText, /contextQueryTileTokens: bcpContextQueryTileTokens/);
+    assert.match(componentText, /Context Parallel Size Request/);
+    assert.doesNotMatch(componentText, /Logical shard plan/);
+    assert.doesNotMatch(componentText, /Triangle attention query tile/);
 });
 
 test('structure MSA submit params carry adaptive target-DB sharding controls for local high-quality runs', () => {

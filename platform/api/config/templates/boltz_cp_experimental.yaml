@@ -6,28 +6,24 @@ icon: sparkles
 color: "#F97316"
 experimental: true
 description: >
-  Experimental Fold-CP large-protein launcher. The default
-  true-distributed-context-parallel backend runs the DTensor context-parallel
-  Boltz-2 prediction data-plane with torch.distributed; shared-cache-serial-output-tiling
-  remains a legacy control-plane/output-tiling fallback for explicit diagnostic use.
+  Experimental single-example Boltz-2 inference using DTensor context
+  parallelism (CP) across multiple GPUs. Reuses the established structure
+  prediction launcher inputs while preserving a separate experimental workflow.
 goal: >
-  Make the native distributed CP data-plane the default BMS launch path while
-  keeping legacy publication backends visibly separate.
+  Surface true multi-GPU single-fold Boltz context parallelism in the BMS
+  launcher without forcing users through ad hoc shell commands.
 status: >
-  Experimental alpha. true-distributed-context-parallel is the default data-plane
-  backend. Legacy shared-cache publication remains opt-in and should not be read
-  as native distributed CP. Host-RAM spill modes are predictor-owned rank-local
-  Pairformer z offload at layer/op boundaries only. virtual-dram-stream-attention is
-  an experimental true data-plane DRAM streaming bridge for fused outer-product-mean
-  projection plus triangle attention/projected triangle multiplication windows.
+  Experimental alpha. Single-node Boltz-2 CP only. Canonical sequence/complex
+  inputs are staged into Boltz config_files automatically, and the local
+  checked-out Fold-CP repo path remains preset for this workstation.
 
 stages:
   - name: Input Intake
     tool: BMS Launcher
     description: Capture canonical structure-launcher inputs and CP launch settings.
-  - name: True Distributed CP Prediction
-    tool: Fold-CP distributed predictor
-    description: Launch torch.distributed DTensor context-parallel Boltz-2 prediction across the selected physical GPUs.
+  - name: Distributed Inference
+    tool: Fold-CP
+    description: Run DTensor context-parallel Boltz-2 inference across the selected GPUs with torch.distributed.
   - name: Artifact Collect
     tool: BMS Output Collector
     description: Flatten prediction artifacts into standard BMS output folders for review.
@@ -37,18 +33,8 @@ preset_params:
   template_mode_id: design
   structure_launch_variant: boltz_cp_experimental
   bcp_repo_path: /home/dalab/tmp/boltz-cp
-  bcp_backend: true-distributed-context-parallel
-  bcp_triattn_backend: reference
-  bcp_context_store_mode: evidence-only
-  bcp_context_query_tile_tokens: 512
-  bcp_context_store_projection_cache_byte_budget: 0
-  bcp_shard_plan_id: 2x2
   bcp_input_format: config_files
   bcp_output_format: mmcif
   bcp_write_full_pae: false
-  bcp_confidence_prediction: false
-  bcp_max_msa_seqs: 128
-  bcp_max_parallel_samples: 1
-  bcp_precision: BF16
 
 user_params: []

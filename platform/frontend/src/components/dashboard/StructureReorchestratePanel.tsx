@@ -1,11 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { fetchBoltzCpShardPlans, type BoltzCpShardPlan } from '../../lib/api.js';
-import {
-    BOLTZ_CP_SHARD_PLAN_DEFINITIONS,
-    deriveBoltzCpGpuLaunchSettings,
-    getBoltzCpLogicalSizeCp,
-    getBoltzCpRuntimeBridgeSummary,
-} from '../structurePredictionUiState.js';
+import { useMemo } from 'react';
+import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
 import { useLiveGpuCatalog } from '../useLiveGpuCatalog';
 import type { StructurePredictor, StructureReorchestrateSettings } from './reorchestrateStructureSettings.js';
 
@@ -24,14 +18,6 @@ const predictorLabel: Record<StructurePredictor, string> = {
 
 const numberInputClass = 'mt-1 w-full rounded border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100';
 const sectionClass = 'rounded-xl border border-slate-700 bg-slate-800/40 p-4';
-const DEFAULT_BOLTZ_CP_SHARD_PLANS: BoltzCpShardPlan[] = BOLTZ_CP_SHARD_PLAN_DEFINITIONS.map((plan) => ({
-    id: plan.id,
-    label: plan.label,
-    topology: plan.id,
-    logical_size_cp: plan.logicalSizeCp,
-    description: plan.description,
-    physical_gpu_resolutions: [],
-}));
 
 const toPositiveInteger = (value: string, fallback: number, min = 1): number => {
     const parsed = Number.parseInt(value, 10);
@@ -46,7 +32,6 @@ export function StructureReorchestratePanel({
     const update = (patch: Partial<StructureReorchestrateSettings>) => onChange({ ...settings, ...patch });
     const { gpuOptions } = useLiveGpuCatalog();
     const boltzCpFallbackGpuIds = useMemo(() => gpuOptions.map((gpu) => gpu.index).join(','), [gpuOptions]);
-    const [availableBoltzCpPlans, setAvailableBoltzCpPlans] = useState<BoltzCpShardPlan[]>(DEFAULT_BOLTZ_CP_SHARD_PLANS);
 
     const updateBoltz = (patch: Partial<StructureReorchestrateSettings['boltz']>) => {
         update({ boltz: { ...settings.boltz, ...patch } });
@@ -67,29 +52,10 @@ export function StructureReorchestratePanel({
     const boltzCpGpuSettings = settings.boltzCp.enabled
         ? deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: settings.boltzCp.pinnedGpus,
-            requestedSizeCp: getBoltzCpLogicalSizeCp(settings.boltzCp.shardPlanId),
+            requestedSizeCp: settings.boltzCp.sizeCp,
             fallbackGpuIds: boltzCpFallbackGpuIds,
         })
         : null;
-
-    useEffect(() => {
-        if (!settings.boltzCp.enabled) return;
-        let cancelled = false;
-        fetchBoltzCpShardPlans()
-            .then(({ data }) => {
-                if (!cancelled && Array.isArray(data?.plans) && data.plans.length > 0) {
-                    setAvailableBoltzCpPlans(data.plans);
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setAvailableBoltzCpPlans(DEFAULT_BOLTZ_CP_SHARD_PLANS);
-                }
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [settings.boltzCp.enabled]);
 
     return (
         <div className="space-y-4">
@@ -300,29 +266,20 @@ export function StructureReorchestratePanel({
                     </div>
 
                     <div>
-                        <label className="text-sm text-orange-100/80 block mb-1">Logical shard plan</label>
-                        <select
-                            value={settings.boltzCp.shardPlanId}
+                        <label className="text-sm text-orange-100/80 block mb-1">Context Parallel Size Request</label>
+                        <input
+                            type="number"
+                            min={1}
+                            max={16}
+                            value={settings.boltzCp.sizeCp}
                             onChange={(event) => updateBoltzCp({
-                                shardPlanId: event.target.value as StructureReorchestrateSettings['boltzCp']['shardPlanId'],
+                                sizeCp: Math.min(16, toPositiveInteger(event.target.value, settings.boltzCp.sizeCp)),
                             })}
-                            className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                            className="w-full max-w-xs bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
                             disabled={disabled}
-                        >
-                            {availableBoltzCpPlans.map((plan) => (
-                                <option key={plan.id} value={plan.id}>{plan.label}</option>
-                            ))}
-                        </select>
+                        />
                         <p className="mt-2 text-xs text-slate-400">
-                            {availableBoltzCpPlans.find((plan) => plan.id === settings.boltzCp.shardPlanId)?.description}
-                        </p>
-                        <p className="mt-2 text-xs text-slate-400">
-                            {getBoltzCpRuntimeBridgeSummary({
-                                shardPlanId: settings.boltzCp.shardPlanId,
-                                gpuIds: boltzCpGpuSettings.gpuIds,
-                                sizeCp: boltzCpGpuSettings.sizeCp,
-                                autoFallbackLabel: 'auto-selected GPU pool',
-                            })}
+                            OEM Fold-CP uses a square context-parallel mesh. Current GPU resolution: {boltzCpGpuSettings.gpuIds || 'auto fallback'} → size_cp {boltzCpGpuSettings.sizeCp}.
                         </p>
                     </div>
 

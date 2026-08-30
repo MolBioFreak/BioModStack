@@ -118,15 +118,6 @@ from services.stage_review import (
     resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
-from services.boltz_cp_shard_plans import (
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    coerce_boltz_cp_shard_plan_id,
-    get_boltz_cp_logical_size_cp,
-    get_boltz_cp_shard_plan_catalog,
-    infer_boltz_cp_shard_plan_id,
-    largest_square_divisor as boltz_cp_largest_square_divisor,
-)
-
 router = APIRouter()
 
 # Project root for resolving code-relative paths
@@ -1526,35 +1517,19 @@ BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_inpu
 
 
 def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
-    return boltz_cp_largest_square_divisor(value_count, requested_size_cp)
+    if value_count < 1:
+        return 1
 
-
-def _get_boltz_cp_catalog_physical_gpu_count() -> int:
-    """Return the discovered host GPU count for UI catalog previews without DALAB ordinal assumptions."""
-    for env_key in ("BMS_BOLTZ_CP_CATALOG_GPU_COUNT", "BMS_MAX_PHYSICAL_GPUS"):
-        raw_value = os.getenv(env_key)
-        if raw_value in (None, ""):
+    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
+    best = 1
+    for candidate in range(1, value_count + 1):
+        if value_count % candidate != 0:
             continue
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
             continue
-        if parsed > 0:
-            return parsed
-
-    try:
-        from services.gpu_metadata import GPU_METADATA
-
-        discovered_count = len(GPU_METADATA)
-    except Exception as exc:
-        logger.debug("Could not discover GPU count for Boltz-CP shard-plan catalog: %s", exc)
-        discovered_count = 0
-    return max(1, discovered_count)
-
-
-@router.get("/boltz-cp/shard-plans")
-def list_boltz_cp_shard_plans() -> Dict[str, Any]:
-    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=_get_boltz_cp_catalog_physical_gpu_count())
+        best = candidate
+    return best
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1730,17 +1705,6 @@ def _normalize_boltz_cp_params_for_validation(
     if input_path:
         normalized["input_path"] = input_path
 
-    shard_plan_id = coerce_boltz_cp_shard_plan_id(
-        normalized.get("shard_plan_id") or normalized.get("bcp_shard_plan_id")
-    )
-    if shard_plan_id is None:
-        shard_plan_id = infer_boltz_cp_shard_plan_id(
-            normalized.get("size_cp") or normalized.get("bcp_size_cp"),
-            default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-        )
-    if shard_plan_id:
-        normalized["shard_plan_id"] = shard_plan_id
-
     gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
         normalized.get("bcp_gpu_ids")
     )
@@ -1749,27 +1713,24 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
+    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
+        normalized.get("bcp_size_cp")
+    )
+    if gpu_ids:
+        gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
+        if gpu_count > 0:
+            size_cp = _largest_square_divisor(gpu_count, size_cp)
+    if size_cp is not None:
+        normalized["size_cp"] = size_cp
+
     alias_mappings = {
-        "shard_plan_id": "bcp_shard_plan_id",
         "input_format": "bcp_input_format",
         "output_format": "bcp_output_format",
         "write_full_pae": "bcp_write_full_pae",
-        "confidence_prediction": "bcp_confidence_prediction",
         "recycling_steps": "bcp_recycling_steps",
         "sampling_steps": "bcp_sampling_steps",
         "diffusion_samples": "bcp_diffusion_samples",
-        "max_msa_seqs": "bcp_max_msa_seqs",
-        "max_parallel_samples": "bcp_max_parallel_samples",
-        "precision": "bcp_precision",
         "seed": "bcp_seed",
-        "backend": "bcp_backend",
-        "triattn_backend": "bcp_triattn_backend",
-        "context_store_mode": "bcp_context_store_mode",
-        "context_store_root": "bcp_context_store_root",
-        "context_query_tile_tokens": "bcp_context_query_tile_tokens",
-        "context_store_logical_size_cp": "bcp_context_store_logical_size_cp",
-        "context_store_pair_tile_tokens": "bcp_context_store_pair_tile_tokens",
-        "context_store_key_tile_tokens": "bcp_context_store_key_tile_tokens",
     }
     for canonical_key, alias_key in alias_mappings.items():
         if canonical_key not in normalized and alias_key in normalized:
@@ -1781,6 +1742,34 @@ def _normalize_boltz_cp_params_for_validation(
         normalized["sampling_steps"] = normalized["boltz_sampling_steps"]
     if "diffusion_samples" not in normalized and "boltz_num_samples" in normalized:
         normalized["diffusion_samples"] = normalized["boltz_num_samples"]
+
+    for retired_key in tuple(normalized):
+        if retired_key in {
+            "backend",
+            "shard_plan_id",
+            "confidence_prediction",
+            "max_msa_seqs",
+            "max_parallel_samples",
+            "precision",
+            "triattn_backend",
+            "context_store_mode",
+            "context_store_root",
+            "context_query_tile_tokens",
+            "context_store_logical_size_cp",
+            "context_store_pair_tile_tokens",
+            "context_store_key_tile_tokens",
+            "context_store_projection_cache_byte_budget",
+            "projection_cache_byte_budget",
+        } or retired_key.startswith("bcp_context_") or retired_key in {
+            "bcp_backend",
+            "bcp_shard_plan_id",
+            "bcp_confidence_prediction",
+            "bcp_max_msa_seqs",
+            "bcp_max_parallel_samples",
+            "bcp_precision",
+            "bcp_triattn_backend",
+        }:
+            normalized.pop(retired_key, None)
 
     return normalized
 
