@@ -267,6 +267,36 @@ async def _validate_signal_alignment_from_pinned_root(
     primary_sessions = [item for item in sessions if item.get("mode") == "primary" and item.get("ready") is True]
     if len(primary_sessions) != 1:
         raise OntNgsCompletionError("exactly one ready primary signal-alignment session is required")
+    try:
+        for ready_session in (item for item in sessions if item.get("ready") is True):
+            alignment_path, alignment_metadata, index_path, index_metadata = await run_in_threadpool(
+                ngs_alignment_sessions.resolve_session_alignment_bundle,
+                str(job.id),
+                ready_session["session_id"],
+                source_reference_sha256=reference_sha256,
+                workflow_id=_EXTERNAL_SIGNAL_ALIGNMENT_WORKFLOW,
+                input_mode="bam",
+                job_output_dir=pinned_result_root,
+                pinned_root_descriptor=True,
+            )
+            await run_in_threadpool(
+                ngs_alignment_sessions.build_alignment_presentation,
+                alignment_path,
+                bam_sha256=alignment_metadata["sha256"],
+                bam_size_bytes=alignment_metadata["size_bytes"],
+                index=index_path,
+                index_sha256=index_metadata["sha256"],
+                index_size_bytes=index_metadata["size_bytes"],
+                source_manifest_sha256=alignment_metadata["source_manifest_sha256"],
+                job_id=str(job.id),
+                session_id=ready_session["session_id"],
+                mode=ready_session["mode"],
+                cache_root=persisted_result_root / ".alignment-presentations",
+                artifact_set_sha256=ready_session["artifact_set_sha256"],
+                alignment_pair_sha256=ready_session["alignment_pair_sha256"],
+            )
+    except ngs_alignment_sessions.AlignmentSessionError as exc:
+        raise OntNgsCompletionError(f"alignment presentation materialization failed: {exc}") from exc
 
     result_integrity = {
         "state": "validated",

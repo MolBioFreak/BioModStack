@@ -77,7 +77,14 @@ export interface AlignmentSessionResponse {
 }
 
 export interface AlignmentPresentationArtifact {
-    kind: string;
+    kind:
+        | 'alignment_preview'
+        | 'alignment_preview_index'
+        | 'full_source_primary_coverage'
+        | 'alignment_presentation_manifest'
+        | 'alignment_locus_slice'
+        | 'alignment_locus_slice_index'
+        | 'alignment_locus_slice_manifest';
     url: string;
     sha256: string;
     size_bytes: number;
@@ -100,7 +107,14 @@ export interface AlignmentPresentation {
         primary_read_count: number;
         alignment_record_count: number;
     };
-    policy: { id: string; version: string; target_reads: number; max_preview_bytes: number; max_coverage_bins: number };
+    policy: {
+        id: 'primary-read-presentation-v2';
+        version: 2;
+        target_reads: number;
+        max_preview_bytes: number;
+        max_coverage_bins: number;
+        max_seconds: number;
+    };
     preview: {
         kind: 'primary_read_preview';
         selected_read_count: number;
@@ -140,7 +154,15 @@ export interface AlignmentLocusSlice {
     selected_read_count: number;
     selected_record_count: number;
     capped: boolean;
-    policy: { id: string; version: string; max_reads: number };
+    policy: {
+        id: 'bounded-full-source-locus-slice';
+        version: 1;
+        max_reads: number;
+        max_records: number;
+        max_bytes: number;
+        max_span_bp: number;
+        max_seconds: number;
+    };
     bam: AlignmentPresentationArtifact;
     index: AlignmentPresentationArtifact;
     manifest: AlignmentPresentationArtifact;
@@ -337,20 +359,39 @@ const isSha256 = (value: unknown): value is string => typeof value === 'string' 
 const isNonNegativeInteger = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const isPositiveInteger = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
 
-function validatePresentationArtifact(value: unknown, label: string): asserts value is AlignmentPresentationArtifact {
+export interface AlignmentPresentationExpectedAuthority {
+    mode: AlignmentSessionMode;
+    packageManifestSha256: string;
+    alignmentSha256: string;
+    alignmentSizeBytes: number;
+    alignmentIndexSha256: string;
+    alignmentIndexSizeBytes: number;
+}
+
+function validatePresentationArtifact(
+    value: unknown,
+    label: string,
+    expected: { kind: AlignmentPresentationArtifact['kind']; url: string; mimeType: string; allowEmpty?: boolean },
+): asserts value is AlignmentPresentationArtifact {
     requireClosedKeys(value, ['kind', 'url', 'sha256', 'size_bytes', 'mime_type', 'range_capable'], label);
-    if (typeof value.kind !== 'string' || !value.kind || typeof value.url !== 'string' || !value.url.startsWith('/')
-        || !isSha256(value.sha256) || !isNonNegativeInteger(value.size_bytes)
-        || typeof value.mime_type !== 'string' || !value.mime_type || value.range_capable !== true) {
+    if (value.kind !== expected.kind || value.url !== expected.url
+        || !isSha256(value.sha256)
+        || !(expected.allowEmpty ? isNonNegativeInteger(value.size_bytes) : isPositiveInteger(value.size_bytes))
+        || value.mime_type !== expected.mimeType || value.range_capable !== true) {
         throw new Error(`Invalid ${label}.`);
     }
 }
 
-export function normalizeAlignmentPresentation(value: unknown, expectedJobId: string, expectedSessionId: string): AlignmentPresentation {
+export function normalizeAlignmentPresentation(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedAuthority: AlignmentPresentationExpectedAuthority,
+): AlignmentPresentation {
     requireClosedKeys(value, ['schema', 'job_id', 'session_id', 'mode', 'state', 'source', 'policy', 'preview', 'coverage', 'manifest'], 'alignment presentation');
     const receipt = value as unknown as AlignmentPresentation;
     if (receipt.schema !== 'bms.ngs.alignment-presentation.v1' || receipt.job_id !== expectedJobId
-        || receipt.session_id !== expectedSessionId || !['primary', 'dimer_candidates'].includes(receipt.mode)
+        || receipt.session_id !== expectedSessionId || receipt.mode !== expectedAuthority.mode
         || receipt.state !== 'ready') throw new Error('Invalid alignment presentation identity.');
     requireClosedKeys(receipt.source, ['package_manifest_sha256', 'alignment_sha256', 'alignment_size_bytes', 'alignment_index_sha256', 'alignment_index_size_bytes', 'primary_read_count', 'alignment_record_count'], 'alignment presentation source');
     if (!isSha256(receipt.source.package_manifest_sha256) || !isSha256(receipt.source.alignment_sha256)
@@ -359,24 +400,48 @@ export function normalizeAlignmentPresentation(value: unknown, expectedJobId: st
         || !isNonNegativeInteger(receipt.source.alignment_record_count) || receipt.source.alignment_record_count < receipt.source.primary_read_count) {
         throw new Error('Invalid alignment presentation source.');
     }
-    requireClosedKeys(receipt.policy, ['id', 'version', 'target_reads', 'max_preview_bytes', 'max_coverage_bins'], 'alignment presentation policy');
-    if (typeof receipt.policy.id !== 'string' || !receipt.policy.id || typeof receipt.policy.version !== 'string' || !receipt.policy.version
+    if (receipt.source.package_manifest_sha256 !== expectedAuthority.packageManifestSha256
+        || receipt.source.alignment_sha256 !== expectedAuthority.alignmentSha256
+        || receipt.source.alignment_size_bytes !== expectedAuthority.alignmentSizeBytes
+        || receipt.source.alignment_index_sha256 !== expectedAuthority.alignmentIndexSha256
+        || receipt.source.alignment_index_size_bytes !== expectedAuthority.alignmentIndexSizeBytes) {
+        throw new Error('Invalid alignment presentation authority binding.');
+    }
+    requireClosedKeys(receipt.policy, ['id', 'version', 'target_reads', 'max_preview_bytes', 'max_coverage_bins', 'max_seconds'], 'alignment presentation policy');
+    if (receipt.policy.id !== 'primary-read-presentation-v2' || receipt.policy.version !== 2
         || !isPositiveInteger(receipt.policy.target_reads) || !isPositiveInteger(receipt.policy.max_preview_bytes)
-        || !isPositiveInteger(receipt.policy.max_coverage_bins)) throw new Error('Invalid alignment presentation policy.');
+        || !isPositiveInteger(receipt.policy.max_coverage_bins)
+        || typeof receipt.policy.max_seconds !== 'number' || !Number.isFinite(receipt.policy.max_seconds)
+        || receipt.policy.max_seconds <= 0) throw new Error('Invalid alignment presentation policy.');
     requireClosedKeys(receipt.preview, ['kind', 'selected_read_count', 'selected_record_count', 'selected_read_set_sha256', 'forward_count', 'reverse_count', 'bam', 'index'], 'alignment preview');
     if (receipt.preview.kind !== 'primary_read_preview' || !isNonNegativeInteger(receipt.preview.selected_read_count)
         || !isNonNegativeInteger(receipt.preview.selected_record_count) || !isSha256(receipt.preview.selected_read_set_sha256)
         || !isNonNegativeInteger(receipt.preview.forward_count) || !isNonNegativeInteger(receipt.preview.reverse_count)
         || receipt.preview.selected_read_count > receipt.source.primary_read_count
         || receipt.preview.selected_record_count > receipt.source.alignment_record_count
-        || receipt.preview.forward_count + receipt.preview.reverse_count !== receipt.preview.selected_read_count) throw new Error('Invalid alignment preview.');
-    validatePresentationArtifact(receipt.preview.bam, 'alignment preview BAM');
-    validatePresentationArtifact(receipt.preview.index, 'alignment preview index');
+        || receipt.preview.forward_count + receipt.preview.reverse_count !== receipt.preview.selected_record_count) throw new Error('Invalid alignment preview.');
+    const prefix = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-sessions/${encodeURIComponent(expectedSessionId)}/presentation/`;
+    const bamUrl = receipt.preview.bam?.url;
+    const presentationId = typeof bamUrl === 'string' && bamUrl.startsWith(prefix) && bamUrl.endsWith('/bam')
+        ? bamUrl.slice(prefix.length, -'/bam'.length)
+        : '';
+    if (!isSha256(presentationId)) throw new Error('Invalid alignment presentation artifact identity.');
+    const base = `${prefix}${presentationId}`;
+    validatePresentationArtifact(receipt.preview.bam, 'alignment preview BAM', {
+        kind: 'alignment_preview', url: `${base}/bam`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(receipt.preview.index, 'alignment preview index', {
+        kind: 'alignment_preview_index', url: `${base}/bai`, mimeType: 'application/octet-stream',
+    });
     requireClosedKeys(receipt.coverage, ['kind', 'bin_width_bp', 'primary_read_count', 'artifact'], 'alignment coverage');
     if (receipt.coverage.kind !== 'full_source_primary_coverage' || !isPositiveInteger(receipt.coverage.bin_width_bp)
         || receipt.coverage.primary_read_count !== receipt.source.primary_read_count) throw new Error('Invalid alignment coverage.');
-    validatePresentationArtifact(receipt.coverage.artifact, 'alignment coverage artifact');
-    validatePresentationArtifact(receipt.manifest, 'alignment presentation manifest');
+    validatePresentationArtifact(receipt.coverage.artifact, 'alignment coverage artifact', {
+        kind: 'full_source_primary_coverage', url: `${base}/coverage`, mimeType: 'text/plain', allowEmpty: true,
+    });
+    validatePresentationArtifact(receipt.manifest, 'alignment presentation manifest', {
+        kind: 'alignment_presentation_manifest', url: `${base}/manifest`, mimeType: 'application/json',
+    });
     return receipt;
 }
 
@@ -386,11 +451,17 @@ export function buildAlignmentLocusSliceRequest(
 ): AlignmentLocusSliceRequest {
     const contig = locus.contig.trim();
     if (!contig || !isPositiveInteger(locus.start) || !isPositiveInteger(locus.end) || locus.end < locus.start
+        || locus.end - locus.start + 1 > 1_000_000
         || !isPositiveInteger(maxReads) || maxReads > 5000) throw new Error('Invalid alignment locus slice request.');
     return { contig, start_1based: locus.start, end_1based: locus.end, max_reads: maxReads };
 }
 
-export function normalizeAlignmentLocusSlice(value: unknown, expectedJobId: string, expectedSessionId: string): AlignmentLocusSlice {
+export function normalizeAlignmentLocusSlice(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedRequest: AlignmentLocusSliceRequest,
+): AlignmentLocusSlice {
     requireClosedKeys(value, ['schema', 'job_id', 'session_id', 'slice_id', 'state', 'contig', 'start_1based', 'end_1based', 'overlapping_read_count', 'selected_read_count', 'selected_record_count', 'capped', 'policy', 'bam', 'index', 'manifest'], 'alignment locus slice');
     const slice = value as unknown as AlignmentLocusSlice;
     if (slice.schema !== 'bms.ngs.alignment-locus-slice.v1' || slice.job_id !== expectedJobId
@@ -400,13 +471,27 @@ export function normalizeAlignmentLocusSlice(value: unknown, expectedJobId: stri
         || !isNonNegativeInteger(slice.overlapping_read_count) || !isNonNegativeInteger(slice.selected_read_count)
         || !isNonNegativeInteger(slice.selected_record_count) || typeof slice.capped !== 'boolean'
         || slice.selected_read_count > slice.overlapping_read_count) throw new Error('Invalid alignment locus slice.');
-    requireClosedKeys(slice.policy, ['id', 'version', 'max_reads'], 'alignment locus policy');
-    if (typeof slice.policy.id !== 'string' || !slice.policy.id || typeof slice.policy.version !== 'string' || !slice.policy.version
-        || !isPositiveInteger(slice.policy.max_reads) || slice.selected_read_count > slice.policy.max_reads
-        || slice.capped !== (slice.overlapping_read_count > slice.selected_read_count)) throw new Error('Invalid alignment locus policy.');
-    validatePresentationArtifact(slice.bam, 'alignment locus BAM');
-    validatePresentationArtifact(slice.index, 'alignment locus index');
-    validatePresentationArtifact(slice.manifest, 'alignment locus manifest');
+    if (slice.contig !== expectedRequest.contig || slice.start_1based !== expectedRequest.start_1based
+        || slice.end_1based !== expectedRequest.end_1based) throw new Error('Invalid alignment locus binding.');
+    requireClosedKeys(slice.policy, ['id', 'version', 'max_reads', 'max_records', 'max_bytes', 'max_span_bp', 'max_seconds'], 'alignment locus policy');
+    if (slice.policy.id !== 'bounded-full-source-locus-slice' || slice.policy.version !== 1
+        || slice.policy.max_reads !== expectedRequest.max_reads || slice.policy.max_records !== 20_000
+        || slice.policy.max_bytes !== 67_108_864 || slice.policy.max_span_bp !== 1_000_000
+        || slice.policy.max_seconds !== 30 || slice.selected_read_count > slice.policy.max_reads
+        || slice.selected_record_count > slice.policy.max_records || slice.bam.size_bytes > slice.policy.max_bytes
+        || (!slice.capped && slice.overlapping_read_count !== slice.selected_read_count)) {
+        throw new Error('Invalid alignment locus policy.');
+    }
+    const base = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-sessions/${encodeURIComponent(expectedSessionId)}/locus-slices/${slice.slice_id}`;
+    validatePresentationArtifact(slice.bam, 'alignment locus BAM', {
+        kind: 'alignment_locus_slice', url: `${base}/bam`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(slice.index, 'alignment locus index', {
+        kind: 'alignment_locus_slice_index', url: `${base}/bai`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(slice.manifest, 'alignment locus manifest', {
+        kind: 'alignment_locus_slice_manifest', url: `${base}/manifest`, mimeType: 'application/json',
+    });
     return slice;
 }
 
@@ -670,12 +755,16 @@ export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSe
     });
 }
 
-export async function fetchAlignmentPresentation(jobId: string, sessionId: string): Promise<AlignmentPresentation> {
+export async function fetchAlignmentPresentation(
+    jobId: string,
+    sessionId: string,
+    expectedAuthority: AlignmentPresentationExpectedAuthority,
+): Promise<AlignmentPresentation> {
     return withAlignmentAccessRecovery(jobId, async () => {
         const response = await api.get<unknown>(
             `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/presentation`,
         );
-        return normalizeAlignmentPresentation(response.data, jobId, sessionId);
+        return normalizeAlignmentPresentation(response.data, jobId, sessionId, expectedAuthority);
     });
 }
 
@@ -691,7 +780,7 @@ export async function createAlignmentLocusSlice(
         request,
         { signal },
     );
-    return normalizeAlignmentLocusSlice(response.data, jobId, sessionId);
+    return normalizeAlignmentLocusSlice(response.data, jobId, sessionId, request);
 }
 
 export async function fetchAlignmentReads(

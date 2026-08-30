@@ -10,6 +10,8 @@ import {
     buildLocalIgvConfig,
     resolveAlignmentViewerArtifacts,
     resolveBrowserAlignmentTrackSource,
+    replaceAlignmentTrackTransactionally,
+    loadMissingTracksById,
 } from '../src/lib/ngsAlignmentViewer.js';
 import {
     buildAlignmentLocusSliceRequest,
@@ -71,7 +73,8 @@ test('track sources keep browser presentation separate from full-source download
     });
     assert.equal(preview?.kind, 'preview');
     assert.equal(preview?.name, 'Primary-read preview');
-    assert.equal(preview?.bamUrl, '/preview.bam');
+    assert.equal(preview?.bamUrl, `/api/jobs/job-a/alignment-sessions/session-a/presentation/${hash('6')}/bam`);
+    assert.equal(preview?.capped, true);
     assert.deepEqual(preview?.fullSourceDownload, { url: '/source.bam', sizeBytes: 818_274_983 });
 
     assert.equal(resolveBrowserAlignmentTrackSource({
@@ -86,6 +89,7 @@ const artifact = (kind: string, url: string) => ({
 });
 
 function presentationFixture() {
+    const base = `/api/jobs/job-a/alignment-sessions/session-a/presentation/${hash('6')}`;
     return {
         schema: 'bms.ngs.alignment-presentation.v1' as const,
         job_id: 'job-a', session_id: 'session-a', mode: 'primary' as const, state: 'ready' as const,
@@ -94,17 +98,21 @@ function presentationFixture() {
             alignment_index_sha256: hash('3'), alignment_index_size_bytes: 2048,
             primary_read_count: 10_000, alignment_record_count: 10_500,
         },
-        policy: { id: 'bounded-preview', version: '1.2.3', target_reads: 2000, max_preview_bytes: 67_108_864, max_coverage_bins: 10_000 },
+        policy: {
+            id: 'primary-read-presentation-v2', version: 2, target_reads: 2000,
+            max_preview_bytes: 67_108_864, max_coverage_bins: 10_000, max_seconds: 120,
+        },
         preview: {
             kind: 'primary_read_preview' as const, selected_read_count: 2000, selected_record_count: 2100,
-            selected_read_set_sha256: hash('4'), forward_count: 1000, reverse_count: 1000,
-            bam: artifact('preview_bam', '/preview.bam'), index: artifact('preview_bai', '/preview.bam.bai'),
+            selected_read_set_sha256: hash('4'), forward_count: 1000, reverse_count: 1100,
+            bam: artifact('alignment_preview', `${base}/bam`),
+            index: artifact('alignment_preview_index', `${base}/bai`),
         },
         coverage: {
             kind: 'full_source_primary_coverage' as const, bin_width_bp: 10, primary_read_count: 10_000,
-            artifact: { ...artifact('coverage_bedgraph', '/coverage.bedgraph'), mime_type: 'text/plain' },
+            artifact: { ...artifact('full_source_primary_coverage', `${base}/coverage`), mime_type: 'text/plain' },
         },
-        manifest: { ...artifact('presentation_manifest', '/presentation.json'), mime_type: 'application/json' },
+        manifest: { ...artifact('alignment_presentation_manifest', `${base}/manifest`), mime_type: 'application/json' },
     };
 }
 
@@ -114,24 +122,48 @@ function locusFixture() {
         job_id: 'job-a', session_id: 'session-a', slice_id: hash('5'), state: 'ready' as const,
         contig: 'plasmid', start_1based: 101, end_1based: 220, overlapping_read_count: 7000,
         selected_read_count: 5000, selected_record_count: 5100, capped: true,
-        policy: { id: 'bounded-locus', version: '1.2.3', max_reads: 5000 },
-        bam: artifact('locus_bam', '/locus.bam'), index: artifact('locus_bai', '/locus.bam.bai'),
-        manifest: { ...artifact('locus_manifest', '/locus.json'), mime_type: 'application/json' },
+        policy: {
+            id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5000,
+            max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 30,
+        },
+        bam: artifact('alignment_locus_slice', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/bam`),
+        index: artifact('alignment_locus_slice_index', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/bai`),
+        manifest: {
+            ...artifact('alignment_locus_slice_manifest', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/manifest`),
+            mime_type: 'application/json',
+        },
     };
 }
 
 test('presentation and locus receipts are exact closed contracts', () => {
     const presentation = presentationFixture();
-    assert.equal(normalizeAlignmentPresentation(presentation, 'job-a', 'session-a'), presentation);
-    assert.throws(() => normalizeAlignmentPresentation({ ...presentation, extra: true }, 'job-a', 'session-a'), /unknown|invalid/i);
+    const authority = {
+        mode: 'primary' as const,
+        packageManifestSha256: hash('1'),
+        alignmentSha256: hash('2'), alignmentSizeBytes: 818_274_983,
+        alignmentIndexSha256: hash('3'), alignmentIndexSizeBytes: 2048,
+    };
+    assert.equal(normalizeAlignmentPresentation(presentation, 'job-a', 'session-a', authority), presentation);
+    assert.throws(() => normalizeAlignmentPresentation({ ...presentation, extra: true }, 'job-a', 'session-a', authority), /unknown|invalid/i);
     const malformedPresentation = structuredClone(presentation) as any;
     delete malformedPresentation.coverage.artifact.sha256;
-    assert.throws(() => normalizeAlignmentPresentation(malformedPresentation, 'job-a', 'session-a'), /invalid|missing/i);
+    assert.throws(() => normalizeAlignmentPresentation(malformedPresentation, 'job-a', 'session-a', authority), /invalid|missing/i);
+    assert.throws(() => normalizeAlignmentPresentation(presentation, 'job-a', 'session-a', {
+        ...authority, alignmentSha256: hash('9'),
+    }), /authority|invalid/i);
+    const unsafePresentation = structuredClone(presentation) as any;
+    unsafePresentation.preview.bam.url = '//attacker.invalid/preview.bam';
+    assert.throws(() => normalizeAlignmentPresentation(unsafePresentation, 'job-a', 'session-a', authority), /url|invalid|unsafe/i);
 
     const locus = locusFixture();
-    assert.equal(normalizeAlignmentLocusSlice(locus, 'job-a', 'session-a'), locus);
-    assert.throws(() => normalizeAlignmentLocusSlice({ ...locus, extra: true }, 'job-a', 'session-a'), /unknown|invalid/i);
-    assert.throws(() => normalizeAlignmentLocusSlice({ ...locus, selected_read_count: 7001 }, 'job-a', 'session-a'), /invalid/i);
+    const requestedLocus = { contig: 'plasmid', start_1based: 101, end_1based: 220, max_reads: 5000 };
+    assert.equal(normalizeAlignmentLocusSlice(locus, 'job-a', 'session-a', requestedLocus), locus);
+    assert.throws(() => normalizeAlignmentLocusSlice({ ...locus, extra: true }, 'job-a', 'session-a', requestedLocus), /unknown|invalid/i);
+    assert.throws(() => normalizeAlignmentLocusSlice({ ...locus, selected_read_count: 7001 }, 'job-a', 'session-a', requestedLocus), /invalid/i);
+    assert.throws(() => normalizeAlignmentLocusSlice({ ...locus, start_1based: 102 }, 'job-a', 'session-a', requestedLocus), /locus|invalid/i);
+    assert.equal(normalizeAlignmentLocusSlice({
+        ...locus, overlapping_read_count: 5000, selected_read_count: 5000, capped: true,
+    }, 'job-a', 'session-a', requestedLocus).capped, true, 'a byte or record cap can apply after every overlapping read ID is selected');
 });
 
 test('locus request construction is exact, bounded, and one-based', () => {
@@ -139,6 +171,7 @@ test('locus request construction is exact, bounded, and one-based', () => {
         contig: 'plasmid', start_1based: 101, end_1based: 220, max_reads: 5000,
     });
     assert.throws(() => buildAlignmentLocusSliceRequest({ contig: 'plasmid', start: 0, end: 220 }), /invalid/i);
+    assert.throws(() => buildAlignmentLocusSliceRequest({ contig: 'plasmid', start: 1, end: 1_000_001 }), /invalid/i);
 });
 
 test('IGV config has authoritative sequence, honest reads, and full-source coverage tracks', () => {
@@ -152,13 +185,50 @@ test('IGV config has authoritative sequence, honest reads, and full-source cover
         initialLocus: 'plasmid:1-100', auxiliaryTracks: [],
     });
     assert.deepEqual((config.tracks as any[])[0], {
-        name: 'Reference bases', type: 'sequence', fastaURL: '/reference.fasta', indexURL: '/reference.fasta.fai', order: -1000,
+        id: 'ngs-reference-bases', name: 'Reference bases', type: 'sequence',
+        fastaURL: '/reference.fasta', indexURL: '/reference.fasta.fai', order: -1000,
     });
-    assert.equal(buildAlignmentTrackConfig(preview, 420).name, 'Primary-read preview');
+    const previewTrack = buildAlignmentTrackConfig(preview, 420);
+    assert.equal(previewTrack.name, 'Primary-read preview');
+    assert.equal(previewTrack.showCoverage, false, 'preview depth must not appear as full-source coverage');
     assert.deepEqual(buildFullSourceCoverageTrackConfig(presentation), {
-        name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph', url: '/coverage.bedgraph',
+        id: 'ngs-full-source-primary-read-coverage', name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph',
+        url: `/api/jobs/job-a/alignment-sessions/session-a/presentation/${hash('6')}/coverage`,
         autoscale: true, graphType: 'bar', height: 72,
     });
+});
+
+test('alignment replacement is transactional and stale replacements are removed', async () => {
+    const oldTrack = { id: 'old', type: 'alignment' };
+    const newTrack = { id: 'new', type: 'alignment' };
+    const removed: string[] = [];
+    const browser = {
+        findTracks: () => [oldTrack],
+        loadTrack: async () => newTrack,
+        removeTrack: (track: { id: string }) => removed.push(track.id),
+    };
+    assert.equal(await replaceAlignmentTrackTransactionally(browser, { type: 'alignment' }, () => true), newTrack);
+    assert.deepEqual(removed, ['old']);
+
+    removed.length = 0;
+    const staleBrowser = { ...browser, findTracks: () => [oldTrack] };
+    assert.equal(await replaceAlignmentTrackTransactionally(staleBrowser, { type: 'alignment' }, () => false), null);
+    assert.deepEqual(removed, ['new'], 'the stale new track is removed and the old track remains');
+
+    removed.length = 0;
+    const failingBrowser = { ...browser, loadTrack: async () => { throw new Error('load failed'); } };
+    await assert.rejects(replaceAlignmentTrackTransactionally(failingBrowser, { type: 'alignment' }, () => true), /load failed/);
+    assert.deepEqual(removed, [], 'failed replacement leaves the old alignment mounted');
+});
+
+test('auxiliary tracks load once by stable track id', async () => {
+    const loaded: string[] = [];
+    const browser = {
+        findTracks: (predicate: (track: { id: string }) => boolean) => [{ id: 'coverage' }].filter(predicate),
+        loadTrack: async (track: { id: string }) => { loaded.push(track.id); return track; },
+    };
+    await loadMissingTracksById(browser, [{ id: 'coverage' }, { id: 'junctions' }], () => true);
+    assert.deepEqual(loaded, ['junctions']);
 });
 
 test('preview disclosure stays persistent and generic aligned-read naming is absent', () => {
@@ -166,6 +236,10 @@ test('preview disclosure stays persistent and generic aligned-read naming is abs
     assert.doesNotMatch(source, /!igvReadsTrackLoaded[\s\S]{0,400}Primary-read preview/u);
     assert.doesNotMatch(source, /name:\s*['"]Aligned Reads['"]/u);
     assert.match(source, /Load full-source reads for this locus/u);
+    assert.match(source, /igvPresentationGenerationRef/u);
+    assert.match(source, /igvLocusSliceGenerationRef/u);
+    assert.match(source, /igvTrackOperationActiveRef/u);
+    assert.match(source, /igvCurrentLocusRef\.current/u);
 });
 
 test('dimer candidate session is opt-in and remains independently bound', () => {
@@ -278,6 +352,7 @@ test('optional tracks are built only from the selected session artifacts', async
         coverage: { url: '/api/jobs/job-a/alignment-artifacts/generic-coverage-tsv' },
     });
     assert.deepEqual(tracks[0], {
+        id: 'ngs-auxiliary-coverage_depth',
         name: 'Coverage Depth',
         type: 'wig',
         format: 'bedgraph',
@@ -303,12 +378,12 @@ test('optional tracks are built only from the selected session artifacts', async
 test('optional IGV track failures cannot suppress a loaded primary alignment', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     const primaryReady = source.indexOf('setIgvReadsTrackLoaded(true);');
-    const optionalLoop = source.indexOf('for (const trackConfig of auxiliaryTracks)');
+    const optionalLoop = source.indexOf('loadMissingTracksById(browser, auxiliaryTracks');
     const optionalFailure = source.indexOf('setIgvAuxTrackFailures', optionalLoop);
 
     assert.ok(primaryReady >= 0 && primaryReady < optionalLoop);
     assert.ok(optionalFailure > optionalLoop);
-    assert.match(source.slice(optionalLoop, optionalFailure + 200), /catch/);
+    assert.match(source.slice(optionalLoop, optionalFailure + 200), /trackConfig, error/u);
 });
 
 test('primary IGV readiness requires the governed FASTA index', () => {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import heapq
 import json
 import math
 import mimetypes
@@ -18,7 +19,7 @@ import threading
 import time
 from dataclasses import dataclass
 from collections import OrderedDict
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, cast
 
@@ -44,13 +45,15 @@ ALIGNMENT_PRESENTATION_POLICY_VERSION = 2
 ALIGNMENT_PREVIEW_MAX_BYTES = 32 * 1024 * 1024
 ALIGNMENT_PREVIEW_MAX_RECORDS = 20_000
 ALIGNMENT_COVERAGE_MAX_BINS = 4_096
-PRESENTATION_CACHE_MAX_BYTES = 512 * 1024 * 1024
-PRESENTATION_CACHE_MAX_ENTRIES = 64
+ALIGNMENT_PRESENTATION_MAX_SECONDS = 120.0
 LOCUS_MAX_SPAN = 1_000_000
 LOCUS_MAX_READS = 5_000
 LOCUS_MAX_RECORDS = 20_000
 LOCUS_MAX_BYTES = 64 * 1024 * 1024
 LOCUS_MAX_SECONDS = 30.0
+LOCUS_CACHE_MAX_BYTES = 512 * 1024 * 1024
+LOCUS_CACHE_MAX_ENTRIES = 128
+LOCUS_GENERATION_CONCURRENCY = 2
 _alignment_preview_lock = threading.Lock()
 LINKED_REPORT_ROLES = frozenset(
     {
@@ -2125,10 +2128,19 @@ def _derived_metadata(
     if digest is None or size is None:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         size = path.stat().st_size
-    extension = "bam.bai" if kind.endswith("index") else ("bedgraph" if "coverage" in kind else "bam")
+    extension = (
+        "json" if kind.endswith("manifest")
+        else "bam.bai" if kind.endswith("index")
+        else "bedgraph" if "coverage" in kind
+        else "bam"
+    )
     return {
         "artifact_id": f"{kind}-{digest}", "kind": kind, "sha256": digest, "size_bytes": size,
-        "mime_type": "text/plain" if extension == "bedgraph" else "application/octet-stream",
+        "mime_type": (
+            "application/json" if extension == "json"
+            else "text/plain" if extension == "bedgraph"
+            else "application/octet-stream"
+        ),
         "range_capable": True, "content_disposition": "inline", "filename_extension": extension,
         "source_manifest_sha256": source_manifest_sha256, "_path": path,
     }
@@ -2146,10 +2158,19 @@ def _record_sort_key(read: Any) -> tuple[int, int, str, int]:
     )
 
 
-def _write_bam_for_ids(path: Path, header: dict[str, Any], records: dict[str, list[Any]], ids: list[str]) -> int:
+def _write_bam_for_ids(
+    path: Path,
+    header: dict[str, Any],
+    records: dict[str, list[Any]],
+    ids: list[str],
+    *,
+    deadline: float | None = None,
+) -> int:
     selected = sorted((record for read_id in ids for record in records[read_id]), key=_record_sort_key)
     with pysam.AlignmentFile(path, "wb", header=header) as output:
         for record in selected:
+            if deadline is not None and time.monotonic() > deadline:
+                raise AlignmentSessionError("alignment derivative time limit exceeded")
             output.write(record)
     return len(selected)
 
@@ -2179,6 +2200,53 @@ def _presentation_root(cache_root: Path | None, source_bam: Path | None = None) 
 
 def _locus_cache_root(cache_root: Path | None) -> Path:
     return (cache_root or (get_analysis_cache_dir() / "ngs_alignment_locus_slices")).resolve()
+
+
+def _acquire_locus_generation_slot(root: Path) -> BinaryIO:
+    root.mkdir(parents=True, exist_ok=True)
+    for slot in range(LOCUS_GENERATION_CONCURRENCY):
+        handle = (root / f".generation-slot-{slot}.lock").open("a+b")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except BlockingIOError:
+            handle.close()
+    raise AlignmentSessionError("locus slice concurrency limit exceeded")
+
+
+def _cleanup_locus_cache(
+    root: Path,
+    *,
+    active: Path | None = None,
+    reserve_bytes: int = 0,
+    reserve_entries: int = 0,
+) -> None:
+    entries: list[tuple[int, str, Path, int]] = []
+    for candidate in root.iterdir():
+        if candidate == active or not candidate.is_dir() or candidate.name.startswith("."):
+            continue
+        files = [path for path in candidate.iterdir() if path.is_file() and not path.is_symlink()]
+        entries.append((
+            (candidate / "manifest.json").stat().st_mtime_ns
+            if (candidate / "manifest.json").is_file() else candidate.stat().st_mtime_ns,
+            candidate.name,
+            candidate,
+            sum(path.stat().st_size for path in files),
+        ))
+    active_size = (
+        sum(path.stat().st_size for path in active.iterdir() if path.is_file() and not path.is_symlink())
+        if active is not None and active.is_dir() else 0
+    )
+    total = active_size + reserve_bytes + sum(item[3] for item in entries)
+    count = int(active is not None and active.is_dir()) + reserve_entries + len(entries)
+    for _mtime, _name, candidate, size in sorted(entries):
+        if total <= LOCUS_CACHE_MAX_BYTES and count <= LOCUS_CACHE_MAX_ENTRIES:
+            break
+        shutil.rmtree(candidate, ignore_errors=True)
+        total -= size
+        count -= 1
+    if total > LOCUS_CACHE_MAX_BYTES or count > LOCUS_CACHE_MAX_ENTRIES:
+        raise AlignmentSessionError("locus slice cache capacity unavailable")
 
 
 def _load_derived_package(directory: Path) -> dict[str, Any] | None:
@@ -2230,26 +2298,6 @@ def _load_derived_package(directory: Path) -> dict[str, Any] | None:
         return None
 
 
-def _cleanup_presentation_cache(root: Path, active: Path) -> None:
-    entries = []
-    for candidate in root.iterdir():
-        if candidate == active or not candidate.is_dir() or candidate.name.startswith("."):
-            continue
-        files = [path for path in candidate.iterdir() if path.is_file()]
-        entries.append((candidate.stat().st_mtime_ns, candidate.name, candidate, sum(path.stat().st_size for path in files)))
-    active_size = sum(path.stat().st_size for path in active.iterdir() if path.is_file()) if active.exists() else 0
-    total = active_size + sum(item[3] for item in entries)
-    count = 1 + len(entries)
-    for _mtime, _name, candidate, size in sorted(entries):
-        if total <= PRESENTATION_CACHE_MAX_BYTES and count <= PRESENTATION_CACHE_MAX_ENTRIES:
-            break
-        shutil.rmtree(candidate, ignore_errors=True)
-        total -= size
-        count -= 1
-    if total > PRESENTATION_CACHE_MAX_BYTES or count > PRESENTATION_CACHE_MAX_ENTRIES:
-        raise AlignmentSessionError("presentation cache capacity unavailable")
-
-
 def resolve_cached_alignment_presentation(
     job_id: str, session_id: str, *, cache_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -2264,10 +2312,27 @@ def resolve_cached_alignment_presentation(
             matches.append(package)
     if len(matches) != 1:
         raise AlignmentSessionError("alignment presentation is not prepared")
-    os.utime(matches[0]["manifest_path"], None)
     return matches[0]
 
 
+def _serialize_alignment_presentation_generation(function: Any) -> Any:
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        lock_root = get_analysis_cache_dir() / "ngs_alignment_presentation_generation"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        lock_handle = (lock_root / ".generation.lock").open("a+b")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            return function(*args, **kwargs)
+        finally:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_handle.close()
+    return wrapped
+
+
+@_serialize_alignment_presentation_generation
 def build_alignment_presentation(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path,
     index_sha256: str, index_size_bytes: int, source_manifest_sha256: str,
@@ -2276,8 +2341,12 @@ def build_alignment_presentation(
     target_reads: int = ALIGNMENT_PREVIEW_TARGET_READS,
     max_output_bytes: int = ALIGNMENT_PREVIEW_MAX_BYTES,
     max_coverage_bins: int = ALIGNMENT_COVERAGE_MAX_BINS,
+    max_seconds: float = ALIGNMENT_PRESENTATION_MAX_SECONDS,
 ) -> dict[str, Any]:
-    if target_reads < 1 or target_reads > 10_000 or max_output_bytes < 1 or max_coverage_bins < 1:
+    if (
+        target_reads < 1 or target_reads > 10_000 or max_output_bytes < 1
+        or max_coverage_bins < 1 or not math.isfinite(max_seconds) or max_seconds <= 0
+    ):
         raise AlignmentSessionError("alignment presentation policy is invalid")
     if re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None or mode not in SESSION_MODES:
         raise AlignmentSessionError("alignment presentation authority is invalid")
@@ -2290,7 +2359,7 @@ def build_alignment_presentation(
         "artifact_set_sha256": artifact_set_sha256, "alignment_pair_sha256": alignment_pair_sha256,
         "policy": {"id": ALIGNMENT_PREVIEW_POLICY, "version": ALIGNMENT_PRESENTATION_POLICY_VERSION,
                    "target_reads": target_reads, "max_preview_bytes": max_output_bytes,
-                   "max_coverage_bins": max_coverage_bins},
+                   "max_coverage_bins": max_coverage_bins, "max_seconds": max_seconds},
     }
     cache_key = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
     root = _presentation_root(cache_root, bam)
@@ -2304,6 +2373,7 @@ def build_alignment_presentation(
             return cached
         temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=destination.parent))
         source_handle = index_handle = None
+        deadline = time.monotonic() + max_seconds
         try:
             source_handle = _open_regular_file_no_symlinks(bam)
             source_identity = _verify_descriptor(source_handle, bam_size_bytes, bam_sha256)
@@ -2316,12 +2386,29 @@ def build_alignment_presentation(
                 tile_widths = {name: max(1, math.ceil(length / 64)) for name, length in references}
                 coverage = {name: [0] * math.ceil(length / bin_width) for name, length in references}
                 read_strata: dict[str, tuple[str, int, str]] = {}
-                source_records = forward = reverse = 0
+                source_records = source_alignment_records = forward = reverse = 0
+                source_record_counts = {
+                    "mapped_primary": 0, "secondary": 0,
+                    "supplementary": 0, "unmapped": 0,
+                }
                 flag_counts: dict[str, int] = {}
                 source_contig_counts: dict[str, int] = {}
                 source_strand_counts = {"forward": 0, "reverse": 0}
                 for read in source.fetch(until_eof=True):
-                    if read.is_unmapped or read.is_secondary or read.is_supplementary or not read.query_name:
+                    if time.monotonic() > deadline:
+                        raise AlignmentSessionError("alignment presentation time limit exceeded")
+                    source_alignment_records += 1
+                    if read.is_unmapped:
+                        source_record_counts["unmapped"] += 1
+                        continue
+                    if read.is_secondary:
+                        source_record_counts["secondary"] += 1
+                        continue
+                    if read.is_supplementary:
+                        source_record_counts["supplementary"] += 1
+                        continue
+                    source_record_counts["mapped_primary"] += 1
+                    if not read.query_name:
                         continue
                     source_records += 1
                     strand = "reverse" if read.is_reverse else "forward"
@@ -2352,15 +2439,16 @@ def build_alignment_presentation(
                 remaining = target_reads - len(strata)
             else:
                 remaining = target_reads
-            total_ids = sum(len(ids) for ids in stratum_ids.values())
+            capacities = {stratum: len(stratum_ids[stratum]) - quotas[stratum] for stratum in strata}
+            total_capacity = sum(capacities.values())
             shares = []
-            if remaining and total_ids:
+            if remaining and total_capacity:
                 for stratum in strata:
-                    exact = remaining * len(stratum_ids[stratum]) / total_ids
+                    exact = remaining * capacities[stratum] / total_capacity
                     whole = math.floor(exact)
                     quotas[stratum] += whole
                     shares.append((exact - whole, stratum))
-                leftover = remaining - sum(math.floor(remaining * len(stratum_ids[s]) / total_ids) for s in strata)
+                leftover = remaining - sum(math.floor(remaining * capacities[s] / total_capacity) for s in strata)
                 for _fraction, stratum in sorted(shares, key=lambda item: (-item[0], item[1]))[:leftover]:
                     quotas[stratum] += 1
             selected_ids_set = {
@@ -2372,6 +2460,8 @@ def build_alignment_presentation(
             source_handle.seek(0)
             with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
                 for read in source.fetch(until_eof=True):
+                    if time.monotonic() > deadline:
+                        raise AlignmentSessionError("alignment presentation time limit exceeded")
                     if (
                         read.query_name in selected and not read.is_unmapped
                         and not read.is_secondary and not read.is_supplementary
@@ -2391,13 +2481,19 @@ def build_alignment_presentation(
             retained_ids = sorted(selected, key=lambda value: _rank_read(bam_sha256, value))
             preview_path = temporary / "alignment-preview.bam"
             while True:
-                selected_record_count = _write_bam_for_ids(preview_path, header, selected, retained_ids)
+                selected_record_count = _write_bam_for_ids(
+                    preview_path, header, selected, retained_ids, deadline=deadline,
+                )
                 if preview_path.stat().st_size <= max_output_bytes:
                     break
                 if not retained_ids:
                     raise AlignmentSessionError("alignment preview byte ceiling is too small")
                 retained_ids.pop()
+            if time.monotonic() > deadline:
+                raise AlignmentSessionError("alignment presentation time limit exceeded")
             pysam.index(str(preview_path))
+            if time.monotonic() > deadline:
+                raise AlignmentSessionError("alignment presentation time limit exceeded")
             preview_index = Path(f"{preview_path}.bai")
             outputs = {}
             for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
@@ -2434,10 +2530,21 @@ def build_alignment_presentation(
                     key: (value if key == "size_bytes" else str(value))
                     for key, value in index_identity.items()
                 },
-                "policy": authority["policy"], "runtime": {"pysam_version": pysam.__version__},
+                "policy": authority["policy"],
+                "generation_limits": {"max_seconds": max_seconds, "max_concurrent_generations": 1},
+                "runtime": {"pysam_version": pysam.__version__},
                 "selected_read_set_sha256": _selected_set_digest(retained_ids),
+                "selection_unit": "unique mapped primary read ID",
+                "inclusion_rules": ["mapped", "primary", "query_name present"],
+                "exclusion_rules": ["secondary", "supplementary", "unmapped", "missing query_name"],
                 "selected_read_count": len(retained_ids),
                 "selected_alignment_record_count": selected_record_count,
+                "selected_record_counts": {
+                    "mapped_primary": selected_record_count, "secondary": 0,
+                    "supplementary": 0, "unmapped": 0,
+                },
+                "source_alignment_record_count": source_alignment_records,
+                "source_record_counts": source_record_counts,
                 "source_primary_mapped_read_count": len(read_strata),
                 "source_primary_mapped_alignment_record_count": source_records,
                 "source_strand_counts": {"forward": forward, "reverse": reverse},
@@ -2513,105 +2620,202 @@ def build_alignment_locus_slice(
         raise AlignmentSessionError("unsafe contig")
     if start < 1 or end < start or end - start + 1 > LOCUS_MAX_SPAN:
         raise AlignmentSessionError("locus span is invalid")
-    if max_reads < 1 or max_reads > LOCUS_MAX_READS or max_records < 1 or max_output_bytes < 1:
+    if (
+        max_reads < 1 or max_reads > LOCUS_MAX_READS or max_records < 1
+        or max_output_bytes < 1 or not math.isfinite(max_seconds) or max_seconds <= 0
+    ):
         raise AlignmentSessionError("locus policy is invalid")
     if source_stat_identity(bam) != source_identity:
         raise AlignmentSessionError("source identity mismatch")
+    policy = {
+        "id": "bounded-full-source-locus-slice", "version": 1,
+        "max_reads": max_reads, "max_records": max_records,
+        "max_bytes": max_output_bytes, "max_span_bp": LOCUS_MAX_SPAN,
+        "max_seconds": max_seconds,
+    }
     authority = {
         "schema": "bms.ngs.alignment-locus-authority.v1", "job_id": job_id, "session_id": session_id,
         "source_manifest_sha256": source_manifest_sha256, "source_alignment_sha256": bam_sha256,
-        "source_index_sha256": index_sha256, "contig": contig, "start_1based": start,
-        "end_1based": end, "max_reads": max_reads, "max_records": max_records,
-        "max_output_bytes": max_output_bytes,
+        "source_alignment_size_bytes": bam_size_bytes, "source_index_sha256": index_sha256,
+        "source_index_size_bytes": index_size_bytes, "contig": contig, "start_1based": start,
+        "end_1based": end, "policy": policy,
     }
     slice_id = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
-    root = _locus_cache_root(cache_root) / slice_id
+    cache_base = _locus_cache_root(cache_root)
+    root = cache_base / slice_id
     manifest_path = root / "manifest.json"
     if manifest_path.is_file():
-        receipt = json.loads(manifest_path.read_bytes())
-        bam_path, index_path = root / "locus.bam", root / "locus.bam.bai"
-        return {"slice_id": slice_id, "bam_path": bam_path, "index_path": index_path,
-                "manifest_path": manifest_path, "receipt": receipt,
-                "bam_metadata": _derived_metadata(bam_path, "alignment_locus_slice", source_manifest_sha256),
-                "index_metadata": _derived_metadata(index_path, "alignment_locus_slice_index", source_manifest_sha256),
-                "manifest_metadata": _derived_metadata(manifest_path, "alignment_locus_slice_manifest", source_manifest_sha256)}
-    root.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(tempfile.mkdtemp(prefix=f".{slice_id}-", dir=root.parent))
-    source_handle = index_handle = None
-    started = time.monotonic()
+        return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
+    slot_handle = _acquire_locus_generation_slot(cache_base)
+    lock_handle: BinaryIO | None = None
     try:
-        source_handle = _open_regular_file_no_symlinks(bam)
-        if _verify_descriptor(source_handle, bam_size_bytes, bam_sha256) != source_identity:
-            raise AlignmentSessionError("source identity mismatch")
-        index_handle = _open_regular_file_no_symlinks(index)
-        _verify_descriptor(index_handle, index_size_bytes, index_sha256)
-        candidates: dict[str, list[Any]] = {}
-        with pysam.AlignmentFile(
-            _descriptor_path(source_handle.fileno()), "rb", index_filename=_descriptor_path(index_handle.fileno())
-        ) as source:
-            header = source.header.to_dict()
-            for read in source.fetch(contig, start - 1, end):
-                if time.monotonic() - started > max_seconds:
-                    raise AlignmentSessionError("locus slice time limit exceeded")
-                if read.is_unmapped or read.is_secondary or not read.query_name:
-                    continue
-                candidates.setdefault(read.query_name, []).append(read)
-                if sum(len(records) for records in candidates.values()) > max_records:
-                    raise AlignmentSessionError("locus slice record limit exceeded")
-        overlapping = len(candidates)
-        selected_ids = sorted(candidates, key=lambda read_id: _rank_read(bam_sha256, read_id))[:max_reads]
-        locus_bam = temporary / "locus.bam"
-        while True:
-            selected_records = _write_bam_for_ids(locus_bam, header, candidates, selected_ids)
-            if locus_bam.stat().st_size <= max_output_bytes:
-                break
-            if not selected_ids:
-                raise AlignmentSessionError("locus slice byte ceiling is too small")
-            selected_ids.pop()
-        pysam.index(str(locus_bam))
-        locus_index = Path(f"{locus_bam}.bai")
-        receipt = {
-            "schema": "bms.ngs.alignment-locus-slice-manifest.v1", "slice_id": slice_id,
-            "job_id": job_id, "session_id": session_id, "source_manifest_sha256": source_manifest_sha256,
-            "contig": contig, "start_1based": start, "end_1based": end,
-            "overlapping_read_count": overlapping, "selected_read_count": len(selected_ids),
-            "selected_record_count": selected_records, "capped": len(selected_ids) < overlapping,
-            "selected_read_set_sha256": _selected_set_digest(selected_ids),
-            "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
-            "flag_policy": "mapped primary and supplementary; secondary and unmapped excluded",
-            "selected_record_counts": {
-                "primary": sum(not record.is_supplementary for read_id in selected_ids for record in candidates[read_id]),
-                "supplementary": sum(record.is_supplementary for read_id in selected_ids for record in candidates[read_id]),
-                "secondary": 0, "unmapped": 0,
-                "forward": sum(not record.is_reverse for read_id in selected_ids for record in candidates[read_id]),
-                "reverse": sum(record.is_reverse for read_id in selected_ids for record in candidates[read_id]),
-            },
-            "policy": {"max_reads": max_reads, "max_records": max_records,
-                       "max_bytes": max_output_bytes, "max_span_bp": LOCUS_MAX_SPAN},
-            "outputs": {},
-        }
-        for key, path in (("bam", locus_bam), ("index", locus_index)):
-            digest, size = _sha256_file_and_size(path)
-            receipt["outputs"][key] = {"sha256": digest, "size_bytes": size}
-        (temporary / "manifest.json").write_bytes(rfc8785.dumps(receipt))
-        os.replace(temporary, root)
-    except Exception as exc:
-        shutil.rmtree(temporary, ignore_errors=True)
-        if isinstance(exc, AlignmentSessionError):
-            raise
-        raise AlignmentSessionError(f"locus slice generation failed: {exc}") from exc
+        lock_handle = (cache_base / f".{slice_id}.lock").open("a+b")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("locus slice generation is already in progress") from exc
+        if manifest_path.is_file():
+            return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
+        _cleanup_locus_cache(
+            cache_base,
+            reserve_bytes=max_output_bytes,
+            reserve_entries=1,
+        )
+        temporary = Path(tempfile.mkdtemp(prefix=f".{slice_id}-", dir=cache_base))
+        source_handle = index_handle = None
+        started = time.monotonic()
+        deadline = started + max_seconds
+        try:
+            source_handle = _open_regular_file_no_symlinks(bam)
+            if _verify_descriptor(source_handle, bam_size_bytes, bam_sha256) != source_identity:
+                raise AlignmentSessionError("source identity mismatch")
+            index_handle = _open_regular_file_no_symlinks(index)
+            _verify_descriptor(index_handle, index_size_bytes, index_sha256)
+            candidate_heap: list[tuple[int, str]] = []
+            overlapping_ids: set[str] = set()
+            with pysam.AlignmentFile(
+                _descriptor_path(source_handle.fileno()), "rb",
+                index_filename=_descriptor_path(index_handle.fileno()),
+            ) as source:
+                header = source.header.to_dict()
+                for read in source.fetch(contig, start - 1, end):
+                    if time.monotonic() > deadline:
+                        raise AlignmentSessionError("locus slice time limit exceeded")
+                    if read.is_unmapped or read.is_secondary or not read.query_name:
+                        continue
+                    if read.query_name in overlapping_ids:
+                        continue
+                    overlapping_ids.add(read.query_name)
+                    rank = int(_rank_read(bam_sha256, read.query_name), 16)
+                    item = (-rank, read.query_name)
+                    if len(candidate_heap) < max_reads:
+                        heapq.heappush(candidate_heap, item)
+                    elif rank < -candidate_heap[0][0]:
+                        heapq.heapreplace(candidate_heap, item)
+            overlapping = len(overlapping_ids)
+            active_ids = {read_id for _rank, read_id in candidate_heap}
+            candidates: dict[str, list[Any]] = {}
+            total_records = 0
+            record_cap_applied = False
+            with pysam.AlignmentFile(
+                _descriptor_path(source_handle.fileno()), "rb",
+                index_filename=_descriptor_path(index_handle.fileno()),
+            ) as source:
+                for read in source.fetch(contig, start - 1, end):
+                    if time.monotonic() > deadline:
+                        raise AlignmentSessionError("locus slice time limit exceeded")
+                    if read.query_name not in active_ids or read.is_unmapped or read.is_secondary:
+                        continue
+                    candidates.setdefault(read.query_name, []).append(read)
+                    total_records += 1
+                    while total_records > max_records and candidates:
+                        evicted = max(candidates, key=lambda read_id: _rank_read(bam_sha256, read_id))
+                        total_records -= len(candidates.pop(evicted))
+                        active_ids.discard(evicted)
+                        record_cap_applied = True
+            selected_ids = sorted(candidates, key=lambda read_id: _rank_read(bam_sha256, read_id))
+            locus_bam = temporary / "locus.bam"
+            byte_cap_applied = False
+            while True:
+                selected_records = _write_bam_for_ids(
+                    locus_bam, header, candidates, selected_ids, deadline=deadline,
+                )
+                if locus_bam.stat().st_size <= max_output_bytes:
+                    break
+                if not selected_ids:
+                    raise AlignmentSessionError("locus slice byte ceiling is too small")
+                selected_ids.pop()
+                byte_cap_applied = True
+            if time.monotonic() > deadline:
+                raise AlignmentSessionError("locus slice time limit exceeded")
+            pysam.index(str(locus_bam))
+            if time.monotonic() > deadline:
+                raise AlignmentSessionError("locus slice time limit exceeded")
+            locus_index = Path(f"{locus_bam}.bai")
+            receipt = {
+                "schema": "bms.ngs.alignment-locus-slice-manifest.v1", "slice_id": slice_id,
+                "job_id": job_id, "session_id": session_id,
+                "source_manifest_sha256": source_manifest_sha256,
+                "source_alignment_sha256": bam_sha256,
+                "source_alignment_size_bytes": bam_size_bytes,
+                "source_index_sha256": index_sha256,
+                "source_index_size_bytes": index_size_bytes,
+                "contig": contig, "start_1based": start, "end_1based": end,
+                "overlapping_read_count": overlapping, "selected_read_count": len(selected_ids),
+                "selected_record_count": selected_records,
+                "capped": len(selected_ids) < overlapping or record_cap_applied or byte_cap_applied,
+                "cap_reasons": [
+                    reason for reason, applied in (
+                        ("read_limit", overlapping > max_reads),
+                        ("record_limit", record_cap_applied),
+                        ("byte_limit", byte_cap_applied),
+                    ) if applied
+                ],
+                "selected_read_set_sha256": _selected_set_digest(selected_ids),
+                "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
+                "selection_unit": "unique mapped primary read ID with associated supplementary records",
+                "inclusion_rules": [
+                    "mapped", "primary or supplementary", "query_name present", "overlaps requested locus",
+                ],
+                "exclusion_rules": ["secondary", "unmapped", "missing query_name", "outside requested locus"],
+                "flag_policy": "mapped primary and supplementary; secondary and unmapped excluded",
+                "selected_record_counts": {
+                    "primary": sum(
+                        not record.is_supplementary for read_id in selected_ids for record in candidates[read_id]
+                    ),
+                    "supplementary": sum(
+                        record.is_supplementary for read_id in selected_ids for record in candidates[read_id]
+                    ),
+                    "secondary": 0, "unmapped": 0,
+                    "forward": sum(
+                        not record.is_reverse for read_id in selected_ids for record in candidates[read_id]
+                    ),
+                    "reverse": sum(
+                        record.is_reverse for read_id in selected_ids for record in candidates[read_id]
+                    ),
+                },
+                "policy": policy,
+                "generation_limits": {"max_seconds": max_seconds, "max_concurrent_generations": 2},
+                "outputs": {},
+            }
+            for key, path in (("bam", locus_bam), ("index", locus_index)):
+                digest, size = _sha256_file_and_size(path)
+                receipt["outputs"][key] = {"sha256": digest, "size_bytes": size}
+            manifest_handle = (temporary / "manifest.json").open("wb")
+            try:
+                manifest_handle.write(rfc8785.dumps(receipt))
+                manifest_handle.flush()
+                os.fsync(manifest_handle.fileno())
+            finally:
+                manifest_handle.close()
+            os.replace(temporary, root)
+            directory_fd = os.open(cache_base, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            _cleanup_locus_cache(cache_base, active=root)
+        except Exception as exc:
+            shutil.rmtree(temporary, ignore_errors=True)
+            if isinstance(exc, AlignmentSessionError):
+                raise
+            raise AlignmentSessionError(f"locus slice generation failed: {exc}") from exc
+        finally:
+            if index_handle is not None:
+                index_handle.close()
+            if source_handle is not None:
+                source_handle.close()
     finally:
-        if index_handle is not None:
-            index_handle.close()
-        if source_handle is not None:
-            source_handle.close()
-    return build_alignment_locus_slice(
-        bam, bam_sha256=bam_sha256, bam_size_bytes=bam_size_bytes, index=index,
-        index_sha256=index_sha256, index_size_bytes=index_size_bytes, source_identity=source_identity,
-        source_manifest_sha256=source_manifest_sha256, job_id=job_id, session_id=session_id,
-        contig=contig, start=start, end=end, max_reads=max_reads, cache_root=cache_root,
-        max_records=max_records, max_output_bytes=max_output_bytes, max_seconds=max_seconds,
-    )
+        if lock_handle is not None:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_handle.close()
+        try:
+            fcntl.flock(slot_handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            slot_handle.close()
+    return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
 
 
 def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | None = None) -> dict[str, Any]:
@@ -2628,6 +2832,7 @@ def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | No
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if receipt["outputs"][key] != {"sha256": digest, "size_bytes": path.stat().st_size}:
             raise AlignmentSessionError("alignment locus slice integrity mismatch")
+    os.utime(manifest_path, None)
     source_manifest = receipt["source_manifest_sha256"]
     return {"slice_id": slice_id, "bam_path": bam_path, "index_path": index_path,
             "manifest_path": manifest_path, "receipt": receipt,

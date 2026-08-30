@@ -151,7 +151,32 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     monkeypatch.setattr(
         service.ngs_alignment_sessions,
         "build_alignment_sessions",
-        lambda *_args, **_kwargs: [{"mode": "primary", "ready": True}],
+        lambda *_args, **_kwargs: [
+            {
+                "mode": "primary", "ready": True, "session_id": "1" * 24,
+                "artifact_set_sha256": "2" * 64, "alignment_pair_sha256": "3" * 64,
+            },
+            {
+                "mode": "dimer_candidates", "ready": True, "session_id": "6" * 24,
+                "artifact_set_sha256": "7" * 64, "alignment_pair_sha256": "8" * 64,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "resolve_session_alignment_bundle",
+        lambda *_args, **_kwargs: (
+            alignment_root / "aligned.bam",
+            {"sha256": "4" * 64, "size_bytes": 11, "source_manifest_sha256": "c" * 64},
+            alignment_root / "aligned.bam.bai",
+            {"sha256": "5" * 64, "size_bytes": 15, "source_manifest_sha256": "c" * 64},
+        ),
+    )
+    presentation_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        service.ngs_alignment_sessions,
+        "build_alignment_presentation",
+        lambda *_args, **kwargs: presentation_calls.append(kwargs) or {"manifest": {"state": "ready"}},
     )
     monkeypatch.setattr(service, "attach_resource_usage_receipt", lambda params, _receipt: dict(params))
 
@@ -177,6 +202,9 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
             f"bms_results/{output_root.name}/qc_manifest.json",
         ]
     }
+    assert {call["session_id"] for call in presentation_calls} == {"1" * 24, "6" * 24}
+    assert all(call["job_id"] == job.id for call in presentation_calls)
+    assert all(call["cache_root"] == output_root / ".alignment-presentations" for call in presentation_calls)
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(

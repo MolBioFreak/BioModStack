@@ -146,6 +146,7 @@ export function resolveSessionAuxiliaryTracks(
         const artifact = artifacts[role];
         if (!artifact) continue;
         tracks.push({
+            id: `ngs-auxiliary-${role}`,
             name,
             type: 'wig',
             format: 'bedgraph',
@@ -159,6 +160,7 @@ export function resolveSessionAuxiliaryTracks(
     const junctions = artifacts.junction_hotspots;
     if (junctions) {
         tracks.push({
+            id: 'ngs-auxiliary-junction-hotspots',
             name: 'Junction Hotspots',
             type: 'annotation',
             format: 'bed',
@@ -221,7 +223,7 @@ export interface BrowserAlignmentTrackSource {
     byteSize: number;
     selectedReadCount: number | null;
     availableReadCount: number | null;
-    policyVersion: string | null;
+    policyVersion: number | null;
     capped: boolean;
     fullSourceDownload: { url: string; sizeBytes: number | null };
 }
@@ -230,6 +232,7 @@ export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackI
     const fullSourceDownload = {
         url: input.alignmentUrl,
         sizeBytes: typeof input.alignmentSizeBytes === 'number' && Number.isFinite(input.alignmentSizeBytes)
+            && input.alignmentSizeBytes > 0
             ? input.alignmentSizeBytes : null,
     };
     if (input.locusSlice) {
@@ -254,7 +257,9 @@ export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackI
         baiUrl: input.presentation.preview.index.url, byteSize: input.presentation.preview.bam.size_bytes,
         selectedReadCount: input.presentation.preview.selected_read_count,
         availableReadCount: input.presentation.source.primary_read_count,
-        policyVersion: input.presentation.policy.version, capped: false, fullSourceDownload,
+        policyVersion: input.presentation.policy.version,
+        capped: input.presentation.preview.selected_read_count < input.presentation.source.primary_read_count,
+        fullSourceDownload,
     };
 }
 
@@ -265,7 +270,7 @@ export function buildAlignmentTrackConfig(
 ): Record<string, unknown> {
     return {
         name: source.name, type: 'alignment', format: 'bam', url: source.bamUrl, indexURL: source.baiUrl,
-        showSoftClips: true, showCoverage: true, showMismatches: true, showAllBases: true,
+        showSoftClips: true, showCoverage: source.kind === 'full', showMismatches: true, showAllBases: true,
         showInsertionText: true, autoHeight: false, height, displayMode: options.displayMode || 'EXPANDED',
         visibilityWindow: -1, samplingWindowSize: 40, samplingDepth: 10000, maxRows: 500,
         alignmentRowHeight: 9, squishedRowHeight: 4,
@@ -276,6 +281,7 @@ export function buildAlignmentTrackConfig(
 
 export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresentation): Record<string, unknown> {
     return {
+        id: 'ngs-full-source-primary-read-coverage',
         name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph',
         url: presentation.coverage.artifact.url, autoscale: true, graphType: 'bar', height: 72,
     };
@@ -283,6 +289,7 @@ export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresen
 
 export function buildLocalIgvConfig(input: LocalIgvConfigInput): Record<string, unknown> {
     const sequenceTrack = {
+        id: 'ngs-reference-bases',
         name: 'Reference bases',
         type: 'sequence',
         fastaURL: input.fastaUrl,
@@ -371,4 +378,52 @@ export function resolveIgvReadLocus(loci: unknown): AlignmentReadLocus | null {
     const start = Math.max(1, Math.floor(first.start) + 1);
     const end = Math.max(start, Math.ceil(first.end));
     return { contig: first.chr.trim(), start, end };
+}
+
+interface MutableIgvTrackBrowser {
+    findTracks: (predicate: (track: Record<string, unknown>) => boolean) => Array<Record<string, unknown>>;
+    loadTrack: (config: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    removeTrack: (track: Record<string, unknown>) => void;
+}
+
+export async function replaceAlignmentTrackTransactionally(
+    browser: MutableIgvTrackBrowser,
+    config: Record<string, unknown>,
+    isCurrent: () => boolean,
+): Promise<Record<string, unknown> | null> {
+    const previousTracks = browser.findTracks((track) => track.type === 'alignment') || [];
+    const loadedTrack = await browser.loadTrack(config);
+    if (!loadedTrack) throw new Error('IGV did not return the loaded alignment track.');
+    if (!isCurrent()) {
+        browser.removeTrack(loadedTrack);
+        return null;
+    }
+    for (const track of previousTracks) {
+        if (track !== loadedTrack) browser.removeTrack(track);
+    }
+    return loadedTrack;
+}
+
+export async function loadMissingTracksById(
+    browser: MutableIgvTrackBrowser,
+    configs: Array<Record<string, unknown>>,
+    isCurrent: () => boolean,
+    onError?: (config: Record<string, unknown>, reason: unknown) => void,
+): Promise<void> {
+    for (const config of configs) {
+        const id = config.id;
+        if (typeof id !== 'string' || !id) throw new Error('IGV auxiliary track id is required.');
+        if ((browser.findTracks((track) => track.id === id) || []).length > 0) continue;
+        try {
+            const loadedTrack = await browser.loadTrack(config);
+            if (!isCurrent()) {
+                if (loadedTrack) browser.removeTrack(loadedTrack);
+                return;
+            }
+        } catch (reason) {
+            if (!isCurrent()) return;
+            if (!onError) throw reason;
+            onError(config, reason);
+        }
+    }
 }

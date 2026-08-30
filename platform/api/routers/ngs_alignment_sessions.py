@@ -263,6 +263,7 @@ class OntPresentationPolicyV1(BaseModel):
     target_reads: int
     max_preview_bytes: int
     max_coverage_bins: int
+    max_seconds: float
 
 
 class OntPresentationPreviewV1(BaseModel):
@@ -307,6 +308,17 @@ class OntAlignmentLocusSliceRequestV1(BaseModel):
     max_reads: int
 
 
+class OntAlignmentLocusPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: Literal["bounded-full-source-locus-slice"]
+    version: Literal[1]
+    max_reads: int
+    max_records: int
+    max_bytes: int
+    max_span_bp: int
+    max_seconds: float
+
+
 class OntAlignmentLocusSliceV1(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     schema_version: Literal["bms.ngs.alignment-locus-slice.v1"] = Field(alias="schema")
@@ -321,7 +333,7 @@ class OntAlignmentLocusSliceV1(BaseModel):
     selected_read_count: int
     selected_record_count: int
     capped: bool
-    policy: dict[str, Any]
+    policy: OntAlignmentLocusPolicyV1
     bam: OntDerivedArtifactV1
     index: OntDerivedArtifactV1
     manifest: OntDerivedArtifactV1
@@ -1362,38 +1374,20 @@ def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
 
 async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
     root = _presentation_root_for_job(job)
-    try:
-        return await run_in_threadpool(service.resolve_cached_alignment_presentation, job_id, session_id, cache_root=root)
-    except service.AlignmentSessionError:
-        pass
-    async with _validated_pinned_result_root(job) as pinned_root:
-        authority = _job_session_authority(job)
-        sessions = await run_in_threadpool(
-            service.build_alignment_sessions, job_id, **authority,
-            job_output_dir=pinned_root, pinned_root_descriptor=True,
-        )
-        selected_session = next((item for item in sessions if item["session_id"] == session_id and item["ready"]), None)
-        if selected_session is None:
-            raise service.AlignmentSessionError("ready alignment session not found")
-        bam, bam_metadata, index, index_metadata = await run_in_threadpool(
-            service.resolve_session_alignment_bundle, job_id, session_id, **_job_authority(job),
-            job_output_dir=pinned_root, pinned_root_descriptor=True,
-        )
-        return await run_in_threadpool(
-            service.build_alignment_presentation, bam,
-            bam_sha256=bam_metadata["sha256"], bam_size_bytes=bam_metadata["size_bytes"],
-            index=index, index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
-            source_manifest_sha256=bam_metadata["source_manifest_sha256"],
-            artifact_set_sha256=selected_session["artifact_set_sha256"],
-            alignment_pair_sha256=selected_session["alignment_pair_sha256"],
-            job_id=job_id, session_id=session_id, mode=selected_session["mode"],
-            cache_root=pinned_root / ".alignment-presentations",
-        )
+    return await run_in_threadpool(
+        service.resolve_cached_alignment_presentation,
+        job_id,
+        session_id,
+        cache_root=root,
+    )
 
 
 def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
     manifest = package["manifest"]
-    base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation"
+    base = (
+        f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/"
+        f"{manifest['authority_sha256']}"
+    )
     return {
         "schema": "bms.ngs.alignment-presentation.v1", "job_id": job_id, "session_id": session_id,
         "mode": manifest["mode"], "state": "ready",
@@ -1403,7 +1397,7 @@ def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]
                    "alignment_index_sha256": manifest["source_index_sha256"],
                    "alignment_index_size_bytes": manifest["source_index_size_bytes"],
                    "primary_read_count": manifest["source_primary_mapped_read_count"],
-                   "alignment_record_count": manifest["source_primary_mapped_alignment_record_count"]},
+                   "alignment_record_count": manifest["source_alignment_record_count"]},
         "policy": manifest["policy"],
         "preview": {"kind": "primary_read_preview", "selected_read_count": manifest["selected_read_count"],
                     "selected_record_count": manifest["selected_alignment_record_count"],
@@ -1430,8 +1424,11 @@ async def get_alignment_presentation(job_id: str, session_id: str, authorized_jo
 
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
 async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind: str, request: Request,
-                                               authorized_job: Job = Depends(require_alignment_job)):
+                                               authorized_job: Job = Depends(require_alignment_job),
+                                               presentation_id: str | None = None):
     if kind not in {"bam", "bai", "coverage", "manifest"}:
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
                                message="The governed presentation artifact was not found.",
@@ -1439,6 +1436,8 @@ async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind
     try:
         package = await run_in_threadpool(service.resolve_cached_alignment_presentation, job_id, session_id,
                                           cache_root=_presentation_root_for_job(authorized_job))
+        if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
+            raise service.AlignmentSessionError("alignment presentation not found")
         path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
                                   "coverage": ("coverage_path", "coverage_metadata"),
                                   "manifest": ("manifest_path", "manifest_metadata")}[kind]

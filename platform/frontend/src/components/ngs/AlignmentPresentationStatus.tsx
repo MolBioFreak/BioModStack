@@ -4,7 +4,7 @@ export interface AlignmentPresentationStatusValue {
     selectedReadCount: number | null;
     availableReadCount: number | null;
     byteSize: number;
-    policyVersion: string | null;
+    policyVersion: number | null;
     capped: boolean;
 }
 

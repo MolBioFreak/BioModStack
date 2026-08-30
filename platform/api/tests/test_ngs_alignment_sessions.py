@@ -228,6 +228,16 @@ def _write_governed_alignment_fixture(path: Path, *, read_count: int = 12) -> tu
                 supplementary_records.append(supplementary)
         for supplementary in supplementary_records:
             output.write(supplementary)
+        secondary = pysam.AlignedSegment()
+        secondary.query_name = "read-00"
+        secondary.query_sequence = "ACGT" * 10
+        secondary.flag = 256
+        secondary.reference_id = 0
+        secondary.reference_start = 900
+        secondary.mapping_quality = 20
+        secondary.cigar = ((0, 40),)
+        secondary.query_qualities = pysam.qualitystring_to_array("I" * 40)
+        output.write(secondary)
         unmapped = pysam.AlignedSegment()
         unmapped.query_name = "unmapped"
         unmapped.query_sequence = "A" * 40
@@ -274,6 +284,25 @@ def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path:
     assert receipt["selected_alignment_record_count"] == len(records) == 5
     assert receipt["source_primary_mapped_read_count"] == 12
     assert receipt["source_primary_mapped_alignment_record_count"] == 12
+    assert receipt["source_alignment_record_count"] == 17
+    assert receipt["source_record_counts"] == {
+        "mapped_primary": 12,
+        "secondary": 1,
+        "supplementary": 3,
+        "unmapped": 1,
+    }
+    assert receipt["selection_unit"] == "unique mapped primary read ID"
+    assert receipt["inclusion_rules"] == ["mapped", "primary", "query_name present"]
+    assert receipt["exclusion_rules"] == ["secondary", "supplementary", "unmapped", "missing query_name"]
+
+    from routers import ngs_alignment_sessions as router
+    response = router._presentation_response("job-a", "1" * 24, package)
+    validated = router.OntAlignmentPresentationV1.model_validate(response)
+    base = f"/api/jobs/job-a/alignment-sessions/{'1' * 24}/presentation/{receipt['authority_sha256']}"
+    assert validated.preview.bam.url == f"{base}/bam"
+    assert validated.preview.bam.kind == "alignment_preview"
+    assert validated.coverage.artifact.url == f"{base}/coverage"
+    assert validated.manifest.mime_type == "application/json"
 
 
 def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path: Path) -> None:
@@ -361,7 +390,7 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(tmp_path
         bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
         index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
         source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
-        contig="plasmid", start=1, end=500, max_reads=3, cache_root=tmp_path / "cache",
+        contig="plasmid", start=1, end=600, max_reads=3, cache_root=tmp_path / "cache",
     )
     first = service.build_alignment_locus_slice(source, **common)
     second = service.build_alignment_locus_slice(source, **common)
@@ -369,12 +398,89 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(tmp_path
     assert first["receipt"]["selected_read_count"] == 3
     assert first["receipt"]["capped"] is True
     assert first["receipt"]["selected_read_set_sha256"] == second["receipt"]["selected_read_set_sha256"]
+    assert first["receipt"]["source_alignment_sha256"] == bam_sha
+    assert first["receipt"]["source_index_sha256"] == bai_sha
+    assert first["receipt"]["selection_unit"] == "unique mapped primary read ID with associated supplementary records"
+    assert first["receipt"]["policy"] == {
+        "id": "bounded-full-source-locus-slice",
+        "version": 1,
+        "max_reads": 3,
+        "max_records": service.LOCUS_MAX_RECORDS,
+        "max_bytes": service.LOCUS_MAX_BYTES,
+        "max_span_bp": service.LOCUS_MAX_SPAN,
+        "max_seconds": service.LOCUS_MAX_SECONDS,
+    }
     with pysam.AlignmentFile(first["bam_path"], "rb") as sliced:
         assert len({record.query_name for record in sliced.fetch(until_eof=True)}) == 3
     with pytest.raises(service.AlignmentSessionError, match="contig"):
         service.build_alignment_locus_slice(source, **{**common, "contig": "../bad"})
     with pytest.raises(service.AlignmentSessionError, match="span"):
         service.build_alignment_locus_slice(source, **{**common, "end": service.LOCUS_MAX_SPAN + 1})
+
+
+def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(tmp_path: Path) -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source, read_count=30)
+    package = service.build_alignment_locus_slice(
+        source,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_identity=service.source_stat_identity(source),
+        source_manifest_sha256="9" * 64,
+        job_id="job-deep",
+        session_id="7" * 24,
+        contig="plasmid",
+        start=1,
+        end=600,
+        max_reads=10,
+        max_records=3,
+        cache_root=tmp_path / "cache",
+    )
+
+    assert package["receipt"]["overlapping_read_count"] > 10
+    assert package["receipt"]["selected_read_count"] <= 3
+    assert package["receipt"]["selected_record_count"] <= 3
+    assert package["receipt"]["capped"] is True
+    with pysam.AlignmentFile(package["bam_path"], "rb") as sliced:
+        assert sliced.count(until_eof=True) <= 3
+
+
+@pytest.mark.asyncio
+async def test_presentation_get_path_never_materializes_a_missing_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import asynccontextmanager
+    from routers import ngs_alignment_sessions as router
+    from services import ngs_alignment_sessions as service
+
+    job = SimpleNamespace(output_dir=str(tmp_path), child_output_dir=None)
+    monkeypatch.setattr(
+        service,
+        "resolve_cached_alignment_presentation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(service.AlignmentSessionError("not prepared")),
+    )
+
+    @asynccontextmanager
+    async def pinned_root(_job):
+        yield tmp_path
+
+    monkeypatch.setattr(router, "_validated_pinned_result_root", pinned_root)
+    monkeypatch.setattr(router, "_job_session_authority", lambda _job: {})
+    monkeypatch.setattr(
+        service,
+        "build_alignment_sessions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("HTTP request tried to prepare presentation")),
+    )
+
+    with pytest.raises(service.AlignmentSessionError, match="not prepared"):
+        await router._prepare_presentation("job-a", "1" * 24, job)
 
 
 def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
