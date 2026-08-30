@@ -1208,7 +1208,20 @@ def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
     monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
     monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
 
-    def request(origin: str) -> Request:
+    def request(
+        origin: str,
+        *,
+        server: tuple[str, int] = ("compute-node.taileb3a90.ts.net", 443),
+        tailnet_user: str | None = None,
+    ) -> Request:
+        host = server[0] if server[1] == 443 else f"{server[0]}:{server[1]}"
+        headers = [
+            (b"host", host.encode("ascii")),
+            (b"origin", origin.encode("ascii")),
+            (b"sec-fetch-site", b"same-origin"),
+        ]
+        if tailnet_user is not None:
+            headers.append((b"tailscale-user-login", tailnet_user.encode("ascii")))
         return Request({
             "type": "http",
             "method": "POST",
@@ -1216,19 +1229,32 @@ def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
             "raw_path": b"/api/jobs/job-a/alignment-access/rotate",
             "query_string": b"",
             "scheme": "https",
-            "server": ("compute-node.taileb3a90.ts.net", 443),
+            "server": server,
             "client": ("127.0.0.1", 42000),
-            "headers": [
-                (b"host", b"compute-node.taileb3a90.ts.net"),
-                (b"origin", origin.encode("ascii")),
-                (b"sec-fetch-site", b"same-origin"),
-            ],
+            "headers": headers,
         })
 
     router._require_local_development_browser(
         request("https://compute-node.taileb3a90.ts.net"),
         "job-a",
     )
+    router._require_local_development_browser(
+        request(
+            "https://compute-node.taileb3a90.ts.net",
+            server=("127.0.0.1", 18002),
+            tailnet_user="operator@example.com",
+        ),
+        "job-a",
+    )
+    with pytest.raises(router.OntNgsRouteError) as missing_tailnet_identity:
+        router._require_local_development_browser(
+            request(
+                "https://compute-node.taileb3a90.ts.net",
+                server=("127.0.0.1", 18002),
+            ),
+            "job-a",
+        )
+    assert missing_tailnet_identity.value.code == "NGS_ROTATION_ORIGIN_DENIED"
     with pytest.raises(router.OntNgsRouteError) as exc_info:
         router._require_local_development_browser(request("https://example.invalid"), "job-a")
     assert exc_info.value.code == "NGS_ROTATION_ORIGIN_DENIED"

@@ -767,15 +767,25 @@ def _require_local_development_browser(request: Request, job_id: str) -> None:
     supplied_origin = (supplied.scheme, supplied.netloc)
     configured_origin = (configured.scheme, configured.netloc)
     external_origin = (external.scheme, external.netloc)
+    tailnet_user = request.headers.get("tailscale-user-login", "").strip()
+    selected_tailnet_origin = (
+        secure_transport
+        and supplied.scheme == "https"
+        and bool(supplied.hostname)
+        and supplied.hostname.rstrip(".").casefold().endswith(".ts.net")
+        and bool(tailnet_user)
+    )
+    allowed_origins = {
+        configured_origin,
+        external_origin if secure_transport else configured_origin,
+    }
+    if selected_tailnet_origin:
+        allowed_origins.add(supplied_origin)
     if (
         request.headers.get("sec-fetch-site", "").lower() != "same-origin"
         or configured.scheme not in {"http", "https"}
         or not configured.netloc
-        or supplied_origin
-        not in {
-            configured_origin,
-            external_origin if secure_transport else configured_origin,
-        }
+        or supplied_origin not in allowed_origins
     ):
         raise OntNgsRouteError(
             status_code=403, code="NGS_ROTATION_ORIGIN_DENIED",
