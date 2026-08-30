@@ -12,10 +12,12 @@ import {
     buildFullSourceCoverageTrackConfig,
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
+    createIgvGenerationMount,
     ownsIgvLoadTerminalState,
     parseLocalIgvRange,
     loadMissingTracksById,
     removeIgvBrowser,
+    removeIgvGenerationMount,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
     resolveBrowserAlignmentTrackSource,
@@ -3948,6 +3950,8 @@ export function NGSToolkit() {
             return;
         }
         const igvFastaUrl = activeIgvFastaUrl;
+        const igvContainer = igvContainerRef.current;
+        const igvMount = createIgvGenerationMount(igvContainer);
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
@@ -3972,9 +3976,6 @@ export function NGSToolkit() {
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
             igvLoadedSourceKeyRef.current = '';
-            if (igvContainerRef.current) {
-                igvContainerRef.current.innerHTML = '';
-            }
 
             try {
                 const { igv, version } = await withTimeout(
@@ -3982,7 +3983,7 @@ export function NGSToolkit() {
                     IGV_INIT_TIMEOUT_MS,
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading IGV library`
                 );
-                if (cancelled || !igvContainerRef.current) return;
+                if (cancelled || !igvMount.isConnected) return;
                 if (isCurrentLoad() && !cancelled) {
                     setIgvVersion(version);
                 }
@@ -4007,7 +4008,7 @@ export function NGSToolkit() {
                     Math.max(5000, Math.floor(IGV_INIT_TIMEOUT_MS / 2)),
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while preparing reference`
                 );
-                if (cancelled || !igvContainerRef.current) return;
+                if (cancelled || !igvMount.isConnected) return;
 
                 const requestedLocus = resolvePendingSessionLocus(
                     pendingIgvLocusRef.current,
@@ -4025,7 +4026,7 @@ export function NGSToolkit() {
                     auxiliaryTracks: [],
                 });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
-                    create: () => igvAny.createBrowser(igvContainerRef.current, localIgvConfig),
+                    create: () => igvAny.createBrowser(igvMount, localIgvConfig),
                     remove: (staleBrowser: unknown) => removeIgvBrowser(igvAny, staleBrowser),
                     isCurrent: () => isCurrentLoad() && !cancelled,
                     invalidate: () => {
@@ -4040,7 +4041,7 @@ export function NGSToolkit() {
                 });
                 if (!igvBrowser) return;
                 igvLibraryRef.current = igvAny;
-                ensureIgvThemeStyles(igvContainerRef.current);
+                ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
                 if (typeof igvBrowser.on === 'function') {
@@ -4142,8 +4143,6 @@ export function NGSToolkit() {
             }
         };
 
-        const igvContainer = igvContainerRef.current;
-
         initIgv();
 
         return () => {
@@ -4162,9 +4161,7 @@ export function NGSToolkit() {
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
-            if (igvContainer) {
-                igvContainer.innerHTML = '';
-            }
+            removeIgvGenerationMount(igvContainer, igvMount);
         };
     }, [
         igvModalOpen,

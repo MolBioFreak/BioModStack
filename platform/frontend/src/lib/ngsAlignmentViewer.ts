@@ -130,6 +130,19 @@ export function removeIgvBrowser(
     library.removeBrowser(browser);
 }
 
+export function createIgvGenerationMount(container: HTMLElement): HTMLDivElement {
+    const mount = container.ownerDocument.createElement('div');
+    mount.className = 'ngs-igv-generation h-full w-full';
+    mount.style.width = '100%';
+    mount.style.height = '100%';
+    container.replaceChildren(mount);
+    return mount;
+}
+
+export function removeIgvGenerationMount(container: HTMLElement, mount: HTMLElement): void {
+    if (mount.parentElement === container) container.removeChild(mount);
+}
+
 export function resolveSessionAuxiliaryTracks(
     artifacts: Record<string, { url: string } | undefined>,
 ): Array<Record<string, unknown>> {

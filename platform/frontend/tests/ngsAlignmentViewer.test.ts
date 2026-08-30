@@ -290,6 +290,44 @@ test('late IGV creation is removed through the library when its generation is st
     assert.deepEqual(removed, ['late-browser']);
 });
 
+test('stale IGV generation cleanup cannot remove the current mount', async () => {
+    const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
+    const createMount = module.createIgvGenerationMount as ((container: unknown) => Record<string, unknown>) | undefined;
+    const removeMount = module.removeIgvGenerationMount as ((container: unknown, mount: unknown) => void) | undefined;
+    assert.equal(typeof createMount, 'function');
+    assert.equal(typeof removeMount, 'function');
+
+    type FakeNode = { className: string; style: Record<string, string>; parentElement: FakeContainer | null };
+    type FakeContainer = {
+        ownerDocument: { createElement: () => FakeNode };
+        children: FakeNode[];
+        replaceChildren: (node: FakeNode) => void;
+        removeChild: (node: FakeNode) => void;
+    };
+    const container: FakeContainer = {
+        ownerDocument: {
+            createElement: () => ({ className: '', style: {}, parentElement: null }),
+        },
+        children: [],
+        replaceChildren(node) {
+            for (const previous of this.children) previous.parentElement = null;
+            this.children = [node];
+            node.parentElement = this;
+        },
+        removeChild(node) {
+            this.children = this.children.filter((candidate) => candidate !== node);
+            node.parentElement = null;
+        },
+    };
+
+    const stale = createMount!(container) as unknown as FakeNode;
+    const current = createMount!(container) as unknown as FakeNode;
+    removeMount!(container, stale);
+    assert.deepEqual(container.children, [current]);
+    removeMount!(container, current);
+    assert.deepEqual(container.children, []);
+});
+
 test('IGV creation timeout invalidates its generation and removes an eventual late browser', async () => {
     const module = await import('../src/lib/ngsAlignmentViewer.js') as Record<string, unknown>;
     const createWithTimeout = module.createGenerationBoundResourceWithTimeout as (<T>(options: {
