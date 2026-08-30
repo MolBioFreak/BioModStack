@@ -7,18 +7,17 @@ import {
     getProject,
     getProjectSummary,
     internalRouteHref,
-    listDomainDatasets,
     projectManagerErrorMessage,
     proteinDomainAuthority,
     proteinWorkspaceHref,
     reopenDomainResult,
-    type DomainDatasetHead,
     type JsonObject,
     type JsonValue,
     type ProteinWorkspaceSection,
     type ProjectManagerReadModel,
     type ResultSurface,
 } from '../../../lib/projectManager';
+import DomainDatasetOperator from '../../molbio-ngs/DomainDatasetOperator';
 import { ProteinPlanOperator } from './ProteinPlanOperator';
 
 interface ProteinProjectWorkspaceProps {
@@ -101,7 +100,7 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
     const globalExperiment = useQuery({ queryKey: ['protein-project', ...scopeKey, 'global'], queryFn: ({ signal }) => getGlobalExperiment(projectId, globalExperimentId, signal), retry: false });
     const domain = useQuery({ queryKey: ['protein-project', ...scopeKey, 'domain'], queryFn: ({ signal }) => getDomainExperiment(projectId, globalExperimentId, domainExperimentId, signal), retry: false });
     const summary = useQuery({ queryKey: ['protein-project', ...scopeKey, 'summary'], queryFn: ({ signal }) => getProjectSummary(projectId, { focusId: globalExperimentId, selectedNodeKey: `domain_experiment:${domainExperimentId}`, mapLimit: 50, runLimit: 100, resultLimit: 100, lineageLimit: 100, noteLimit: 100, decisionLimit: 100, datasetLimit: 100, activityLimit: 100, signal }), retry: false });
-    const datasets = useQuery({ queryKey: ['protein-project', ...scopeKey, 'datasets'], queryFn: ({ signal }) => listDomainDatasets(projectId, globalExperimentId, domainExperimentId, signal), retry: false });
+
     const projectData = project.data;
     const globalExperimentData = globalExperiment.data;
     const domainData = domain.data;
@@ -134,7 +133,6 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
 
     const projectReturn = `/projects/${encodeURIComponent(projectId)}?focus=${encodeURIComponent(globalExperimentId)}&selected=${encodeURIComponent(`domain_experiment:${domainExperimentId}`)}`;
     const selectSection = (next: ProteinWorkspaceSection) => { const query = new URLSearchParams(searchParams); query.set('workspace', 'protein'); query.set('section', next); setSearchParams(query); };
-    const toggleDataset = (revisionId: string) => setSelectedDatasetRevisionIds((current) => current.includes(revisionId) ? current.filter((item) => item !== revisionId) : [...current, revisionId]);
     const results = summary.data.result_previews;
     const comparisonSurfaces = results.filter((surface) => surface.comparison.state !== 'not_applicable');
 
@@ -145,7 +143,7 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
             {reopen.error && <p role="alert" className="mb-4 rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(reopen.error)}</p>}
             {section === 'overview' && <Overview summary={summary.data} authority={authority} />}
             {section === 'targets' && <div className="space-y-3">{authority.targets.length ? authority.targets.map((target) => <article key={target.target_id} className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-semibold text-content">{target.label}</h2><p className="mt-1 font-mono text-xs text-content-muted">{target.target_id}</p></div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-secondary">{target.role}</span></div><p className="mt-3 text-xs text-content-secondary">Source receipts: {target.source_receipt_ids.length ? target.source_receipt_ids.join(', ') : 'none recorded'}</p><p className="mt-1 text-xs text-content-secondary">Dataset members: {target.dataset_member_refs.length ? target.dataset_member_refs.map((member) => `${member.dataset_revision_id}:${member.member_id}`).join(', ') : 'none recorded'}</p></article>) : <EmptyState>No targets are recorded in the current Protein Domain revision.</EmptyState>}<p className="rounded-lg border border-border-primary bg-surface-secondary p-3 text-xs text-content-muted">Target changes are disabled here because Project Manager owns the Protein Domain revision. Use “Back to Project Manager” and edit the exact Domain revision.</p></div>}
-            {section === 'datasets' && (datasets.isError ? <p role="alert" className="rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">Datasets could not be loaded: {projectManagerErrorMessage(datasets.error)}</p> : <DatasetSection datasets={datasets.data?.items ?? []} selected={selectedDatasetRevisionIds} onToggle={toggleDataset} />)}
+            {section === 'datasets' && <DomainDatasetOperator projectId={projectId} globalExperimentId={globalExperimentId} domainExperimentId={domainExperimentId} canMutate mutationBlocker={null} currentStateRevisionId={null} selectedRevisionIds={selectedDatasetRevisionIds} onSelectedRevisionIdsChange={setSelectedDatasetRevisionIds} />}
             {section === 'plans' && <ProteinPlanOperator projectId={projectId} globalExperimentId={globalExperimentId} domainExperimentId={domainExperimentId} domainRevisionId={authority.domain_revision_id} inputDatasetRevisionIds={selectedDatasetRevisionIds} />}
             {section === 'runs' && <RunSection summary={summary.data} />}
             {section === 'results' && (results.length ? <div className="grid gap-3 lg:grid-cols-2">{results.map((surface) => <ResultCard key={surface.receipt_id} surface={surface} opening={reopen.isPending} onOpen={(receiptId) => reopen.mutate(receiptId)} />)}</div> : <EmptyState>No receipt-backed Protein result surface is projected for this Domain.</EmptyState>)}
