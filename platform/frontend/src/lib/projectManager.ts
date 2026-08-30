@@ -952,6 +952,18 @@ export interface ResearchRecordRequest {
     supersedes_record_id?: string | null;
 }
 
+export interface ResearchRecordItem {
+    id: string;
+    workspace_id: string;
+    subject_resource_id: string;
+    record_kind: RecordKind;
+    body: string;
+    author: string | null;
+    source_receipt_ids: string[];
+    supersedes_record_id: string | null;
+    created_at: string;
+}
+
 export interface FrustraMpnnExperimentScopeItem {
     result_receipt_id: string;
     parent_job_id: string | null;
@@ -1837,6 +1849,18 @@ export async function createResearchRecord(subject: ResearchRecordSubject, reque
     if (subject.globalExperimentId) path += `/experiments/${segment(subject.globalExperimentId)}`;
     if (subject.domainExperimentId) path += `/domains/${segment(subject.domainExperimentId)}`;
     return (await api.post<JsonObject>(`${path}/records`, request)).data;
+}
+
+export async function listDomainResearchRecords(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<{ items: ResearchRecordItem[]; next_cursor: string | null }> {
+    return (await api.get<{ items: ResearchRecordItem[]; next_cursor: string | null }>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/records`,
+        { params: { limit: 100 }, signal },
+    )).data;
 }
 
 export async function getNgsMolBioBinding(
