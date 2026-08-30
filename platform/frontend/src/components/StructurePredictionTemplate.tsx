@@ -160,7 +160,6 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         .find(Boolean) || 'A';
 
     const launchConfig = resolveStructureLaunchConfig(initialValues);
-    const isBoltzCpLaunch = launchConfig.variant === 'boltz_cp_experimental';
     const initialBoltzCpSizeCp = Number.parseInt(String(initialValues?.size_cp ?? initialValues?.bcp_size_cp ?? 4), 10);
     const initialBoltzCpSeed = initialValues?.seed ?? initialValues?.bcp_seed;
 
@@ -636,23 +635,26 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         proteinBatchTargets[0]?.id ||
         '';
     const predictionMode: StructurePredictionMode = complexMode ? 'complex' : 'predict';
-    const activePredictorSelection = launchConfig.allowPredictorSelection ? predictor : (launchConfig.forcedPredictor || predictor);
+    const activePredictorSelection = predictor;
     const resolvedPredictorSelection = resolveStructurePredictorSelection(predictionMode, activePredictorSelection);
     const predictorFamilies = getPredictorFamiliesForSelection(predictionMode, activePredictorSelection);
     const predictorOptions = getStructurePredictorOptions(predictionMode);
     const selectedPredictorId = resolvedPredictorSelection.canonicalSelection;
     const isBoltzApi = selectedPredictorId === 'boltz_api';
+    const isBoltzCpLaunch = selectedPredictorId === 'fold_cp';
     const submitTarget = resolveStructureSubmitTarget({
         launchConfig,
         predictionMode,
         predictorSelection: activePredictorSelection,
     });
     const usesBoltz = predictorFamilies.includes('boltz');
+    const usesFoldCp = predictorFamilies.includes('fold_cp');
     const usesRf3 = predictorFamilies.includes('rf3');
     const usesProtenix = predictorFamilies.includes('protenix');
     const usesEsmFold2 = predictorFamilies.includes('esmfold2');
     const msaNeeded =
         (usesBoltz && !isBoltzApi && boltzUseMsa) ||
+        (usesFoldCp && boltzUseMsa) ||
         (usesRf3 && rf3UseMsa) ||
         (usesProtenix && protenixUseMsa);
 
@@ -699,7 +701,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             sequence: sequence.trim(),
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.canonicalSelection,
-            num_parallel_jobs: launchConfig.showParallelJobs ? numParallelJobs : 1,
+            num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
             pinned_gpus: pinnedGpus,
             lock_gpus: lockGpus && pinnedGpus.length > 0,
             allow_retries: allowRetries,
@@ -735,6 +737,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.boltz_max_parallel_samples = boltzMaxParallelSamples;
             params.boltz_target_geometry_mode = boltzTargetGeometryMode;
             if (boltzMethod) params.boltz_method = boltzMethod;
+        }
+
+        if (usesFoldCp) {
+            params.boltz_use_msa = boltzUseMsa;
+            params.boltz_recycling_steps = boltzRecyclingSteps;
+            params.boltz_sampling_steps = boltzSamplingSteps;
+            params.boltz_num_samples = boltzNumSamples;
         }
 
         if (usesRf3) {
@@ -816,7 +825,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         return Object.fromEntries(
             Object.entries(params).filter(([, value]) => value !== undefined)
         );
-    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
+    }, [jobName, sequence, sequenceName, resolvedPredictorSelection.canonicalSelection, launchConfig.showParallelJobs, numParallelJobs, pinnedGpus, lockGpus, allowRetries, runFrustrampnn, frustrampnnSettings, isBoltzCpLaunch, esmfold2Variant, usesEsmFold2, usesBoltz, usesFoldCp, usesRf3, usesProtenix, msaNeeded, targetSource, targetSourcePath, targetSourceChainId, selectedTargetModel, targetSourceSequence, complexMode, batchEntriesPreview, bcpRequestedSizeCp, bcpOutputFormat, bcpWriteFullPae, bcpSeed, boltzCpGpuSettings.gpuIds, boltzCpGpuSettings.sizeCp, boltzUseMsa, boltzRecyclingSteps, boltzSamplingSteps, boltzNumSamples, boltzUsePotentials, boltzMaxParallelSamples, boltzTargetGeometryMode, boltzMethod, rf3UseMsa, rf3NumRecycles, rf3NumSamples, protenixModelWeights, protenixSeeds, protenixNSample, protenixNStep, protenixNCycle, protenixUseMsa, protenixTargetGeometryMode, msaProvider, msaPreset, msaTargetShardMode, msaTargetShards, msaTargetShardMinSizeGb, msaTaxonomy, msaEvalue, msaMinSeqId, msaMinCoverage, msaMinDepthWarning, msaMinDepthFail, msaCacheOnly, msaAllowEmptyFallback, msaUseExpand, msaUseEnv, msaNumIterations, colabfoldApiHost, colabfoldApiMinInterval, colabfoldApiPollInterval, buildComplexComponents, sequenceBatchInput, sequenceBatchPrefix, resolvedSequenceBatchComponentId]);
     const targetPreview = targetSource
         ? resolveTargetPreviewSource({
             previewUrl: targetPreviewUrl,
@@ -975,7 +984,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             sequence: sequence.trim(),
             sequence_name: sequenceName,
             pred_method: resolvedPredictorSelection.canonicalSelection,
-            num_parallel_jobs: launchConfig.showParallelJobs ? numParallelJobs : 1,
+            num_parallel_jobs: launchConfig.showParallelJobs && !isBoltzCpLaunch ? numParallelJobs : 1,
             ...buildStructureFrustraMpnnSubmitParams(runFrustrampnn, frustrampnnSettings),
         };
 
@@ -1007,6 +1016,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
             params.boltz_max_parallel_samples = boltzMaxParallelSamples;
             params.boltz_target_geometry_mode = boltzTargetGeometryMode;
             if (boltzMethod) params.boltz_method = boltzMethod;
+        }
+
+        if (usesFoldCp) {
+            params.boltz_use_msa = boltzUseMsa;
+            params.boltz_recycling_steps = boltzRecyclingSteps;
+            params.boltz_sampling_steps = boltzSamplingSteps;
+            params.boltz_num_samples = boltzNumSamples;
         }
 
         // RF3 parameters
@@ -1315,13 +1331,11 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
         setSelectedChainIndices(next);
     };
 
-    const showBoltzParams = usesBoltz && !isBoltzApi;
+    const showBoltzParams = (usesBoltz || usesFoldCp) && !isBoltzApi;
     const showRf3Params = usesRf3;
     const showProtenixParams = usesProtenix;
     const showEsmFold2Params = usesEsmFold2;
-    const structureTemplateBaseId = isBoltzCpLaunch
-        ? 'boltz_cp_experimental'
-        : 'structure_prediction';
+    const structureTemplateBaseId = 'structure_prediction';
     const structureDocumentationTopics = useMemo<ModelDocumentationTopic[]>(() => {
         if (isBoltzCpLaunch) return ['fold_cp', 'boltz2'];
         const topics: ModelDocumentationTopic[] = [];
@@ -1490,11 +1504,9 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                         </div>
                     ) : (
                         <div className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3 text-sm text-orange-100">
-                            <div className="font-medium">{isBoltzCpLaunch ? 'Fold-CP Experimental' : 'Fixed predictor'}</div>
+                            <div className="font-medium">Fixed predictor</div>
                             <div className="mt-1 text-xs text-orange-100/80">
-                                {isBoltzCpLaunch
-                                    ? 'Single-fold Boltz launcher with Fold-CP runtime controls below.'
-                                    : 'Fixed predictor variant.'}
+                                Fixed predictor variant.
                             </div>
                         </div>
                     )}
@@ -1548,7 +1560,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 </div>
 
                 {/* Sequence Name */}
-                <div className={`grid ${launchConfig.showParallelJobs && !isBoltzApi ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
+                <div className={`grid ${launchConfig.showParallelJobs && !isBoltzApi && !isBoltzCpLaunch ? 'grid-cols-2' : 'grid-cols-1'} gap-4`}>
                     <div>
                         <label className="block text-sm font-medium text-slate-400 mb-2">Sequence Name</label>
                         <input
@@ -1559,7 +1571,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             placeholder="predicted"
                         />
                     </div>
-                    {launchConfig.showParallelJobs && !isBoltzApi && (
+                    {launchConfig.showParallelJobs && !isBoltzApi && !isBoltzCpLaunch && (
                         <div>
                             <label className="block text-sm font-medium text-slate-400 mb-2">Parallel Jobs</label>
                             <input
@@ -1578,7 +1590,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                     )}
                 </div>
 
-                {launchConfig.showSequenceBatch && !isBoltzApi && (
+                {launchConfig.showSequenceBatch && !isBoltzApi && !isBoltzCpLaunch && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
                         <div>
                             <h3 className="text-sm font-semibold text-slate-200">Sequence Matrix Batch</h3>
@@ -1836,18 +1848,19 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                 {showBoltzParams && (
                     <div className="border border-slate-700/50 rounded-lg p-4 space-y-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
-                            <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'Fold-CP Experimental Settings' : 'Boltz-2 Settings'}</h3>
+                            <h3 className="text-sm font-semibold text-blue-400">{isBoltzCpLaunch ? 'NVIDIA Fold-CP Settings' : 'Boltz-2 Settings'}</h3>
                             <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium text-blue-200">
-                                {isBoltzCpLaunch ? 'Alpha CP path' : 'Model controls'}
+                                {isBoltzCpLaunch ? 'OEM context parallelism' : 'Model controls'}
                             </span>
                         </div>
                         <ModelDocumentationLinks
                             topics={structureDocumentationTopics}
-                            summary={isBoltzCpLaunch ? 'Logical topology and DTensor details are linked out; launch controls stay action-first here.' : 'Method background is linked out; this panel only exposes runtime knobs.'}
+                            summary={isBoltzCpLaunch ? 'NVIDIA Fold-CP runs the selected structure input with OEM DTensor context parallelism.' : 'Method background is linked out; this panel only exposes runtime knobs.'}
                             compact
                         />
 
-                        {/* Physics Potentials Toggle */}
+                        {/* Physics potentials are a Boltz-2 control, not an OEM Fold-CP option. */}
+                        {!isBoltzCpLaunch && (
                         <div className="flex items-center gap-3 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
                             <input
                                 type="checkbox"
@@ -1861,6 +1874,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 <p className="text-xs text-slate-500">physics/FK steering potentials; use batching for high sample counts.</p>
                             </label>
                         </div>
+                        )}
 
                         <div className={`grid grid-cols-1 ${launchConfig.showMsaControls ? 'md:grid-cols-2' : ''} gap-4`}>
                             {launchConfig.showMsaControls && (
@@ -2020,7 +2034,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                             </div>
                         )}
 
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className={`grid ${isBoltzCpLaunch ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
                             <div>
                                 <label className="text-xs text-slate-400 block mb-1">Num Samples</label>
                                 <input
@@ -2034,44 +2048,50 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
                                 />
                                 <p className="mt-1 text-[11px] leading-snug text-slate-500">{BOLTZ_NUM_SAMPLES_HELP_TEXT}</p>
                             </div>
-                            <div>
-                                <label className="text-xs text-slate-400 block mb-1">Denoiser Chunk Limit</label>
-                                <input
-                                    type="number"
-                                    value={boltzMaxParallelSamples}
-                                    onChange={(e) => setBoltzMaxParallelSamples(Math.max(1, Math.min(boltzNumSamples, parseInt(e.target.value) || 1)))}
-                                    min={1}
-                                    max={boltzNumSamples}
-                                    title={BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                                />
-                                <p className="mt-1 text-[11px] leading-snug text-slate-500">{BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}</p>
-                            </div>
+                            {!isBoltzCpLaunch && (
+                                <div>
+                                    <label className="text-xs text-slate-400 block mb-1">Denoiser Chunk Limit</label>
+                                    <input
+                                        type="number"
+                                        value={boltzMaxParallelSamples}
+                                        onChange={(e) => setBoltzMaxParallelSamples(Math.max(1, Math.min(boltzNumSamples, parseInt(e.target.value) || 1)))}
+                                        min={1}
+                                        max={boltzNumSamples}
+                                        title={BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                    />
+                                    <p className="mt-1 text-[11px] leading-snug text-slate-500">{BOLTZ_MAX_PARALLEL_SAMPLES_HELP_TEXT}</p>
+                                </div>
+                            )}
                         </div>
 
                         {!boltzUseMsa && (
                             <p className="text-xs text-amber-300/90 mt-3">
-                                No-MSA Boltz-2 runs are held to at least 50 sampling steps and 3 recycling steps to avoid malformed geometry.
+                                {isBoltzCpLaunch
+                                    ? 'No-MSA Fold-CP runs use the displayed OEM sampling and recycling settings.'
+                                    : 'No-MSA Boltz-2 runs are held to at least 50 sampling steps and 3 recycling steps to avoid malformed geometry.'}
                             </p>
                         )}
 
-                        <div>
-                            <label className="text-xs text-slate-400 block mb-1">Conditioning Method</label>
-                            <select
-                                value={boltzMethod}
-                                onChange={(e) => setBoltzMethod(e.target.value)}
-                                className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
-                            >
-                                <option value="">None (Standard Folding)</option>
-                                <option value="md">Molecular Dynamics</option>
-                                <option value="x-ray diffraction">X-ray Diffraction</option>
-                                <option value="electron microscopy">Electron Microscopy</option>
-                                <option value="solution nmr">Solution NMR</option>
-                                <option value="solid-state nmr">Solid-State NMR</option>
-                                <option value="afdb">AlphaFold DB</option>
-                                <option value="boltz-1">Boltz-1</option>
-                            </select>
-                        </div>
+                        {!isBoltzCpLaunch && (
+                            <div>
+                                <label className="text-xs text-slate-400 block mb-1">Conditioning Method</label>
+                                <select
+                                    value={boltzMethod}
+                                    onChange={(e) => setBoltzMethod(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-white text-sm"
+                                >
+                                    <option value="">None (Standard Folding)</option>
+                                    <option value="md">Molecular Dynamics</option>
+                                    <option value="x-ray diffraction">X-ray Diffraction</option>
+                                    <option value="electron microscopy">Electron Microscopy</option>
+                                    <option value="solution nmr">Solution NMR</option>
+                                    <option value="solid-state nmr">Solid-State NMR</option>
+                                    <option value="afdb">AlphaFold DB</option>
+                                    <option value="boltz-1">Boltz-1</option>
+                                </select>
+                            </div>
+                        )}
                     </div>
                 )}
 

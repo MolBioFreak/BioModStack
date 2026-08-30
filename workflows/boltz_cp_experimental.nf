@@ -2,6 +2,7 @@
 nextflow.enable.dsl = 2
 
 include { RunBoltzCPExperimental ; FinalizeBoltzCPExperimental } from '../modules/boltz_cp_experimental.nf'
+include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
 
 workflow BOLTZ_CP_EXPERIMENTAL {
     main:
@@ -28,6 +29,42 @@ workflow BOLTZ_CP_EXPERIMENTAL {
         RunBoltzCPExperimental(inputTarget)
         FinalizeBoltzCPExperimental(RunBoltzCPExperimental.out.results_dir)
 
+        if (params.run_frustrampnn != false) {
+            if (!params.job_id) {
+                error("job_id is required when FrustraMPNN is enabled")
+            }
+            if ((params.frustrampnn_requiredness ?: 'required').toString() != 'required') {
+                error("FrustraMPNN must remain required when enabled")
+            }
+
+            def selectedStructures = (params.bcp_output_format ?: 'mmcif').toString().toLowerCase() == 'pdb'
+                ? FinalizeBoltzCPExperimental.out.pdbs
+                : FinalizeBoltzCPExperimental.out.cifs
+            def foldCpCandidates = selectedStructures
+                .flatten()
+                .map { structureFile ->
+                    def fileName = structureFile.getName()
+                    def stem = fileName.replaceFirst(/\.[^.]+$/, '').replaceAll(/[^A-Za-z0-9._-]/, '_')
+                    def candidateId = "foldcp_${stem}".take(128)
+                    tuple([
+                        candidate_id: candidateId,
+                        parent_job_id: params.job_id.toString(),
+                        parent_workflow_id: 'structure_prediction',
+                        producer_stage: 'structure_prediction:fold_cp',
+                        producer_candidate_key: "fold_cp/${fileName}",
+                        requiredness: 'required',
+                    ], structureFile)
+                }
+
+            SchedulerFrustraMPNNParentFanout(
+                foldCpCandidates,
+                Channel.value(params.job_id.toString()),
+                Channel.value('structure_prediction'),
+                Channel.value((params.frustrampnn_settings ?: '').toString()),
+                Channel.value(params.get('frustrampnn_settings_value_origin', 'bms_default').toString()),
+            )
+        }
+
     emit:
         prediction_dir = RunBoltzCPExperimental.out.results_dir
         processed_dir = RunBoltzCPExperimental.out.processed_dir
@@ -44,7 +81,7 @@ workflow {
     }
     def gpuIds = gpuIdsParam == null ? '' : gpuIdsParam.toString().trim()
     println("=" * 60)
-    println("Boltz-CP Experimental Workflow")
+    println("NVIDIA Fold-CP Structure Predictor")
     println("=" * 60)
     println("* Input path: ${params.bcp_input_path}")
     println("* GPU IDs: ${gpuIds}")

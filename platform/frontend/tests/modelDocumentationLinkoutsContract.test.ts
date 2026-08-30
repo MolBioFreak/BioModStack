@@ -136,7 +136,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
 
   const workflowsById = new Map(WORKFLOW_MODEL_INVENTORY.map((entry) => [entry.workflowId, entry]));
   assert.deepEqual(workflowsById.get('mutagenesis')?.modelTopics, ['boltz2', 'rf3', 'esmfold2']);
-  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
+  assert.deepEqual(workflowsById.get('structure_prediction')?.modelTopics, ['boltz2', 'fold_cp', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('antibody_child'), false);
   assert.deepEqual(workflowsById.get('protein_modification_experimental')?.modelTopics, ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2']);
   assert.equal(workflowsById.has('protein_local_redesign'), false);
@@ -144,7 +144,7 @@ test('workflow model inventory is source-grounded and exposes the total unique m
   assert.equal(workflowsById.has('protein_hunter_experimental'), false);
   assert.deepEqual(getWorkflowModelTopics('protein_hunter_experimental'), []);
   assert.equal(workflowsById.has('esmfold2'), false);
-  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
+  assert.deepEqual(getWorkflowModelTopics('esmfold2_experimental'), ['boltz2', 'fold_cp', 'rf3', 'protenix', 'esmfold2', 'frustrampnn']);
   assert.equal(workflowsById.has('confornets_experimental'), false);
   assert.deepEqual(getWorkflowModelTopics('confornets_experimental'), ['confornets', 'protenix']);
 
@@ -178,7 +178,7 @@ test('JobSubmission keeps workflow cards concise, hides Advanced Models, and rou
   requireSnippet(source, "return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];");
   requireSnippet(source, "return ['boltz2', 'rf3', 'protenix', 'esmfold2'];");
 
-  requireSnippet(source, "return 'Experimental Fold-CP path for large Boltz-2 folds.';");
+  requireSnippet(source, "return 'NVIDIA Fold-CP predictor inside Structure Prediction.';");
   requireSnippet(source, "!LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id)");
   rejectSnippet(source, "return 'Standalone ESMFold2 protein/complex fold.';");
 
@@ -244,9 +244,12 @@ test('dedicated model launchers expose compact documentation linkouts instead of
   requireSnippet(structureSource, "if (usesRf3) topics.push('rf3');");
   requireSnippet(structureSource, "if (usesProtenix) topics.push('protenix');");
   requireSnippet(structureSource, 'topics={structureDocumentationTopics}');
-  requireSnippet(structureSource, 'Logical topology and DTensor details are linked out; launch controls stay action-first here.');
+  requireSnippet(structureSource, 'NVIDIA Fold-CP Settings');
+  requireSnippet(structureSource, 'OEM context parallelism');
+  requireSnippet(structureSource, 'NVIDIA Fold-CP runs the selected structure input with OEM DTensor context parallelism.');
   requireSnippet(structureSource, 'Method background is linked out; this panel only exposes runtime knobs.');
-  requireSnippet(structureSource, 'Single-fold Boltz launcher with Fold-CP runtime controls below.');
+  rejectSnippet(structureSource, 'Single-fold Boltz launcher with Fold-CP runtime controls below.');
+  rejectSnippet(structureSource, 'Logical topology and DTensor details are linked out; launch controls stay action-first here.');
   rejectSnippet(structureSource, 'This workflow stays on single-fold Boltz mode and reuses the standard structure input flow.');
 
 

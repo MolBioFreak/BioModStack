@@ -11,6 +11,7 @@ interface StructureReorchestratePanelProps {
 
 const predictorLabel: Record<StructurePredictor, string> = {
     boltz: 'Boltz-2',
+    fold_cp: 'NVIDIA Fold-CP',
     rf3: 'RoseTTAFold 3',
     protenix: 'Protenix',
     esmfold2: 'ESMFold2',

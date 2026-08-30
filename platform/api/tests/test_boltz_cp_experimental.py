@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
 
 import yaml
@@ -14,6 +15,7 @@ if str(API_ROOT) not in sys.path:
 from model_registry import ModelRegistry
 import routers.jobs as jobs
 from services.nextflow import build_nextflow_command
+from services.frustrampnn.settings import default_settings
 from template_registry import TemplateRegistry
 
 
@@ -27,29 +29,71 @@ def test_model_registry_loads_boltz_cp_experimental() -> None:
     model = registry.get_model("boltz_cp_experimental")
 
     assert model is not None
-    assert model.name == "Fold-CP Experimental"
-    assert model.experimental is True
+    assert model.name == "NVIDIA Fold-CP"
+    assert model.experimental is False
     assert any(mode.id == "design" for mode in model.modes)
     assert any(param.name == "input_path" for param in model.params)
     assert any(param.name == "gpu_ids" for param in model.params)
     assert any(param.name == "size_cp" for param in model.params)
 
 
-def test_template_registry_loads_boltz_cp_experimental() -> None:
+def test_template_registry_does_not_advertise_standalone_boltz_cp_workflow() -> None:
     registry = TemplateRegistry(API_ROOT / "config" / "templates")
 
     template = registry.get_template("boltz_cp_experimental")
 
+    assert template is None
+
+
+def test_structure_template_owns_fold_cp_predictor_and_oem_controls() -> None:
+    registry = TemplateRegistry(API_ROOT / "config" / "templates")
+
+    template = registry.get_template("structure_prediction")
+
     assert template is not None
-    assert template.name == "Fold-CP Experimental"
-    assert template.experimental is True
-    assert template.preset_params["template_model_id"] == "boltz_cp_experimental"
-    assert template.preset_params["template_mode_id"] == "design"
-    assert template.preset_params["structure_launch_variant"] == "boltz_cp_experimental"
-    assert template.preset_params["bcp_repo_path"] == "/home/dalab/tmp/boltz-cp"
-    assert not any(param.name == "input_path" for param in template.user_params)
-    assert not any(param.name == "gpu_ids" for param in template.user_params)
-    assert not any(param.name == "size_cp" for param in template.user_params)
+    params = {param.name: param for param in template.user_params}
+    assert "fold_cp" in params["pred_method"].enum
+    for name in ("bcp_size_cp", "bcp_output_format", "bcp_write_full_pae", "bcp_seed"):
+        condition = params[name].condition
+        assert condition is not None
+        assert condition["values"] == ["fold_cp"]
+
+
+def test_fold_cp_runtime_uses_structure_frustrampnn_parent_fanout() -> None:
+    workflow = (API_ROOT.parents[1] / "workflows" / "boltz_cp_experimental.nf").read_text(encoding="utf-8")
+
+    assert "SchedulerFrustraMPNNParentFanout" in workflow
+    assert "Channel.value('structure_prediction')" in workflow
+    assert "params.run_frustrampnn != false" in workflow
+
+
+def test_build_nextflow_command_threads_fold_cp_frustrampnn_authority(tmp_path: Path) -> None:
+    settings = default_settings().model_dump(mode="json", exclude_none=False)
+    cmd = build_nextflow_command(
+        "boltz_cp_experimental",
+        "design",
+        {
+            "sequence": "MKTIIALSYIFCLVFADYKDDDDA",
+            "sequence_name": "fold_cp_frustrampnn",
+            "pinned_gpus": [0],
+            "gpu_id": 0,
+            "run_frustrampnn": True,
+            "frustrampnn_requiredness": "required",
+            "frustrampnn_settings": settings,
+        },
+        str(tmp_path / "out"),
+        job_id="job-fold-cp-frustrampnn",
+    )
+
+    assert _flag_value(cmd, "--job_id") == "job-fold-cp-frustrampnn"
+    assert _flag_value(cmd, "--run_frustrampnn") == "true"
+    assert _flag_value(cmd, "--frustrampnn_requiredness") == "required"
+    assert _flag_value(cmd, "--frustrampnn_settings_value_origin") == "bms_default"
+    assert _flag_value(cmd, "--frustrampnn_physical_gpu_id") == "0"
+    transported = json.loads(_flag_value(cmd, "--frustrampnn_settings"))
+    assert "settings_value_origin" not in transported
+    assert transported["schema_name"] == "frustrampnn_settings"
+    assert transported["schema_version"] == 2
 
 
 def test_build_nextflow_command_maps_boltz_cp_experimental_params() -> None:

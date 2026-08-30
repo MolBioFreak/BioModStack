@@ -1,17 +1,15 @@
 id: boltz_cp_experimental
-name: Fold-CP Experimental
+name: NVIDIA Fold-CP
 version: "0.1.0"
 category: structure_prediction
 description: >
-  Experimental single-example Boltz-2 inference using DTensor context
-  parallelism (CP) across multiple GPUs. Accepts either a prepared Boltz YAML
-  / FASTA input or a preprocessed Boltz directory, then launches the checked-out
-  Fold-CP fork through torch.distributed.
+  NVIDIA BioNeMo boltz-cp execution backend for the Structure Prediction workflow.
+  It accepts Structure inputs and uses OEM DTensor context parallelism.
 container: boltz2-pre-community-20260417-211613.sif
 
 ui_icon: sparkles
 ui_color: "#F97316"
-experimental: true
+experimental: false
 
 inputs:
   - yaml

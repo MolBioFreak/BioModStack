@@ -63,7 +63,7 @@ type PredictorOption = {
 test('predict mode keeps all surfaced predictor combinations available', () => {
     const options = getStructurePredictorOptions('predict');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'both', 'all']);
     assert.equal(options.every((option: PredictorOption) => option.disabled !== true), true);
 });
 
@@ -71,7 +71,7 @@ test('complex mode only exposes truthful predictor choices and disables RF3 expl
     const options = getStructurePredictorOptions('complex');
     const rf3Option = options.find((option: PredictorOption) => option.id === 'rf3');
 
-    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
+    assert.deepEqual(options.map((option: PredictorOption) => option.id), ['boltz', 'fold_cp', 'boltz_api', 'rf3', 'protenix', 'esmfold2', 'boltz_protenix']);
     assert.equal(rf3Option?.disabled, true);
     assert.match(rf3Option?.disabledReason || '', /predict-only/i);
 });
@@ -96,7 +96,7 @@ test('complex mode rejects RF3-only selections instead of silently lying about s
     assert.match(resolved.error || '', /predict-only/i);
 });
 
-test('boltz cp experimental launch config keeps the structure template locked to single-fold boltz mode while exposing MSA controls', () => {
+test('legacy boltz cp jobs reopen as an editable Fold-CP predictor inside Structure Prediction', () => {
     const config = resolveStructureLaunchConfig({
         template_model_id: 'boltz_cp_experimental',
         structure_launch_variant: 'boltz_cp_experimental',
@@ -105,11 +105,36 @@ test('boltz cp experimental launch config keeps the structure template locked to
     assert.equal(config.variant, 'boltz_cp_experimental');
     assert.equal(config.submitModelId, 'boltz_cp_experimental');
     assert.equal(config.submitMode, 'design');
-    assert.equal(config.allowPredictorSelection, false);
+    assert.equal(config.allowPredictorSelection, true);
     assert.equal(config.showParallelJobs, false);
     assert.equal(config.showSequenceBatch, false);
     assert.equal(config.showMsaControls, true);
-    assert.equal(config.forcedPredictor, 'boltz');
+    assert.equal(config.forcedPredictor, 'fold_cp');
+});
+
+test('Fold-CP is a normal Structure predictor with its own execution identity', () => {
+    const options = getStructurePredictorOptions('predict');
+    const foldCp = options.find((option) => option.id === 'fold_cp');
+    assert.equal(foldCp?.name, 'NVIDIA Fold-CP');
+
+    const config = resolveStructureLaunchConfig();
+    assert.deepEqual(
+        resolveStructurePredictorSelection('predict', 'fold_cp'),
+        {
+            requestedSelection: 'fold_cp',
+            canonicalSelection: 'fold_cp',
+            families: ['fold_cp'],
+            valid: true,
+        },
+    );
+    assert.deepEqual(
+        resolveStructureSubmitTarget({
+            launchConfig: config,
+            predictionMode: 'predict',
+            predictorSelection: 'fold_cp',
+        }),
+        { modelId: 'boltz_cp_experimental', mode: 'design' },
+    );
 });
 
 test('esmfold2 compatibility IDs no longer create dedicated structure launch variants', () => {
@@ -126,7 +151,7 @@ test('esmfold2 compatibility IDs no longer create dedicated structure launch var
     assert.deepEqual(getPredictorFamiliesForSelection('complex', 'esmfold2'), ['esmfold2']);
 });
 
-test('structure submit target preserves native predictor routing but forces boltz cp experimental onto its workflow identity', () => {
+test('structure submit target routes the selected Fold-CP predictor onto its execution identity', () => {
     const defaultConfig = resolveStructureLaunchConfig({ template_model_id: 'boltz2' });
     assert.deepEqual(
         resolveStructureSubmitTarget({
@@ -161,7 +186,7 @@ test('structure submit target preserves native predictor routing but forces bolt
         resolveStructureSubmitTarget({
             launchConfig: cpConfig,
             predictionMode: 'complex',
-            predictorSelection: 'boltz',
+            predictorSelection: 'fold_cp',
         }),
         { modelId: 'boltz_cp_experimental', mode: 'design' },
     );
@@ -211,7 +236,6 @@ test('boltz cp submit params use the OEM context-parallel contract', () => {
             sizeCp: 4,
         }),
         {
-            structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
             bcp_output_format: 'pdb',
@@ -231,7 +255,6 @@ test('boltz cp submit params use the OEM context-parallel contract', () => {
             sizeCp: 1,
         }),
         {
-            structure_launch_variant: 'boltz_cp_experimental',
             num_parallel_jobs: 1,
             bcp_input_format: 'config_files',
             bcp_output_format: 'mmcif',

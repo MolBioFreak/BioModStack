@@ -95,7 +95,7 @@ The live workflow surface includes:
 - experimental protein CAD (La-Proteina / DISCO)
 - Protein Hunter Experimental
 - Caliby Experimental
-- Fold-CP Experimental
+- NVIDIA Fold-CP inside Structure Prediction
 
 See [Structure_Design_and_Refinement.md](Structure_Design_and_Refinement.md)
 for the workflow-level view.

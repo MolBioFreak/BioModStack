@@ -4,7 +4,7 @@ import {
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
 export type StructurePredictionMode = 'predict' | 'complex';
-export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
+export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'rf3' | 'protenix' | 'esmfold2';
 export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
@@ -245,11 +245,11 @@ export const resolveStructureLaunchConfig = (initialValues?: StructureInitialVal
             variant,
             submitModelId: 'boltz_cp_experimental',
             submitMode: 'design',
-            allowPredictorSelection: false,
+            allowPredictorSelection: true,
             showParallelJobs: false,
             showSequenceBatch: false,
             showMsaControls: true,
-            forcedPredictor: 'boltz',
+            forcedPredictor: 'fold_cp',
         };
     }
 
@@ -281,21 +281,15 @@ export const deriveBoltzCpGpuLaunchSettings = ({
 };
 
 export const resolveStructureSubmitTarget = ({
-    launchConfig,
     predictionMode,
     predictorSelection,
 }: ResolveStructureSubmitTargetInput): StructureSubmitTarget => {
-    if (launchConfig.variant !== 'default') {
-        return {
-            modelId: launchConfig.submitModelId,
-            mode: launchConfig.submitMode,
-        };
-    }
-
     const resolvedSelection = resolveStructurePredictorSelection(predictionMode, predictorSelection);
     return {
         modelId: resolvedSelection.canonicalSelection === 'boltz_api'
             ? 'boltz_api'
+            : resolvedSelection.canonicalSelection === 'fold_cp'
+                ? 'boltz_cp_experimental'
             : resolvedSelection.canonicalSelection === 'rf3'
                 ? 'rf3'
                 : resolvedSelection.canonicalSelection === 'protenix'
@@ -303,7 +297,7 @@ export const resolveStructureSubmitTarget = ({
                     : resolvedSelection.canonicalSelection === 'esmfold2'
                         ? 'esmfold2'
                         : 'boltz2',
-        mode: predictionMode,
+        mode: resolvedSelection.canonicalSelection === 'fold_cp' ? 'design' : predictionMode,
     };
 };
 
@@ -315,7 +309,6 @@ export const buildBoltzCpSubmitParams = ({
     sizeCp,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
     const params: BoltzCpSubmitParams = {
-        structure_launch_variant: 'boltz_cp_experimental',
         num_parallel_jobs: 1,
         bcp_input_format: 'config_files',
         bcp_output_format: outputFormat,
@@ -380,6 +373,7 @@ export const BOLTZ_QUALITY_PRESETS = [
 
 const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
+    { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel Boltz', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 queue', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
@@ -390,6 +384,7 @@ const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
+    { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel complex prediction', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
     { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
@@ -399,7 +394,7 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
 
 const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'boltz_api' || normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
+    if (normalized === 'boltz_api' || normalized === 'fold_cp' || normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
         return normalized;
     }
     return 'boltz';
@@ -416,6 +411,14 @@ export const resolveStructurePredictorSelection = (
     const requestedSelection = toPredictorSelection(selection);
 
     if (mode === 'complex') {
+        if (requestedSelection === 'fold_cp') {
+            return {
+                requestedSelection,
+                canonicalSelection: 'fold_cp',
+                families: ['fold_cp'],
+                valid: true,
+            };
+        }
         if (requestedSelection === 'boltz_api') {
             return {
                 requestedSelection,
@@ -465,6 +468,14 @@ export const resolveStructurePredictorSelection = (
         };
     }
 
+    if (requestedSelection === 'fold_cp') {
+        return {
+            requestedSelection,
+            canonicalSelection: 'fold_cp',
+            families: ['fold_cp'],
+            valid: true,
+        };
+    }
     if (requestedSelection === 'boltz_api') {
         return {
             requestedSelection,
