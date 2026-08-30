@@ -230,9 +230,6 @@ def _quarantine_catalog_payload(payload: Any) -> Any:
             actions.append(raw_row)
             continue
         path = str(raw_row.get("informational_path") or "")
-        action_id = str(raw_row.get("action_id") or "")
-        if action_id.startswith("oem.y.") or action_id.startswith("oem.xy."):
-            continue
         if path == "/oem/startup/status/{session_id}":
             continue
         row = dict(raw_row)
@@ -282,16 +279,6 @@ def _resolve_action_quarantine(action_id: str) -> str | None:
     # admission because the cockpit requests several signed X admissions at
     # once and the catalog itself acquires the robot provider-state lock.
     return OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
-
-
-def _retired_y_xy_detail(action_id: str) -> dict[str, str] | None:
-    if not (action_id.startswith("oem.y.") or action_id.startswith("oem.xy.")):
-        return None
-    return {
-        "error": "legacy_y_xy_operator_surface_retired",
-        "action_id": action_id,
-        "replacement": "Use strict /operator-controls/v2 actions, interrupts, or methods.",
-    }
 
 
 def _translate_robot_error(exc: Exception) -> HTTPException:
@@ -813,9 +800,6 @@ async def operator_action_admission(
     request: OperatorAdmissionRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorAdmission:
-    retired = _retired_y_xy_detail(action_id)
-    if retired is not None:
-        raise HTTPException(status_code=410, detail=retired)
     quarantine_reason = _resolve_action_quarantine(action_id)
     if quarantine_reason is not None:
         return _quarantined_admission(
@@ -849,9 +833,6 @@ async def invoke_operator_action(
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceipt:
-    retired = _retired_y_xy_detail(action_id)
-    if retired is not None:
-        raise HTTPException(status_code=410, detail=retired)
     quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)

@@ -1043,38 +1043,7 @@ def test_dispatched_timeout_translation_is_explicitly_ambiguous_and_do_not_retry
     }
 
 
-@pytest.mark.parametrize("action_id", ["oem.y.move_steps", "oem.y.stop", "oem.xy.home"])
-def test_legacy_y_and_xy_admission_and_invocation_are_retired_at_bms_boundary(monkeypatch, action_id):
-    client, runtime = make_client(monkeypatch)
-    admission = client.post(
-        f"/api/bioxp/operator-controls/actions/{action_id}/admission",
-        json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "inputs": {},
-        },
-    )
-    invocation = client.post(
-        f"/api/bioxp/operator-controls/actions/{action_id}",
-        json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "idempotency_key": "retired-12345678",
-            "inputs": {},
-        },
-    )
-    for response in (admission, invocation):
-        assert response.status_code == 410
-        assert response.json()["detail"] == {
-            "error": "legacy_y_xy_operator_surface_retired",
-            "action_id": action_id,
-            "replacement": "Use strict /operator-controls/v2 actions, interrupts, or methods.",
-        }
-    assert runtime.connection.client.calls == []
-    assert runtime.connection.safety_interrupt_calls == []
-
-
-def test_legacy_catalog_projection_removes_y_and_xy_action_identities(monkeypatch):
+def test_legacy_catalog_projection_preserves_y_and_xy_action_identities(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
     payload = runtime.connection.client.responses["operator_control_catalog"]
     payload["actions"].extend([
@@ -1083,7 +1052,11 @@ def test_legacy_catalog_projection_removes_y_and_xy_action_identities(monkeypatc
     ])
     response = client.get("/api/bioxp/operator-controls/catalog")
     assert response.status_code == 200
-    assert [row["action_id"] for row in response.json()["actions"]] == ["motion.home_xy"]
+    assert [row["action_id"] for row in response.json()["actions"]] == [
+        "motion.home_xy",
+        "oem.y.move_steps",
+        "oem.xy.home",
+    ]
 
 
 def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_mismatch(monkeypatch):
