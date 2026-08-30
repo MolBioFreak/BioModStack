@@ -4045,10 +4045,70 @@ class OperatorActionReceipt(BaseModel):
         return self
 
 
+class OperatorLegacyReconciliationReceipt(BaseModel):
+    """Known schema-2 command row retained by the v1 history projection."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action_id: str = Field(min_length=1, max_length=160)
+    automatic_retry: Literal[False]
+    callback_session_id: str | None = Field(default=None, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=120)
+    command_id: str = Field(min_length=1, max_length=160)
+    connection_generation: StrictInt | None = Field(default=None, ge=0)
+    control_class: str = Field(min_length=1, max_length=120)
+    duration_ms: StrictFloat | StrictInt = Field(ge=0)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    finished_at: str = Field(min_length=1, max_length=80)
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    idempotency_replay_enabled: StrictBool
+    lifecycle_stage_id: str | None = Field(default=None, max_length=160)
+    operation: str = Field(min_length=1, max_length=160)
+    ownership_generation: StrictInt = Field(ge=0)
+    physical_outcome: Literal["ambiguous"]
+    protocol_action_id: str | None = Field(default=None, max_length=160)
+    protocol_job_id: str | None = Field(default=None, max_length=160)
+    requested_inputs: dict[str, JsonValue]
+    response: dict[str, JsonValue]
+    stage_receipts: list[dict[str, JsonValue]]
+    status: Literal["reconciliation_required"]
+
+
+class OperatorLegacyPipetteRuntimeBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    callback_session_id: str = Field(min_length=1, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=120)
+    control_class: str = Field(min_length=1, max_length=120)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    lifecycle_stage_id: str = Field(min_length=1, max_length=160)
+    owner: str = Field(min_length=1, max_length=160)
+    transport_owner_bound: Literal[True]
+
+
+class OperatorLegacyUnindexedPipetteReceipt(BaseModel):
+    """Known pre-index pipette failure retained without inventing an ID."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    error: str = Field(min_length=1, max_length=4000)
+    failure_code: str = Field(min_length=1, max_length=2000)
+    ok: Literal[False]
+    outcome: str = Field(min_length=1, max_length=2000)
+    response: dict[str, JsonValue]
+    runtime_binding: OperatorLegacyPipetteRuntimeBinding
+    stage_receipts: list[dict[str, JsonValue]]
+
+
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
-    receipts: list[OperatorActionReceipt | PipetteReceipt] = Field(max_length=500)
+    receipts: list[
+        OperatorActionReceipt
+        | PipetteReceipt
+        | OperatorLegacyReconciliationReceipt
+        | OperatorLegacyUnindexedPipetteReceipt
+    ] = Field(max_length=500)
 
 
 # Serial-206 operator wire contracts. Keep these separate from the strict v1
@@ -4727,6 +4787,31 @@ class OperatorReportSchemaIdentityV1(BaseModel):
     release_identity: OperatorReportReleaseIdentityV1
 
 
+class OperatorReportLegacySnapshotV1(BaseModel):
+    """Exact read-only snapshot identity emitted by supported schema 2."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    database_identity: Literal["robot_authoritative_sqlite"]
+    schema_version: Literal[2]
+    database_path_exposed: Literal[False]
+    identity_version: Literal[2]
+    high_water_sequence: StrictInt | None = Field(default=None, ge=0)
+    high_water_rowid: StrictInt | None = Field(default=None, ge=0)
+    high_water_event_id: StrictInt | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def require_one_high_water(self):
+        high_waters = (
+            self.high_water_sequence,
+            self.high_water_rowid,
+            self.high_water_event_id,
+        )
+        if sum(value is not None for value in high_waters) != 1:
+            raise ValueError("legacy report snapshot requires exactly one high-water identity")
+        return self
+
+
 class OperatorReportSnapshotV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4737,6 +4822,9 @@ class OperatorReportSnapshotV1(BaseModel):
     high_water_sequence: StrictInt | None = Field(default=None, ge=0)
     high_water_rowid: StrictInt | None = Field(default=None, ge=0)
     high_water_event_id: StrictInt | None = Field(default=None, ge=0)
+
+
+OperatorReportSnapshotContractV1 = OperatorReportSnapshotV1 | OperatorReportLegacySnapshotV1
 
 
 class OperatorReportFiltersV1(BaseModel):
@@ -4829,7 +4917,7 @@ class OperatorReportSummaryV1(BaseModel):
 
     scope: Literal["window", "filtered"]
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     commands: OperatorReportCommandCountsV1
     pipette_operations: OperatorReportPipetteCountsV1
     runtime_events: OperatorReportEventCountsV1
@@ -5008,7 +5096,7 @@ class OperatorReportPipetteDetailV1(OperatorReportPipetteRowV1):
     exchanges: list[OperatorReportExchangeV1]
     events: list[OperatorReportPipetteEventV1]
     pressure_streams: list[OperatorReportPressureStreamChildV1]
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     child_page_limit: StrictInt = Field(ge=1)
 
 
@@ -5016,7 +5104,7 @@ class OperatorReportCommandPageV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5056,7 +5144,7 @@ class OperatorReportCommandDetailV1(OperatorReportCommandRowV1):
     evidence_preview: list[OperatorReportEvidenceV1]
     evidence_continuation: OperatorReportPageContinuationV1
     pipette: OperatorReportPipetteDetailV1 | None
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     child_page_limit: StrictInt = Field(ge=1)
 
 
@@ -5065,7 +5153,7 @@ class OperatorReportTransitionsV1(BaseModel):
 
     command_id: str = Field(min_length=1, max_length=160)
     filters: OperatorReportCommandChildFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5078,7 +5166,7 @@ class OperatorReportCommandEvidencePageV1(BaseModel):
 
     command_id: str = Field(min_length=1, max_length=160)
     filters: OperatorReportCommandChildFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5090,7 +5178,7 @@ class OperatorReportPipettePageV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5103,7 +5191,7 @@ class OperatorReportPipetteChannelsV1(BaseModel):
 
     pipette_operation_id: str = Field(min_length=1, max_length=160)
     filters: OperatorReportPipetteChildFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5116,7 +5204,7 @@ class OperatorReportPipetteExchangesV1(BaseModel):
 
     pipette_operation_id: str = Field(min_length=1, max_length=160)
     filters: OperatorReportPipetteChildFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5135,7 +5223,7 @@ class OperatorReportEventV1(BaseModel):
     channel: StrictInt | None = Field(default=None, ge=0, le=3)
     observed_at: StrictFloat | StrictInt | str
     event: OperatorReportJsonObjectV1
-    snapshot: OperatorReportSnapshotV1 | None = None
+    snapshot: OperatorReportSnapshotContractV1 | None = None
 
 
 class OperatorReportEventsV1(BaseModel):
@@ -5143,7 +5231,7 @@ class OperatorReportEventsV1(BaseModel):
 
     event_kind: str | None
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5171,7 +5259,7 @@ class OperatorReportPressureStreamsV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5207,7 +5295,7 @@ class OperatorReportPressureDetailV1(BaseModel):
     loss_count: StrictInt | None = Field(default=None, ge=0)
     chunks: list[OperatorReportPressureChunkV1]
     child_page_limit: StrictInt = Field(ge=1)
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
 
 
 class OperatorReportPressureSamplesV1(BaseModel):
@@ -5215,7 +5303,7 @@ class OperatorReportPressureSamplesV1(BaseModel):
 
     stream_session_id: str = Field(min_length=1, max_length=160)
     filters: OperatorReportFiltersV1
-    snapshot: OperatorReportSnapshotV1
+    snapshot: OperatorReportSnapshotContractV1
     returned_count: StrictInt = Field(ge=0)
     filtered_total: StrictInt = Field(ge=0)
     has_more: StrictBool
@@ -5313,6 +5401,18 @@ class OperatorReportExportListV1(BaseModel):
     items: list[OperatorReportExportListItemV1]
     returned_count: StrictInt = Field(ge=0)
     limit: StrictInt = Field(ge=1, le=1000)
+    available: StrictBool = True
+    unavailable_reason: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def bind_availability(self):
+        if self.available and self.unavailable_reason is not None:
+            raise ValueError("available export index cannot carry an unavailable reason")
+        if not self.available and self.unavailable_reason is None:
+            raise ValueError("unavailable export index requires a reason")
+        if not self.available and (self.items or self.returned_count != 0):
+            raise ValueError("unavailable export index cannot claim indexed exports")
+        return self
 
 
 class OperatorReportHealthSchemaCheckV1(BaseModel):

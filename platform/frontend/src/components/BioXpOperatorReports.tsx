@@ -128,6 +128,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
     const rows = connected && !commandsQuery.isError ? (commandsQuery.data?.commands ?? []) : [];
     const statusCounts = summary?.commands?.by_status ?? {};
     const detail = detailQuery.data;
+    const exportIndexAvailable = exportsQuery.data?.available !== false;
 
     const clearFilters = () => {
         setStatus('');
@@ -174,6 +175,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
     };
 
     const exportReport = (format: 'json' | 'csv') => {
+        if (!exportIndexAvailable) return;
         setExportMessage(null);
         setExportDownload(null);
         exportMutation.mutate({ format, filters, limit: 1000 }, {
@@ -223,8 +225,9 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                     <label className="text-xs text-slate-400">End timestamp<input className="mt-1 w-full rounded bg-slate-950 px-2 py-1 text-sm text-slate-100" value={end} onChange={(event) => setEnd(event.target.value)} inputMode="decimal" placeholder="optional" /></label>
                     <div className="flex items-end gap-2 md:col-span-3 lg:col-span-6">
                         <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500" onClick={clearFilters}>Clear filters</button>
-                        <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500" onClick={() => exportReport('json')} disabled={exportMutation.isPending}>Export JSON</button>
-                        <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500" onClick={() => exportReport('csv')} disabled={exportMutation.isPending}>Export CSV</button>
+                        <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500 disabled:opacity-40" onClick={() => exportReport('json')} disabled={exportMutation.isPending || !exportIndexAvailable}>Export JSON</button>
+                        <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500 disabled:opacity-40" onClick={() => exportReport('csv')} disabled={exportMutation.isPending || !exportIndexAvailable}>Export CSV</button>
+                        {!exportIndexAvailable && <span className="text-xs text-slate-400">This supported legacy report schema has no export index. Command, pipette, event, and pressure history remain available.</span>}
                         {exportMessage && <span role="status" className="text-xs text-slate-300">{exportMessage}</span>}
                         {exportDownload && <a className="text-xs text-cyan-200 underline" href={exportDownload}>Download export</a>}
                     </div>
@@ -296,7 +299,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                     <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Recent runtime events</h3><p className="mt-1 text-xs text-slate-400">{eventsQuery.data?.returned_count ?? 0} events in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(eventsQuery.data?.events ?? []).map((event, index) => <li key={String(event.event_id ?? index)}><button type="button" className="text-left hover:text-cyan-200" onClick={() => { if (typeof event.event_id === 'number') setSelectedEvent(event.event_id); }}>{display(event.observed_at)} · {display(event.event_kind)} · {display(event.command_id)}</button></li>)}</ul></div>
                     <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Pressure evidence</h3><p className="mt-1 text-xs text-slate-400">{pressureQuery.data?.returned_count ?? 0} pressure streams in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(pressureQuery.data?.pressure_streams ?? []).map((stream, index) => <li key={String(stream.stream_session_id ?? index)}><button type="button" className="text-left hover:text-cyan-200" onClick={() => { if (typeof stream.stream_session_id === 'string') { setSelectedPressureStream(stream.stream_session_id); setSampleCursor(null); } }}>{display(stream.stream_session_id)} · channels {display(stream.channels)} · {display(stream.terminal_state)}</button></li>)}</ul></div>
                     <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Pipette operations</h3><p className="mt-1 text-xs text-slate-400">{pipetteQuery.data?.returned_count ?? 0} pipette operations in the current report view.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(pipetteQuery.data?.pipette ?? []).map((item, index) => <li key={String(item.pipette_operation_id ?? index)}>{display(item.operation)} · {display(item.status)} · {display(item.pipette_operation_id)}</li>)}</ul></div>
-                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Report exports</h3><p className="mt-1 text-xs text-slate-400">{exportsQuery.data?.returned_count ?? 0} retained exports.</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(exportsQuery.data?.items ?? []).map((item) => <li key={item.export_id}>{display(item.format)} · {display(item.publication_state)} · {item.download ? <a className="text-cyan-200 underline" href={item.download}>download</a> : 'unavailable'}</li>)}</ul></div>
+                    <div className="rounded border border-slate-800 bg-slate-900/40 p-3"><h3 className="font-semibold">Report exports</h3><p className="mt-1 text-xs text-slate-400">{exportIndexAvailable ? `${exportsQuery.data?.returned_count ?? 0} retained exports.` : 'Export indexing is unavailable for this supported legacy report schema.'}</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-slate-400">{(exportsQuery.data?.items ?? []).map((item) => <li key={item.export_id}>{display(item.format)} · {display(item.publication_state)} · {item.download ? <a className="text-cyan-200 underline" href={item.download}>download</a> : 'download unavailable'}</li>)}</ul></div>
                 </div>
             )}
 
