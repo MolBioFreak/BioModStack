@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "ae7d6077b1fc0d7f63300cc25e35f726718c8a55a74016d14c7748a650197cd2",
+  "content_sha256": "04fb9e108f9c7fce2ab80bbfcb3ad64e67a3764ffffc2065bbe54ded1de1a93c",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -169,8 +169,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "59a3476a9123a9a95198c44eb57729720d5e7ae45356252a26fd9cab39074ded",
-      "size_bytes": 96322
+      "sha256": "9761ec0f93b4d1fd06f9651d4fd3c8a09d86b2aefe48939697da138ef26174f3",
+      "size_bytes": 96605
     },
     {
       "path": "platform/api/config/models/nanopore.yaml",
@@ -399,8 +399,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "95cccdd0c7542a3985edddd4a161af25b21e27cb385c605c17db12ed7834cb0d",
-      "size_bytes": 404478
+      "sha256": "240bf99e949f0994f8ab94334371135e15b4e16f0f1726a4e1f6a0e66e586961",
+      "size_bytes": 403743
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -554,8 +554,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "994f466906c490c6395e6fbeeeec29a98fe28653a67dbc1f50764e0d5a8de55f",
-      "size_bytes": 212611
+      "sha256": "d445e021a6317e2ec7970ee47d52c2b35038d854ab88b877d782e7c363559863",
+      "size_bytes": 211699
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -854,8 +854,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "4ce751376cc0f53dc5b9559006b74ce932acd8b2e5ffb63c3b23cdd6cbebf693",
-      "size_bytes": 196150
+      "sha256": "a1ee883ec19ff42c6931668c906eda7cba5806591e05dce2ad501fbd4548cc5a",
+      "size_bytes": 195618
     },
     {
       "path": "platform/frontend/src/lib/nanoporeCloneState.ts",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "e34bb95cc54b19e80798feafa7ddaad6d27b519b",
-  "successor_source_tree": "d47a0677a6098cad38b198a19d60d10420439b24",
+  "successor_source_commit": "ef118c0c68d93e08544bb25191dbc0b473bd0340",
+  "successor_source_tree": "7331945f8be7c791889d5728031a18afd093c297",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
