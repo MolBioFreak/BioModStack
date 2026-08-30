@@ -956,7 +956,8 @@ def _verify_protein_domain_semantics(
         for target in targets
         for ref in target.get("dataset_member_refs", [])
     ]
-    if len(target_dataset_ids) != len(set(target_dataset_ids)) or target_dataset_ids != outer_dataset_ids:
+    ordered_target_dataset_ids = list(dict.fromkeys(target_dataset_ids))
+    if ordered_target_dataset_ids != outer_dataset_ids:
         raise NgsMolBioCapabilityError(
             "Protein target Dataset member references must match the ordered outer dataset_revision_ids list"
         )
