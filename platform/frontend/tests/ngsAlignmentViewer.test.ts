@@ -12,6 +12,7 @@ import {
     resolveBrowserAlignmentTrackSource,
     replaceAlignmentTrackTransactionally,
     loadMissingTracksById,
+    locusMatchesAlignmentSlice,
 } from '../src/lib/ngsAlignmentViewer.js';
 import {
     buildAlignmentLocusSliceRequest,
@@ -99,7 +100,7 @@ function presentationFixture() {
             primary_read_count: 10_000, alignment_record_count: 10_500,
         },
         policy: {
-            id: 'primary-read-presentation-v2', version: 2, target_reads: 2000,
+            id: 'primary-read-presentation-v3', version: 3, target_reads: 2000,
             max_preview_bytes: 67_108_864, max_coverage_bins: 10_000, max_seconds: 120,
         },
         preview: {
@@ -428,6 +429,21 @@ test('IGV locus-change payload becomes a bounded one-based read-inspector locus'
     });
     assert.equal(currentLocus!([]), null);
     assert.equal(currentLocus!([{ chr: '', start: 0, end: 10 }]), null);
+});
+
+test('mounted locus source matches only its exact authoritative interval', () => {
+    assert.equal(locusMatchesAlignmentSlice(
+        { contig: 'plasmid', start: 101, end: 250 },
+        { contig: 'plasmid', start_1based: 101, end_1based: 250 },
+    ), true);
+    assert.equal(locusMatchesAlignmentSlice(
+        { contig: 'plasmid', start: 102, end: 250 },
+        { contig: 'plasmid', start_1based: 101, end_1based: 250 },
+    ), false);
+    assert.equal(locusMatchesAlignmentSlice(
+        { contig: 'other', start: 101, end: 250 },
+        { contig: 'plasmid', start_1based: 101, end_1based: 250 },
+    ), false);
 });
 
 test('timed-out IGV generation owns terminal loading state but cannot clear a newer generation', async () => {

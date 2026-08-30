@@ -380,6 +380,19 @@ export function resolveIgvReadLocus(loci: unknown): AlignmentReadLocus | null {
     return { contig: first.chr.trim(), start, end };
 }
 
+export function locusMatchesAlignmentSlice(
+    locus: { contig: string; start: number; end: number } | null,
+    slice: AlignmentLocusSlice | null,
+): boolean {
+    return Boolean(
+        locus
+        && slice
+        && locus.contig === slice.contig
+        && locus.start === slice.start_1based
+        && locus.end === slice.end_1based,
+    );
+}
+
 interface MutableIgvTrackBrowser {
     findTracks: (predicate: (track: Record<string, unknown>) => boolean) => Array<Record<string, unknown>>;
     loadTrack: (config: Record<string, unknown>) => Promise<Record<string, unknown>>;

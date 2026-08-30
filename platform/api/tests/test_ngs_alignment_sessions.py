@@ -14,6 +14,7 @@ from typing import Any, cast
 
 
 import pytest
+import rfc8785
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.testclient import TestClient
@@ -185,7 +186,7 @@ def test_alignment_preview_is_deterministic_and_source_bound(tmp_path: Path) -> 
         index=source_index,
         index_sha256=index_sha,
         index_size_bytes=index_size,
-        cache_root=tmp_path / "cache",
+        cache_root=tmp_path / "cache-second",
         target_reads=3,
     )
 
@@ -368,29 +369,43 @@ def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, mon
 
     source = tmp_path / "source.bam"
     index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
-    service.build_alignment_presentation(
+    first = service.build_alignment_presentation(
         source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
         index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="e" * 64,
         job_id="job-e", session_id="5" * 24, mode="primary", cache_root=tmp_path / "cache",
         target_reads=3, max_output_bytes=1_000_000,
     )
     monkeypatch.setattr(service, "_open_regular_file_no_symlinks", lambda *_args: (_ for _ in ()).throw(AssertionError("source opened")))
-    package = service.resolve_cached_alignment_presentation("job-e", "5" * 24, cache_root=tmp_path / "cache")
+    package = service.resolve_cached_alignment_presentation(
+        "job-e", "5" * 24, cache_root=tmp_path / "cache",
+        expected_authority_sha256=first["manifest"]["authority_sha256"],
+        expected_manifest_sha256=first["manifest_metadata"]["sha256"],
+    )
     assert package["manifest"]["source_alignment_sha256"] == bam_sha
 
 
-def test_locus_slice_validates_and_deterministically_caps_primary_reads(tmp_path: Path) -> None:
+def test_locus_slice_validates_and_deterministically_caps_primary_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
 
     source = tmp_path / "source.bam"
     index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
     identity = service.source_stat_identity(source)
+    index_identity = service.source_stat_identity(index)
     common = dict(
         bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
         index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
+        source_index_identity=index_identity,
         source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
         contig="plasmid", start=1, end=600, max_reads=3, cache_root=tmp_path / "cache",
+    )
+    monkeypatch.setattr(
+        service,
+        "_verify_descriptor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("full source hash attempted")),
     )
     first = service.build_alignment_locus_slice(source, **common)
     second = service.build_alignment_locus_slice(source, **common)
@@ -432,6 +447,7 @@ def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(
         index_sha256=bai_sha,
         index_size_bytes=bai_size,
         source_identity=service.source_stat_identity(source),
+        source_index_identity=service.source_stat_identity(index),
         source_manifest_sha256="9" * 64,
         job_id="job-deep",
         session_id="7" * 24,
@@ -460,7 +476,14 @@ async def test_presentation_get_path_never_materializes_a_missing_package(
     from routers import ngs_alignment_sessions as router
     from services import ngs_alignment_sessions as service
 
-    job = SimpleNamespace(output_dir=str(tmp_path), child_output_dir=None)
+    job = SimpleNamespace(
+        output_dir=str(tmp_path), child_output_dir=None,
+        provenance={"result_integrity": {"alignment_presentations": [{
+            "session_id": "1" * 24,
+            "authority_sha256": "7" * 64,
+            "manifest_sha256": "8" * 64,
+        }]}},
+    )
     monkeypatch.setattr(
         service,
         "resolve_cached_alignment_presentation",
@@ -472,6 +495,7 @@ async def test_presentation_get_path_never_materializes_a_missing_package(
         yield tmp_path
 
     monkeypatch.setattr(router, "_validated_pinned_result_root", pinned_root)
+    (tmp_path / ".alignment-presentations").mkdir()
     monkeypatch.setattr(router, "_job_session_authority", lambda _job: {})
     monkeypatch.setattr(
         service,
@@ -481,6 +505,98 @@ async def test_presentation_get_path_never_materializes_a_missing_package(
 
     with pytest.raises(service.AlignmentSessionError, match="not prepared"):
         await router._prepare_presentation("job-a", "1" * 24, job)
+
+
+def test_presentation_publication_rejects_symlinked_authority_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    result_root = tmp_path / "result"
+    result_root.mkdir()
+    source_bam = result_root / "source.bam"
+    source_index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source_bam)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (result_root / ".alignment-presentations").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(service, "_creation_authority", lambda: ("a" * 40, "b" * 40))
+
+    with pytest.raises(service.AlignmentSessionError, match="presentation root"):
+        service.build_alignment_presentation(
+            source_bam,
+            bam_sha256=bam_sha,
+            bam_size_bytes=bam_size,
+            index=source_index,
+            index_sha256=bai_sha,
+            index_size_bytes=bai_size,
+            source_manifest_sha256="c" * 64,
+            job_id="job-a",
+            session_id="1" * 24,
+            mode="primary",
+            cache_root=result_root / ".alignment-presentations",
+        )
+    assert list(outside.iterdir()) == []
+
+    authority_root = result_root / ".alignment-presentations"
+    authority_root.unlink()
+    authority_root.mkdir()
+    (authority_root / "job-a").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(service.AlignmentSessionError, match="namespace"):
+        service.build_alignment_presentation(
+            source_bam,
+            bam_sha256=bam_sha,
+            bam_size_bytes=bam_size,
+            index=source_index,
+            index_sha256=bai_sha,
+            index_size_bytes=bai_size,
+            source_manifest_sha256="c" * 64,
+            job_id="job-a",
+            session_id="1" * 24,
+            mode="primary",
+            cache_root=authority_root,
+        )
+    assert list(outside.iterdir()) == []
+
+
+def test_cached_presentation_requires_persisted_manifest_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source_bam = tmp_path / "source.bam"
+    source_index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source_bam)
+    cache_root = tmp_path / ".alignment-presentations"
+    monkeypatch.setattr(service, "_creation_authority", lambda: ("a" * 40, "b" * 40))
+    package = service.build_alignment_presentation(
+        source_bam,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=source_index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_manifest_sha256="c" * 64,
+        job_id="job-a",
+        session_id="1" * 24,
+        mode="primary",
+        cache_root=cache_root,
+    )
+    expected_authority = package["manifest"]["authority_sha256"]
+    expected_manifest = package["manifest_metadata"]["sha256"]
+    manifest_path = package["manifest_path"]
+    tampered = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tampered["selected_read_count"] += 1
+    manifest_path.write_bytes(rfc8785.dumps(tampered))
+
+    with pytest.raises(service.AlignmentSessionError, match="manifest authority"):
+        service.resolve_cached_alignment_presentation(
+            "job-a",
+            "1" * 24,
+            cache_root=cache_root,
+            expected_authority_sha256=expected_authority,
+            expected_manifest_sha256=expected_manifest,
+        )
 
 
 def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
@@ -494,6 +610,7 @@ def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
         service.build_alignment_locus_slice(
             source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
             index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
+            source_index_identity=service.source_stat_identity(index),
             source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
             contig="plasmid", start=1, end=100, max_reads=3, cache_root=tmp_path / "cache",
         )

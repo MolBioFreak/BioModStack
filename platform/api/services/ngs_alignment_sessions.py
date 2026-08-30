@@ -12,6 +12,7 @@ import os
 import random
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import tempfile
@@ -19,9 +20,10 @@ import threading
 import time
 from dataclasses import dataclass
 from collections import OrderedDict
+from contextlib import contextmanager
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator, cast
+from typing import Any, BinaryIO, Iterator, Mapping, cast
 
 import rfc8785
 import pysam
@@ -40,8 +42,8 @@ MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
 ALIGNMENT_PREVIEW_TARGET_READS = 2_000
-ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v2"
-ALIGNMENT_PRESENTATION_POLICY_VERSION = 2
+ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v3"
+ALIGNMENT_PRESENTATION_POLICY_VERSION = 3
 ALIGNMENT_PREVIEW_MAX_BYTES = 32 * 1024 * 1024
 ALIGNMENT_PREVIEW_MAX_RECORDS = 20_000
 ALIGNMENT_COVERAGE_MAX_BINS = 4_096
@@ -172,6 +174,38 @@ def _open_regular_file_no_symlinks(path: Path) -> BinaryIO:
     except (OSError, ValueError) as exc:
         os.close(descriptor)
         raise AlignmentSessionError("unsafe artifact path") from exc
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _open_directory_descriptor_no_symlinks(path: Path) -> int:
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) >= 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+        try:
+            descriptor = os.dup(int(parts[4]))
+        except OSError as exc:
+            raise AlignmentSessionError("presentation root is unsafe") from exc
+        components = parts[5:]
+    else:
+        descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        components = parts[1:]
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise AlignmentSessionError("presentation root is unsafe")
+        for component in components:
+            next_descriptor = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except (OSError, ValueError) as exc:
+        os.close(descriptor)
+        raise AlignmentSessionError("presentation root is unsafe") from exc
     except Exception:
         os.close(descriptor)
         raise
@@ -2089,7 +2123,16 @@ def resolve_session_alignment_bundle(
 
 
 def source_stat_identity(path: Path) -> dict[str, int]:
-    handle = _open_regular_file_no_symlinks(path)
+    absolute = Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+        try:
+            descriptor = os.dup(int(parts[4]))
+        except OSError as exc:
+            raise AlignmentSessionError("source artifact identity is unavailable") from exc
+        handle = os.fdopen(descriptor, "rb", closefd=True)
+    else:
+        handle = _open_regular_file_no_symlinks(path)
     try:
         observed = os.fstat(handle.fileno())
         return {
@@ -2101,6 +2144,57 @@ def source_stat_identity(path: Path) -> dict[str, int]:
         }
     finally:
         handle.close()
+
+
+def _canonical_stat_identity(identity: Mapping[str, Any]) -> dict[str, str]:
+    return {key: str(int(value)) for key, value in sorted(identity.items())}
+
+
+@contextmanager
+def open_presentation_source_bundle(
+    package: dict[str, Any],
+    pinned_result_root: Path,
+) -> Iterator[tuple[Path, Path, dict[str, int], dict[str, int]]]:
+    manifest = package.get("manifest")
+    if not isinstance(manifest, dict):
+        raise AlignmentSessionError("alignment presentation source authority is unavailable")
+    alignment_relative = manifest.get("source_alignment_relative_path")
+    index_relative = manifest.get("source_index_relative_path")
+    if not isinstance(alignment_relative, str) or not isinstance(index_relative, str):
+        raise AlignmentSessionError("alignment presentation source paths are unavailable")
+    alignment_path = pinned_result_root / _safe_presentation_relative_path(
+        alignment_relative, pinned_result_root, pinned_result_root,
+    )
+    index_path = pinned_result_root / _safe_presentation_relative_path(
+        index_relative, pinned_result_root, pinned_result_root,
+    )
+    alignment_handle = _open_regular_file_no_symlinks(alignment_path)
+    index_handle: BinaryIO | None = None
+    try:
+        index_handle = _open_regular_file_no_symlinks(index_path)
+        alignment_identity = source_stat_identity(Path(f"/proc/self/fd/{alignment_handle.fileno()}"))
+        index_identity = source_stat_identity(Path(f"/proc/self/fd/{index_handle.fileno()}"))
+        expected_alignment_identity = {key: int(value) for key, value in manifest["source_identity"].items()}
+        expected_index_identity = {key: int(value) for key, value in manifest["source_index_identity"].items()}
+        if (
+            alignment_identity != expected_alignment_identity
+            or index_identity != expected_index_identity
+            or alignment_identity["size_bytes"] != manifest.get("source_alignment_size_bytes")
+            or index_identity["size_bytes"] != manifest.get("source_index_size_bytes")
+        ):
+            raise AlignmentSessionError("alignment presentation source identity changed")
+        yield (
+            Path(f"/proc/self/fd/{alignment_handle.fileno()}"),
+            Path(f"/proc/self/fd/{index_handle.fileno()}"),
+            alignment_identity,
+            index_identity,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AlignmentSessionError("alignment presentation source identity is invalid") from exc
+    finally:
+        if index_handle is not None:
+            index_handle.close()
+        alignment_handle.close()
 
 
 def _verify_descriptor(handle: BinaryIO, expected_size: int, expected_sha256: str) -> dict[str, int]:
@@ -2192,10 +2286,126 @@ def _creation_authority() -> tuple[str, str | None]:
 
 def _presentation_root(cache_root: Path | None, source_bam: Path | None = None) -> Path:
     if cache_root is not None:
-        return cache_root.resolve()
+        return Path(os.path.abspath(cache_root))
     if source_bam is None:
         raise AlignmentSessionError("pinned presentation root is required")
-    return (source_bam.parent / ".alignment-presentations").resolve()
+    return Path(os.path.abspath(source_bam.parent / ".alignment-presentations"))
+
+
+@contextmanager
+def open_presentation_authority_root(cache_root: Path, *, create: bool) -> Iterator[Path]:
+    requested = Path(os.path.abspath(cache_root))
+    parts = requested.parts
+    if len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+        if not stat.S_ISDIR(os.fstat(int(parts[4])).st_mode):
+            raise AlignmentSessionError("presentation root is unsafe")
+        yield requested
+        return
+    parent_descriptor = _open_directory_descriptor_no_symlinks(requested.parent)
+    child_descriptor: int | None = None
+    try:
+        if create:
+            try:
+                os.mkdir(requested.name, mode=0o750, dir_fd=parent_descriptor)
+            except FileExistsError:
+                pass
+        try:
+            child_descriptor = os.open(
+                requested.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=parent_descriptor,
+            )
+        except OSError as exc:
+            raise AlignmentSessionError("presentation root is unsafe or unavailable") from exc
+        yield Path(f"/proc/self/fd/{child_descriptor}")
+    finally:
+        if child_descriptor is not None:
+            os.close(child_descriptor)
+        os.close(parent_descriptor)
+
+
+def _safe_presentation_relative_path(value: str | None, fallback: Path, root: Path) -> str:
+    if value is None:
+        try:
+            value = fallback.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise AlignmentSessionError("presentation source path is outside result authority") from exc
+    relative = Path(value)
+    if not value or relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise AlignmentSessionError("presentation source relative path is unsafe")
+    return relative.as_posix()
+
+
+@contextmanager
+def _open_presentation_namespace(root: Path, job_id: str, session_id: str, *, create: bool) -> Iterator[Path]:
+    if re.fullmatch(r"[A-Za-z0-9._-]{1,128}", job_id) is None or job_id in {".", ".."}:
+        raise AlignmentSessionError("presentation job namespace is invalid")
+    if re.fullmatch(r"[0-9a-f]{24}", session_id) is None:
+        raise AlignmentSessionError("presentation session namespace is invalid")
+    descriptor = _open_directory_descriptor_no_symlinks(root)
+    try:
+        for component in (job_id, session_id):
+            if create:
+                try:
+                    os.mkdir(component, mode=0o750, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            try:
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except OSError as exc:
+                raise AlignmentSessionError("presentation namespace is unsafe or unavailable") from exc
+            os.close(descriptor)
+            descriptor = child
+        yield Path(f"/proc/self/fd/{descriptor}")
+    finally:
+        os.close(descriptor)
+
+
+def _pin_presentation_root(*, create: bool):
+    def decorate(function: Any) -> Any:
+        @wraps(function)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            raw_root = kwargs.get("cache_root")
+            if not isinstance(raw_root, Path):
+                raise AlignmentSessionError("pinned presentation root is required")
+            requested = Path(os.path.abspath(raw_root))
+            parts = requested.parts
+            already_pinned = len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit()
+            if create:
+                bam = Path(args[0]) if args else Path(kwargs["bam"])
+                index = Path(kwargs["index"])
+                kwargs["source_alignment_relative_path"] = _safe_presentation_relative_path(
+                    kwargs.get("source_alignment_relative_path"), bam, requested.parent,
+                )
+                kwargs["source_index_relative_path"] = _safe_presentation_relative_path(
+                    kwargs.get("source_index_relative_path"), index, requested.parent,
+                )
+            if already_pinned:
+                return function(*args, **kwargs)
+            with open_presentation_authority_root(requested, create=create) as pinned_root:
+                if create:
+                    job_id = str(kwargs.get("job_id") or "")
+                    session_id = str(kwargs.get("session_id") or "")
+                else:
+                    job_id = str(args[0]) if args else str(kwargs.get("job_id") or "")
+                    session_id = str(args[1]) if len(args) > 1 else str(kwargs.get("session_id") or "")
+                with _open_presentation_namespace(pinned_root, job_id, session_id, create=create) as namespace_root:
+                    kwargs["cache_root"] = pinned_root
+                    kwargs["presentation_namespace_root"] = namespace_root
+                    result = function(*args, **kwargs)
+                if isinstance(result, dict):
+                    manifest = result.get("manifest")
+                    authority_sha256 = manifest.get("authority_sha256") if isinstance(manifest, dict) else None
+                    if not isinstance(authority_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None:
+                        raise AlignmentSessionError("presentation package authority is invalid")
+                    result_root = requested / job_id / session_id / authority_sha256
+                    for key in ("bam_path", "index_path", "coverage_path", "manifest_path"):
+                        path = result.get(key)
+                        if isinstance(path, Path):
+                            result[key] = result_root / path.name
+                return result
+        return wrapped
+    return decorate
 
 
 def _locus_cache_root(cache_root: Path | None) -> Path:
@@ -2249,7 +2459,12 @@ def _cleanup_locus_cache(
         raise AlignmentSessionError("locus slice cache capacity unavailable")
 
 
-def _load_derived_package(directory: Path) -> dict[str, Any] | None:
+def _load_derived_package(
+    directory: Path,
+    *,
+    expected_authority_sha256: str | None = None,
+    expected_manifest_sha256: str | None = None,
+) -> dict[str, Any] | None:
     manifest_path = directory / "manifest.json"
     paths = {
         "bam": directory / "alignment-preview.bam",
@@ -2259,8 +2474,19 @@ def _load_derived_package(directory: Path) -> dict[str, Any] | None:
     if not manifest_path.is_file() or manifest_path.is_symlink():
         return None
     try:
-        manifest = json.loads(manifest_path.read_bytes())
-        if manifest.get("schema") != "bms.ngs.alignment-presentation-manifest.v2":
+        manifest_bytes = manifest_path.read_bytes()
+        manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+        if expected_manifest_sha256 is not None and manifest_digest != expected_manifest_sha256:
+            return None
+        manifest = json.loads(manifest_bytes)
+        if manifest.get("schema") != "bms.ngs.alignment-presentation-manifest.v3":
+            return None
+        authority = manifest.get("authority")
+        if not isinstance(authority, dict):
+            return None
+        authority_digest = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
+        directory_authority = expected_authority_sha256 or directory.name
+        if manifest.get("authority_sha256") != authority_digest or directory_authority != authority_digest:
             return None
         metadata = {}
         for key, path in paths.items():
@@ -2282,7 +2508,6 @@ def _load_derived_package(directory: Path) -> dict[str, Any] | None:
                 "source_index_sha256": manifest["source_index_sha256"],
                 "policy": ALIGNMENT_PREVIEW_POLICY,
             })
-        manifest_bytes = manifest_path.read_bytes()
         return {
             "bam_path": paths["bam"], "bam_metadata": metadata["bam"],
             "index_path": paths["index"], "index_metadata": metadata["index"],
@@ -2290,7 +2515,7 @@ def _load_derived_package(directory: Path) -> dict[str, Any] | None:
             "manifest_path": manifest_path,
             "manifest_metadata": _derived_metadata(
                 manifest_path, "alignment_presentation_manifest", manifest["source_manifest_sha256"],
-                digest=hashlib.sha256(manifest_bytes).hexdigest(), size=len(manifest_bytes),
+                digest=manifest_digest, size=len(manifest_bytes),
             ),
             "manifest": manifest,
         }
@@ -2298,21 +2523,39 @@ def _load_derived_package(directory: Path) -> dict[str, Any] | None:
         return None
 
 
+@_pin_presentation_root(create=False)
 def resolve_cached_alignment_presentation(
-    job_id: str, session_id: str, *, cache_root: Path | None = None,
+    job_id: str,
+    session_id: str,
+    *,
+    cache_root: Path | None = None,
+    expected_authority_sha256: str,
+    expected_manifest_sha256: str,
+    presentation_namespace_root: Path | None = None,
 ) -> dict[str, Any]:
-    root = _presentation_root(cache_root)
-    if not root.is_dir():
-        raise AlignmentSessionError("alignment presentation is not prepared")
-    matches = []
-    for manifest_path in root.glob("**/manifest.json"):
-        candidate = manifest_path.parent
-        package = _load_derived_package(candidate)
-        if package is not None and package["manifest"].get("job_id") == job_id and package["manifest"].get("session_id") == session_id:
-            matches.append(package)
-    if len(matches) != 1:
-        raise AlignmentSessionError("alignment presentation is not prepared")
-    return matches[0]
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", expected_authority_sha256) is None
+        or re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+    namespace = presentation_namespace_root or (_presentation_root(cache_root) / job_id / session_id)
+    candidate = namespace / expected_authority_sha256
+    if candidate.is_symlink() or not candidate.is_dir():
+        raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+    with open_presentation_authority_root(candidate, create=False) as pinned_candidate:
+        package = _load_derived_package(
+            pinned_candidate,
+            expected_authority_sha256=expected_authority_sha256,
+            expected_manifest_sha256=expected_manifest_sha256,
+        )
+    if (
+        package is None
+        or package["manifest"].get("job_id") != job_id
+        or package["manifest"].get("session_id") != session_id
+        or package["manifest"].get("authority_sha256") != expected_authority_sha256
+    ):
+        raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+    return package
 
 
 def _serialize_alignment_presentation_generation(function: Any) -> Any:
@@ -2333,11 +2576,16 @@ def _serialize_alignment_presentation_generation(function: Any) -> Any:
 
 
 @_serialize_alignment_presentation_generation
+@_pin_presentation_root(create=True)
 def build_alignment_presentation(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path,
     index_sha256: str, index_size_bytes: int, source_manifest_sha256: str,
     job_id: str, session_id: str, mode: str, cache_root: Path | None = None,
     artifact_set_sha256: str | None = None, alignment_pair_sha256: str | None = None,
+    source_alignment_relative_path: str | None = None,
+    source_index_relative_path: str | None = None,
+    expected_manifest_sha256: str | None = None,
+    presentation_namespace_root: Path | None = None,
     target_reads: int = ALIGNMENT_PREVIEW_TARGET_READS,
     max_output_bytes: int = ALIGNMENT_PREVIEW_MAX_BYTES,
     max_coverage_bins: int = ALIGNMENT_COVERAGE_MAX_BINS,
@@ -2350,42 +2598,83 @@ def build_alignment_presentation(
         raise AlignmentSessionError("alignment presentation policy is invalid")
     if re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None or mode not in SESSION_MODES:
         raise AlignmentSessionError("alignment presentation authority is invalid")
+    if not isinstance(source_alignment_relative_path, str) or not isinstance(source_index_relative_path, str):
+        raise AlignmentSessionError("alignment presentation source paths are unavailable")
     creation_revision, creation_source_tree = _creation_authority()
+    admitted_source_identity = source_stat_identity(bam)
+    admitted_index_identity = source_stat_identity(index)
     authority = {
-        "schema": "bms.ngs.alignment-presentation-authority.v2", "job_id": job_id,
+        "schema": "bms.ngs.alignment-presentation-authority.v3", "job_id": job_id,
         "session_id": session_id, "mode": mode, "source_manifest_sha256": source_manifest_sha256,
         "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
         "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
+        "source_alignment_relative_path": source_alignment_relative_path,
+        "source_index_relative_path": source_index_relative_path,
+        "source_identity": _canonical_stat_identity(admitted_source_identity),
+        "source_index_identity": _canonical_stat_identity(admitted_index_identity),
         "artifact_set_sha256": artifact_set_sha256, "alignment_pair_sha256": alignment_pair_sha256,
+        "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
         "policy": {"id": ALIGNMENT_PREVIEW_POLICY, "version": ALIGNMENT_PRESENTATION_POLICY_VERSION,
                    "target_reads": target_reads, "max_preview_bytes": max_output_bytes,
                    "max_coverage_bins": max_coverage_bins, "max_seconds": max_seconds},
     }
     cache_key = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
-    root = _presentation_root(cache_root, bam)
-    destination = root / job_id / session_id / cache_key
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = destination.parent / f".{cache_key}.lock"
-    with lock_path.open("a+b") as producer_lock:
+    root_parent = _presentation_root(cache_root, bam)
+    namespace = presentation_namespace_root or (root_parent / job_id / session_id)
+    destination = namespace / cache_key
+    namespace_parts = namespace.parts
+    if not (len(namespace_parts) == 5 and namespace_parts[1:4] == ("proc", "self", "fd") and namespace_parts[4].isdigit()):
+        raise AlignmentSessionError("presentation namespace is not pinned")
+    lock_fd = os.open(
+        f".{cache_key}.lock",
+        os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o640,
+        dir_fd=int(namespace_parts[4]),
+    )
+    with os.fdopen(lock_fd, "a+b") as producer_lock:
         fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX)
-        cached = _load_derived_package(destination)
-        if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
-            return cached
-        temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=destination.parent))
+        if destination.exists() or destination.is_symlink():
+            if destination.is_symlink() or expected_manifest_sha256 is None:
+                raise AlignmentSessionError("alignment presentation destination is unsafe or unauthorised")
+            with open_presentation_authority_root(destination, create=False) as pinned_destination:
+                cached = _load_derived_package(
+                    pinned_destination,
+                    expected_authority_sha256=cache_key,
+                    expected_manifest_sha256=expected_manifest_sha256,
+                )
+            if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
+                return cached
+            raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+        temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=namespace))
         source_handle = index_handle = None
+        candidate_db: sqlite3.Connection | None = None
         deadline = time.monotonic() + max_seconds
         try:
             source_handle = _open_regular_file_no_symlinks(bam)
             source_identity = _verify_descriptor(source_handle, bam_size_bytes, bam_sha256)
             index_handle = _open_regular_file_no_symlinks(index)
             index_identity = _verify_descriptor(index_handle, index_size_bytes, index_sha256)
+            if source_identity != admitted_source_identity or index_identity != admitted_index_identity:
+                raise AlignmentSessionError("alignment presentation source changed during materialization")
+            candidate_db_path = temporary / "preview-candidates.sqlite3"
+            candidate_db = sqlite3.connect(candidate_db_path)
+            candidate_db.execute("PRAGMA journal_mode=OFF")
+            candidate_db.execute("PRAGMA synchronous=OFF")
+            candidate_db.execute("PRAGMA temp_store=FILE")
+            candidate_db.execute("PRAGMA cache_size=-8192")
+            candidate_db.execute(
+                "CREATE TABLE candidates (read_id TEXT PRIMARY KEY, contig TEXT NOT NULL, "
+                "tile INTEGER NOT NULL, strand TEXT NOT NULL, rank TEXT NOT NULL) WITHOUT ROWID"
+            )
+            candidate_db.execute(
+                "CREATE INDEX candidate_stratum_rank ON candidates (contig, tile, strand, rank, read_id)"
+            )
             with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
                 header = source.header.to_dict()
                 references = list(zip(source.references, source.lengths, strict=True))
                 bin_width = max(1, math.ceil(sum(length for _name, length in references) / max_coverage_bins))
                 tile_widths = {name: max(1, math.ceil(length / 64)) for name, length in references}
                 coverage = {name: [0] * math.ceil(length / bin_width) for name, length in references}
-                read_strata: dict[str, tuple[str, int, str]] = {}
                 source_records = source_alignment_records = forward = reverse = 0
                 source_record_counts = {
                     "mapped_primary": 0, "secondary": 0,
@@ -2418,9 +2707,15 @@ def build_alignment_presentation(
                     flag_counts[str(read.flag)] = flag_counts.get(str(read.flag), 0) + 1
                     contig = source.get_reference_name(read.reference_id)
                     source_contig_counts[contig] = source_contig_counts.get(contig, 0) + 1
-                    read_strata.setdefault(
-                        read.query_name,
-                        (contig, max(0, read.reference_start) // tile_widths[contig], strand),
+                    candidate_db.execute(
+                        "INSERT OR IGNORE INTO candidates(read_id, contig, tile, strand, rank) VALUES (?, ?, ?, ?, ?)",
+                        (
+                            read.query_name,
+                            contig,
+                            max(0, read.reference_start) // tile_widths[contig],
+                            strand,
+                            _rank_read(bam_sha256, read.query_name),
+                        ),
                     )
                     for block_start, block_end in read.get_blocks():
                         first_bin = block_start // bin_width
@@ -2429,17 +2724,23 @@ def build_alignment_presentation(
                             left = max(block_start, bin_index * bin_width)
                             right = min(block_end, (bin_index + 1) * bin_width)
                             coverage[contig][bin_index] += max(0, right - left)
-            stratum_ids: dict[tuple[str, int, str], list[str]] = {}
-            for read_id, stratum in read_strata.items():
-                stratum_ids.setdefault(stratum, []).append(read_id)
-            strata = sorted(stratum_ids)
+            candidate_db.commit()
+            stratum_counts = {
+                (str(contig), int(tile), str(strand)): int(count)
+                for contig, tile, strand, count in candidate_db.execute(
+                    "SELECT contig, tile, strand, COUNT(*) FROM candidates "
+                    "GROUP BY contig, tile, strand ORDER BY contig, tile, strand"
+                )
+            }
+            source_primary_read_count = sum(stratum_counts.values())
+            strata = sorted(stratum_counts)
             quotas = {stratum: 0 for stratum in strata}
             if target_reads >= len(strata):
                 quotas = {stratum: 1 for stratum in strata}
                 remaining = target_reads - len(strata)
             else:
                 remaining = target_reads
-            capacities = {stratum: len(stratum_ids[stratum]) - quotas[stratum] for stratum in strata}
+            capacities = {stratum: stratum_counts[stratum] - quotas[stratum] for stratum in strata}
             total_capacity = sum(capacities.values())
             shares = []
             if remaining and total_capacity:
@@ -2451,11 +2752,20 @@ def build_alignment_presentation(
                 leftover = remaining - sum(math.floor(remaining * capacities[s] / total_capacity) for s in strata)
                 for _fraction, stratum in sorted(shares, key=lambda item: (-item[0], item[1]))[:leftover]:
                     quotas[stratum] += 1
-            selected_ids_set = {
-                read_id
-                for stratum in strata
-                for read_id in sorted(stratum_ids[stratum], key=lambda value: _rank_read(bam_sha256, value))[:quotas[stratum]]
-            }
+            selected_ids_set: set[str] = set()
+            selected_strata: dict[str, tuple[str, int, str]] = {}
+            for stratum in strata:
+                contig, tile, strand = stratum
+                for (read_id,) in candidate_db.execute(
+                    "SELECT read_id FROM candidates WHERE contig = ? AND tile = ? AND strand = ? "
+                    "ORDER BY rank, read_id LIMIT ?",
+                    (contig, tile, strand, quotas[stratum]),
+                ):
+                    selected_ids_set.add(str(read_id))
+                    selected_strata[str(read_id)] = stratum
+            candidate_db.close()
+            candidate_db = None
+            candidate_db_path.unlink()
             selected: dict[str, list[Any]] = {read_id: [] for read_id in selected_ids_set}
             source_handle.seek(0)
             with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
@@ -2504,16 +2814,17 @@ def build_alignment_presentation(
             selected_contig_counts: dict[str, int] = {}
             selected_stratum_counts: dict[str, int] = {}
             for read_id in retained_ids:
-                contig, tile, strand = read_strata[read_id]
+                contig, tile, strand = selected_strata[read_id]
                 selected_contig_counts[contig] = selected_contig_counts.get(contig, 0) + 1
                 key = f"{contig}:{tile}:{strand}"
                 selected_stratum_counts[key] = selected_stratum_counts.get(key, 0) + 1
             unrepresented = [
                 f"{contig}:{tile}:{strand}" for contig, tile, strand in strata
-                if not any(read_id in retained_ids for read_id in stratum_ids[(contig, tile, strand)])
+                if selected_stratum_counts.get(f"{contig}:{tile}:{strand}", 0) == 0
             ]
             manifest = {
-                "schema": "bms.ngs.alignment-presentation-manifest.v2", "authority_sha256": cache_key,
+                "schema": "bms.ngs.alignment-presentation-manifest.v3", "authority_sha256": cache_key,
+                "authority": authority,
                 "job_id": job_id, "session_id": session_id, "mode": mode,
                 "source_manifest_sha256": source_manifest_sha256,
                 "package_manifest_sha256": source_manifest_sha256,
@@ -2522,6 +2833,8 @@ def build_alignment_presentation(
                 "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
                 "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
                 "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
+                "source_alignment_relative_path": source_alignment_relative_path,
+                "source_index_relative_path": source_index_relative_path,
                 "source_identity": {
                     key: (value if key == "size_bytes" else str(value))
                     for key, value in source_identity.items()
@@ -2545,7 +2858,7 @@ def build_alignment_presentation(
                 },
                 "source_alignment_record_count": source_alignment_records,
                 "source_record_counts": source_record_counts,
-                "source_primary_mapped_read_count": len(read_strata),
+                "source_primary_mapped_read_count": source_primary_read_count,
                 "source_primary_mapped_alignment_record_count": source_records,
                 "source_strand_counts": {"forward": forward, "reverse": reverse},
                 "selected_strand_counts": {"forward": selected_forward, "reverse": selected_reverse},
@@ -2566,8 +2879,6 @@ def build_alignment_presentation(
                 os.fsync(manifest_handle.fileno())
             finally:
                 manifest_handle.close()
-            if destination.exists():
-                shutil.rmtree(destination)
             os.replace(temporary, destination)
             directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
@@ -2580,11 +2891,17 @@ def build_alignment_presentation(
                 raise
             raise AlignmentSessionError(f"alignment presentation generation failed: {exc}") from exc
         finally:
+            if candidate_db is not None:
+                candidate_db.close()
             if index_handle is not None:
                 index_handle.close()
             if source_handle is not None:
                 source_handle.close()
-        package = _load_derived_package(destination)
+        with open_presentation_authority_root(destination, create=False) as pinned_destination:
+            package = _load_derived_package(
+                pinned_destination,
+                expected_authority_sha256=cache_key,
+            )
         if package is None:
             raise AlignmentSessionError("alignment presentation failed integrity validation")
         return package
@@ -2610,7 +2927,8 @@ def build_alignment_preview(
 
 def build_alignment_locus_slice(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,
-    index_size_bytes: int, source_identity: dict[str, int], source_manifest_sha256: str,
+    index_size_bytes: int, source_identity: dict[str, int], source_index_identity: dict[str, int],
+    source_manifest_sha256: str,
     job_id: str, session_id: str, contig: str, start: int, end: int, max_reads: int,
     cache_root: Path | None = None, max_records: int = LOCUS_MAX_RECORDS,
     max_output_bytes: int = LOCUS_MAX_BYTES, max_seconds: float = LOCUS_MAX_SECONDS,
@@ -2625,7 +2943,7 @@ def build_alignment_locus_slice(
         or max_output_bytes < 1 or not math.isfinite(max_seconds) or max_seconds <= 0
     ):
         raise AlignmentSessionError("locus policy is invalid")
-    if source_stat_identity(bam) != source_identity:
+    if source_stat_identity(bam) != source_identity or source_stat_identity(index) != source_index_identity:
         raise AlignmentSessionError("source identity mismatch")
     policy = {
         "id": "bounded-full-source-locus-slice", "version": 1,
@@ -2638,7 +2956,8 @@ def build_alignment_locus_slice(
         "source_manifest_sha256": source_manifest_sha256, "source_alignment_sha256": bam_sha256,
         "source_alignment_size_bytes": bam_size_bytes, "source_index_sha256": index_sha256,
         "source_index_size_bytes": index_size_bytes, "contig": contig, "start_1based": start,
-        "end_1based": end, "policy": policy,
+        "end_1based": end, "source_identity": _canonical_stat_identity(source_identity),
+        "source_index_identity": _canonical_stat_identity(source_index_identity), "policy": policy,
     }
     slice_id = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
     cache_base = _locus_cache_root(cache_root)
@@ -2662,20 +2981,13 @@ def build_alignment_locus_slice(
             reserve_entries=1,
         )
         temporary = Path(tempfile.mkdtemp(prefix=f".{slice_id}-", dir=cache_base))
-        source_handle = index_handle = None
         started = time.monotonic()
         deadline = started + max_seconds
         try:
-            source_handle = _open_regular_file_no_symlinks(bam)
-            if _verify_descriptor(source_handle, bam_size_bytes, bam_sha256) != source_identity:
-                raise AlignmentSessionError("source identity mismatch")
-            index_handle = _open_regular_file_no_symlinks(index)
-            _verify_descriptor(index_handle, index_size_bytes, index_sha256)
             candidate_heap: list[tuple[int, str]] = []
             overlapping_ids: set[str] = set()
             with pysam.AlignmentFile(
-                _descriptor_path(source_handle.fileno()), "rb",
-                index_filename=_descriptor_path(index_handle.fileno()),
+                str(bam), "rb", index_filename=str(index),
             ) as source:
                 header = source.header.to_dict()
                 for read in source.fetch(contig, start - 1, end):
@@ -2698,8 +3010,7 @@ def build_alignment_locus_slice(
             total_records = 0
             record_cap_applied = False
             with pysam.AlignmentFile(
-                _descriptor_path(source_handle.fileno()), "rb",
-                index_filename=_descriptor_path(index_handle.fileno()),
+                str(bam), "rb", index_filename=str(index),
             ) as source:
                 for read in source.fetch(contig, start - 1, end):
                     if time.monotonic() > deadline:
@@ -2732,6 +3043,8 @@ def build_alignment_locus_slice(
             if time.monotonic() > deadline:
                 raise AlignmentSessionError("locus slice time limit exceeded")
             locus_index = Path(f"{locus_bam}.bai")
+            if source_stat_identity(bam) != source_identity or source_stat_identity(index) != source_index_identity:
+                raise AlignmentSessionError("source identity changed during locus slice generation")
             receipt = {
                 "schema": "bms.ngs.alignment-locus-slice-manifest.v1", "slice_id": slice_id,
                 "job_id": job_id, "session_id": session_id,
@@ -2740,6 +3053,8 @@ def build_alignment_locus_slice(
                 "source_alignment_size_bytes": bam_size_bytes,
                 "source_index_sha256": index_sha256,
                 "source_index_size_bytes": index_size_bytes,
+                "source_identity": _canonical_stat_identity(source_identity),
+                "source_index_identity": _canonical_stat_identity(source_index_identity),
                 "contig": contig, "start_1based": start, "end_1based": end,
                 "overlapping_read_count": overlapping, "selected_read_count": len(selected_ids),
                 "selected_record_count": selected_records,
@@ -2800,11 +3115,6 @@ def build_alignment_locus_slice(
             if isinstance(exc, AlignmentSessionError):
                 raise
             raise AlignmentSessionError(f"locus slice generation failed: {exc}") from exc
-        finally:
-            if index_handle is not None:
-                index_handle.close()
-            if source_handle is not None:
-                source_handle.close()
     finally:
         if lock_handle is not None:
             try:

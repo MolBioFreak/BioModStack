@@ -176,7 +176,10 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     monkeypatch.setattr(
         service.ngs_alignment_sessions,
         "build_alignment_presentation",
-        lambda *_args, **kwargs: presentation_calls.append(kwargs) or {"manifest": {"state": "ready"}},
+        lambda *_args, **kwargs: presentation_calls.append(kwargs) or {
+            "manifest": {"authority_sha256": "7" * 64},
+            "manifest_metadata": {"sha256": "8" * 64},
+        },
     )
     monkeypatch.setattr(service, "attach_resource_usage_receipt", lambda params, _receipt: dict(params))
 
@@ -204,7 +207,8 @@ async def test_external_signal_alignment_completion_persists_primary_package_aut
     }
     assert {call["session_id"] for call in presentation_calls} == {"1" * 24, "6" * 24}
     assert all(call["job_id"] == job.id for call in presentation_calls)
-    assert all(call["cache_root"] == output_root / ".alignment-presentations" for call in presentation_calls)
+    assert all(call["cache_root"].name == ".alignment-presentations" for call in presentation_calls)
+    assert all(str(call["cache_root"]).startswith("/proc/self/fd/") for call in presentation_calls)
 
 
 def test_package_builder_rejects_exact_five_field_duplicate_descriptors(
@@ -693,6 +697,24 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
         return {**dict(params or {}), "resource_usage_receipts": [dict(receipt)]}
 
     monkeypatch.setattr(service, "attach_resource_usage_receipt", fake_attach, raising=False)
+    materialization_calls: list[dict[str, Any]] = []
+
+    async def fake_materialize(*_args, **kwargs):
+        materialization_calls.append(dict(kwargs))
+        return [
+            {
+                "session_id": "1" * 24,
+                "authority_sha256": "2" * 64,
+                "manifest_sha256": "3" * 64,
+            }
+        ]
+
+    monkeypatch.setattr(
+        service,
+        "_materialize_ready_alignment_presentations",
+        fake_materialize,
+        raising=False,
+    )
 
     integrity = await service.validate_and_prepare_ont_fastq_qc_completion(
         cast(Any, job),
@@ -707,5 +729,20 @@ async def test_finalizer_persists_stage_mirrors_without_a_transient_all_stages_f
     assert integrity["present_artifact_count"] == 34
     assert integrity["unavailable_artifact_count"] == 2
     assert integrity["source_fastq_sha256"] == "f" * 64
+    assert integrity["alignment_presentations"] == [
+        {
+            "session_id": "1" * 24,
+            "authority_sha256": "2" * 64,
+            "manifest_sha256": "3" * 64,
+        }
+    ]
+    assert len(materialization_calls) == 1
+    materialization = materialization_calls[0]
+    assert materialization["job"] is job
+    assert str(materialization["pinned_result_root"]).startswith("/proc/self/fd/")
+    assert materialization["source_reference_sha256"] == reference_sha256
+    assert materialization["workflow_id"] == "ont_fastq_qc"
+    assert materialization["input_mode"] == "fastq"
+    assert materialization["package_artifact_set_sha256"] == integrity["artifact_set_sha256"]
     assert attached_receipts == [{"complete": True, "receipt_sha256": "9" * 64}]
     assert job.params["resource_usage_receipts"] == attached_receipts

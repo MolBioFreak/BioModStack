@@ -1372,14 +1372,46 @@ def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
             "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
 
 
+def _presentation_authority(job: Job, session_id: str) -> tuple[str, str]:
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
+    presentations = integrity.get("alignment_presentations") if isinstance(integrity, dict) else None
+    matches = [
+        item for item in presentations or []
+        if isinstance(item, dict) and item.get("session_id") == session_id
+    ]
+    if len(matches) != 1:
+        raise service.AlignmentSessionError("alignment presentation authority is unavailable")
+    authority_sha256 = matches[0].get("authority_sha256")
+    manifest_sha256 = matches[0].get("manifest_sha256")
+    if (
+        not isinstance(authority_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None
+        or not isinstance(manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+    ):
+        raise service.AlignmentSessionError("alignment presentation authority is invalid")
+    return authority_sha256, manifest_sha256
+
+
+@asynccontextmanager
+async def _prepared_presentation(job_id: str, session_id: str, job: Job):
+    authority_sha256, manifest_sha256 = _presentation_authority(job, session_id)
+    async with _validated_pinned_result_root(job) as pinned_result_root:
+        package = await run_in_threadpool(
+            service.resolve_cached_alignment_presentation,
+            job_id,
+            session_id,
+            cache_root=pinned_result_root / ".alignment-presentations",
+            expected_authority_sha256=authority_sha256,
+            expected_manifest_sha256=manifest_sha256,
+        )
+        yield package, pinned_result_root
+
+
 async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
-    root = _presentation_root_for_job(job)
-    return await run_in_threadpool(
-        service.resolve_cached_alignment_presentation,
-        job_id,
-        session_id,
-        cache_root=root,
-    )
+    async with _prepared_presentation(job_id, session_id, job) as (package, _pinned_result_root):
+        return package
 
 
 def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
@@ -1417,7 +1449,8 @@ def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]
             response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
 async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
     try:
-        return _presentation_response(job_id, session_id, await _prepare_presentation(job_id, session_id, authorized_job))
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            return _presentation_response(job_id, session_id, package)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
@@ -1434,14 +1467,13 @@ async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind
                                message="The governed presentation artifact was not found.",
                                job_id=job_id, resource="artifact")
     try:
-        package = await run_in_threadpool(service.resolve_cached_alignment_presentation, job_id, session_id,
-                                          cache_root=_presentation_root_for_job(authorized_job))
-        if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
-            raise service.AlignmentSessionError("alignment presentation not found")
-        path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
-                                  "coverage": ("coverage_path", "coverage_metadata"),
-                                  "manifest": ("manifest_path", "manifest_metadata")}[kind]
-        return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
+                raise service.AlignmentSessionError("alignment presentation identity does not match")
+            path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                      "coverage": ("coverage_path", "coverage_metadata"),
+                                      "manifest": ("manifest_path", "manifest_metadata")}[kind]
+            return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
@@ -1457,20 +1489,22 @@ async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAl
         return _ngs_error_response(status_code=400, code="NGS_RANGE_INVALID",
                                    message="The locus slice request is invalid.", job_id=job_id, resource="range")
     try:
-        presentation = await _prepare_presentation(job_id, session_id, authorized_job)
-        manifest = presentation["manifest"]
-        identity = {key: int(value) for key, value in manifest["source_identity"].items()}
-        async with _validated_pinned_result_root(authorized_job) as pinned_root:
-            bam, bam_metadata, index, index_metadata = await run_in_threadpool(
-                service.resolve_session_alignment_bundle, job_id, session_id, **_job_authority(authorized_job),
-                job_output_dir=pinned_root, pinned_root_descriptor=True)
-            package = await run_in_threadpool(
-                service.build_alignment_locus_slice, bam, bam_sha256=bam_metadata["sha256"],
-                bam_size_bytes=bam_metadata["size_bytes"], index=index,
-                index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
-                source_identity=identity, source_manifest_sha256=manifest["package_manifest_sha256"],
-                job_id=job_id, session_id=session_id, contig=body.contig,
-                start=body.start_1based, end=body.end_1based, max_reads=body.max_reads)
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, pinned_root):
+            manifest = presentation["manifest"]
+            with service.open_presentation_source_bundle(
+                presentation, pinned_root,
+            ) as (bam, index, identity, index_identity):
+                package = await run_in_threadpool(
+                    service.build_alignment_locus_slice, bam,
+                    bam_sha256=manifest["source_alignment_sha256"],
+                    bam_size_bytes=manifest["source_alignment_size_bytes"], index=index,
+                    index_sha256=manifest["source_index_sha256"],
+                    index_size_bytes=manifest["source_index_size_bytes"],
+                    source_identity=identity, source_index_identity=index_identity,
+                    source_manifest_sha256=manifest["package_manifest_sha256"],
+                    job_id=job_id, session_id=session_id, contig=body.contig,
+                    start=body.start_1based, end=body.end_1based, max_reads=body.max_reads,
+                )
         receipt = package["receipt"]
         base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{package['slice_id']}"
         return {"schema": "bms.ngs.alignment-locus-slice.v1", "job_id": job_id, "session_id": session_id,
@@ -1523,10 +1557,10 @@ async def get_alignment_preview(
             resource="artifact",
         )
     try:
-        package = await _prepare_presentation(job_id, session_id, authorized_job)
-        if kind == "bam":
-            return await _serve_artifact(package["bam_path"], package["bam_metadata"], request, job_id=job_id)
-        return await _serve_artifact(package["index_path"], package["index_metadata"], request, job_id=job_id)
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            if kind == "bam":
+                return await _serve_artifact(package["bam_path"], package["bam_metadata"], request, job_id=job_id)
+            return await _serve_artifact(package["index_path"], package["index_metadata"], request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 

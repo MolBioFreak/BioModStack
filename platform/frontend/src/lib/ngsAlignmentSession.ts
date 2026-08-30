@@ -108,8 +108,8 @@ export interface AlignmentPresentation {
         alignment_record_count: number;
     };
     policy: {
-        id: 'primary-read-presentation-v2';
-        version: 2;
+        id: 'primary-read-presentation-v3';
+        version: 3;
         target_reads: number;
         max_preview_bytes: number;
         max_coverage_bins: number;
@@ -408,7 +408,7 @@ export function normalizeAlignmentPresentation(
         throw new Error('Invalid alignment presentation authority binding.');
     }
     requireClosedKeys(receipt.policy, ['id', 'version', 'target_reads', 'max_preview_bytes', 'max_coverage_bins', 'max_seconds'], 'alignment presentation policy');
-    if (receipt.policy.id !== 'primary-read-presentation-v2' || receipt.policy.version !== 2
+    if (receipt.policy.id !== 'primary-read-presentation-v3' || receipt.policy.version !== 3
         || !isPositiveInteger(receipt.policy.target_reads) || !isPositiveInteger(receipt.policy.max_preview_bytes)
         || !isPositiveInteger(receipt.policy.max_coverage_bins)
         || typeof receipt.policy.max_seconds !== 'number' || !Number.isFinite(receipt.policy.max_seconds)

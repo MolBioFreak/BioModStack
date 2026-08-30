@@ -45,9 +45,11 @@
 - A tiny byte ceiling reduces the selected read count and keeps the BAM at or below the ceiling.
 - Source BAMs above the shared snapshot-cache limit can be streamed through one verified descriptor for presentation generation.
 - Full-source coverage includes all mapped primary records and reports exact bin width.
-- Cache-hit package resolution does not open or hash the source BAM.
+- Cache-hit package resolution is admitted only by the manifest digest persisted in job authority and does not open or hash the source BAM.
 - A presentation GET fails closed when terminal finalization did not materialize the package.
-- Terminal finalization materializes every ready primary or dimer-candidate session before publishing completed status.
+- Both ordinary FASTQ-QC and external signal-alignment terminal finalization materialize every ready primary or dimer-candidate session before publishing completed status.
+- A symlink substituted for the presentation authority root is rejected before publication.
+- Preview candidate inventory is disk-backed with a bounded SQLite page cache; selected identifiers alone enter process memory.
 
 **Implementation:**
 - Add a versioned presentation-policy contract.
@@ -87,7 +89,7 @@ platform/api/.venv/bin/python -m pytest platform/api/tests/test_ngs_alignment_se
 - Keep compatibility for the existing preview BAM/BAI paths by resolving them through the new package manifest.
 - Add receipt and coverage delivery.
 - Add bounded locus-slice preparation, a host-wide two-producer limit, bounded cache lifecycle, and digest-addressed artifact delivery.
-- Use source identity captured in the presentation manifest for constant-time unchanged-source admission. Revalidate fully only when device, inode, size, mtime, or ctime changes.
+- Bind source identity and relative paths into the persisted presentation receipt. Admit locus slicing in constant time only while device, inode, size, mtime, and ctime all match; fail closed on drift without request-time full hashing.
 
 **Focused command:**
 ```bash

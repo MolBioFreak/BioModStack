@@ -20,6 +20,7 @@ import {
     resolveBoundSessionLocus,
     resolveBrowserAlignmentTrackSource,
     resolveIgvReadLocus,
+    locusMatchesAlignmentSlice,
     resolvePendingSessionLocus,
     resolveSessionAuxiliaryTracks,
     replaceAlignmentTrackTransactionally,
@@ -2273,6 +2274,7 @@ export function NGSToolkit() {
     const selectedAlignmentSessionIdRef = useRef('');
     const igvLoadedSourceKeyRef = useRef('');
     const igvCurrentLocusRef = useRef<AlignmentReadLocus | null>(null);
+    const igvLocusSliceRef = useRef<AlignmentLocusSlice | null>(null);
     const [igvCurrentLocus, setIgvCurrentLocus] = useState<AlignmentReadLocus | null>(null);
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
@@ -2813,6 +2815,7 @@ export function NGSToolkit() {
             igvNavigationOwnerRef.current = null;
         }
         igvCurrentLocusRef.current = null;
+        igvLocusSliceRef.current = null;
         setIgvCurrentLocus(null);
         setIgvPresentation(null);
         setIgvLocusSlice(null);
@@ -4026,6 +4029,20 @@ export function NGSToolkit() {
                     const locusHandler = (loci: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
                         const nextLocus = resolveIgvReadLocus(loci);
+                        const mountedSlice = igvLocusSliceRef.current;
+                        if (mountedSlice && !locusMatchesAlignmentSlice(nextLocus, mountedSlice)) {
+                            igvLocusSliceGenerationRef.current += 1;
+                            igvLocusSliceRef.current = null;
+                            setIgvLocusSlice(null);
+                            setIgvReadsTrackLoaded(false);
+                            setIgvAutoLoadAttempted(false);
+                            if (typeof igvBrowser.findTracks === 'function' && typeof igvBrowser.removeTrack === 'function') {
+                                const staleTracks = igvBrowser.findTracks((track: UntypedApiValue) => (
+                                    track?.type === 'alignment' && track?.name === 'Bounded full-source locus slice'
+                                ));
+                                for (const track of staleTracks) igvBrowser.removeTrack(track);
+                            }
+                        }
                         igvCurrentLocusRef.current = nextLocus;
                         setIgvCurrentLocus(nextLocus);
                     };
@@ -4276,6 +4293,7 @@ export function NGSToolkit() {
             applyIgvAlignmentOptionsToTrack(loaded, {
                 displayMode: igvAlignmentDisplayMode, colorBy: igvAlignmentColorBy, groupBy: igvAlignmentGroupBy,
             });
+            igvLocusSliceRef.current = slice;
             setIgvLocusSlice(slice);
             setIgvReadsTrackLoaded(true);
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);

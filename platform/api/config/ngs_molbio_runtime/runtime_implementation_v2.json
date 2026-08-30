@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "7a7d48c5b9606991d05d2f6ea6bb2bba04955afbea41ab93455c4ffd71f9d989",
+  "content_sha256": "232f3b6e23ec52d2b81191790e6c4972137f644a9f3b9bc4da8cadd5eff2ab53",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -129,8 +129,8 @@
     },
     {
       "path": "docs/plans/2026-08-29-small-reference-large-bam-igv-repair.md",
-      "sha256": "a38c41e0b3fe5bf6538ef5c74b583b6fecbc5aafbdfeeed366cde0105af6d295",
-      "size_bytes": 11919
+      "sha256": "30130b995457c157183f435eeb9ad15fc86b3f02a76eb96b6caf47f2a12a3503",
+      "size_bytes": 12319
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
@@ -414,8 +414,8 @@
     },
     {
       "path": "platform/api/routers/ngs_alignment_sessions.py",
-      "sha256": "ae2d664f501bb485dc644ed01c6fde9291087064a4049492c4d267c9810e6ac7",
-      "size_bytes": 68848
+      "sha256": "9345685b36b29c888a17aea6d600bddfb1067eaf9319f2c2f02c07474e0952db",
+      "size_bytes": 70484
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
@@ -559,8 +559,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "fb0e9ff9bcc8f54c5105be02cbd71f4f44e327b0cb2b3cc29ced16ea031cd243",
-      "size_bytes": 136860
+      "sha256": "c55b133d9fff9260cf6cf09dea69a0c7aff8509d209e9c3d2942420bd27f4d78",
+      "size_bytes": 152625
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -609,8 +609,8 @@
     },
     {
       "path": "platform/api/services/ont_ngs_completion.py",
-      "sha256": "3d4fa390f138f637fc3ef26f76bb1142b1ef0f6f0a3a7a675bfea94ab4c37eb7",
-      "size_bytes": 28622
+      "sha256": "f677c14d3986a1f751e5e074952d3382443bf8efb7769c1bf26d0aa5760e299f",
+      "size_bytes": 31067
     },
     {
       "path": "platform/api/services/ont_ngs_contract.py",
@@ -679,8 +679,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "64f1176216a5ef576f739b5c5f87a74a49e171964a3cf3c97d479ae60b812120",
-      "size_bytes": 141740
+      "sha256": "a5a8c0fd37d9fff0f6e4d7de73172413552cf91425df3d21439d7d452f2c372d",
+      "size_bytes": 146164
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -689,8 +689,8 @@
     },
     {
       "path": "platform/api/tests/test_ont_ngs_completion.py",
-      "sha256": "f194d3ff3d01779e1e86402e509d973937d3927d0f5d5c46a91d1664f4ab09ee",
-      "size_bytes": 27317
+      "sha256": "4b2b76260e6018ad6b83383ff1aeb04bb47426b1bc5bece56394a65e33fa3fef",
+      "size_bytes": 28683
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
@@ -749,8 +749,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "64570c1a20b7eeeee94b0f987891d4273e74122b8993c671f4145eed4776783d",
-      "size_bytes": 323394
+      "sha256": "47a6f4305b46bb853cafd7b1cbff2f60ed2f91e6bc0922f7cb018da05425d8b9",
+      "size_bytes": 324592
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -869,13 +869,13 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentSession.ts",
-      "sha256": "c7d52ff370027e3e69a2081e7b8142fb9b1bd118f583633b5d73c228d78c5b71",
+      "sha256": "fc81241662734d280b79e0670f703c86468351769d6cacab1c8c07aa426c1b2c",
       "size_bytes": 37769
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
-      "sha256": "b3ff372275c86ef405b453f2fc6b9390f89f7c08a929f0ddfd4b2ff64d5be91c",
-      "size_bytes": 16353
+      "sha256": "a171ac04e869c6daa108f6c38e522223ba783521a4276d89df0e6e071955c65a",
+      "size_bytes": 16706
     },
     {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
@@ -894,8 +894,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "c68efd3630fb3e1d3dd64665ac6f09a5c22ee72581c188c732ac21f50b518934",
-      "size_bytes": 29246
+      "sha256": "4700ddc8e0788dc5c087883682f883e3426ce5b1f39c4f7d3d499f7e3bd91f62",
+      "size_bytes": 29903
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "02f9c34fd2a6f7cc27145b325c4eb0f4440abc30",
-  "successor_source_tree": "ceee84b604cbf9f0bb86b65f6157fc267f59d43e",
+  "successor_source_commit": "f8133b1fa51a1d3c88a1ae3ee16bcc45e22181fd",
+  "successor_source_tree": "99ba664d82e4baee998d7afccc73f759d77db4e6",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
