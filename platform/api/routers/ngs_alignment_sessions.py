@@ -376,7 +376,7 @@ _GOVERNED_OPENAPI_SUFFIXES = (
     "/presentation",
     "/presentation/{kind}",
     "/locus-slices",
-    "/locus-slices/{slice_id}/{kind}",
+    "/locus-slices/{slice_id}/{artifact_sha256}/{kind}",
     "/reads",
     "/sequence-qc-manifest",
     "/manifest",
@@ -1514,16 +1514,17 @@ async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAl
                 "selected_read_count": receipt["selected_read_count"],
                 "selected_record_count": receipt["selected_record_count"], "capped": receipt["capped"],
                 "policy": receipt["policy"],
-                "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
-                "index": _derived_descriptor(package["index_metadata"], f"{base}/bai"),
-                "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/manifest")}
+                "bam": _derived_descriptor(package["bam_metadata"], f"{base}/{package['bam_metadata']['sha256']}/bam"),
+                "index": _derived_descriptor(package["index_metadata"], f"{base}/{package['index_metadata']['sha256']}/bai"),
+                "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/{package['manifest_metadata']['sha256']}/manifest")}
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
-@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}", responses=_BINARY_RESPONSES)
-@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}", responses=_BINARY_RESPONSES)
-async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice_id: str, kind: str,
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice_id: str,
+                                              artifact_sha256: str, kind: str,
                                               request: Request, authorized_job: Job = Depends(require_alignment_job)):
     if kind not in {"bam", "bai", "manifest"}:
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
@@ -1534,6 +1535,8 @@ async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice
             raise service.AlignmentSessionError("alignment locus slice not found")
         path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
                                   "manifest": ("manifest_path", "manifest_metadata")}[kind]
+        if package[metadata_key].get("sha256") != artifact_sha256:
+            raise service.AlignmentSessionError("alignment locus artifact digest does not match")
         return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc

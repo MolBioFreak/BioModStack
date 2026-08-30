@@ -484,13 +484,13 @@ export function normalizeAlignmentLocusSlice(
     }
     const base = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-sessions/${encodeURIComponent(expectedSessionId)}/locus-slices/${slice.slice_id}`;
     validatePresentationArtifact(slice.bam, 'alignment locus BAM', {
-        kind: 'alignment_locus_slice', url: `${base}/bam`, mimeType: 'application/octet-stream',
+        kind: 'alignment_locus_slice', url: `${base}/${slice.bam.sha256}/bam`, mimeType: 'application/octet-stream',
     });
     validatePresentationArtifact(slice.index, 'alignment locus index', {
-        kind: 'alignment_locus_slice_index', url: `${base}/bai`, mimeType: 'application/octet-stream',
+        kind: 'alignment_locus_slice_index', url: `${base}/${slice.index.sha256}/bai`, mimeType: 'application/octet-stream',
     });
     validatePresentationArtifact(slice.manifest, 'alignment locus manifest', {
-        kind: 'alignment_locus_slice_manifest', url: `${base}/manifest`, mimeType: 'application/json',
+        kind: 'alignment_locus_slice_manifest', url: `${base}/${slice.manifest.sha256}/manifest`, mimeType: 'application/json',
     });
     return slice;
 }

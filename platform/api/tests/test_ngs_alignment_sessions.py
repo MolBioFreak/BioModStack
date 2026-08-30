@@ -130,7 +130,7 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "/api/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}",
         "/api/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}",
         "/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}",
-        "/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}",
+        "/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}",
     ):
         exact_statuses[(path, "get")] = binary_statuses
         exact_statuses[(path, "head")] = binary_statuses
@@ -186,7 +186,7 @@ def test_alignment_preview_is_deterministic_and_source_bound(tmp_path: Path) -> 
         index=source_index,
         index_sha256=index_sha,
         index_size_bytes=index_size,
-        cache_root=tmp_path / "cache-second",
+        cache_root=tmp_path / "cache",
         target_reads=3,
     )
 

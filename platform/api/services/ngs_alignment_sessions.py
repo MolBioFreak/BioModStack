@@ -2409,13 +2409,49 @@ def _pin_presentation_root(*, create: bool):
 
 
 def _locus_cache_root(cache_root: Path | None) -> Path:
-    return (cache_root or (get_analysis_cache_dir() / "ngs_alignment_locus_slices")).resolve()
+    return Path(os.path.abspath(cache_root or (get_analysis_cache_dir() / "ngs_alignment_locus_slices")))
+
+
+def _pin_locus_cache_root(*, create: bool):
+    def decorate(function: Any) -> Any:
+        @wraps(function)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            requested = _locus_cache_root(kwargs.get("cache_root"))
+            parts = requested.parts
+            already_pinned = len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit()
+            if already_pinned:
+                return function(*args, **kwargs)
+            with open_presentation_authority_root(requested, create=create) as pinned_root:
+                kwargs["cache_root"] = pinned_root
+                result = function(*args, **kwargs)
+                if isinstance(result, dict):
+                    slice_id = result.get("slice_id")
+                    if not isinstance(slice_id, str) or re.fullmatch(r"[0-9a-f]{64}", slice_id) is None:
+                        raise AlignmentSessionError("locus slice package identity is invalid")
+                    result_root = requested / slice_id
+                    for key in ("bam_path", "index_path", "manifest_path"):
+                        path = result.get(key)
+                        if isinstance(path, Path):
+                            result[key] = result_root / path.name
+                return result
+        return wrapped
+    return decorate
 
 
 def _acquire_locus_generation_slot(root: Path) -> BinaryIO:
     root.mkdir(parents=True, exist_ok=True)
+    parts = root.parts
+    if not (len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit()):
+        raise AlignmentSessionError("locus cache root is not pinned")
+    root_fd = int(parts[4])
     for slot in range(LOCUS_GENERATION_CONCURRENCY):
-        handle = (root / f".generation-slot-{slot}.lock").open("a+b")
+        descriptor = os.open(
+            f".generation-slot-{slot}.lock",
+            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o640,
+            dir_fd=root_fd,
+        )
+        handle = os.fdopen(descriptor, "a+b")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return handle
@@ -2634,17 +2670,26 @@ def build_alignment_presentation(
     with os.fdopen(lock_fd, "a+b") as producer_lock:
         fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX)
         if destination.exists() or destination.is_symlink():
-            if destination.is_symlink() or expected_manifest_sha256 is None:
-                raise AlignmentSessionError("alignment presentation destination is unsafe or unauthorised")
-            with open_presentation_authority_root(destination, create=False) as pinned_destination:
-                cached = _load_derived_package(
-                    pinned_destination,
-                    expected_authority_sha256=cache_key,
-                    expected_manifest_sha256=expected_manifest_sha256,
-                )
-            if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
-                return cached
-            raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+            if expected_manifest_sha256 is not None:
+                if destination.is_symlink():
+                    raise AlignmentSessionError("alignment presentation destination is unsafe")
+                with open_presentation_authority_root(destination, create=False) as pinned_destination:
+                    cached = _load_derived_package(
+                        pinned_destination,
+                        expected_authority_sha256=cache_key,
+                        expected_manifest_sha256=expected_manifest_sha256,
+                    )
+                if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
+                    return cached
+                raise AlignmentSessionError("alignment presentation manifest authority is invalid")
+            namespace_fd = int(namespace_parts[4])
+            orphan_name = f".orphan-{cache_key}-{os.getpid()}-{time.time_ns()}"
+            os.rename(cache_key, orphan_name, src_dir_fd=namespace_fd, dst_dir_fd=namespace_fd)
+            orphan_metadata = os.stat(orphan_name, dir_fd=namespace_fd, follow_symlinks=False)
+            if stat.S_ISLNK(orphan_metadata.st_mode):
+                os.unlink(orphan_name, dir_fd=namespace_fd)
+            else:
+                shutil.rmtree(orphan_name, dir_fd=namespace_fd)
         temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=namespace))
         source_handle = index_handle = None
         candidate_db: sqlite3.Connection | None = None
@@ -2767,6 +2812,7 @@ def build_alignment_presentation(
             candidate_db = None
             candidate_db_path.unlink()
             selected: dict[str, list[Any]] = {read_id: [] for read_id in selected_ids_set}
+            selected_record_total = 0
             source_handle.seek(0)
             with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
                 for read in source.fetch(until_eof=True):
@@ -2777,9 +2823,14 @@ def build_alignment_presentation(
                         and not read.is_secondary and not read.is_supplementary
                     ):
                         selected[read.query_name].append(read)
-            while sum(len(records) for records in selected.values()) > ALIGNMENT_PREVIEW_MAX_RECORDS:
-                evicted = max(selected, key=lambda value: _rank_read(bam_sha256, value))
-                selected.pop(evicted)
+                        selected_record_total += 1
+                        if selected_record_total > ALIGNMENT_PREVIEW_MAX_RECORDS:
+                            evicted = max(
+                                (read_id for read_id, records in selected.items() if records),
+                                key=lambda value: _rank_read(bam_sha256, value),
+                            )
+                            selected_record_total -= len(selected[evicted])
+                            selected.pop(evicted)
             coverage_path = temporary / "full-source-primary-coverage.bedgraph"
             with coverage_path.open("w", encoding="utf-8", newline="\n") as output:
                 for contig, length in references:
@@ -2925,6 +2976,7 @@ def build_alignment_preview(
     return package["bam_path"], package["bam_metadata"], package["index_path"], package["index_metadata"]
 
 
+@_pin_locus_cache_root(create=True)
 def build_alignment_locus_slice(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,
     index_size_bytes: int, source_identity: dict[str, int], source_index_identity: dict[str, int],
@@ -2963,18 +3015,36 @@ def build_alignment_locus_slice(
     cache_base = _locus_cache_root(cache_root)
     root = cache_base / slice_id
     manifest_path = root / "manifest.json"
-    if manifest_path.is_file():
-        return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
     slot_handle = _acquire_locus_generation_slot(cache_base)
     lock_handle: BinaryIO | None = None
     try:
-        lock_handle = (cache_base / f".{slice_id}.lock").open("a+b")
+        cache_parts = cache_base.parts
+        if not (len(cache_parts) == 5 and cache_parts[1:4] == ("proc", "self", "fd") and cache_parts[4].isdigit()):
+            raise AlignmentSessionError("locus cache root is not pinned")
+        cache_fd = int(cache_parts[4])
+        lock_fd = os.open(
+            f".{slice_id}.lock",
+            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o640,
+            dir_fd=cache_fd,
+        )
+        lock_handle = os.fdopen(lock_fd, "a+b")
         try:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise AlignmentSessionError("locus slice generation is already in progress") from exc
-        if manifest_path.is_file():
-            return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
+        if root.exists() or root.is_symlink():
+            cache_parts = cache_base.parts
+            if not (len(cache_parts) == 5 and cache_parts[1:4] == ("proc", "self", "fd") and cache_parts[4].isdigit()):
+                raise AlignmentSessionError("locus cache root is not pinned")
+            cache_fd = int(cache_parts[4])
+            orphan_name = f".orphan-{slice_id}-{os.getpid()}-{time.time_ns()}"
+            os.rename(slice_id, orphan_name, src_dir_fd=cache_fd, dst_dir_fd=cache_fd)
+            orphan_metadata = os.stat(orphan_name, dir_fd=cache_fd, follow_symlinks=False)
+            if stat.S_ISLNK(orphan_metadata.st_mode):
+                os.unlink(orphan_name, dir_fd=cache_fd)
+            else:
+                shutil.rmtree(orphan_name, dir_fd=cache_fd)
         _cleanup_locus_cache(
             cache_base,
             reserve_bytes=max_output_bytes,
@@ -3128,6 +3198,7 @@ def build_alignment_locus_slice(
     return resolve_cached_alignment_locus_slice(slice_id, cache_root=cache_root)
 
 
+@_pin_locus_cache_root(create=False)
 def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | None = None) -> dict[str, Any]:
     if re.fullmatch(r"[0-9a-f]{64}", slice_id) is None:
         raise AlignmentSessionError("alignment locus slice not found")
