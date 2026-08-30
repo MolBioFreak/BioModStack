@@ -15,6 +15,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -53,9 +54,11 @@ LOCUS_MAX_READS = 5_000
 LOCUS_MAX_RECORDS = 20_000
 LOCUS_MAX_BYTES = 64 * 1024 * 1024
 LOCUS_MAX_SECONDS = 30.0
+LOCUS_INDEX_MAX_BYTES = 16 * 1024 * 1024
+LOCUS_MANIFEST_MAX_BYTES = 1024 * 1024
 LOCUS_CACHE_MAX_BYTES = 512 * 1024 * 1024
 LOCUS_CACHE_MAX_ENTRIES = 128
-LOCUS_GENERATION_CONCURRENCY = 2
+LOCUS_GENERATION_CONCURRENCY = 1
 _alignment_preview_lock = threading.Lock()
 LINKED_REPORT_ROLES = frozenset(
     {
@@ -2269,6 +2272,37 @@ def _write_bam_for_ids(
     return len(selected)
 
 
+def _index_bam_with_deadline(path: Path, *, deadline: float, label: str) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AlignmentSessionError(f"{label} time limit exceeded")
+    parts = path.parts
+    pass_fds: tuple[int, ...] = ()
+    if len(parts) >= 6 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+        pass_fds = (int(parts[4]),)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import pysam,sys; pysam.index(sys.argv[1])",
+                os.fspath(path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+            pass_fds=pass_fds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AlignmentSessionError(f"{label} time limit exceeded") from exc
+    except OSError as exc:
+        raise AlignmentSessionError(f"{label} indexing failed") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise AlignmentSessionError(f"{label} indexing failed: {detail}")
+
+
 def _selected_set_digest(ids: list[str]) -> str:
     return hashlib.sha256(rfc8785.dumps(sorted(ids))).hexdigest()
 
@@ -2438,26 +2472,48 @@ def _pin_locus_cache_root(*, create: bool):
     return decorate
 
 
-def _acquire_locus_generation_slot(root: Path) -> BinaryIO:
+def _acquire_locus_generation_slot(root: Path, slice_id: str) -> tuple[int, BinaryIO]:
     root.mkdir(parents=True, exist_ok=True)
     parts = root.parts
     if not (len(parts) == 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit()):
         raise AlignmentSessionError("locus cache root is not pinned")
     root_fd = int(parts[4])
-    for slot in range(LOCUS_GENERATION_CONCURRENCY):
-        descriptor = os.open(
-            f".generation-slot-{slot}.lock",
-            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
-            0o640,
-            dir_fd=root_fd,
-        )
-        handle = os.fdopen(descriptor, "a+b")
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return handle
-        except BlockingIOError:
-            handle.close()
-    raise AlignmentSessionError("locus slice concurrency limit exceeded")
+    slot = int(slice_id, 16) % LOCUS_GENERATION_CONCURRENCY
+    descriptor = os.open(
+        f".generation-slot-{slot}.lock",
+        os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o640,
+        dir_fd=root_fd,
+    )
+    handle = os.fdopen(descriptor, "a+b")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return slot, handle
+    except BlockingIOError as exc:
+        handle.close()
+        raise AlignmentSessionError("locus slice concurrency limit exceeded") from exc
+
+
+def _remove_locus_transient(root_fd: int, name: str) -> None:
+    try:
+        metadata = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode):
+        shutil.rmtree(name, dir_fd=root_fd)
+    else:
+        os.unlink(name, dir_fd=root_fd)
+
+
+def _cleanup_legacy_locus_transients(root: Path, root_fd: int) -> None:
+    for candidate in root.iterdir():
+        name = candidate.name
+        if (
+            re.fullmatch(r"\.[0-9a-f]{64}\.lock", name)
+            or re.fullmatch(r"\.[0-9a-f]{64}-.*", name)
+            or name.startswith(".orphan-")
+        ):
+            _remove_locus_transient(root_fd, name)
 
 
 def _cleanup_locus_cache(
@@ -2601,7 +2657,10 @@ def _serialize_alignment_presentation_generation(function: Any) -> Any:
         lock_root.mkdir(parents=True, exist_ok=True)
         lock_handle = (lock_root / ".generation.lock").open("a+b")
         try:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise AlignmentSessionError("alignment presentation concurrency limit exceeded") from exc
             return function(*args, **kwargs)
         finally:
             try:
@@ -2628,8 +2687,11 @@ def build_alignment_presentation(
     max_seconds: float = ALIGNMENT_PRESENTATION_MAX_SECONDS,
 ) -> dict[str, Any]:
     if (
-        target_reads < 1 or target_reads > 10_000 or max_output_bytes < 1
-        or max_coverage_bins < 1 or not math.isfinite(max_seconds) or max_seconds <= 0
+        target_reads < 1 or target_reads > 10_000
+        or max_output_bytes < 1 or max_output_bytes > ALIGNMENT_PREVIEW_MAX_BYTES
+        or max_coverage_bins < 1 or max_coverage_bins > ALIGNMENT_COVERAGE_MAX_BINS
+        or not math.isfinite(max_seconds) or max_seconds <= 0
+        or max_seconds > ALIGNMENT_PRESENTATION_MAX_SECONDS
     ):
         raise AlignmentSessionError("alignment presentation policy is invalid")
     if re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None or mode not in SESSION_MODES:
@@ -2662,13 +2724,16 @@ def build_alignment_presentation(
     if not (len(namespace_parts) == 5 and namespace_parts[1:4] == ("proc", "self", "fd") and namespace_parts[4].isdigit()):
         raise AlignmentSessionError("presentation namespace is not pinned")
     lock_fd = os.open(
-        f".{cache_key}.lock",
+        ".generation.lock",
         os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o640,
         dir_fd=int(namespace_parts[4]),
     )
     with os.fdopen(lock_fd, "a+b") as producer_lock:
-        fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
         if destination.exists() or destination.is_symlink():
             if expected_manifest_sha256 is not None:
                 if destination.is_symlink():
@@ -2852,9 +2917,11 @@ def build_alignment_presentation(
                 retained_ids.pop()
             if time.monotonic() > deadline:
                 raise AlignmentSessionError("alignment presentation time limit exceeded")
-            pysam.index(str(preview_path))
-            if time.monotonic() > deadline:
-                raise AlignmentSessionError("alignment presentation time limit exceeded")
+            _index_bam_with_deadline(
+                preview_path,
+                deadline=deadline,
+                label="alignment presentation",
+            )
             preview_index = Path(f"{preview_path}.bai")
             outputs = {}
             for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
@@ -2886,14 +2953,8 @@ def build_alignment_presentation(
                 "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
                 "source_alignment_relative_path": source_alignment_relative_path,
                 "source_index_relative_path": source_index_relative_path,
-                "source_identity": {
-                    key: (value if key == "size_bytes" else str(value))
-                    for key, value in source_identity.items()
-                },
-                "source_index_identity": {
-                    key: (value if key == "size_bytes" else str(value))
-                    for key, value in index_identity.items()
-                },
+                "source_identity": _canonical_stat_identity(source_identity),
+                "source_index_identity": _canonical_stat_identity(index_identity),
                 "policy": authority["policy"],
                 "generation_limits": {"max_seconds": max_seconds, "max_concurrent_generations": 1},
                 "runtime": {"pysam_version": pysam.__version__},
@@ -2993,7 +3054,9 @@ def build_alignment_locus_slice(
         raise AlignmentSessionError("locus span is invalid")
     if (
         max_reads < 1 or max_reads > LOCUS_MAX_READS or max_records < 1
-        or max_output_bytes < 1 or not math.isfinite(max_seconds) or max_seconds <= 0
+        or max_records > LOCUS_MAX_RECORDS
+        or max_output_bytes < 1 or max_output_bytes > LOCUS_MAX_BYTES
+        or not math.isfinite(max_seconds) or max_seconds <= 0 or max_seconds > LOCUS_MAX_SECONDS
     ):
         raise AlignmentSessionError("locus policy is invalid")
     if source_stat_identity(bam) != source_identity or source_stat_identity(index) != source_index_identity:
@@ -3018,44 +3081,28 @@ def build_alignment_locus_slice(
     cache_base = _locus_cache_root(cache_root)
     root = cache_base / slice_id
     manifest_path = root / "manifest.json"
-    slot_handle = _acquire_locus_generation_slot(cache_base)
-    lock_handle: BinaryIO | None = None
+    deadline = time.monotonic() + max_seconds
+    slot, slot_handle = _acquire_locus_generation_slot(cache_base, slice_id)
     try:
         cache_parts = cache_base.parts
         if not (len(cache_parts) == 5 and cache_parts[1:4] == ("proc", "self", "fd") and cache_parts[4].isdigit()):
             raise AlignmentSessionError("locus cache root is not pinned")
         cache_fd = int(cache_parts[4])
-        lock_fd = os.open(
-            f".{slice_id}.lock",
-            os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
-            0o640,
-            dir_fd=cache_fd,
-        )
-        lock_handle = os.fdopen(lock_fd, "a+b")
-        try:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise AlignmentSessionError("locus slice generation is already in progress") from exc
+        temporary_name = f".generation-slot-{slot}.tmp"
+        orphan_name = f".generation-slot-{slot}.orphan"
+        _remove_locus_transient(cache_fd, temporary_name)
+        _remove_locus_transient(cache_fd, orphan_name)
+        _cleanup_legacy_locus_transients(cache_base, cache_fd)
         if root.exists() or root.is_symlink():
-            cache_parts = cache_base.parts
-            if not (len(cache_parts) == 5 and cache_parts[1:4] == ("proc", "self", "fd") and cache_parts[4].isdigit()):
-                raise AlignmentSessionError("locus cache root is not pinned")
-            cache_fd = int(cache_parts[4])
-            orphan_name = f".orphan-{slice_id}-{os.getpid()}-{time.time_ns()}"
             os.rename(slice_id, orphan_name, src_dir_fd=cache_fd, dst_dir_fd=cache_fd)
-            orphan_metadata = os.stat(orphan_name, dir_fd=cache_fd, follow_symlinks=False)
-            if stat.S_ISLNK(orphan_metadata.st_mode):
-                os.unlink(orphan_name, dir_fd=cache_fd)
-            else:
-                shutil.rmtree(orphan_name, dir_fd=cache_fd)
+            _remove_locus_transient(cache_fd, orphan_name)
         _cleanup_locus_cache(
             cache_base,
-            reserve_bytes=max_output_bytes,
+            reserve_bytes=max_output_bytes + LOCUS_INDEX_MAX_BYTES + LOCUS_MANIFEST_MAX_BYTES,
             reserve_entries=1,
         )
-        temporary = Path(tempfile.mkdtemp(prefix=f".{slice_id}-", dir=cache_base))
-        started = time.monotonic()
-        deadline = started + max_seconds
+        os.mkdir(temporary_name, mode=0o750, dir_fd=cache_fd)
+        temporary = cache_base / temporary_name
         try:
             candidate_heap: list[tuple[int, str]] = []
             overlapping_ids: set[str] = set()
@@ -3112,10 +3159,14 @@ def build_alignment_locus_slice(
                 byte_cap_applied = True
             if time.monotonic() > deadline:
                 raise AlignmentSessionError("locus slice time limit exceeded")
-            pysam.index(str(locus_bam))
-            if time.monotonic() > deadline:
-                raise AlignmentSessionError("locus slice time limit exceeded")
+            _index_bam_with_deadline(
+                locus_bam,
+                deadline=deadline,
+                label="locus slice",
+            )
             locus_index = Path(f"{locus_bam}.bai")
+            if locus_index.stat().st_size > LOCUS_INDEX_MAX_BYTES:
+                raise AlignmentSessionError("locus slice index byte ceiling exceeded")
             if source_stat_identity(bam) != source_identity or source_stat_identity(index) != source_index_identity:
                 raise AlignmentSessionError("source identity changed during locus slice generation")
             receipt = {
@@ -3165,37 +3216,38 @@ def build_alignment_locus_slice(
                     ),
                 },
                 "policy": policy,
-                "generation_limits": {"max_seconds": max_seconds, "max_concurrent_generations": 2},
+                "generation_limits": {
+                    "max_seconds": max_seconds,
+                    "max_concurrent_generations": LOCUS_GENERATION_CONCURRENCY,
+                },
                 "outputs": {},
             }
             for key, path in (("bam", locus_bam), ("index", locus_index)):
                 digest, size = _sha256_file_and_size(path)
                 receipt["outputs"][key] = {"sha256": digest, "size_bytes": size}
+            manifest_bytes = rfc8785.dumps(receipt)
+            if len(manifest_bytes) > LOCUS_MANIFEST_MAX_BYTES:
+                raise AlignmentSessionError("locus slice manifest byte ceiling exceeded")
             manifest_handle = (temporary / "manifest.json").open("wb")
             try:
-                manifest_handle.write(rfc8785.dumps(receipt))
+                manifest_handle.write(manifest_bytes)
                 manifest_handle.flush()
                 os.fsync(manifest_handle.fileno())
             finally:
                 manifest_handle.close()
-            os.replace(temporary, root)
-            directory_fd = os.open(cache_base, os.O_RDONLY | os.O_DIRECTORY)
+            os.rename(temporary_name, slice_id, src_dir_fd=cache_fd, dst_dir_fd=cache_fd)
+            directory_fd = os.dup(cache_fd)
             try:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
             _cleanup_locus_cache(cache_base, active=root)
         except Exception as exc:
-            shutil.rmtree(temporary, ignore_errors=True)
+            _remove_locus_transient(cache_fd, temporary_name)
             if isinstance(exc, AlignmentSessionError):
                 raise
             raise AlignmentSessionError(f"locus slice generation failed: {exc}") from exc
     finally:
-        if lock_handle is not None:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                lock_handle.close()
         try:
             fcntl.flock(slot_handle.fileno(), fcntl.LOCK_UN)
         finally:

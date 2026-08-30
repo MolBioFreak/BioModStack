@@ -6,8 +6,10 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -343,7 +345,7 @@ def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
         job_id="job-c", session_id="3" * 24, mode="primary",
         cache_root=tmp_path / "cache", target_reads=3, max_output_bytes=1_000_000,
     )
-    assert package["manifest"]["source_identity"]["size_bytes"] == bam_size
+    assert package["manifest"]["source_identity"]["size_bytes"] == str(bam_size)
 
 
 def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -> None:
@@ -405,6 +407,13 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
         job_id="job-f", session_id="6" * 24,
         contig="plasmid", start=1, end=600, max_reads=3, cache_root=tmp_path / "cache",
     )
+    cache_root = cast(Path, common["cache_root"])
+    cache_root.mkdir()
+    legacy_lock = cache_root / f".{('0' * 64)}.lock"
+    legacy_lock.touch()
+    legacy_temporary = cache_root / f".{('1' * 64)}-crashed"
+    legacy_temporary.mkdir()
+    (legacy_temporary / "locus.bam").write_bytes(b"abandoned")
     monkeypatch.setattr(
         service,
         "_verify_descriptor",
@@ -412,10 +421,15 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
     )
     first = service.build_alignment_locus_slice(source, **common)
     second = service.build_alignment_locus_slice(source, **common)
+    third = service.build_alignment_locus_slice(source, **{**common, "start": 2})
     assert first["receipt"]["overlapping_read_count"] > 3
     assert first["receipt"]["selected_read_count"] == 3
     assert first["receipt"]["capped"] is True
     assert first["receipt"]["selected_read_set_sha256"] == second["receipt"]["selected_read_set_sha256"]
+    assert third["slice_id"] != first["slice_id"]
+    assert sorted(path.name for path in cache_root.iterdir() if path.name.startswith(".")) == [
+        ".generation-slot-0.lock",
+    ]
     assert first["receipt"]["source_alignment_sha256"] == bam_sha
     assert first["receipt"]["source_index_sha256"] == bai_sha
     assert first["receipt"]["selection_unit"] == "unique mapped primary read ID with associated supplementary records"
@@ -439,6 +453,40 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
         service.build_alignment_locus_slice(source, **{**common, "contig": "../bad"})
     with pytest.raises(service.AlignmentSessionError, match="span"):
         service.build_alignment_locus_slice(source, **{**common, "end": service.LOCUS_MAX_SPAN + 1})
+
+
+def test_alignment_indexing_deadline_terminates_the_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    def time_out(*_args: Any, **kwargs: Any) -> None:
+        assert 0 < kwargs["timeout"] <= 1
+        raise subprocess.TimeoutExpired("pysam-index", kwargs["timeout"])
+
+    monkeypatch.setattr(service.subprocess, "run", time_out)
+    with pytest.raises(service.AlignmentSessionError, match="locus slice time limit exceeded"):
+        service._index_bam_with_deadline(
+            tmp_path / "locus.bam",
+            deadline=time.monotonic() + 1,
+            label="locus slice",
+        )
+
+
+def test_presentation_generation_lock_is_nonblocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    operations: list[int] = []
+    monkeypatch.setattr(service, "get_analysis_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(service.fcntl, "flock", lambda _fd, operation: operations.append(operation))
+    wrapped = service._serialize_alignment_presentation_generation(lambda: "complete")
+
+    assert wrapped() == "complete"
+    assert operations[0] & service.fcntl.LOCK_NB
 
 
 def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(tmp_path: Path) -> None:
@@ -478,10 +526,12 @@ def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(
 
 
 def _locus_authority_test_packages() -> tuple[dict[str, Any], dict[str, Any]]:
-    source_identity = {
+    raw_source_identity = {
         "device": "1", "inode": "2", "size_bytes": 1024,
         "mtime_ns": "3", "ctime_ns": "4",
     }
+    source_identity = {key: str(value) for key, value in raw_source_identity.items()}
+    source_index_identity = {**source_identity, "inode": "5", "size_bytes": "128"}
     presentation = {
         "manifest": {
             "authority_sha256": "a" * 64,
@@ -491,7 +541,7 @@ def _locus_authority_test_packages() -> tuple[dict[str, Any], dict[str, Any]]:
             "source_index_sha256": "d" * 64,
             "source_index_size_bytes": 128,
             "source_identity": source_identity,
-            "source_index_identity": {**source_identity, "inode": "5", "size_bytes": 128},
+            "source_index_identity": source_index_identity,
         },
         "manifest_metadata": {"sha256": "e" * 64},
     }
@@ -506,7 +556,10 @@ def _locus_authority_test_packages() -> tuple[dict[str, Any], dict[str, Any]]:
         "source_index_sha256": "d" * 64,
         "source_index_size_bytes": 128,
         "source_identity": source_identity,
-        "source_index_identity": {**source_identity, "inode": "5", "size_bytes": 128},
+        "source_index_identity": {
+            key: str(value)
+            for key, value in {**raw_source_identity, "inode": "5", "size_bytes": 128}.items()
+        },
     }
     return presentation, receipt
 

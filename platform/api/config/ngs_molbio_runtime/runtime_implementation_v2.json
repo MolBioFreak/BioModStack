@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "a39250bdb259da8c8b34b0f5a8daf6855ed86cff73bd0be65f338e7e719a6baf",
+  "content_sha256": "789d3ae665594b14a5415002d371b4e95ea153f93acbd249add25f696c04e2c2",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -559,8 +559,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "802853c9f76e23a0403bf950d624c42b82688e84bd61f4d7301a35ddbd61e4a6",
-      "size_bytes": 157824
+      "sha256": "08329364aa3e3738a23d7d3e874f1963cab4d7a68ce50bf3fa516bb4fdc5ef7c",
+      "size_bytes": 159776
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -679,8 +679,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "29ff59adbb64da33d9105a28c5006e9cfc84dd93a25f9f8591820d62006ceb92",
-      "size_bytes": 150117
+      "sha256": "66ca1736a9360e88eedcfb8c2357dc971024d077cde2839882cda2d09c566f2e",
+      "size_bytes": 152194
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "5a72d4ffd845390b698d032f71f3991aecc8eb66",
-  "successor_source_tree": "93b50ed1166d49254b017464638663092c619624",
+  "successor_source_commit": "1b4d49f975700792760689c88d2885beb6a7ea9d",
+  "successor_source_tree": "e68787698bf5b6af8883c88d8a5241f2074ecdd1",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
