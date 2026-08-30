@@ -227,7 +227,8 @@ export interface DomainCapabilityDescriptor {
 }
 
 export interface DomainCapabilityList {
-    schema: 'bms.ngs-molbio.domain-capability-list.v1';
+    schema: 'bms.ngs-molbio.domain-capability-list.v1' | 'bms.protein.domain-capability-list.v1';
+    domain_kind?: 'ngs_molbio' | 'protein_in_silico';
     domain_id: string;
     domain_revision_id: string | null;
     experiment_mode: string | null;
