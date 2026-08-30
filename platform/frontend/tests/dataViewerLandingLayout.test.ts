@@ -38,3 +38,14 @@ test('Data Viewer landing preserves preview-first ingestion and post-import cach
     assert.ok(landing.includes('Preview before import'));
     assert.ok(landing.includes('Existing job pipeline'));
 });
+
+test('Data Viewer landing accepts the current official ProteinBase CSV download', () => {
+    const landing = readSource('src', 'components', 'DataViewerLanding.tsx');
+
+    assert.ok(landing.includes("'proteinbase_csv'"));
+    assert.ok(landing.includes("columns.includes('evaluations')"));
+    assert.ok(landing.includes("columns.includes('designMethod')"));
+    assert.ok(landing.includes("label: 'ProteinBase CSV bundle'"));
+    assert.ok(landing.includes('ProteinBase CSV / JSONL bundle'));
+    assert.ok(!landing.includes('Only ProteinBase JSONL and validated Boltz API runs import today.'));
+});
