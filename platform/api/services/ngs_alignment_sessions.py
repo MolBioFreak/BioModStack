@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
+import math
 import mimetypes
 import os
 import random
@@ -13,6 +15,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from collections import OrderedDict
 from functools import lru_cache
@@ -24,6 +27,8 @@ import pysam
 
 from paths import get_analysis_cache_dir, get_results_dir
 from services.ont_ngs_contract import DORADO_LOCK_PATH
+from services.ngs_molbio_source_authority import SourceBuildRevisionError, source_build_revision
+from services.ngs_molbio_runtime_status import NgsMolBioRuntimeAuthorityError, runtime_implementation_record
 
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
@@ -34,7 +39,18 @@ MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
 ALIGNMENT_PREVIEW_TARGET_READS = 2_000
-ALIGNMENT_PREVIEW_POLICY = "deterministic-reservoir-v1"
+ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v2"
+ALIGNMENT_PRESENTATION_POLICY_VERSION = 2
+ALIGNMENT_PREVIEW_MAX_BYTES = 32 * 1024 * 1024
+ALIGNMENT_PREVIEW_MAX_RECORDS = 20_000
+ALIGNMENT_COVERAGE_MAX_BINS = 4_096
+PRESENTATION_CACHE_MAX_BYTES = 512 * 1024 * 1024
+PRESENTATION_CACHE_MAX_ENTRIES = 64
+LOCUS_MAX_SPAN = 1_000_000
+LOCUS_MAX_READS = 5_000
+LOCUS_MAX_RECORDS = 20_000
+LOCUS_MAX_BYTES = 64 * 1024 * 1024
+LOCUS_MAX_SECONDS = 30.0
 _alignment_preview_lock = threading.Lock()
 LINKED_REPORT_ROLES = frozenset(
     {
@@ -2069,156 +2085,555 @@ def resolve_session_alignment_bundle(
     raise AlignmentSessionError("ready alignment session not found")
 
 
-def _preview_metadata(
-    path: Path,
-    *,
-    kind: str,
-    sha256: str,
-    size_bytes: int,
-    source_alignment_sha256: str,
-    source_index_sha256: str,
-    policy_sha256: str,
+def source_stat_identity(path: Path) -> dict[str, int]:
+    handle = _open_regular_file_no_symlinks(path)
+    try:
+        observed = os.fstat(handle.fileno())
+        return {
+            "device": observed.st_dev,
+            "inode": observed.st_ino,
+            "size_bytes": observed.st_size,
+            "mtime_ns": observed.st_mtime_ns,
+            "ctime_ns": observed.st_ctime_ns,
+        }
+    finally:
+        handle.close()
+
+
+def _verify_descriptor(handle: BinaryIO, expected_size: int, expected_sha256: str) -> dict[str, int]:
+    observed = os.fstat(handle.fileno())
+    identity = {
+        "device": observed.st_dev, "inode": observed.st_ino, "size_bytes": observed.st_size,
+        "mtime_ns": observed.st_mtime_ns, "ctime_ns": observed.st_ctime_ns,
+    }
+    if observed.st_size != expected_size:
+        raise AlignmentSessionError("artifact integrity size mismatch")
+    digest = hashlib.sha256()
+    handle.seek(0)
+    for chunk in iter(lambda: handle.read(SNAPSHOT_CHUNK_BYTES), b""):
+        digest.update(chunk)
+    if digest.hexdigest() != expected_sha256:
+        raise AlignmentSessionError("artifact integrity digest mismatch")
+    handle.seek(0)
+    return identity
+
+
+def _derived_metadata(
+    path: Path, kind: str, source_manifest_sha256: str,
+    *, digest: str | None = None, size: int | None = None,
 ) -> dict[str, Any]:
+    if digest is None or size is None:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        size = path.stat().st_size
+    extension = "bam.bai" if kind.endswith("index") else ("bedgraph" if "coverage" in kind else "bam")
     return {
-        "artifact_id": f"{kind}-{policy_sha256}",
-        "kind": kind,
-        "sha256": sha256,
-        "size_bytes": size_bytes,
-        "mime_type": "application/octet-stream",
-        "range_capable": True,
-        "content_disposition": "inline",
-        "filename_extension": "bam.bai" if kind.endswith("index") else "bam",
-        "source_manifest_sha256": policy_sha256,
-        "source_alignment_sha256": source_alignment_sha256,
-        "source_index_sha256": source_index_sha256,
-        "policy": ALIGNMENT_PREVIEW_POLICY,
-        "_path": path,
+        "artifact_id": f"{kind}-{digest}", "kind": kind, "sha256": digest, "size_bytes": size,
+        "mime_type": "text/plain" if extension == "bedgraph" else "application/octet-stream",
+        "range_capable": True, "content_disposition": "inline", "filename_extension": extension,
+        "source_manifest_sha256": source_manifest_sha256, "_path": path,
     }
 
 
-def build_alignment_preview(
-    bam: Path,
-    *,
-    bam_sha256: str,
-    bam_size_bytes: int,
-    index: Path,
-    index_sha256: str,
-    index_size_bytes: int,
-    cache_root: Path | None = None,
+def _rank_read(source_sha256: str, read_id: str) -> str:
+    return hashlib.sha256(f"{source_sha256}\0{read_id}".encode("utf-8")).hexdigest()
+
+
+def _record_sort_key(read: Any) -> tuple[int, int, str, int]:
+    return (
+        read.reference_id if read.reference_id >= 0 else 2**31,
+        read.reference_start if read.reference_start >= 0 else 2**31,
+        read.query_name or "", read.flag,
+    )
+
+
+def _write_bam_for_ids(path: Path, header: dict[str, Any], records: dict[str, list[Any]], ids: list[str]) -> int:
+    selected = sorted((record for read_id in ids for record in records[read_id]), key=_record_sort_key)
+    with pysam.AlignmentFile(path, "wb", header=header) as output:
+        for record in selected:
+            output.write(record)
+    return len(selected)
+
+
+def _selected_set_digest(ids: list[str]) -> str:
+    return hashlib.sha256(rfc8785.dumps(sorted(ids))).hexdigest()
+
+
+def _creation_authority() -> tuple[str, str | None]:
+    try:
+        revision = source_build_revision()
+        tree = runtime_implementation_record().get("successor_source_tree")
+    except (SourceBuildRevisionError, NgsMolBioRuntimeAuthorityError, OSError, RuntimeError, ValueError) as exc:
+        raise AlignmentSessionError("derived-artifact creation revision authority is unavailable") from exc
+    if not isinstance(tree, str) or re.fullmatch(r"[0-9a-f]{40}", tree) is None:
+        tree = None
+    return revision, tree
+
+
+def _presentation_root(cache_root: Path | None, source_bam: Path | None = None) -> Path:
+    if cache_root is not None:
+        return cache_root.resolve()
+    if source_bam is None:
+        raise AlignmentSessionError("pinned presentation root is required")
+    return (source_bam.parent / ".alignment-presentations").resolve()
+
+
+def _locus_cache_root(cache_root: Path | None) -> Path:
+    return (cache_root or (get_analysis_cache_dir() / "ngs_alignment_locus_slices")).resolve()
+
+
+def _load_derived_package(directory: Path) -> dict[str, Any] | None:
+    manifest_path = directory / "manifest.json"
+    paths = {
+        "bam": directory / "alignment-preview.bam",
+        "index": directory / "alignment-preview.bam.bai",
+        "coverage": directory / "full-source-primary-coverage.bedgraph",
+    }
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_bytes())
+        if manifest.get("schema") != "bms.ngs.alignment-presentation-manifest.v2":
+            return None
+        metadata = {}
+        for key, path in paths.items():
+            if not path.is_file() or path.is_symlink():
+                return None
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            size = path.stat().st_size
+            declared = manifest["outputs"][key]
+            if declared != {"sha256": digest, "size_bytes": size}:
+                return None
+            metadata[key] = _derived_metadata(
+                path,
+                {"bam": "alignment_preview", "index": "alignment_preview_index", "coverage": "full_source_primary_coverage"}[key],
+                manifest["source_manifest_sha256"],
+                digest=digest, size=size,
+            )
+            metadata[key].update({
+                "source_alignment_sha256": manifest["source_alignment_sha256"],
+                "source_index_sha256": manifest["source_index_sha256"],
+                "policy": ALIGNMENT_PREVIEW_POLICY,
+            })
+        manifest_bytes = manifest_path.read_bytes()
+        return {
+            "bam_path": paths["bam"], "bam_metadata": metadata["bam"],
+            "index_path": paths["index"], "index_metadata": metadata["index"],
+            "coverage_path": paths["coverage"], "coverage_metadata": metadata["coverage"],
+            "manifest_path": manifest_path,
+            "manifest_metadata": _derived_metadata(
+                manifest_path, "alignment_presentation_manifest", manifest["source_manifest_sha256"],
+                digest=hashlib.sha256(manifest_bytes).hexdigest(), size=len(manifest_bytes),
+            ),
+            "manifest": manifest,
+        }
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
+def _cleanup_presentation_cache(root: Path, active: Path) -> None:
+    entries = []
+    for candidate in root.iterdir():
+        if candidate == active or not candidate.is_dir() or candidate.name.startswith("."):
+            continue
+        files = [path for path in candidate.iterdir() if path.is_file()]
+        entries.append((candidate.stat().st_mtime_ns, candidate.name, candidate, sum(path.stat().st_size for path in files)))
+    active_size = sum(path.stat().st_size for path in active.iterdir() if path.is_file()) if active.exists() else 0
+    total = active_size + sum(item[3] for item in entries)
+    count = 1 + len(entries)
+    for _mtime, _name, candidate, size in sorted(entries):
+        if total <= PRESENTATION_CACHE_MAX_BYTES and count <= PRESENTATION_CACHE_MAX_ENTRIES:
+            break
+        shutil.rmtree(candidate, ignore_errors=True)
+        total -= size
+        count -= 1
+    if total > PRESENTATION_CACHE_MAX_BYTES or count > PRESENTATION_CACHE_MAX_ENTRIES:
+        raise AlignmentSessionError("presentation cache capacity unavailable")
+
+
+def resolve_cached_alignment_presentation(
+    job_id: str, session_id: str, *, cache_root: Path | None = None,
+) -> dict[str, Any]:
+    root = _presentation_root(cache_root)
+    if not root.is_dir():
+        raise AlignmentSessionError("alignment presentation is not prepared")
+    matches = []
+    for manifest_path in root.glob("**/manifest.json"):
+        candidate = manifest_path.parent
+        package = _load_derived_package(candidate)
+        if package is not None and package["manifest"].get("job_id") == job_id and package["manifest"].get("session_id") == session_id:
+            matches.append(package)
+    if len(matches) != 1:
+        raise AlignmentSessionError("alignment presentation is not prepared")
+    os.utime(matches[0]["manifest_path"], None)
+    return matches[0]
+
+
+def build_alignment_presentation(
+    bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path,
+    index_sha256: str, index_size_bytes: int, source_manifest_sha256: str,
+    job_id: str, session_id: str, mode: str, cache_root: Path | None = None,
+    artifact_set_sha256: str | None = None, alignment_pair_sha256: str | None = None,
     target_reads: int = ALIGNMENT_PREVIEW_TARGET_READS,
-) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
-    """Build one deterministic, source-bound BAM subset for browser IGV."""
-    if target_reads < 1 or target_reads > 10_000:
-        raise AlignmentSessionError("alignment preview read bound is invalid")
-    source_authority = {
-        "schema": "bms.ngs.alignment-preview-authority.v1",
-        "policy": ALIGNMENT_PREVIEW_POLICY,
-        "target_reads": target_reads,
-        "source_alignment_sha256": bam_sha256,
-        "source_alignment_size_bytes": bam_size_bytes,
-        "source_index_sha256": index_sha256,
-        "source_index_size_bytes": index_size_bytes,
+    max_output_bytes: int = ALIGNMENT_PREVIEW_MAX_BYTES,
+    max_coverage_bins: int = ALIGNMENT_COVERAGE_MAX_BINS,
+) -> dict[str, Any]:
+    if target_reads < 1 or target_reads > 10_000 or max_output_bytes < 1 or max_coverage_bins < 1:
+        raise AlignmentSessionError("alignment presentation policy is invalid")
+    if re.fullmatch(r"[0-9a-f]{64}", source_manifest_sha256) is None or mode not in SESSION_MODES:
+        raise AlignmentSessionError("alignment presentation authority is invalid")
+    creation_revision, creation_source_tree = _creation_authority()
+    authority = {
+        "schema": "bms.ngs.alignment-presentation-authority.v2", "job_id": job_id,
+        "session_id": session_id, "mode": mode, "source_manifest_sha256": source_manifest_sha256,
+        "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
+        "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
+        "artifact_set_sha256": artifact_set_sha256, "alignment_pair_sha256": alignment_pair_sha256,
+        "policy": {"id": ALIGNMENT_PREVIEW_POLICY, "version": ALIGNMENT_PRESENTATION_POLICY_VERSION,
+                   "target_reads": target_reads, "max_preview_bytes": max_output_bytes,
+                   "max_coverage_bins": max_coverage_bins},
     }
-    policy_sha256 = hashlib.sha256(rfc8785.dumps(source_authority)).hexdigest()
-    root = (cache_root or (get_analysis_cache_dir() / "ngs_alignment_previews")).resolve()
-    destination = root / policy_sha256
-    preview_bam = destination / "alignment-preview.bam"
-    preview_index = destination / "alignment-preview.bam.bai"
-    manifest_path = destination / "manifest.json"
-
-    def resolved() -> tuple[Path, dict[str, Any], Path, dict[str, Any]] | None:
-        if not all(path.is_file() and not path.is_symlink() for path in (preview_bam, preview_index, manifest_path)):
-            return None
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        if manifest.get("authority") != source_authority or manifest.get("policy_sha256") != policy_sha256:
-            return None
-        bam_digest, bam_size = _sha256_file_and_size(preview_bam)
-        index_digest, index_size = _sha256_file_and_size(preview_index)
-        if manifest.get("preview_bam") != {"sha256": bam_digest, "size_bytes": bam_size}:
-            return None
-        if manifest.get("preview_index") != {"sha256": index_digest, "size_bytes": index_size}:
-            return None
-        return (
-            preview_bam,
-            _preview_metadata(
-                preview_bam, kind="alignment_preview", sha256=bam_digest, size_bytes=bam_size,
-                source_alignment_sha256=bam_sha256, source_index_sha256=index_sha256,
-                policy_sha256=policy_sha256,
-            ),
-            preview_index,
-            _preview_metadata(
-                preview_index, kind="alignment_preview_index", sha256=index_digest, size_bytes=index_size,
-                source_alignment_sha256=bam_sha256, source_index_sha256=index_sha256,
-                policy_sha256=policy_sha256,
-            ),
-        )
-
-    with _alignment_preview_lock:
-        cached = resolved()
-        if cached is not None:
+    cache_key = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
+    root = _presentation_root(cache_root, bam)
+    destination = root / job_id / session_id / cache_key
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = destination.parent / f".{cache_key}.lock"
+    with lock_path.open("a+b") as producer_lock:
+        fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX)
+        cached = _load_derived_package(destination)
+        if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
             return cached
-        root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{policy_sha256}-", dir=root))
-        temporary_bam = temporary / "alignment-preview.bam"
+        temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=destination.parent))
+        source_handle = index_handle = None
         try:
-            bam_snapshot = open_verified_artifact_snapshot(
-                bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256,
-            )
-            index_snapshot = open_verified_artifact_snapshot(
-                index, expected_size=index_size_bytes, expected_sha256=index_sha256,
-            )
-            try:
-                randomizer = random.Random(int(bam_sha256[:16], 16))
-                reservoir: list[Any] = []
-                with pysam.AlignmentFile(_descriptor_path(bam_snapshot.fileno()), "rb") as source:
-                    header = source.header.to_dict()
-                    for ordinal, read in enumerate(source.fetch(until_eof=True)):
-                        if ordinal < target_reads:
-                            reservoir.append(read)
-                        else:
-                            selected = randomizer.randrange(ordinal + 1)
-                            if selected < target_reads:
-                                reservoir[selected] = read
-                reservoir.sort(key=lambda read: (
-                    read.reference_id if read.reference_id >= 0 else 2**31,
-                    read.reference_start if read.reference_start >= 0 else 2**31,
-                    read.query_name or "",
-                    read.flag,
-                ))
-                with pysam.AlignmentFile(temporary_bam, "wb", header=header) as output:
-                    for read in reservoir:
-                        output.write(read)
-                pysam.index(str(temporary_bam))
-            finally:
-                index_snapshot.close()
-                bam_snapshot.close()
-            temporary_index = Path(f"{temporary_bam}.bai")
-            preview_bam_sha, preview_bam_size = _sha256_file_and_size(temporary_bam)
-            preview_index_sha, preview_index_size = _sha256_file_and_size(temporary_index)
-            manifest = {
-                "schema": "bms.ngs.alignment-preview-manifest.v1",
-                "authority": source_authority,
-                "policy_sha256": policy_sha256,
-                "selected_read_count": len(reservoir),
-                "preview_bam": {"sha256": preview_bam_sha, "size_bytes": preview_bam_size},
-                "preview_index": {"sha256": preview_index_sha, "size_bytes": preview_index_size},
+            source_handle = _open_regular_file_no_symlinks(bam)
+            source_identity = _verify_descriptor(source_handle, bam_size_bytes, bam_sha256)
+            index_handle = _open_regular_file_no_symlinks(index)
+            index_identity = _verify_descriptor(index_handle, index_size_bytes, index_sha256)
+            with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
+                header = source.header.to_dict()
+                references = list(zip(source.references, source.lengths, strict=True))
+                bin_width = max(1, math.ceil(sum(length for _name, length in references) / max_coverage_bins))
+                tile_widths = {name: max(1, math.ceil(length / 64)) for name, length in references}
+                coverage = {name: [0] * math.ceil(length / bin_width) for name, length in references}
+                read_strata: dict[str, tuple[str, int, str]] = {}
+                source_records = forward = reverse = 0
+                flag_counts: dict[str, int] = {}
+                source_contig_counts: dict[str, int] = {}
+                source_strand_counts = {"forward": 0, "reverse": 0}
+                for read in source.fetch(until_eof=True):
+                    if read.is_unmapped or read.is_secondary or read.is_supplementary or not read.query_name:
+                        continue
+                    source_records += 1
+                    strand = "reverse" if read.is_reverse else "forward"
+                    forward += int(not read.is_reverse)
+                    reverse += int(read.is_reverse)
+                    source_strand_counts[strand] += 1
+                    flag_counts[str(read.flag)] = flag_counts.get(str(read.flag), 0) + 1
+                    contig = source.get_reference_name(read.reference_id)
+                    source_contig_counts[contig] = source_contig_counts.get(contig, 0) + 1
+                    read_strata.setdefault(
+                        read.query_name,
+                        (contig, max(0, read.reference_start) // tile_widths[contig], strand),
+                    )
+                    for block_start, block_end in read.get_blocks():
+                        first_bin = block_start // bin_width
+                        last_bin = (block_end - 1) // bin_width
+                        for bin_index in range(first_bin, last_bin + 1):
+                            left = max(block_start, bin_index * bin_width)
+                            right = min(block_end, (bin_index + 1) * bin_width)
+                            coverage[contig][bin_index] += max(0, right - left)
+            stratum_ids: dict[tuple[str, int, str], list[str]] = {}
+            for read_id, stratum in read_strata.items():
+                stratum_ids.setdefault(stratum, []).append(read_id)
+            strata = sorted(stratum_ids)
+            quotas = {stratum: 0 for stratum in strata}
+            if target_reads >= len(strata):
+                quotas = {stratum: 1 for stratum in strata}
+                remaining = target_reads - len(strata)
+            else:
+                remaining = target_reads
+            total_ids = sum(len(ids) for ids in stratum_ids.values())
+            shares = []
+            if remaining and total_ids:
+                for stratum in strata:
+                    exact = remaining * len(stratum_ids[stratum]) / total_ids
+                    whole = math.floor(exact)
+                    quotas[stratum] += whole
+                    shares.append((exact - whole, stratum))
+                leftover = remaining - sum(math.floor(remaining * len(stratum_ids[s]) / total_ids) for s in strata)
+                for _fraction, stratum in sorted(shares, key=lambda item: (-item[0], item[1]))[:leftover]:
+                    quotas[stratum] += 1
+            selected_ids_set = {
+                read_id
+                for stratum in strata
+                for read_id in sorted(stratum_ids[stratum], key=lambda value: _rank_read(bam_sha256, value))[:quotas[stratum]]
             }
-            (temporary / "manifest.json").write_bytes(rfc8785.dumps(manifest))
+            selected: dict[str, list[Any]] = {read_id: [] for read_id in selected_ids_set}
+            source_handle.seek(0)
+            with pysam.AlignmentFile(_descriptor_path(source_handle.fileno()), "rb") as source:
+                for read in source.fetch(until_eof=True):
+                    if (
+                        read.query_name in selected and not read.is_unmapped
+                        and not read.is_secondary and not read.is_supplementary
+                    ):
+                        selected[read.query_name].append(read)
+            while sum(len(records) for records in selected.values()) > ALIGNMENT_PREVIEW_MAX_RECORDS:
+                evicted = max(selected, key=lambda value: _rank_read(bam_sha256, value))
+                selected.pop(evicted)
+            coverage_path = temporary / "full-source-primary-coverage.bedgraph"
+            with coverage_path.open("w", encoding="utf-8", newline="\n") as output:
+                for contig, length in references:
+                    for bin_index, aligned_bases in enumerate(coverage[contig]):
+                        if aligned_bases:
+                            start = bin_index * bin_width
+                            end = min(length, start + bin_width)
+                            output.write(f"{contig}\t{start}\t{end}\t{aligned_bases / (end - start):.6f}\n")
+            retained_ids = sorted(selected, key=lambda value: _rank_read(bam_sha256, value))
+            preview_path = temporary / "alignment-preview.bam"
+            while True:
+                selected_record_count = _write_bam_for_ids(preview_path, header, selected, retained_ids)
+                if preview_path.stat().st_size <= max_output_bytes:
+                    break
+                if not retained_ids:
+                    raise AlignmentSessionError("alignment preview byte ceiling is too small")
+                retained_ids.pop()
+            pysam.index(str(preview_path))
+            preview_index = Path(f"{preview_path}.bai")
+            outputs = {}
+            for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
+                digest, size = _sha256_file_and_size(path)
+                outputs[key] = {"sha256": digest, "size_bytes": size}
+            selected_forward = sum(not record.is_reverse for read_id in retained_ids for record in selected[read_id])
+            selected_reverse = sum(record.is_reverse for read_id in retained_ids for record in selected[read_id])
+            selected_contig_counts: dict[str, int] = {}
+            selected_stratum_counts: dict[str, int] = {}
+            for read_id in retained_ids:
+                contig, tile, strand = read_strata[read_id]
+                selected_contig_counts[contig] = selected_contig_counts.get(contig, 0) + 1
+                key = f"{contig}:{tile}:{strand}"
+                selected_stratum_counts[key] = selected_stratum_counts.get(key, 0) + 1
+            unrepresented = [
+                f"{contig}:{tile}:{strand}" for contig, tile, strand in strata
+                if not any(read_id in retained_ids for read_id in stratum_ids[(contig, tile, strand)])
+            ]
+            manifest = {
+                "schema": "bms.ngs.alignment-presentation-manifest.v2", "authority_sha256": cache_key,
+                "job_id": job_id, "session_id": session_id, "mode": mode,
+                "source_manifest_sha256": source_manifest_sha256,
+                "package_manifest_sha256": source_manifest_sha256,
+                "artifact_set_sha256": artifact_set_sha256,
+                "alignment_pair_sha256": alignment_pair_sha256,
+                "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
+                "source_alignment_sha256": bam_sha256, "source_alignment_size_bytes": bam_size_bytes,
+                "source_index_sha256": index_sha256, "source_index_size_bytes": index_size_bytes,
+                "source_identity": {
+                    key: (value if key == "size_bytes" else str(value))
+                    for key, value in source_identity.items()
+                },
+                "source_index_identity": {
+                    key: (value if key == "size_bytes" else str(value))
+                    for key, value in index_identity.items()
+                },
+                "policy": authority["policy"], "runtime": {"pysam_version": pysam.__version__},
+                "selected_read_set_sha256": _selected_set_digest(retained_ids),
+                "selected_read_count": len(retained_ids),
+                "selected_alignment_record_count": selected_record_count,
+                "source_primary_mapped_read_count": len(read_strata),
+                "source_primary_mapped_alignment_record_count": source_records,
+                "source_strand_counts": {"forward": forward, "reverse": reverse},
+                "selected_strand_counts": {"forward": selected_forward, "reverse": selected_reverse},
+                "source_flag_counts": flag_counts, "coverage_bin_width": bin_width,
+                "coverage_semantics": "mean primary mapped alignment depth from full source",
+                "tile_policy": {"id": "reference-tile-strand-largest-remainder", "version": 1,
+                                "tiles_per_contig": 64, "tile_widths_bp": tile_widths},
+                "source_contig_counts": source_contig_counts,
+                "selected_contig_counts": selected_contig_counts,
+                "selected_stratum_counts": selected_stratum_counts,
+                "unrepresented_strata": unrepresented,
+                "output_byte_ceiling": max_output_bytes, "outputs": outputs,
+            }
+            manifest_handle = (temporary / "manifest.json").open("wb")
+            try:
+                manifest_handle.write(rfc8785.dumps(manifest))
+                manifest_handle.flush()
+                os.fsync(manifest_handle.fileno())
+            finally:
+                manifest_handle.close()
             if destination.exists():
                 shutil.rmtree(destination)
             os.replace(temporary, destination)
+            directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         except Exception as exc:
             shutil.rmtree(temporary, ignore_errors=True)
             if isinstance(exc, AlignmentSessionError):
                 raise
-            raise AlignmentSessionError(f"alignment preview generation failed: {exc}") from exc
-        built = resolved()
-        if built is None:
-            raise AlignmentSessionError("alignment preview failed integrity validation")
-        return built
+            raise AlignmentSessionError(f"alignment presentation generation failed: {exc}") from exc
+        finally:
+            if index_handle is not None:
+                index_handle.close()
+            if source_handle is not None:
+                source_handle.close()
+        package = _load_derived_package(destination)
+        if package is None:
+            raise AlignmentSessionError("alignment presentation failed integrity validation")
+        return package
+
+
+def build_alignment_preview(
+    bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,
+    index_size_bytes: int, cache_root: Path | None = None,
+    target_reads: int = ALIGNMENT_PREVIEW_TARGET_READS,
+) -> tuple[Path, dict[str, Any], Path, dict[str, Any]]:
+    """Compatibility wrapper for the governed presentation package."""
+    package = build_alignment_presentation(
+        bam, bam_sha256=bam_sha256, bam_size_bytes=bam_size_bytes, index=index,
+        index_sha256=index_sha256, index_size_bytes=index_size_bytes,
+        source_manifest_sha256=hashlib.sha256(
+            rfc8785.dumps({"bam": bam_sha256, "bai": index_sha256})
+        ).hexdigest(),
+        job_id="legacy-preview", session_id=hashlib.sha256(bam_sha256.encode()).hexdigest()[:24],
+        mode="primary", cache_root=cache_root, target_reads=target_reads,
+    )
+    return package["bam_path"], package["bam_metadata"], package["index_path"], package["index_metadata"]
+
+
+def build_alignment_locus_slice(
+    bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,
+    index_size_bytes: int, source_identity: dict[str, int], source_manifest_sha256: str,
+    job_id: str, session_id: str, contig: str, start: int, end: int, max_reads: int,
+    cache_root: Path | None = None, max_records: int = LOCUS_MAX_RECORDS,
+    max_output_bytes: int = LOCUS_MAX_BYTES, max_seconds: float = LOCUS_MAX_SECONDS,
+) -> dict[str, Any]:
+    creation_revision, creation_source_tree = _creation_authority()
+    if not SAFE_CONTIG_RE.fullmatch(contig):
+        raise AlignmentSessionError("unsafe contig")
+    if start < 1 or end < start or end - start + 1 > LOCUS_MAX_SPAN:
+        raise AlignmentSessionError("locus span is invalid")
+    if max_reads < 1 or max_reads > LOCUS_MAX_READS or max_records < 1 or max_output_bytes < 1:
+        raise AlignmentSessionError("locus policy is invalid")
+    if source_stat_identity(bam) != source_identity:
+        raise AlignmentSessionError("source identity mismatch")
+    authority = {
+        "schema": "bms.ngs.alignment-locus-authority.v1", "job_id": job_id, "session_id": session_id,
+        "source_manifest_sha256": source_manifest_sha256, "source_alignment_sha256": bam_sha256,
+        "source_index_sha256": index_sha256, "contig": contig, "start_1based": start,
+        "end_1based": end, "max_reads": max_reads, "max_records": max_records,
+        "max_output_bytes": max_output_bytes,
+    }
+    slice_id = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
+    root = _locus_cache_root(cache_root) / slice_id
+    manifest_path = root / "manifest.json"
+    if manifest_path.is_file():
+        receipt = json.loads(manifest_path.read_bytes())
+        bam_path, index_path = root / "locus.bam", root / "locus.bam.bai"
+        return {"slice_id": slice_id, "bam_path": bam_path, "index_path": index_path,
+                "manifest_path": manifest_path, "receipt": receipt,
+                "bam_metadata": _derived_metadata(bam_path, "alignment_locus_slice", source_manifest_sha256),
+                "index_metadata": _derived_metadata(index_path, "alignment_locus_slice_index", source_manifest_sha256),
+                "manifest_metadata": _derived_metadata(manifest_path, "alignment_locus_slice_manifest", source_manifest_sha256)}
+    root.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{slice_id}-", dir=root.parent))
+    source_handle = index_handle = None
+    started = time.monotonic()
+    try:
+        source_handle = _open_regular_file_no_symlinks(bam)
+        if _verify_descriptor(source_handle, bam_size_bytes, bam_sha256) != source_identity:
+            raise AlignmentSessionError("source identity mismatch")
+        index_handle = _open_regular_file_no_symlinks(index)
+        _verify_descriptor(index_handle, index_size_bytes, index_sha256)
+        candidates: dict[str, list[Any]] = {}
+        with pysam.AlignmentFile(
+            _descriptor_path(source_handle.fileno()), "rb", index_filename=_descriptor_path(index_handle.fileno())
+        ) as source:
+            header = source.header.to_dict()
+            for read in source.fetch(contig, start - 1, end):
+                if time.monotonic() - started > max_seconds:
+                    raise AlignmentSessionError("locus slice time limit exceeded")
+                if read.is_unmapped or read.is_secondary or not read.query_name:
+                    continue
+                candidates.setdefault(read.query_name, []).append(read)
+                if sum(len(records) for records in candidates.values()) > max_records:
+                    raise AlignmentSessionError("locus slice record limit exceeded")
+        overlapping = len(candidates)
+        selected_ids = sorted(candidates, key=lambda read_id: _rank_read(bam_sha256, read_id))[:max_reads]
+        locus_bam = temporary / "locus.bam"
+        while True:
+            selected_records = _write_bam_for_ids(locus_bam, header, candidates, selected_ids)
+            if locus_bam.stat().st_size <= max_output_bytes:
+                break
+            if not selected_ids:
+                raise AlignmentSessionError("locus slice byte ceiling is too small")
+            selected_ids.pop()
+        pysam.index(str(locus_bam))
+        locus_index = Path(f"{locus_bam}.bai")
+        receipt = {
+            "schema": "bms.ngs.alignment-locus-slice-manifest.v1", "slice_id": slice_id,
+            "job_id": job_id, "session_id": session_id, "source_manifest_sha256": source_manifest_sha256,
+            "contig": contig, "start_1based": start, "end_1based": end,
+            "overlapping_read_count": overlapping, "selected_read_count": len(selected_ids),
+            "selected_record_count": selected_records, "capped": len(selected_ids) < overlapping,
+            "selected_read_set_sha256": _selected_set_digest(selected_ids),
+            "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
+            "flag_policy": "mapped primary and supplementary; secondary and unmapped excluded",
+            "selected_record_counts": {
+                "primary": sum(not record.is_supplementary for read_id in selected_ids for record in candidates[read_id]),
+                "supplementary": sum(record.is_supplementary for read_id in selected_ids for record in candidates[read_id]),
+                "secondary": 0, "unmapped": 0,
+                "forward": sum(not record.is_reverse for read_id in selected_ids for record in candidates[read_id]),
+                "reverse": sum(record.is_reverse for read_id in selected_ids for record in candidates[read_id]),
+            },
+            "policy": {"max_reads": max_reads, "max_records": max_records,
+                       "max_bytes": max_output_bytes, "max_span_bp": LOCUS_MAX_SPAN},
+            "outputs": {},
+        }
+        for key, path in (("bam", locus_bam), ("index", locus_index)):
+            digest, size = _sha256_file_and_size(path)
+            receipt["outputs"][key] = {"sha256": digest, "size_bytes": size}
+        (temporary / "manifest.json").write_bytes(rfc8785.dumps(receipt))
+        os.replace(temporary, root)
+    except Exception as exc:
+        shutil.rmtree(temporary, ignore_errors=True)
+        if isinstance(exc, AlignmentSessionError):
+            raise
+        raise AlignmentSessionError(f"locus slice generation failed: {exc}") from exc
+    finally:
+        if index_handle is not None:
+            index_handle.close()
+        if source_handle is not None:
+            source_handle.close()
+    return build_alignment_locus_slice(
+        bam, bam_sha256=bam_sha256, bam_size_bytes=bam_size_bytes, index=index,
+        index_sha256=index_sha256, index_size_bytes=index_size_bytes, source_identity=source_identity,
+        source_manifest_sha256=source_manifest_sha256, job_id=job_id, session_id=session_id,
+        contig=contig, start=start, end=end, max_reads=max_reads, cache_root=cache_root,
+        max_records=max_records, max_output_bytes=max_output_bytes, max_seconds=max_seconds,
+    )
+
+
+def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | None = None) -> dict[str, Any]:
+    if re.fullmatch(r"[0-9a-f]{64}", slice_id) is None:
+        raise AlignmentSessionError("alignment locus slice not found")
+    root = _locus_cache_root(cache_root) / slice_id
+    manifest_path, bam_path, index_path = root / "manifest.json", root / "locus.bam", root / "locus.bam.bai"
+    if not all(path.is_file() and not path.is_symlink() for path in (manifest_path, bam_path, index_path)):
+        raise AlignmentSessionError("alignment locus slice not found")
+    receipt = json.loads(manifest_path.read_bytes())
+    if receipt.get("slice_id") != slice_id:
+        raise AlignmentSessionError("alignment locus slice integrity mismatch")
+    for key, path in (("bam", bam_path), ("index", index_path)):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if receipt["outputs"][key] != {"sha256": digest, "size_bytes": path.stat().st_size}:
+            raise AlignmentSessionError("alignment locus slice integrity mismatch")
+    source_manifest = receipt["source_manifest_sha256"]
+    return {"slice_id": slice_id, "bam_path": bam_path, "index_path": index_path,
+            "manifest_path": manifest_path, "receipt": receipt,
+            "bam_metadata": _derived_metadata(bam_path, "alignment_locus_slice", source_manifest),
+            "index_metadata": _derived_metadata(index_path, "alignment_locus_slice_index", source_manifest),
+            "manifest_metadata": _derived_metadata(manifest_path, "alignment_locus_slice_manifest", source_manifest)}
 
 
 def _iter_sam_lines(

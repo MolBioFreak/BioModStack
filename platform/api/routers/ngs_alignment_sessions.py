@@ -235,6 +235,98 @@ class BinaryArtifactResponse(RootModel[bytes]):
     pass
 
 
+class OntDerivedArtifactV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    url: str
+    sha256: str
+    size_bytes: int
+    mime_type: str
+    range_capable: Literal[True]
+
+
+class OntPresentationSourceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    package_manifest_sha256: str
+    alignment_sha256: str
+    alignment_size_bytes: int
+    alignment_index_sha256: str
+    alignment_index_size_bytes: int
+    primary_read_count: int
+    alignment_record_count: int
+
+
+class OntPresentationPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    version: int
+    target_reads: int
+    max_preview_bytes: int
+    max_coverage_bins: int
+
+
+class OntPresentationPreviewV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["primary_read_preview"]
+    selected_read_count: int
+    selected_record_count: int
+    selected_read_set_sha256: str
+    forward_count: int
+    reverse_count: int
+    bam: OntDerivedArtifactV1
+    index: OntDerivedArtifactV1
+
+
+class OntPresentationCoverageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["full_source_primary_coverage"]
+    bin_width_bp: int
+    primary_read_count: int
+    artifact: OntDerivedArtifactV1
+
+
+class OntAlignmentPresentationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-presentation.v1"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    mode: Literal["primary", "dimer_candidates"]
+    state: Literal["ready"]
+    source: OntPresentationSourceV1
+    policy: OntPresentationPolicyV1
+    preview: OntPresentationPreviewV1
+    coverage: OntPresentationCoverageV1
+    manifest: OntDerivedArtifactV1
+
+
+class OntAlignmentLocusSliceRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contig: str
+    start_1based: int
+    end_1based: int
+    max_reads: int
+
+
+class OntAlignmentLocusSliceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-locus-slice.v1"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    slice_id: str
+    state: Literal["ready"]
+    contig: str
+    start_1based: int
+    end_1based: int
+    overlapping_read_count: int
+    selected_read_count: int
+    selected_record_count: int
+    capped: bool
+    policy: dict[str, Any]
+    bam: OntDerivedArtifactV1
+    index: OntDerivedArtifactV1
+    manifest: OntDerivedArtifactV1
+
+
 def _typed_errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
     return {
         status: {"model": OntNgsErrorV1, "description": "Typed governed NGS failure"}
@@ -269,6 +361,10 @@ _GOVERNED_OPENAPI_SUFFIXES = (
     "/alignment-artifacts",
     "/alignment-session-artifacts",
     "/preview/{kind}",
+    "/presentation",
+    "/presentation/{kind}",
+    "/locus-slices",
+    "/locus-slices/{slice_id}/{kind}",
     "/reads",
     "/sequence-qc-manifest",
     "/manifest",
@@ -1252,6 +1348,164 @@ async def get_alignment_session_artifact(
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 
 
+def _presentation_root_for_job(job: Job) -> Path:
+    root = _job_output_dir(job)
+    if not isinstance(root, str) or not root:
+        raise service.AlignmentSessionError("persisted NGS result root is unavailable")
+    return Path(root) / ".alignment-presentations"
+
+
+def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
+    return {"kind": metadata["kind"], "url": url, "sha256": metadata["sha256"],
+            "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
+
+
+async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
+    root = _presentation_root_for_job(job)
+    try:
+        return await run_in_threadpool(service.resolve_cached_alignment_presentation, job_id, session_id, cache_root=root)
+    except service.AlignmentSessionError:
+        pass
+    async with _validated_pinned_result_root(job) as pinned_root:
+        authority = _job_session_authority(job)
+        sessions = await run_in_threadpool(
+            service.build_alignment_sessions, job_id, **authority,
+            job_output_dir=pinned_root, pinned_root_descriptor=True,
+        )
+        selected_session = next((item for item in sessions if item["session_id"] == session_id and item["ready"]), None)
+        if selected_session is None:
+            raise service.AlignmentSessionError("ready alignment session not found")
+        bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+            service.resolve_session_alignment_bundle, job_id, session_id, **_job_authority(job),
+            job_output_dir=pinned_root, pinned_root_descriptor=True,
+        )
+        return await run_in_threadpool(
+            service.build_alignment_presentation, bam,
+            bam_sha256=bam_metadata["sha256"], bam_size_bytes=bam_metadata["size_bytes"],
+            index=index, index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
+            source_manifest_sha256=bam_metadata["source_manifest_sha256"],
+            artifact_set_sha256=selected_session["artifact_set_sha256"],
+            alignment_pair_sha256=selected_session["alignment_pair_sha256"],
+            job_id=job_id, session_id=session_id, mode=selected_session["mode"],
+            cache_root=pinned_root / ".alignment-presentations",
+        )
+
+
+def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
+    manifest = package["manifest"]
+    base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation"
+    return {
+        "schema": "bms.ngs.alignment-presentation.v1", "job_id": job_id, "session_id": session_id,
+        "mode": manifest["mode"], "state": "ready",
+        "source": {"package_manifest_sha256": manifest["package_manifest_sha256"],
+                   "alignment_sha256": manifest["source_alignment_sha256"],
+                   "alignment_size_bytes": manifest["source_alignment_size_bytes"],
+                   "alignment_index_sha256": manifest["source_index_sha256"],
+                   "alignment_index_size_bytes": manifest["source_index_size_bytes"],
+                   "primary_read_count": manifest["source_primary_mapped_read_count"],
+                   "alignment_record_count": manifest["source_primary_mapped_alignment_record_count"]},
+        "policy": manifest["policy"],
+        "preview": {"kind": "primary_read_preview", "selected_read_count": manifest["selected_read_count"],
+                    "selected_record_count": manifest["selected_alignment_record_count"],
+                    "selected_read_set_sha256": manifest["selected_read_set_sha256"],
+                    "forward_count": manifest["selected_strand_counts"]["forward"],
+                    "reverse_count": manifest["selected_strand_counts"]["reverse"],
+                    "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
+                    "index": _derived_descriptor(package["index_metadata"], f"{base}/bai")},
+        "coverage": {"kind": "full_source_primary_coverage", "bin_width_bp": manifest["coverage_bin_width"],
+                     "primary_read_count": manifest["source_primary_mapped_read_count"],
+                     "artifact": _derived_descriptor(package["coverage_metadata"], f"{base}/coverage")},
+        "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/manifest"),
+    }
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
+            response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
+async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
+    try:
+        return _presentation_response(job_id, session_id, await _prepare_presentation(job_id, session_id, authorized_job))
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind: str, request: Request,
+                                               authorized_job: Job = Depends(require_alignment_job)):
+    if kind not in {"bam", "bai", "coverage", "manifest"}:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="The governed presentation artifact was not found.",
+                               job_id=job_id, resource="artifact")
+    try:
+        package = await run_in_threadpool(service.resolve_cached_alignment_presentation, job_id, session_id,
+                                          cache_root=_presentation_root_for_job(authorized_job))
+        path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                  "coverage": ("coverage_path", "coverage_metadata"),
+                                  "manifest": ("manifest_path", "manifest_metadata")}[kind]
+        return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices",
+             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409))
+async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAlignmentLocusSliceRequestV1,
+                                       authorized_job: Job = Depends(require_alignment_job)):
+    if (not service.SAFE_CONTIG_RE.fullmatch(body.contig) or body.start_1based < 1
+            or body.end_1based < body.start_1based
+            or body.end_1based - body.start_1based + 1 > service.LOCUS_MAX_SPAN
+            or body.max_reads < 1 or body.max_reads > service.LOCUS_MAX_READS):
+        return _ngs_error_response(status_code=400, code="NGS_RANGE_INVALID",
+                                   message="The locus slice request is invalid.", job_id=job_id, resource="range")
+    try:
+        presentation = await _prepare_presentation(job_id, session_id, authorized_job)
+        manifest = presentation["manifest"]
+        identity = {key: int(value) for key, value in manifest["source_identity"].items()}
+        async with _validated_pinned_result_root(authorized_job) as pinned_root:
+            bam, bam_metadata, index, index_metadata = await run_in_threadpool(
+                service.resolve_session_alignment_bundle, job_id, session_id, **_job_authority(authorized_job),
+                job_output_dir=pinned_root, pinned_root_descriptor=True)
+            package = await run_in_threadpool(
+                service.build_alignment_locus_slice, bam, bam_sha256=bam_metadata["sha256"],
+                bam_size_bytes=bam_metadata["size_bytes"], index=index,
+                index_sha256=index_metadata["sha256"], index_size_bytes=index_metadata["size_bytes"],
+                source_identity=identity, source_manifest_sha256=manifest["package_manifest_sha256"],
+                job_id=job_id, session_id=session_id, contig=body.contig,
+                start=body.start_1based, end=body.end_1based, max_reads=body.max_reads)
+        receipt = package["receipt"]
+        base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{package['slice_id']}"
+        return {"schema": "bms.ngs.alignment-locus-slice.v1", "job_id": job_id, "session_id": session_id,
+                "slice_id": package["slice_id"], "state": "ready", "contig": body.contig,
+                "start_1based": body.start_1based, "end_1based": body.end_1based,
+                "overlapping_read_count": receipt["overlapping_read_count"],
+                "selected_read_count": receipt["selected_read_count"],
+                "selected_record_count": receipt["selected_record_count"], "capped": receipt["capped"],
+                "policy": receipt["policy"],
+                "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
+                "index": _derived_descriptor(package["index_metadata"], f"{base}/bai"),
+                "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/manifest")}
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice_id: str, kind: str,
+                                              request: Request, authorized_job: Job = Depends(require_alignment_job)):
+    if kind not in {"bam", "bai", "manifest"}:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="The governed locus artifact was not found.", job_id=job_id, resource="artifact")
+    try:
+        package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
+        if package["receipt"].get("job_id") != job_id or package["receipt"].get("session_id") != session_id:
+            raise service.AlignmentSessionError("alignment locus slice not found")
+        path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                  "manifest": ("manifest_path", "manifest_metadata")}[kind]
+        return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
 @router.head("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
 async def get_alignment_preview(
@@ -1270,27 +1524,10 @@ async def get_alignment_preview(
             resource="artifact",
         )
     try:
-        async with _validated_pinned_result_root(authorized_job) as pinned_root:
-            bam, bam_metadata, index, index_metadata = await run_in_threadpool(
-                service.resolve_session_alignment_bundle,
-                job_id,
-                session_id,
-                **_job_authority(authorized_job),
-                job_output_dir=pinned_root,
-                pinned_root_descriptor=True,
-            )
-            preview_bam, preview_bam_metadata, preview_index, preview_index_metadata = await run_in_threadpool(
-                service.build_alignment_preview,
-                bam,
-                bam_sha256=bam_metadata["sha256"],
-                bam_size_bytes=bam_metadata["size_bytes"],
-                index=index,
-                index_sha256=index_metadata["sha256"],
-                index_size_bytes=index_metadata["size_bytes"],
-            )
-            if kind == "bam":
-                return await _serve_artifact(preview_bam, preview_bam_metadata, request, job_id=job_id)
-            return await _serve_artifact(preview_index, preview_index_metadata, request, job_id=job_id)
+        package = await _prepare_presentation(job_id, session_id, authorized_job)
+        if kind == "bam":
+            return await _serve_artifact(package["bam_path"], package["bam_metadata"], request, job_id=job_id)
+        return await _serve_artifact(package["index_path"], package["index_metadata"], request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 

@@ -26,6 +26,13 @@ from routers import files as files_router  # noqa: E402
 from routers import ngs_alignment_sessions as ngs_routes  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _stable_derived_artifact_creation_authority(monkeypatch: pytest.MonkeyPatch):
+    from services import ngs_alignment_sessions as service
+
+    monkeypatch.setattr(service, "_creation_authority", lambda: ("1" * 40, "2" * 40))
+
+
 def _ngs_app() -> FastAPI:
     app = FastAPI()
     app.add_exception_handler(ngs_routes.OntNgsRouteError, ngs_routes.ont_ngs_route_error_handler)
@@ -86,6 +93,9 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "OntNgsCapabilityRevocationSuccessV1",
         "OntNgsErrorV1",
         "BinaryArtifactResponse",
+        "OntAlignmentPresentationV1",
+        "OntAlignmentLocusSliceRequestV1",
+        "OntAlignmentLocusSliceV1",
     } <= set(components)
     error_schema = components["OntNgsErrorV1"]
     assert error_schema["properties"]["job_id"]["format"] == "uuid"
@@ -109,6 +119,8 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         ("/api/jobs/{job_id}/alignment-access", "delete"): {"200", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads", "get"): {"200", "400", "403", "404", "409"},
         ("/api/jobs/{job_id}/reads/{read_id}", "get"): {"200", "400", "403", "404", "409"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation", "get"): {"200", "403", "404", "409"},
+        ("/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices", "post"): {"200", "400", "403", "404", "409"},
     }
     binary_statuses = {"200", "206", "304", "400", "403", "404", "409", "416"}
     for path in (
@@ -116,6 +128,8 @@ def test_governed_ngs_openapi_has_exact_web6_components_and_status_maps() -> Non
         "/api/jobs/{job_id}/alignment-artifacts/{artifact_id}",
         "/api/jobs/{job_id}/alignment-session-artifacts/{mode}/{role}/{sha256}",
         "/api/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}",
+        "/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}",
+        "/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{kind}",
     ):
         exact_statuses[(path, "get")] = binary_statuses
         exact_statuses[(path, "head")] = binary_statuses
@@ -181,6 +195,202 @@ def test_alignment_preview_is_deterministic_and_source_bound(tmp_path: Path) -> 
     assert first[1]["source_index_sha256"] == index_sha
     with pysam.AlignmentFile(first[0], "rb") as preview:
         assert preview.count(until_eof=True) == 3
+
+
+def _write_governed_alignment_fixture(path: Path, *, read_count: int = 12) -> tuple[Path, str, int, str, int]:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "plasmid", "LN": 1000}]}
+    with pysam.AlignmentFile(path, "wb", header=header) as output:
+        supplementary_records = []
+        for index in range(read_count):
+            primary = pysam.AlignedSegment()
+            primary.query_name = f"read-{index:02d}"
+            primary.query_sequence = "ACGT" * 10
+            primary.flag = 16 if index % 2 else 0
+            primary.reference_id = 0
+            primary.reference_start = index * 10
+            primary.mapping_quality = 60
+            primary.cigar = ((0, 40),)
+            primary.query_qualities = pysam.qualitystring_to_array("I" * 40)
+            output.write(primary)
+            if index < 3:
+                supplementary = pysam.AlignedSegment()
+                supplementary.query_name = primary.query_name
+                supplementary.query_sequence = primary.query_sequence
+                supplementary.flag = 2048
+                supplementary.reference_id = 0
+                supplementary.reference_start = 500 + index * 10
+                supplementary.mapping_quality = 30
+                supplementary.cigar = ((0, 40),)
+                supplementary.query_qualities = primary.query_qualities
+                supplementary_records.append(supplementary)
+        for supplementary in supplementary_records:
+            output.write(supplementary)
+        unmapped = pysam.AlignedSegment()
+        unmapped.query_name = "unmapped"
+        unmapped.query_sequence = "A" * 40
+        unmapped.flag = 4
+        unmapped.reference_id = -1
+        unmapped.reference_start = -1
+        unmapped.query_qualities = pysam.qualitystring_to_array("I" * 40)
+        output.write(unmapped)
+    pysam.index(str(path))
+    index = Path(f"{path}.bai")
+    bam_sha, bam_size = service._sha256_file_and_size(path)
+    bai_sha, bai_size = service._sha256_file_and_size(index)
+    return index, bam_sha, bam_size, bai_sha, bai_size
+
+
+def test_presentation_selects_unique_primary_reads_and_truthful_counts(tmp_path: Path) -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    package = service.build_alignment_presentation(
+        source,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_manifest_sha256="a" * 64,
+        job_id="job-a",
+        session_id="1" * 24,
+        mode="primary",
+        cache_root=tmp_path / "cache",
+        target_reads=5,
+        max_output_bytes=1_000_000,
+    )
+
+    receipt = package["manifest"]
+    with pysam.AlignmentFile(package["bam_path"], "rb") as preview:
+        records = list(preview.fetch(until_eof=True))
+    assert len({record.query_name for record in records}) == 5
+    assert all(not record.is_unmapped and not record.is_secondary and not record.is_supplementary for record in records)
+    assert receipt["selected_read_count"] == 5
+    assert receipt["selected_alignment_record_count"] == len(records) == 5
+    assert receipt["source_primary_mapped_read_count"] == 12
+    assert receipt["source_primary_mapped_alignment_record_count"] == 12
+
+
+def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source, read_count=30)
+    common = dict(
+        bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size,
+        source_manifest_sha256="b" * 64, job_id="job-b", session_id="2" * 24,
+        mode="primary", target_reads=30, max_output_bytes=250,
+    )
+    first = service.build_alignment_presentation(source, cache_root=tmp_path / "cache-a", **common)
+    second = service.build_alignment_presentation(source, cache_root=tmp_path / "cache-b", **common)
+    assert first["manifest"]["selected_read_count"] < 30
+    assert first["manifest"]["output_byte_ceiling"] == 250
+    assert first["bam_metadata"]["size_bytes"] <= 250
+    assert first["manifest"]["selected_read_set_sha256"] == second["manifest"]["selected_read_set_sha256"]
+
+
+def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    monkeypatch.setattr(service, "SNAPSHOT_CACHE_MAX_BYTES", bam_size - 1)
+    monkeypatch.setattr(
+        service, "open_verified_artifact_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("shared snapshot cache used")),
+    )
+    package = service.build_alignment_presentation(
+        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="c" * 64,
+        job_id="job-c", session_id="3" * 24, mode="primary",
+        cache_root=tmp_path / "cache", target_reads=3, max_output_bytes=1_000_000,
+    )
+    assert package["manifest"]["source_identity"]["size_bytes"] == bam_size
+
+
+def test_presentation_coverage_uses_all_source_primary_records(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    package = service.build_alignment_presentation(
+        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="d" * 64,
+        job_id="job-d", session_id="4" * 24, mode="primary", cache_root=tmp_path / "cache",
+        target_reads=1, max_output_bytes=1_000_000,
+    )
+    coverage = package["coverage_path"].read_text(encoding="utf-8")
+    assert package["manifest"]["coverage_semantics"] == "mean primary mapped alignment depth from full source"
+    assert package["manifest"]["coverage_bin_width"] >= 1
+    assert "plasmid\t" in coverage
+    assert package["manifest"]["source_primary_mapped_alignment_record_count"] == 12
+
+
+def test_cached_presentation_resolution_does_not_open_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    service.build_alignment_presentation(
+        source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_manifest_sha256="e" * 64,
+        job_id="job-e", session_id="5" * 24, mode="primary", cache_root=tmp_path / "cache",
+        target_reads=3, max_output_bytes=1_000_000,
+    )
+    monkeypatch.setattr(service, "_open_regular_file_no_symlinks", lambda *_args: (_ for _ in ()).throw(AssertionError("source opened")))
+    package = service.resolve_cached_alignment_presentation("job-e", "5" * 24, cache_root=tmp_path / "cache")
+    assert package["manifest"]["source_alignment_sha256"] == bam_sha
+
+
+def test_locus_slice_validates_and_deterministically_caps_primary_reads(tmp_path: Path) -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    identity = service.source_stat_identity(source)
+    common = dict(
+        bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+        index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
+        source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
+        contig="plasmid", start=1, end=500, max_reads=3, cache_root=tmp_path / "cache",
+    )
+    first = service.build_alignment_locus_slice(source, **common)
+    second = service.build_alignment_locus_slice(source, **common)
+    assert first["receipt"]["overlapping_read_count"] > 3
+    assert first["receipt"]["selected_read_count"] == 3
+    assert first["receipt"]["capped"] is True
+    assert first["receipt"]["selected_read_set_sha256"] == second["receipt"]["selected_read_set_sha256"]
+    with pysam.AlignmentFile(first["bam_path"], "rb") as sliced:
+        assert len({record.query_name for record in sliced.fetch(until_eof=True)}) == 3
+    with pytest.raises(service.AlignmentSessionError, match="contig"):
+        service.build_alignment_locus_slice(source, **{**common, "contig": "../bad"})
+    with pytest.raises(service.AlignmentSessionError, match="span"):
+        service.build_alignment_locus_slice(source, **{**common, "end": service.LOCUS_MAX_SPAN + 1})
+
+
+def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    identity = service.source_stat_identity(source)
+    identity["mtime_ns"] += 1
+    with pytest.raises(service.AlignmentSessionError, match="identity"):
+        service.build_alignment_locus_slice(
+            source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
+            index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
+            source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
+            contig="plasmid", start=1, end=100, max_reads=3, cache_root=tmp_path / "cache",
+        )
 
 
 def test_samtools_command_uses_pinned_no_network_ont_runtime(
