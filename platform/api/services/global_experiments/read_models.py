@@ -959,16 +959,20 @@ async def build_project_manager_read_model(
         )
         for domain_head in children:
             domain_key = _key("domain_experiment", domain_head.aggregate_id)
+            domain_payload = domain_payloads[domain_head.aggregate_id]
+            domain_actions = ["attach", "add_note", "archive"]
+            if domain_payload.get("domain_kind") == "protein_in_silico":
+                domain_actions.insert(0, "edit")
             tree_nodes.append(
                 _tree_node(
                     node_key=domain_key,
                     node_type="domain_experiment",
                     subject_id=domain_head.aggregate_id,
                     parent_node_key=global_key,
-                    label=str(domain_payloads[domain_head.aggregate_id].get("name") or domain_head.display_name),
+                    label=str(domain_payload.get("name") or domain_head.display_name),
                     lifecycle_state=domain_head.lifecycle_state,
                     has_children=True,
-                    allowed_actions=["attach", "add_note", "archive"]
+                    allowed_actions=domain_actions
                     if domain_head.lifecycle_state != "archived"
                     else ["restore"],
                 )
