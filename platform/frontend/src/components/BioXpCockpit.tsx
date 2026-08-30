@@ -22,8 +22,11 @@ import {
     useSubmitBioXpOperatorMethodV1,
     useRecoverBioXpMotion,
     type BioXpOperatorActionV2Request,
+    type BioXpOperatorActionReceipt,
     type BioXpOperatorDashboardXAxis,
+    type BioXpOperatorHistoryReceipt,
     type BioXpOperatorInputSpec,
+    type BioXpOperatorLegacyReconciliationReceipt,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
@@ -95,6 +98,12 @@ const AXES: readonly AxisControls[] = [
         ],
     },
 ];
+
+function isIndexedHistoryReceipt(
+    receipt: BioXpOperatorHistoryReceipt,
+): receipt is BioXpOperatorActionReceipt | BioXpOperatorLegacyReconciliationReceipt {
+    return 'command_id' in receipt && 'action_id' in receipt && 'status' in receipt;
+}
 
 const actionClass = 'rounded bg-cyan-700 px-3 py-2 text-sm font-semibold hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-35';
 
@@ -258,7 +267,7 @@ export function BioXpCockpit() {
             ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
             : 'Updating';
     const recentCommands = useMemo(
-        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter((record) => typeof record.status === 'string' && typeof record.action_id === 'string').slice(0, historyLimit),
+        () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter(isIndexedHistoryReceipt).slice(0, historyLimit),
         [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
     );
     useEffect(() => {
@@ -407,9 +416,9 @@ export function BioXpCockpit() {
     const xBoardGeneration = xProvider?.current_board_lifecycle_generation ?? 'unknown';
     const xBoardGenerationFresh = xProvider?.board_generation_fresh;
     const xLastFailure = xAxisDashboard?.last_failure ?? xProvider?.lifecycle?.last_failure;
-    const xHistoryReceipt = historyQuery.data?.receipts?.[0]?.action_id?.startsWith('oem.x.')
-        ? historyQuery.data.receipts[0]
-        : null;
+    const xHistoryReceipt = historyQuery.data?.receipts?.find(
+        (receipt) => isIndexedHistoryReceipt(receipt) && receipt.action_id.startsWith('oem.x.'),
+    ) ?? null;
     const xReceipt = xHistoryReceipt
         ?? xAxisDashboard?.latest_receipt
         ?? xProvider?.lifecycle?.latest_receipt
@@ -1177,9 +1186,9 @@ export function BioXpCockpit() {
                                         {record.status.replaceAll('_', ' ')} · {bioXpReceiptTimestampText(record.finished_at)}
                                     </span>
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{record.error ?? record.machine_assessment}</p>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{'error' in record ? (record.error ?? record.machine_assessment) : 'unverified legacy reconciliation record'}</p>
                                 <p className="mt-1 text-xs text-slate-400">
-                                    {record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP did not acknowledge'} · {record.controller_acknowledged ? 'Controller ACK' : 'No controller ACK'} · {record.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
+                                    {'remote_acknowledged' in record && record.remote_acknowledged ? 'Robot HTTP acknowledged' : 'Robot HTTP unverified'} · {'controller_acknowledged' in record && record.controller_acknowledged ? 'Controller ACK' : 'Controller ACK unverified'} · {'controller_terminal_state_verified' in record && record.controller_terminal_state_verified ? 'Terminal proof verified' : 'Terminal proof unverified'} · {'physical_effect_verified' in record && record.physical_effect_verified ? 'Physical effect verified' : 'Physical effect unverified'}
                                 </p>
                                 {(record.response != null || record.stage_receipts.length > 0) && <details className="mt-2"><summary className="cursor-pointer text-xs text-slate-400">Nested robot evidence</summary><pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify({ response: record.response, stage_receipts: record.stage_receipts }, null, 2)}</pre></details>}
                             </article>

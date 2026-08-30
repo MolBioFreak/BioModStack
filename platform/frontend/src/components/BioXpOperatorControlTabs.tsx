@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
     type BioXpOperatorActionReceipt,
     type BioXpOperatorActionSpec,
+    type BioXpOperatorHistoryReceipt,
     bioXpErrorText,
 
     useBioXpOperatorActionHistory,
@@ -113,27 +114,59 @@ function buildActionConfirmationFingerprint(value: ActionConfirmationFingerprint
     return JSON.stringify(value);
 }
 
-function ReceiptCard({ receipt }: { receipt: BioXpOperatorActionReceipt }) {
-    const terminalPass = receipt.machine_assessment === 'pass' || receipt.operator_assessment === 'pass';
-    const terminalFail = receipt.machine_assessment === 'fail' || receipt.operator_assessment === 'fail';
+function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
+    const actionId = 'action_id' in receipt
+        ? receipt.action_id
+        : 'schema' in receipt
+            ? receipt.operation
+            : receipt.runtime_binding.entrypoint_id;
+    const status = 'status' in receipt ? receipt.status : 'schema' in receipt ? 'recorded' : receipt.outcome;
+    const machineAssessment = 'machine_assessment' in receipt ? receipt.machine_assessment : 'unverified';
+    const operatorAssessment = 'operator_assessment' in receipt ? receipt.operator_assessment : null;
+    const terminalPass = machineAssessment === 'pass' || operatorAssessment === 'pass';
+    const terminalFail = machineAssessment === 'fail' || operatorAssessment === 'fail';
+    const commandId = 'command_id' in receipt
+        ? receipt.command_id
+        : 'receipt_id' in receipt
+            ? receipt.receipt_id
+            : 'legacy unindexed record';
+    const ownershipGeneration = 'ownership_generation' in receipt ? receipt.ownership_generation : 'unknown';
+    const remoteAcknowledged = 'remote_acknowledged' in receipt
+        ? receipt.remote_acknowledged
+        : 'truth' in receipt
+            ? receipt.truth.delivery_verified
+            : false;
+    const physicalEffectVerified = 'physical_effect_verified' in receipt
+        ? receipt.physical_effect_verified
+        : 'truth' in receipt
+            ? receipt.truth.physical_effect_verified
+            : false;
+    const durationMs = 'duration_ms' in receipt ? receipt.duration_ms : null;
+    const operatorNote = 'operator_note' in receipt ? receipt.operator_note : null;
+    const stageReceipts = 'stage_receipts' in receipt ? receipt.stage_receipts : [];
+    const response = 'response' in receipt ? receipt.response : null;
     return (
         <article className={`rounded border p-3 text-xs ${terminalPass ? 'border-emerald-700/60' : terminalFail ? 'border-red-700/60' : 'border-slate-700'}`}>
             <div className="flex flex-wrap justify-between gap-2">
-                <span className="font-mono text-cyan-200">{receipt.action_id}</span>
-                <span>{receipt.status} · machine={receipt.machine_assessment} · operator={receipt.operator_assessment ?? 'unreviewed'}</span>
+                <span className="font-mono text-cyan-200">{actionId}</span>
+                <span>{status} · machine={machineAssessment} · operator={operatorAssessment ?? 'unreviewed'}</span>
             </div>
-            <p className="mt-1 font-mono text-slate-400">{receipt.command_id} · generation {receipt.ownership_generation}</p>
-            <p className="mt-1 text-slate-300">remote_acknowledged={String(receipt.remote_acknowledged)} · physical_effect_verified={String(receipt.physical_effect_verified)} · duration_ms={receipt.duration_ms ?? 'pending'}</p>
-            {receipt.error && <p className="mt-1 text-red-300">{receipt.error}</p>}
-            {receipt.operator_note && <p className="mt-1 text-slate-300">Operator: {receipt.operator_note}</p>}
-            {receipt.stage_receipts.length > 0 && (
-                <details className="mt-2"><summary>Stage receipts ({receipt.stage_receipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(receipt.stage_receipts, null, 2)}</pre></details>
+            <p className="mt-1 font-mono text-slate-400">{commandId} · generation {ownershipGeneration}</p>
+            <p className="mt-1 text-slate-300">remote_acknowledged={String(remoteAcknowledged)} · physical_effect_verified={String(physicalEffectVerified)} · duration_ms={durationMs ?? 'unknown'}</p>
+            {'error' in receipt && receipt.error && <p className="mt-1 text-red-300">{receipt.error}</p>}
+            {operatorNote && <p className="mt-1 text-slate-300">Operator: {operatorNote}</p>}
+            {stageReceipts.length > 0 && (
+                <details className="mt-2"><summary>Stage receipts ({stageReceipts.length})</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(stageReceipts, null, 2)}</pre></details>
             )}
-            {receipt.response && (
-                <details className="mt-2"><summary>Bounded response</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(receipt.response, null, 2)}</pre></details>
+            {response && (
+                <details className="mt-2"><summary>Bounded response</summary><pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap text-[11px] text-slate-400">{JSON.stringify(response, null, 2)}</pre></details>
             )}
         </article>
     );
+}
+
+function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): receipt is BioXpOperatorActionReceipt {
+    return 'schema_version' in receipt && receipt.schema_version === 'bioxp.operator_action_receipt.v1';
 }
 
 export function BioXpOperatorControlTabs({ generation, connected }: { generation: number; connected: boolean }) {
@@ -212,7 +245,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
     const disabledReason = admission.data?.disabled_reason ?? (selected ? selected.disabled_reason : null) ?? 'Robot did not admit this action.';
     const dependencies = admission.data?.dependencies ?? (selected ? selected.dependencies : []);
     const latestReceipt = connected && authoritativeCatalog && authoritativeHistory
-        ? invoke.data ?? authoritativeHistory.receipts[0]
+        ? invoke.data ?? authoritativeHistory.receipts.find(isCurrentActionReceipt)
         : undefined;
     const latestReceiptCommandId = latestReceipt?.command_id ?? null;
     const xLifecycle = dashboardQuery.data?.x_axis?.provider?.lifecycle ?? null;
@@ -368,7 +401,7 @@ export function BioXpOperatorControlTabs({ generation, connected }: { generation
 
             {pane === 'logs' ? (
                 <div className="mt-4 space-y-2">
-                    {(authoritativeHistory?.receipts ?? []).map((receipt) => <ReceiptCard key={receipt.command_id} receipt={receipt} />)}
+                    {(authoritativeHistory?.receipts ?? []).map((receipt, index) => <ReceiptCard key={'command_id' in receipt ? receipt.command_id : 'receipt_id' in receipt ? receipt.receipt_id : `legacy-unindexed-${index}`} receipt={receipt} />)}
                     {authoritativeHistory?.receipts.length === 0 && <p className="text-sm text-slate-400">No robot-owned action receipts yet.</p>}
                 </div>
             ) : (

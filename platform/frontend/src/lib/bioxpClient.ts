@@ -727,9 +727,58 @@ export interface BioXpOperatorActionReceipt {
     stage_receipts: Record<string, unknown>[];
 }
 
+export interface BioXpOperatorLegacyReconciliationReceipt {
+    action_id: string;
+    automatic_retry: false;
+    callback_session_id: string | null;
+    caller_class: string;
+    command_id: string;
+    connection_generation: number | null;
+    control_class: string;
+    duration_ms: number;
+    entrypoint_id: string;
+    finished_at: string;
+    idempotency_key: string;
+    idempotency_replay_enabled: boolean;
+    lifecycle_stage_id: string | null;
+    operation: string;
+    ownership_generation: number;
+    physical_outcome: 'ambiguous';
+    protocol_action_id: string | null;
+    protocol_job_id: string | null;
+    requested_inputs: Record<string, unknown>;
+    response: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>[];
+    status: 'reconciliation_required';
+}
+
+export interface BioXpOperatorLegacyUnindexedPipetteReceipt {
+    error: string;
+    failure_code: string;
+    ok: false;
+    outcome: string;
+    response: Record<string, unknown>;
+    runtime_binding: {
+        callback_session_id: string;
+        caller_class: string;
+        control_class: string;
+        entrypoint_id: string;
+        lifecycle_stage_id: string;
+        owner: string;
+        transport_owner_bound: true;
+    };
+    stage_receipts: Record<string, unknown>[];
+}
+
+export type BioXpOperatorHistoryReceipt =
+    | BioXpOperatorActionReceipt
+    | BioXpPipetteReceipt
+    | BioXpOperatorLegacyReconciliationReceipt
+    | BioXpOperatorLegacyUnindexedPipetteReceipt;
+
 export interface BioXpOperatorActionHistory {
     schema_version: 'bioxp.operator_action_history.v1';
-    receipts: BioXpOperatorActionReceipt[];
+    receipts: BioXpOperatorHistoryReceipt[];
 }
 
 export function bioXpOperatorGenerationPayload(
@@ -928,7 +977,7 @@ export interface BioXpOperatorReportReleaseIdentity { schema?: string | null; st
 export interface BioXpOperatorReportUnavailableReleaseIdentity { status: string; verified: false; reason_code: string }
 export interface BioXpOperatorReportSourceHighWaters { operator_commands: number; operator_transitions: number; pipette_operations: number; pipette_channel_observations: number; pipette_transport_exchanges: number; runtime_events: number; pipette_pressure_streams: number; pipette_pressure_chunks: number; runtime_evidence_objects: number; runtime_evidence_links: number | null; runtime_evidence_events: number; operator_plane_command_versions: number; operator_plane_pipette_versions: number; operator_plane_pressure_stream_versions: number; operator_plane_evidence_versions: number }
 export interface BioXpOperatorReportSchemaIdentity { database_identity: 'robot_authoritative_sqlite'; schema_version: 5; identity_version: number | null; release_identity: BioXpOperatorReportReleaseIdentity }
-export interface BioXpOperatorReportSnapshot {
+export interface BioXpOperatorReportCurrentSnapshot {
     database_incarnation_id: string;
     schema_identity: BioXpOperatorReportSchemaIdentity;
     release_identity: BioXpOperatorReportReleaseIdentity;
@@ -937,6 +986,18 @@ export interface BioXpOperatorReportSnapshot {
     high_water_rowid?: number;
     high_water_event_id?: number;
 }
+
+export interface BioXpOperatorReportLegacySnapshot {
+    database_identity: 'robot_authoritative_sqlite';
+    schema_version: 2;
+    database_path_exposed: false;
+    identity_version: 2;
+    high_water_sequence?: number;
+    high_water_rowid?: number;
+    high_water_event_id?: number;
+}
+
+export type BioXpOperatorReportSnapshot = BioXpOperatorReportCurrentSnapshot | BioXpOperatorReportLegacySnapshot;
 
 export interface BioXpOperatorReportSummary {
     scope?: string;
@@ -1063,6 +1124,8 @@ export interface BioXpOperatorReportExportList {
     }>;
     returned_count: number;
     limit: number;
+    available: boolean;
+    unavailable_reason: string | null;
 }
 
 const operatorReportSummaryKey = ['bioxp', 'operator-reports', 'summary'] as const;
@@ -1512,13 +1575,16 @@ export const useBioXpOperatorActionAdmission = (
     retry: false,
 });
 
-export const bioXpReceiptIsNonTerminal = (receipt: { status?: unknown } | null | undefined): boolean =>
-    typeof receipt?.status === 'string'
-    && receipt.status !== 'completed'
-    && receipt.status !== 'failed'
-    && receipt.status !== 'rejected'
-    && receipt.status !== 'blocked'
-    && receipt.status !== 'cleared';
+export const bioXpReceiptIsNonTerminal = (receipt: unknown): boolean => {
+    if (!receipt || typeof receipt !== 'object' || !('status' in receipt)) return false;
+    const status = receipt.status;
+    return typeof status === 'string'
+        && status !== 'completed'
+        && status !== 'failed'
+        && status !== 'rejected'
+        && status !== 'blocked'
+        && status !== 'cleared';
+};
 
 export const useBioXpOperatorActionHistory = (
     connectionGeneration: number,
@@ -1922,7 +1988,7 @@ export const useInvokeBioXpOperatorAction = () => {
                     schema_version: 'bioxp.operator_action_history.v1',
                     receipts: [
                         receipt,
-                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
                     ].slice(0, 100),
                 }),
             );
@@ -1965,7 +2031,7 @@ export const useAssessBioXpOperatorAction = () => {
                     schema_version: 'bioxp.operator_action_history.v1',
                     receipts: [
                         receipt,
-                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
                     ].slice(0, 100),
                 }),
             );
