@@ -36,6 +36,18 @@ export const CLIENT_DERIVED_RESULTS_LIMIT = 500;
 const CLIENT_DERIVED_RESULTS_MESSAGE =
     'Client-side sorting and source/result-set filters require a result set of 500 designs or fewer. Narrow the server-side filters first.';
 
+export function shouldFetchBackboneSummary({
+    active,
+    showReviewWorkingSetPanel,
+    reviewSelectionRequired,
+}: {
+    active: boolean;
+    showReviewWorkingSetPanel: boolean;
+    reviewSelectionRequired: boolean;
+}): boolean {
+    return active && showReviewWorkingSetPanel && !reviewSelectionRequired;
+}
+
 /**
  * Client-only filters and sort keys have no server equivalent. They must never
  * present a capped first page as a complete result set.

@@ -365,6 +365,26 @@ def test_batching_settings_v2_are_strict_bounded_and_historically_compatible() -
     )
 
 
+def test_operator_requested_v1_effective_settings_reopen_with_defaulted_batching_sources() -> None:
+    settings = _settings_module()
+    effective = _effective(_requested())
+    persisted = settings.compatible_effective_settings_payload(effective)
+
+    assert persisted["requested_settings"]["schema_version"] == 1
+    assert "batching_enabled" not in persisted["requested_settings"]
+    assert "structures_per_job" not in persisted["requested_settings"]
+    assert "batching_enabled" not in persisted["value_sources"]
+    assert "structures_per_job" not in persisted["value_sources"]
+
+    reopened = settings.FrustraMPNNEffectiveSettings.model_validate(persisted)
+
+    assert reopened.settings_value_origin == "operator_request"
+    assert reopened.value_sources.batching_enabled == "bms_default"
+    assert reopened.value_sources.structures_per_job == "bms_default"
+    assert reopened.value_sources.source_structure.selected_model_number == "operator_request"
+    assert reopened.effective_settings_sha256 == effective.effective_settings_sha256
+
+
 def test_default_settings_match_installed_behavior_and_have_explicit_value_sources() -> None:
     settings = _settings_module()
     defaults = settings.default_settings()

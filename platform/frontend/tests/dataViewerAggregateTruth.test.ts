@@ -26,6 +26,20 @@ const summary = {
     screen_failed: 150,
 };
 
+test('backbone summaries run only for active review workspaces with a selected source', () => {
+    const decide = (policy as Record<string, unknown>).shouldFetchBackboneSummary;
+    assert.equal(typeof decide, 'function');
+    const shouldFetch = decide as (input: {
+        active: boolean;
+        showReviewWorkingSetPanel: boolean;
+        reviewSelectionRequired: boolean;
+    }) => boolean;
+    assert.equal(shouldFetch({ active: true, showReviewWorkingSetPanel: false, reviewSelectionRequired: false }), false);
+    assert.equal(shouldFetch({ active: true, showReviewWorkingSetPanel: true, reviewSelectionRequired: true }), false);
+    assert.equal(shouldFetch({ active: true, showReviewWorkingSetPanel: true, reviewSelectionRequired: false }), true);
+    assert.equal(shouldFetch({ active: false, showReviewWorkingSetPanel: true, reviewSelectionRequired: false }), false);
+});
+
 test('server aggregates replace page samples and clear unsupported sampled metrics', () => {
     const apply = (policy as Record<string, unknown>).applyAuthoritativeDesignSummary;
     assert.equal(typeof apply, 'function');

@@ -38,7 +38,11 @@ import {
     type ResultSetFilter,
 } from './designOutputSource';
 import { isAntibodyRefinementMode } from '../lib/antibodyRefinementMode';
-import { applyAuthoritativeDesignSummary, getClientDerivedResultsPolicy } from '../lib/clientDerivedResultsPolicy';
+import {
+    applyAuthoritativeDesignSummary,
+    getClientDerivedResultsPolicy,
+    shouldFetchBackboneSummary,
+} from '../lib/clientDerivedResultsPolicy';
 import { jobPollingInterval } from '../lib/queryPolling';
 import {
     getReviewColumnCapabilities,
@@ -2640,7 +2644,11 @@ export function ResultsViewer() {
     const { data: backboneSummaryData } = useQuery({
         queryKey: ['backboneSummary', selectedJobId, activeRfArtifactGroup],
         queryFn: () => fetchBackboneSummary(selectedJobId, activeRfArtifactGroup),
-        enabled: !!activeJob && !reviewSelectionRequired,
+        enabled: shouldFetchBackboneSummary({
+            active: Boolean(activeJob),
+            showReviewWorkingSetPanel,
+            reviewSelectionRequired,
+        }),
     });
     const backboneSummary = backboneSummaryData?.data;
     const gateCandidateBackboneSummary = useMemo(
