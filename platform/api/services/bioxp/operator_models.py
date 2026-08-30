@@ -4125,6 +4125,9 @@ CommandStatusV2 = Literal[
     "interrupted",
     "ambiguous",
     "rejected",
+    "stopped",
+    "aborted",
+    "cancelled",
 ]
 _NONTERMINAL_V2 = frozenset({"queued", "dispatched", "issued_pending", "interrupting"})
 Board4StateV2 = Literal["unknown", "inactive", "transitioning", "active", "faulted"]
@@ -4192,6 +4195,14 @@ class OperatorMoveXYInputsV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     x: SignedInt32
     y: SignedInt32
+
+
+class OperatorDeckMoveInputsV1(BaseModel):
+    """Finite semantic deck intent; the robot remains coordinate authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    camera_offset: StrictBool
 
 
 OperatorNormalInputsV2 = (
@@ -4467,6 +4478,16 @@ class OperatorTransitionV2(BaseModel):
         return value
 
 
+class OperatorDeckMovementReceiptV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    target_label: str | None = Field(default=None, min_length=1, max_length=240)
+    source_branch: str | None = Field(default=None, min_length=1, max_length=240)
+    controller_completion_verified: StrictBool | None = None
+    semantic_state_committed: StrictBool | None = None
+    physical_observation_verified: StrictBool | None = None
+
+
 class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
     canonical_inputs: dict[str, JsonValue]
     requested_values: dict[str, ReceiptScalarV2]
@@ -4477,6 +4498,38 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
     transport_artifacts: list[OperatorTransportArtifactV2]
     child_receipts: list[OperatorActionReceiptV2]
     transitions: list[OperatorTransitionV2]
+    deck_movement: OperatorDeckMovementReceiptV1 | None = None
+
+    @model_validator(mode="after")
+    def bind_deck_movement_detail(self):
+        if self.action_id == "oem.deck.move_to_location":
+            if self.deck_movement is None:
+                raise ValueError("deck movement detail requires typed deck evidence")
+            if self.deck_movement.target != self.canonical_inputs.get("target"):
+                raise ValueError("deck receipt target must match canonical inputs")
+            deck = self.deck_movement
+            if deck.physical_observation_verified is True and not self.physical_effect_verified:
+                raise ValueError("deck physical observation cannot exceed receipt physical-effect truth")
+            if self.physical_effect_verified and deck.physical_observation_verified is not True:
+                raise ValueError("verified physical effect requires matching deck observation")
+            if self.status == "completed":
+                if deck.controller_completion_verified is not True or deck.semantic_state_committed is not True:
+                    raise ValueError("completed deck movement requires controller completion and semantic commit")
+                if deck.target_label is None or deck.source_branch is None:
+                    raise ValueError("completed deck movement requires established target and source branch")
+            else:
+                if deck.semantic_state_committed is True:
+                    raise ValueError("non-completed deck movement cannot claim semantic commit")
+                if deck.controller_completion_verified is True and deck.semantic_state_committed is not True:
+                    if self.status != "ambiguous" or self.completion_class != "recovery_required":
+                        raise ValueError(
+                            "controller-completed deck movement without semantic commit requires ambiguous recovery"
+                        )
+                if self.status in {"queued", "dispatched", "rejected"} and deck.controller_completion_verified is True:
+                    raise ValueError("unissued or rejected deck movement cannot claim controller completion")
+        elif self.deck_movement is not None:
+            raise ValueError("deck movement evidence is forbidden on other actions")
+        return self
 
 
 class OperatorQueueItemV1(BaseModel):
@@ -4580,6 +4633,43 @@ class OperatorYAxisAuthorityV2(BaseModel):
         return value
 
 
+class OperatorDeckDestinationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    label: str = Field(min_length=1, max_length=240)
+    aliases: list[str] = Field(default_factory=list, max_length=64)
+    branch_kind: Literal["ordinary", "barcode", "park"]
+    camera_offset_supported: StrictBool
+
+
+class OperatorDeckDashboardV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    current_location: str | None = Field(default=None, max_length=160)
+    current_well: str | None = Field(default=None, max_length=160)
+    position_table_revision: str = Field(min_length=1, max_length=160)
+    destination_catalog_revision: str = Field(min_length=1, max_length=160)
+    semantic_state_revision: StrictInt = Field(ge=0)
+    ownership_generation: StrictInt = Field(ge=0)
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
+    destinations: list[OperatorDeckDestinationV1]
+
+    @field_validator("expected_board_epoch_by_board")
+    @classmethod
+    def exact_deck_board_epochs(cls, value: dict[str, int]) -> dict[str, int]:
+        value = _canonical_board_epoch_map(value)
+        if set(value) != {"4", "5"}:
+            raise ValueError("deck dashboard requires exact board epochs 4 and 5")
+        return value
+
+    @field_validator("destinations")
+    @classmethod
+    def unique_deck_destinations(cls, value: list[OperatorDeckDestinationV1]) -> list[OperatorDeckDestinationV1]:
+        keys = [destination.key for destination in value]
+        if not keys or len(keys) != len(set(keys)):
+            raise ValueError("deck dashboard destination keys must be present and unique")
+        return value
+
+
 class OperatorDashboardV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4591,6 +4681,7 @@ class OperatorDashboardV2(BaseModel):
     active_commands: list[OperatorActionReceiptV2]
     command_queue: OperatorQueueV1
     latest_receipts: list[OperatorActionReceiptV2]
+    deck: OperatorDeckDashboardV1 | None = None
 
     @field_validator("generated_at")
     @classmethod
@@ -4621,6 +4712,11 @@ class OperatorActionSpecV2(BaseModel):
     interrupt: StrictBool
     enabled: StrictBool
     disabled_reason: str | None
+    destination_catalog_revision: str | None = Field(default=None, min_length=1, max_length=160)
+    position_table_revision: str | None = Field(default=None, min_length=1, max_length=160)
+    required_board_ids: list[Literal[4, 5]] | None = None
+    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt] | None = None
+    destinations: list[OperatorDeckDestinationV1] | None = None
 
     @model_validator(mode="after")
     def bind_request_schema_to_interrupt(self):
@@ -4636,6 +4732,25 @@ class OperatorActionSpecV2(BaseModel):
         )
         if self.request_schema_version != expected_request or self.response_schema_version != expected_response:
             raise ValueError("catalog request/response schemas do not match interrupt classification")
+        deck_fields = (
+            self.destination_catalog_revision,
+            self.position_table_revision,
+            self.required_board_ids,
+            self.expected_board_epoch_by_board,
+            self.destinations,
+        )
+        if self.action_id == "oem.deck.move_to_location":
+            if any(value is None for value in deck_fields):
+                raise ValueError("deck movement catalog row requires complete finite destination authority")
+            if self.required_board_ids != [4, 5]:
+                raise ValueError("deck movement requires exact board IDs 4 and 5")
+            if set(self.expected_board_epoch_by_board or {}) != {"4", "5"}:
+                raise ValueError("deck movement catalog requires exact board epochs 4 and 5")
+            keys = [destination.key for destination in self.destinations or []]
+            if not keys or len(keys) != len(set(keys)):
+                raise ValueError("deck destination keys must be present and unique")
+        elif any(value is not None for value in deck_fields):
+            raise ValueError("deck destination authority is forbidden on other actions")
         return self
 
 
@@ -4645,6 +4760,31 @@ class OperatorControlCatalogV2(BaseModel):
     schema_version: Literal["bioxp.operator_control_catalog.v2"]
     dashboard: OperatorDashboardV2
     actions: list[OperatorActionSpecV2]
+
+    @model_validator(mode="after")
+    def bind_deck_action_to_embedded_dashboard(self):
+        deck_actions = [action for action in self.actions if action.action_id == "oem.deck.move_to_location"]
+        if len(deck_actions) > 1:
+            raise ValueError("catalog cannot contain duplicate deck movement actions")
+        if not deck_actions:
+            if self.dashboard.deck is not None:
+                raise ValueError("embedded deck dashboard requires its canonical action")
+            return self
+        deck = self.dashboard.deck
+        if deck is None:
+            raise ValueError("deck movement action requires embedded deck dashboard authority")
+        action = deck_actions[0]
+        if deck.ownership_generation != self.dashboard.ownership_generation:
+            raise ValueError("deck ownership generation must match embedded dashboard")
+        if action.destination_catalog_revision != deck.destination_catalog_revision:
+            raise ValueError("deck destination catalog revision is incoherent")
+        if action.position_table_revision != deck.position_table_revision:
+            raise ValueError("deck position table revision is incoherent")
+        if action.expected_board_epoch_by_board != deck.expected_board_epoch_by_board:
+            raise ValueError("deck board epochs are incoherent")
+        if action.destinations != deck.destinations:
+            raise ValueError("deck destination list is incoherent")
+        return self
 
 
 class OperatorActionHistoryV2(BaseModel):

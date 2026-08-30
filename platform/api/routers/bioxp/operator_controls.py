@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -25,6 +26,7 @@ from services.bioxp.operator_models import (
     OperatorMoveAbsoluteInputsV2,
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
+    OperatorDeckMoveInputsV1,
     OperatorInterruptRequestV1,
     OperatorInterruptReceiptV1,
     OperatorMethodRequestV1,
@@ -343,6 +345,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,
     "oem.xy.move_absolute": OperatorMoveXYInputsV2,
     "oem.xy.home": OperatorEmptyInputsV2,
+    "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
 }
 
 
@@ -354,6 +357,8 @@ def _validate_v2_action_inputs(action_id: str, request: OperatorActionRequestV2)
         validated = expected_type.model_validate(request.inputs)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="Action inputs do not match the closed action schema") from exc
+    if action_id == "oem.deck.move_to_location" and set(request.expected_board_epoch_by_board) != {"4", "5"}:
+        raise HTTPException(status_code=422, detail="Deck movement requires exact expected board epochs 4 and 5")
     return validated.model_dump(mode="json")
 
 
@@ -488,6 +493,27 @@ def _normalize_legacy_command_detail_payload(
     return transformed
 
 
+def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
+    if not isinstance(payload, dict):
+        return None
+    command_id = payload.get("command_id")
+    if not isinstance(command_id, str) or not command_id or len(command_id) > 160:
+        return None
+    status_path = f"/api/bioxp/operator-controls/v2/receipts/{quote(command_id, safe='')}"
+    return HTTPException(
+        status_code=502,
+        detail={
+            "error": "post_dispatch_receipt_validation_failed",
+            "command_id": command_id,
+            "status_path": status_path,
+            "outcome": "uncertain",
+            "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
+            "reconciliation": "Poll the command receipt until terminal; if unavailable, require operator reconciliation.",
+            "robot_evidence": payload,
+        },
+    )
+
+
 @router.get("/operator-controls/v2/catalog", response_model=OperatorControlCatalogV2)
 async def operator_control_catalog_v2(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
@@ -543,8 +569,17 @@ async def invoke_operator_action_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceiptV2, payload)
-    if receipt.action_id != action_id or receipt.command_id == "":
+    try:
+        receipt = OperatorActionReceiptV2.model_validate(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
+    if receipt.action_id != action_id:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched v2 operator-action receipt")
     return receipt
 
