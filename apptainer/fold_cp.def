@@ -1,0 +1,38 @@
+Bootstrap: localimage
+From: /mnt/BioModStack/apptainer/boltzgen.sif
+
+%post
+    set -eu
+    rm -rf /opt/fold-cp
+    git clone https://github.com/NVIDIA-BioNeMo/boltz-cp.git /opt/fold-cp
+    cd /opt/fold-cp
+    git checkout --detach f76f37a77c854b56b6250b426af8c2d63b501f7f
+    test "$(git rev-parse HEAD)" = "f76f37a77c854b56b6250b426af8c2d63b501f7f"
+    find /opt/fold-cp -type d -name __pycache__ -prune -exec rm -rf {} +
+
+%environment
+    export PATH=/opt/venv/bin:$PATH
+    export PYTHONPATH=/opt/fold-cp/src${PYTHONPATH:+:$PYTHONPATH}
+    export CUDA_DEVICE_ORDER=PCI_BUS_ID
+    export BOLTZ_CACHE=/boltzcache
+    export NUMBA_CACHE_DIR=/tmp/fold-cp-numba
+    export XDG_CACHE_HOME=/tmp/fold-cp-cache
+    export TRITON_CACHE_DIR=/tmp/fold-cp-triton
+    export MPLCONFIGDIR=/tmp/fold-cp-matplotlib
+
+%labels
+    org.opencontainers.image.title "NVIDIA Fold-CP runtime"
+    org.opencontainers.image.source "https://github.com/NVIDIA-BioNeMo/boltz-cp"
+    org.opencontainers.image.revision "f76f37a77c854b56b6250b426af8c2d63b501f7f"
+    org.biomodstack.runtime.id "fold-cp-f76f37a"
+    org.biomodstack.runtime.base.sha256 "a62b63635a53f18f3bbb66585817bdd0425f58799696b2a1c19124bd6023a672"
+
+%test
+    set -eu
+    test "$(python3 -c 'import sys; print(sys.version_info >= (3, 11))')" = "True"
+    test "$(git -C /opt/fold-cp rev-parse HEAD)" = "f76f37a77c854b56b6250b426af8c2d63b501f7f"
+    python3 -c "import boltz.distributed.main as main; assert main.__file__.startswith('/opt/fold-cp/src/')"
+    python3 -m boltz.distributed.main --help >/dev/null
+
+%runscript
+    exec python3 -m boltz.distributed.main "$@"

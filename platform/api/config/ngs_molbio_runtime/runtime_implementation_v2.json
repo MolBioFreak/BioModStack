@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "929775d92e4afd3b8819ab56b1b536df59e50e17a66311685960698657055435",
+  "content_sha256": "7e7428cec0c30484f510b8e272edfbfca6e29f489696d444476c459814f141cd",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -169,8 +169,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "9761ec0f93b4d1fd06f9651d4fd3c8a09d86b2aefe48939697da138ef26174f3",
-      "size_bytes": 96605
+      "sha256": "3115af271d1b9c51f686d9926cd5d448fab82dffb6993a642e5639ec2fe9f0cb",
+      "size_bytes": 96457
     },
     {
       "path": "platform/api/config/models/nanopore.yaml",
@@ -559,8 +559,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "d445e021a6317e2ec7970ee47d52c2b35038d854ab88b877d782e7c363559863",
-      "size_bytes": 211699
+      "sha256": "c0e3ad903f6c89579e0f670c2c2931b155ee649bc24d396a2d002a1d9f89ea22",
+      "size_bytes": 211670
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -1167,8 +1167,8 @@
     "content_sha256": "4652d6f92ae02b714735fb1a47dcd34cc63fcb3ea0bdb4c5f74976d1d648f460",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "a9a71d5676d56d80a32d3fed5e272b8e125a2555",
-  "successor_source_tree": "d2244856d40c738c2a6b803b318c7e7bb09ebd26",
+  "successor_source_commit": "7a8b69610216c7aa22c4058397d475145f11e1e3",
+  "successor_source_tree": "7be5f64ac65d8f44dadfdf5072011d4deb977c98",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

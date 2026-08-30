@@ -230,7 +230,7 @@ def test_build_nextflow_command_injects_boltz_cp_compat_container_default(tmp_pa
 
     joined = " ".join(cmd)
 
-    assert "--bcp_container_path /srv/apptainer/boltz2-pre-community-20260417-211613.sif" in joined
+    assert "--bcp_container_path /srv/apptainer/fold-cp.sif" in joined
 
 
 
@@ -239,7 +239,7 @@ def test_boltz_cp_nextflow_config_uses_explicit_compat_container_override() -> N
     boltz_cp_section = config_text.split("withLabel: BoltzCP {", 1)[1].split("withLabel:", 1)[0]
 
     assert "params.bcp_container_path" in boltz_cp_section
-    assert "boltz2-pre-community-20260417-211613.sif" in boltz_cp_section
+    assert "fold-cp.sif" in boltz_cp_section
 
 
 

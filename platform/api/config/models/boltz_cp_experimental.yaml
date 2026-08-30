@@ -5,7 +5,7 @@ category: structure_prediction
 description: >
   NVIDIA BioNeMo boltz-cp execution backend for the Structure Prediction workflow.
   It accepts Structure inputs and uses OEM DTensor context parallelism.
-container: boltz2-pre-community-20260417-211613.sif
+container: fold-cp.sif
 
 ui_icon: sparkles
 ui_color: "#F97316"

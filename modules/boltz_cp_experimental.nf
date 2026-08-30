@@ -49,7 +49,7 @@ process RunBoltzCPExperimental {
     def msaForceRefresh = params.msa_force_refresh?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
     def msaCacheOnly = params.msa_cache_only?.toString()?.toLowerCase() in ['true', '1', 'yes', 'y', 'on']
     def inputConfigPath = shellQuote(input_config.toString())
-    def repoPath = shellQuote(params.bcp_repo_path ?: '')
+    def repoPath = shellQuote(params.bcp_repo_path ?: '/opt/fold-cp')
     def quotedInputFormat = shellQuote(inputFormat)
     def quotedUseMsa = shellQuote(useMsa ? 'true' : 'false')
     def codeRoot = shellQuote(params.code_root ?: '')
