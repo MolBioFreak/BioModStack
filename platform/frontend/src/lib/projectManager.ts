@@ -1700,6 +1700,11 @@ export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAd
     return parseDomainAdapterRegistry(response.data);
 }
 
+export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<unknown> {
+    const response = await api.get<unknown>('/api/protein-project-capabilities', { signal });
+    return response.data;
+}
+
 export async function searchAdapterEntities(adapterId: string, query: string, limit = 25, signal?: AbortSignal): Promise<AdapterSearchResult> {
     const response = await api.get<unknown>(`/api/domain-adapters/${segment(adapterId)}/entities/search`, {
         params: { q: query, limit },

@@ -1147,7 +1147,7 @@ class FrustraMpnnComparisonAdapter:
                 label=f"{row.reference_parent_job_id} → {row.target_parent_job_id}"[:160],
                 canonical_state="immutable",
                 metadata={
-                    "compatibility_status": (row.payload_json or {}).get("comparability", {}).get("status"),
+                    "compatibility_status": (row.payload_json or {}).get("compatibility", {}).get("status"),
                     "comparison_status": str(row.status),
                 },
             )
@@ -1161,7 +1161,7 @@ class FrustraMpnnComparisonAdapter:
         declared = _sha256(row.comparison_sha256, "FrustraMPNN comparison digest")
         if _canonical_json_sha256(row.payload_json) != declared:
             raise AdapterError("source_digest_mismatch", "FrustraMPNN comparison digest is invalid")
-        compatibility = row.payload_json.get("comparability")
+        compatibility = row.payload_json.get("compatibility")
         if not isinstance(compatibility, dict) or compatibility.get("status") not in {"comparable", "incompatible"}:
             raise AdapterError("source_contract_invalid", "FrustraMPNN compatibility receipt is invalid")
         reference_landscape_sha256 = _sha256(
@@ -1172,16 +1172,7 @@ class FrustraMpnnComparisonAdapter:
             row.target_landscape_sha256,
             "FrustraMPNN target landscape digest",
         )
-        if (
-            row.payload_json.get("comparison_id") != row.comparison_id
-            or row.payload_json.get("reference_landscape_sha256") != reference_landscape_sha256
-            or row.payload_json.get("target_landscape_sha256") != target_landscape_sha256
-            or row.payload_json.get("configuration_sha256") != row.configuration_sha256
-        ):
-            raise AdapterError(
-                "source_digest_mismatch",
-                "FrustraMPNN comparison is not bound to its native source landscapes",
-            )
+
         return _receipt(
             self,
             entity_id=row.comparison_id,

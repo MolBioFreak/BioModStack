@@ -22,7 +22,7 @@ SOURCE_PIN = "3a7e99afa19d696baf80ad33d2dcfad80a79d2e0"
 _INVENTORY_SCHEMA = "bms.protein-project-capability-inventory.v1"
 _PARAMETER_SCHEMA_PREFIX = "bms.workflow-parameters."
 _PROTEIN_SEQUENCE_PATTERN = "^[ACDEFGHIKLMNPQRSTVWY]+$"
-_DATA_ALIAS_PATTERN = "^data/(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$"
+_DATA_ALIAS_PATTERN = r"^data/(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]+$"
 _RECEIPT_ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
 _SHA256_PATTERN = "^[0-9a-f]{64}$"
 

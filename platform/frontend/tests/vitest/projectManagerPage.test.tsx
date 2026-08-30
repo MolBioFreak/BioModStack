@@ -14,6 +14,7 @@ const managerApi = vi.hoisted(() => ({
     searchProjects: vi.fn(),
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
+    listProteinProjectCapabilities: vi.fn(),
     searchAdapterEntities: vi.fn(),
     issueAdapterReceipt: vi.fn(),
     attachExistingEntity: vi.fn(),
@@ -263,6 +264,10 @@ beforeEach(() => {
         return Promise.resolve(normalizeProjectManagerReadModel(value));
     });
     managerApi.listDomainAdapters.mockResolvedValue({ schema: 'bms.global.adapter-registry.v1', adapters: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', domain_kind: 'protein_in_silico', entity_kind: 'rfd3_local_redesign_request' }] });
+    managerApi.listProteinProjectCapabilities.mockResolvedValue({
+        schema: 'bms.protein-project.capability-inventory.v1',
+        capabilities: [],
+    });
     managerApi.searchAdapterEntities.mockResolvedValue({ schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', items: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-10', label: 'PLM-07 redesign', canonical_state: 'completed', attachable: true, reason: null, reopen_uri: '/designs/job-9', metadata: { created_at: '2026-08-09' } }], next_cursor: null });
     managerApi.attachExistingEntity.mockResolvedValue({ source_receipt_id: 'receipt-9' });
     managerApi.getResultSurface.mockResolvedValue(summaryFor('external_entity_receipt:receipt-9').selection.canonical_surface);
@@ -709,18 +714,18 @@ describe('ProjectManager', () => {
                 searchInput.dispatchEvent(new Event('input', { bubbles: true }));
             }
         });
-        const search = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Search Protein sources');
+        const search = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Search');
         await act(async () => search?.click());
         await waitUntil(() => expect(container.textContent).toContain('Ubiquitin 1UBQ'));
         const choice = container.querySelector<HTMLInputElement>('input[type="radio"][value="job-1ubq"]');
         await act(async () => choice?.click());
-        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Verify and use receipt');
+        const issue = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Verify and add to target');
         await act(async () => issue?.click());
         await waitUntil(() => expect(managerApi.issueAdapterReceipt).toHaveBeenCalledWith(
             'bms.core-job.esmfold2.adapter.v1', 'job-1ubq', 'project-1',
         ));
-        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs"]')?.value).toBe('receipt-1ubq');
-        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256"]')?.value).toBe('d'.repeat(64));
+        await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs 1"]')?.value).toBe('receipt-1ubq'));
+        expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256 1"]')?.value).toBe('d'.repeat(64));
     });
 
     it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {
