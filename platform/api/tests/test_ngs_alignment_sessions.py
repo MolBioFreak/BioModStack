@@ -1199,6 +1199,41 @@ def test_completed_nanopore_alignment_access_can_rotate_active_or_fresh_revoked_
     assert session.rollbacks == 0
 
 
+def test_alignment_access_rotation_admits_exact_secure_proxy_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request
+    from routers import ngs_alignment_sessions as router
+
+    monkeypatch.setenv("BMS_RUNTIME_MODE", "dev")
+    monkeypatch.setenv("BMS_FRONTEND_HEALTH_URL", "http://127.0.0.1:18082/")
+
+    def request(origin: str) -> Request:
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/jobs/job-a/alignment-access/rotate",
+            "raw_path": b"/api/jobs/job-a/alignment-access/rotate",
+            "query_string": b"",
+            "scheme": "https",
+            "server": ("compute-node.taileb3a90.ts.net", 443),
+            "client": ("127.0.0.1", 42000),
+            "headers": [
+                (b"host", b"compute-node.taileb3a90.ts.net"),
+                (b"origin", origin.encode("ascii")),
+                (b"sec-fetch-site", b"same-origin"),
+            ],
+        })
+
+    router._require_local_development_browser(
+        request("https://compute-node.taileb3a90.ts.net"),
+        "job-a",
+    )
+    with pytest.raises(router.OntNgsRouteError) as exc_info:
+        router._require_local_development_browser(request("https://example.invalid"), "job-a")
+    assert exc_info.value.code == "NGS_ROTATION_ORIGIN_DENIED"
+
+
 def test_revocation_without_browser_cookie_revokes_persisted_capability(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

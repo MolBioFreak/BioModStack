@@ -763,11 +763,19 @@ def _require_local_development_browser(request: Request, job_id: str) -> None:
         )
     configured = urlsplit(os.environ.get("BMS_FRONTEND_HEALTH_URL", ""))
     supplied = urlsplit(request.headers.get("origin", ""))
+    external = urlsplit(str(request.base_url))
+    supplied_origin = (supplied.scheme, supplied.netloc)
+    configured_origin = (configured.scheme, configured.netloc)
+    external_origin = (external.scheme, external.netloc)
     if (
         request.headers.get("sec-fetch-site", "").lower() != "same-origin"
         or configured.scheme not in {"http", "https"}
         or not configured.netloc
-        or (supplied.scheme, supplied.netloc) != (configured.scheme, configured.netloc)
+        or supplied_origin
+        not in {
+            configured_origin,
+            external_origin if secure_transport else configured_origin,
+        }
     ):
         raise OntNgsRouteError(
             status_code=403, code="NGS_ROTATION_ORIGIN_DENIED",
