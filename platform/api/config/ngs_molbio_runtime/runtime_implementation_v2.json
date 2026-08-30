@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "31f1022094f49b33287f461ec2ef58c4ec126ddb6e20d06aff819ec508b2078d",
+  "content_sha256": "ca3888696a33846b5dbeb69dd1fa5c638f5724fc1a0df0a5760a5671b78fa16c",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -269,8 +269,8 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "d56b3a4aa29b8a8cf28a13f064fb46c43638987e540f188094c75039a1ba982f",
-      "size_bytes": 270785
+      "sha256": "4144cb6a882018352786845487fb4eaf03f3a8bda3b64c56e8c0daa4717159f1",
+      "size_bytes": 271385
     },
     {
       "path": "platform/api/main.py",
@@ -419,8 +419,8 @@
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
-      "sha256": "857bf0d323af3109592fe0e2fd79cdc4937d58c39a84489e496b23838e99f0d5",
-      "size_bytes": 76993
+      "sha256": "da1c2a77c406f443c5a4881285317f3366cbda1eecdc2d8dcceb853bc4d29640",
+      "size_bytes": 79354
     },
     {
       "path": "platform/api/routers/nucleotide_sequences.py",
@@ -444,8 +444,8 @@
     },
     {
       "path": "platform/api/routers/project_manager.py",
-      "sha256": "f2c9f4ec1a1b1ca9ba7bdbe83a8b6b400c7d128e50af9ee38ea58384c2bd8fad",
-      "size_bytes": 132327
+      "sha256": "c3d4f870ce51f0a654acf9bd783d1bdf3fd66bee27101080c01432ae45c0d32c",
+      "size_bytes": 133540
     },
     {
       "path": "platform/api/routers/projects.py",
@@ -494,8 +494,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/adapters.py",
-      "sha256": "1f36d3d8ba8687065851470164dfdc43b86ece121d4c49c10a5a9035def905c4",
-      "size_bytes": 165711
+      "sha256": "d102acf331cfc17ed14e46e7eaae63d882ce84256a04af8e004d9e45c002d9d6",
+      "size_bytes": 167610
     },
     {
       "path": "platform/api/services/global_experiments/launch_contexts.py",
@@ -514,8 +514,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/result_surfaces.py",
-      "sha256": "a316763535e0372d676af11c23735806541c1f33ecb75d5adeeebf5181eaa3b1",
-      "size_bytes": 17671
+      "sha256": "8c69cf2852697e69d5baedeb987a4eae07bb111b0636ddb6d478933e6d35215c",
+      "size_bytes": 20810
     },
     {
       "path": "platform/api/services/global_experiments/worker.py",
@@ -564,8 +564,8 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
-      "sha256": "dc688ac9962b4a79725eb13be3400c411d5bdc395037351a74e4e67068f79f0d",
-      "size_bytes": 41816
+      "sha256": "5412b2bb4a945ac81ba79e53962356088d44c7634746efac5d0cdc9d1edbcfec",
+      "size_bytes": 48254
     },
     {
       "path": "platform/api/services/ngs_molbio_connector.py",
@@ -649,8 +649,8 @@
     },
     {
       "path": "platform/api/services/protein_project_capabilities.py",
-      "sha256": "df95da05192e7660ebc838a2672d7b259b3a563586a65e04098d492f0a02e317",
-      "size_bytes": 5900
+      "sha256": "12d068e718cccdc0edf779043e7d299704d83b4dbf9e620df52dbdf3e68a0b03",
+      "size_bytes": 53155
     },
     {
       "path": "platform/api/services/resource_usage_evidence.py",
@@ -834,8 +834,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ManagerDialog.tsx",
-      "sha256": "bf7050c39725c4eafe83325ed2e64ac58d2ce02709aaf6bb84fd48114a2f6324",
-      "size_bytes": 47493
+      "sha256": "3356eea3c49b038b5f8effcd421784434ea0737a2fef7d9689061332257cfef5",
+      "size_bytes": 77998
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
@@ -884,13 +884,13 @@
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
-      "sha256": "383616e830829c67e03c2cb5ad1e02185c19e5eadefcfa1e3d18a9330dc755ab",
-      "size_bytes": 101630
+      "sha256": "2c99ee3351ccdb14f9ae6a6fada897efcc4d665c948dde93fe78582313f0673c",
+      "size_bytes": 106731
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "6c6b7edda6590f501734302772732bf1b76d55ae2a4506921a513d98c560a269",
-      "size_bytes": 62430
+      "sha256": "fb7dd95fabc176b5c1b90a88de99b55848011d540ebdaebec3ed802e58da6eb4",
+      "size_bytes": 64152
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "4dd466de5aa5190a87b34543932f43ad8bf0982a",
-  "successor_source_tree": "5773017574fe0c2fc6d503537da27123378ac964",
+  "successor_source_commit": "487093eaba7b3ed0bc7fcaa7cabe8c63ef383af4",
+  "successor_source_tree": "fb3d1081d894d7454936fd5266a1230175fabf1e",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
