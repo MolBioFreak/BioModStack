@@ -76,7 +76,7 @@ interface ComparisonMemberDraft { targetId: string; role: ComparisonRole }
 interface ComparisonGroupDraft { groupId: string; label: string; compatibilityContractId: string; members: ComparisonMemberDraft[] }
 interface AcceptanceDraft { criterionId: string; subjectRole: SubjectRole; question: string; outcome: 'approve' | 'reject' | 'record_only' }
 interface EvidenceDraft { requirementId: string; subjectRole: SubjectRole; observationKind: string; prompt: string; required: boolean }
-interface ProteinCapabilityOption { capabilityId: string; label: string; scientificRole: string; allowedDomainModes: string[] }
+interface ProteinCapabilityOption { capabilityId: string; label: string; scientificRole: string; allowedDomainModes: string[]; validatorDomainModes: string[] }
 
 const MANUAL_REVIEW_SCHEMA_SHA256 = '581b25b646a8d581d234eef6948a3cc66e66ece0d00031b68dc8a5792dfc6b1d';
 const OPERATOR_OBSERVATION_SCHEMA_SHA256 = '4122ba416790375dc99abbf028a1d494e1f0a9d11967dd138b4b4fde5a03bc06';
@@ -98,7 +98,16 @@ function parseProteinCapabilityInventory(value: unknown): ProteinCapabilityOptio
             throw new Error('The Protein capability inventory contains a malformed row.');
         }
         if (row.plannable !== true || row.exposure_state !== 'accepted') return [];
-        return [{ capabilityId: row.capability_id, label: row.label, scientificRole: row.scientific_role, allowedDomainModes: row.allowed_domain_modes as string[] }];
+        const validatorDomainModes = Array.isArray(row.validator_domain_modes)
+            ? row.validator_domain_modes.filter((mode): mode is string => typeof mode === 'string' && mode.length > 0)
+            : [];
+        return [{
+            capabilityId: row.capability_id,
+            label: row.label,
+            scientificRole: row.scientific_role,
+            allowedDomainModes: row.allowed_domain_modes as string[],
+            validatorDomainModes,
+        }];
     });
 }
 
@@ -609,7 +618,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         && acceptanceCriteria.every((criterion) => criterion.criterionId.trim() && criterion.question.trim())
         && evidenceRequirements.every((requirement) => requirement.requirementId.trim() && requirement.observationKind.trim() && requirement.prompt.trim());
     const plannedCapabilityOptions = (proteinCapabilitiesQuery.data ?? []).filter((capability) => capability.allowedDomainModes.includes(proteinExperimentMode));
-    const validationCapabilityOptions = (proteinCapabilitiesQuery.data ?? []).filter((capability) => capability.allowedDomainModes.includes('validation'));
+    const validationCapabilityOptions = (proteinCapabilitiesQuery.data ?? []).filter((capability) => capability.validatorDomainModes.includes(proteinExperimentMode));
     const domainCreationReady = domainKind === 'ngs_molbio' || (proteinTargetsReady && proteinPlansReady);
     const canSubmit = confirmation
         ? Boolean(detailQuery.data)

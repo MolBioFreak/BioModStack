@@ -994,12 +994,12 @@ def _verify_protein_domain_semantics(
         row = catalogue.get(capability_id)
         if row is None:
             raise NgsMolBioCapabilityError(f"unknown Protein validation capability ID: {capability_id}")
-        allowed_modes = row.get("allowed_domain_modes")
+        validator_modes = row.get("validator_domain_modes")
         if (
             row.get("exposure_state") != "accepted"
             or row.get("allowed_as_validator") is not True
-            or not isinstance(allowed_modes, list)
-            or mode not in allowed_modes
+            or not isinstance(validator_modes, list)
+            or mode not in validator_modes
         ):
             raise NgsMolBioCapabilityError(
                 f"Protein capability is not explicitly accepted as a validator for {mode}: {capability_id}"
