@@ -389,6 +389,114 @@ def _equal_float(observed: float, expected: float) -> bool:
     return bool(np.isclose(observed, expected, equal_nan=True))
 
 
+def _finite_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    candidate = float(value)
+    return candidate if np.isfinite(candidate) else None
+
+
+def _optional_nonnegative_int(record: dict[str, Any], name: str) -> int | None:
+    raw = record.get(name)
+    if raw is None or raw == "":
+        return None
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
+def raw_read_metric_row(record: dict[str, Any]) -> dict[str, Any]:
+    """Return literature-backed descriptive signal metrics for one exact read."""
+    raw = np.asarray(record["signal"], dtype=np.float64)
+    sample_count = int(record["len_raw_signal"])
+    sampling_rate = int(record["sampling_rate"])
+    digitisation = float(record["digitisation"])
+    if sample_count != int(raw.size) or sample_count < 1:
+        raise ValueError("raw metric signal length is invalid")
+    if sampling_rate < 1 or not np.isfinite(digitisation) or digitisation <= 0:
+        raise ValueError("raw metric calibration is invalid")
+    scale = float(record["range"]) / digitisation
+    current = (raw + float(record["offset"])) * scale
+    if not np.all(np.isfinite(current)):
+        raise ValueError("calibrated current is non-finite")
+    median = float(np.median(current))
+    duration = sample_count / sampling_rate
+    channel_number = _optional_nonnegative_int(record, "channel_number")
+    start_mux = _optional_nonnegative_int(record, "start_mux")
+    start_time_samples = _optional_nonnegative_int(record, "start_time")
+    reads_since_mux_change = _optional_nonnegative_int(record, "num_reads_since_mux_change")
+    events = _optional_nonnegative_int(record, "num_minknow_events")
+    return {
+        "read_id": str(record["read_id"]),
+        "sample_count": sample_count,
+        "sampling_rate_hz": sampling_rate,
+        "duration_seconds": duration,
+        "channel_number": channel_number,
+        "start_mux": start_mux,
+        "start_time_samples": start_time_samples,
+        "acquisition_start_seconds": (
+            start_time_samples / sampling_rate if start_time_samples is not None else None
+        ),
+        "time_since_mux_change_seconds": _finite_or_none(record.get("time_since_mux_change", float("nan"))),
+        "num_reads_since_mux_change": reads_since_mux_change,
+        "num_minknow_events": events,
+        "minknow_event_rate_per_second": events / duration if events is not None else None,
+        "median_before_pa": _finite_or_none(record.get("median_before", float("nan"))),
+        "open_pore_level_pa": _finite_or_none(record.get("open_pore_level", float("nan"))),
+        "tracked_scaling_shift": _finite_or_none(record.get("tracked_scaling_shift", float("nan"))),
+        "tracked_scaling_scale": _finite_or_none(record.get("tracked_scaling_scale", float("nan"))),
+        "predicted_scaling_shift": _finite_or_none(record.get("predicted_scaling_shift", float("nan"))),
+        "predicted_scaling_scale": _finite_or_none(record.get("predicted_scaling_scale", float("nan"))),
+        "current_mean_pa": float(np.mean(current)),
+        "current_median_pa": median,
+        "current_stddev_pa": float(np.std(current, ddof=0)),
+        "current_mad_pa": float(np.median(np.abs(current - median))),
+        "current_min_pa": float(np.min(current)),
+        "current_max_pa": float(np.max(current)),
+    }
+
+
+RAW_READ_METRIC_CONTRACT = "bms.ont.literature-backed-read-metrics.v1"
+RAW_READ_METRIC_MAX_ROWS = 500_000
+
+
+def _write_raw_read_metrics(path: Path | None, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    if not rows or len(rows) > RAW_READ_METRIC_MAX_ROWS:
+        raise ValueError("raw read metric row count is outside the bounded contract")
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        for row in rows:
+            payload = (json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+            digest.update(payload)
+            size += len(payload)
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                view = view[written:]
+        os.fsync(descriptor)
+        if os.fstat(descriptor).st_size != size:
+            raise ValueError("raw read metric output size diverged")
+    finally:
+        os.close(descriptor)
+    return {
+        "schema": "bms.ont.raw-read-metrics-jsonl.v1",
+        "contract": RAW_READ_METRIC_CONTRACT,
+        "contract_sha256": hashlib.sha256(RAW_READ_METRIC_CONTRACT.encode("utf-8")).hexdigest(),
+        "sha256": digest.hexdigest(),
+        "bytes": size,
+        "row_count": len(rows),
+    }
+
+
 def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
     _verify_inputs(args)
     if len(args.blow5) != len(args.index):
@@ -396,6 +504,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
     pod5_records, acquisitions, source_group_counts = _pod5_records(args.pod5)
     seen: Counter[str] = Counter()
     observed_group_counts: Counter[str] = Counter()
+    metric_rows: list[dict[str, Any]] = []
     read_to_group: dict[str, str] = {}
     total_samples = 0
     lookup_count = 0
@@ -476,6 +585,7 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
                 read_to_group[read_id] = fingerprint
                 observed_group_counts[fingerprint] += 1
                 total_samples += len(signal)
+                metric_rows.append(raw_read_metric_row(record))
             for read_id in unit_ids:
                 indexed = slow5.get_read(read_id, pA=False, aux="all")
                 if indexed is None or str(indexed.get("read_id")) != read_id:
@@ -507,7 +617,8 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "read_to_group": read_to_group,
     }
     _write(args.routing, routing)
-    return {
+    metric_identity = _write_raw_read_metrics(getattr(args, "metrics", None), metric_rows)
+    result = {
         "schema": "bms.ont.raw-signal-semantic-validation.v2",
         "status": "passed",
         "read_count": len(seen),
@@ -525,6 +636,9 @@ def semantic_validate(args: argparse.Namespace) -> dict[str, Any]:
         "indexed_lookup_count": lookup_count,
         "routing_sha256": hashlib.sha256(args.routing.read_bytes()).hexdigest(),
     }
+    if metric_identity is not None:
+        result["read_metrics"] = metric_identity
+    return result
 
 
 def _open_verified_external_file(
@@ -752,6 +866,7 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
             temporary_root=temporary_root,
         )
     seen: Counter[str] = Counter()
+    metric_rows: list[dict[str, Any]] = []
     required = {"read_id", "signal", "len_raw_signal", "digitisation", "offset", "range", "sampling_rate"}
     try:
         for record in slow5.seq_reads(pA=False, aux="all"):
@@ -762,6 +877,7 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
             seen[read_id] += 1
             if int(record["len_raw_signal"]) != len(record["signal"]):
                 raise ValueError(f"BLOW5 signal length mismatch for read {read_id}")
+            metric_rows.append(raw_read_metric_row(record))
         duplicate_count = sum(count - 1 for count in seen.values() if count > 1)
         if duplicate_count:
             raise ValueError(f"duplicate BLOW5 read IDs: {duplicate_count}")
@@ -771,7 +887,8 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(f"BLOW5 index lookup failed for read {read_id}")
     finally:
         slow5.close()
-    return {
+    metric_identity = _write_raw_read_metrics(getattr(args, "metrics", None), metric_rows)
+    result = {
         "schema": "bms.ont.external-blow5-validation.v2",
         "status": "passed",
         "read_count": len(seen),
@@ -783,6 +900,9 @@ def external_blow5_validate(args: argparse.Namespace) -> dict[str, Any]:
         "blow5_identity": blow5_identity,
         "blow5_index_identity": index_identity,
     }
+    if metric_identity is not None:
+        result["read_metrics"] = metric_identity
+    return result
 
 
 def main() -> int:
@@ -819,6 +939,7 @@ def main() -> int:
         external.add_argument(f"--expected-{prefix}-root-device", type=int, required=True)
         external.add_argument(f"--expected-{prefix}-root-inode", type=int, required=True)
     external.add_argument("--fd-socket", type=Path)
+    external.add_argument("--metrics", type=Path)
     external.add_argument("--receipt", type=Path, required=True)
     partition = subparsers.add_parser("partition-pod5")
     add_source_authority(partition)
@@ -835,6 +956,7 @@ def main() -> int:
     semantic.add_argument("--blow5", action="append", type=Path, required=True)
     semantic.add_argument("--index", action="append", type=Path, required=True)
     semantic.add_argument("--routing", type=Path, required=True)
+    semantic.add_argument("--metrics", type=Path)
     semantic.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
     args.received_fds = []

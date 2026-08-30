@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "04fb9e108f9c7fce2ab80bbfcb3ad64e67a3764ffffc2065bbe54ded1de1a93c",
+  "content_sha256": "e7e11866a8084f0f9c3acf31131f1f8b6569819c4acb0eda5547a373f6e06091",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -224,7 +224,7 @@
     },
     {
       "path": "platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json",
-      "sha256": "6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05",
+      "sha256": "7d504d40b1022120911400f74872b4d038d65dbbafd01ee5a0e318e9ade82a58",
       "size_bytes": 352
     },
     {
@@ -314,8 +314,8 @@
     },
     {
       "path": "platform/api/migrations/runner.py",
-      "sha256": "5c391e44055918454e7a2334e2de716d948c963474af74b25c27c68f0a594a08",
-      "size_bytes": 23728
+      "sha256": "4a0b88a2b5f847757c2fe79ac31feebc05e2b1c43f4dd55bd8da08598f34aea9",
+      "size_bytes": 23993
     },
     {
       "path": "platform/api/migrations/seal_ont_external_move_bam_receipt_binding.py",
@@ -326,6 +326,11 @@
       "path": "platform/api/migrations/seal_ont_move_source_terminal_immutability.py",
       "sha256": "46557e1e6720401dae9a1822bf4826bb5b2de84526dfbdfcc3262fbe80be7b56",
       "size_bytes": 846
+    },
+    {
+      "path": "platform/api/migrations/seal_ont_read_metric_receipt_immutability.py",
+      "sha256": "df7692f4564eb2e3cb684ef06c8f88ce76900f5c1ba2a6ee0483e32afe05da5c",
+      "size_bytes": 1667
     },
     {
       "path": "platform/api/migrations/seal_ont_raw_signal_lookup_terminal_immutability.py",
@@ -414,8 +419,8 @@
     },
     {
       "path": "platform/api/routers/ngs_alignment_sessions.py",
-      "sha256": "677f4bc74d3cf5a05d10d51e0e8b1b32f0360da8d319d2ebfc1f27329bf30b35",
-      "size_bytes": 73176
+      "sha256": "a06359d4b2b1da5df73ecabb8200de5378bd09ca636c34a41d8d42b79d66853f",
+      "size_bytes": 85431
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
@@ -559,8 +564,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "35fe1d665f3811a62d5356be9ac8357f61bba3930bb69d9aedb127f5b4bb2bfd",
-      "size_bytes": 174179
+      "sha256": "71df54500008a7fc364da2ab776855dd871b0377426176bad036c38b29d02f8e",
+      "size_bytes": 186457
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -618,9 +623,14 @@
       "size_bytes": 29046
     },
     {
+      "path": "platform/api/services/ont_read_metrics.py",
+      "sha256": "ee7d454f07ec678bd89a58687333420fc0280d019fa28ae5a351949cc8c50838",
+      "size_bytes": 15714
+    },
+    {
       "path": "platform/api/services/ont_raw_signal.py",
-      "sha256": "e5b71ad824114f30fd84c082c3144b5c9c645f70c9a921d293b7801d7f827671",
-      "size_bytes": 176726
+      "sha256": "b2c9174667f52179a10f1603d4f42dc8a70a58e800c6336ee4e0e161834924fc",
+      "size_bytes": 177717
     },
     {
       "path": "platform/api/services/ont_raw_signal_worker.py",
@@ -658,6 +668,36 @@
       "size_bytes": 78069
     },
     {
+      "path": "platform/api/services/scientific_artifacts/__init__.py",
+      "sha256": "91f85fa3a3edf3961f4facf656bb96fd0701e8dc613cd79619e532e128b5e9fb",
+      "size_bytes": 1440
+    },
+    {
+      "path": "platform/api/services/scientific_artifacts/contracts.py",
+      "sha256": "fc13f8a54e02bc2d4e1624b8e9f994fa0aa8f1b3001248d0ccad7893f014eae1",
+      "size_bytes": 7984
+    },
+    {
+      "path": "platform/api/services/scientific_artifacts/persistence.py",
+      "sha256": "71ee0e640ff3f53a3f91246edeca17b40bc96de27700f7330aba31cfd8c599e9",
+      "size_bytes": 5763
+    },
+    {
+      "path": "platform/api/services/scientific_artifacts/query.py",
+      "sha256": "9100c8b87ae2fb4792ea5f9c9cc012cf75ca47a8b55cd309c96fc339c4e81fd0",
+      "size_bytes": 7355
+    },
+    {
+      "path": "platform/api/services/scientific_artifacts/resolve.py",
+      "sha256": "d5a745f0b4010f43b61f9364be932b68082b318c914bee68338ee0600ef03750",
+      "size_bytes": 4321
+    },
+    {
+      "path": "platform/api/services/scientific_artifacts/writer.py",
+      "sha256": "abefb12ca6b1eb8e6941a0a1931ddc83731ef855052d599b38a2dc145c168ccd",
+      "size_bytes": 13580
+    },
+    {
       "path": "platform/api/services/workflow_adapter.py",
       "sha256": "e3eebefc68a296efd2b29773c6f24dca0de087664fce1b3d5ed47f3722aedb2d",
       "size_bytes": 8717
@@ -674,13 +714,13 @@
     },
     {
       "path": "platform/api/tests/test_migration_runner_version_reconciliation.py",
-      "sha256": "4e7626faa0a962067bf35c2fbb6be257187bd79db5eebf9b763fb7ee70442186",
-      "size_bytes": 10796
+      "sha256": "a7b4db363f9ab8315500348f423e2151b5635a47b2fa979c7c40821309405ccc",
+      "size_bytes": 10855
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "bc4c3eb4e37560803a8bdcc653bba78423c3fb528ed225b95431c48a05f748b6",
-      "size_bytes": 161167
+      "sha256": "c0613242653cd98ae880385c87fb7cd0f2748bf4ea239f428a4b86d3cf7f47e7",
+      "size_bytes": 172475
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -691,6 +731,16 @@
       "path": "platform/api/tests/test_ont_ngs_completion.py",
       "sha256": "4b2b76260e6018ad6b83383ff1aeb04bb47426b1bc5bece56394a65e33fa3fef",
       "size_bytes": 28683
+    },
+    {
+      "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
+      "sha256": "2b642696e8705cc7bfd3891f28767c2fd9a43a71bb016f87b9e632f28ecad262",
+      "size_bytes": 109711
+    },
+    {
+      "path": "platform/api/tests/test_scientific_artifacts.py",
+      "sha256": "58e6fbd2a96615e242d7a841c5d7433f8dc837f440479f54cab9e98f24960dc6",
+      "size_bytes": 27303
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
@@ -749,8 +799,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "10cb4d046a7546a5d2da89e1b8492c16a53163f9623444430569453e4d3e9446",
-      "size_bytes": 327433
+      "sha256": "cbb4baf8bfb2eaf9c4e93a6c13833acbfdbf507941f75ef6001698bf205ace17",
+      "size_bytes": 328224
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -819,8 +869,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/RawReadInspector.tsx",
-      "sha256": "fe3a5f1d99ab4e809f181cf2d4f10206cd141fcbb968ba798453bbae91ad16fd",
-      "size_bytes": 21275
+      "sha256": "5cbd021939738c5a1ff90561bb01f3ef49d988af6b489e69f879c294c6f6668e",
+      "size_bytes": 30206
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
@@ -869,8 +919,8 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentSession.ts",
-      "sha256": "c76e415ff3898b191f89bf417bdb0ab74c23e3c402eb3c59feb18cf00aa1f3bf",
-      "size_bytes": 40277
+      "sha256": "e2eb74de25921f79003dac57babc3577a87b6983ef9511231f35d78443730f0f",
+      "size_bytes": 50604
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
@@ -891,6 +941,11 @@
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
       "sha256": "6c6b7edda6590f501734302772732bf1b76d55ae2a4506921a513d98c560a269",
       "size_bytes": 62430
+    },
+    {
+      "path": "platform/frontend/tests/ngsAlignmentSession.test.ts",
+      "sha256": "f8e9d0160a00a063248c78ed0497a3d46fb7f4e841ca9c98e54d7ae3f4d634f1",
+      "size_bytes": 26349
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
@@ -918,14 +973,19 @@
       "size_bytes": 139336
     },
     {
+      "path": "platform/frontend/tests/vitest/rawReadSortableWorkbench.test.tsx",
+      "sha256": "da92e4b06f2c5b94fe4b174ddd44c84cd607ac800fcf282161241ebb926504d4",
+      "size_bytes": 18261
+    },
+    {
       "path": "platform/frontend/vite.config.ts",
       "sha256": "57781bba3116ba0595e2e10398c4057917b69a3a246272a9a8661881a2b18a52",
       "size_bytes": 8772
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "135bddbc6627810d0e4bf36f6ee6e50f33f7ee6011c5a6987878f3fd72aa7933",
-      "size_bytes": 3190
+      "sha256": "09d8daf273ab807843e53573f19c1c44a1ab635029120fcdd056934fac97a308",
+      "size_bytes": 3254
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
@@ -959,8 +1019,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-      "sha256": "7217b74c992254b516e74efb0b5a63f64136ef7d1440132ddc33cf5a7e9cb014",
-      "size_bytes": 11765
+      "sha256": "14ffa046c2ea214c2a4d7f7c6ab6d43b6193b18dc5eb156229ee763ba29b8b4c",
+      "size_bytes": 12517
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -984,7 +1044,7 @@
     },
     {
       "path": "scripts/build_ont_raw_signal_runtime.sh",
-      "sha256": "81e48644b60d014a09e502161cc0074db1d8eeb01b5b114dfeb341c9b8b6e5b2",
+      "sha256": "1eb9c676d3fdbcd97ffedd134469b2a4aa0e210e882082744a32edca08b8a3a4",
       "size_bytes": 2776
     },
     {
@@ -1014,8 +1074,8 @@
     },
     {
       "path": "scripts/ont_raw_signal_validate.py",
-      "sha256": "fc6dff75492f534c164592958a15f5b1855713b160da7bdd9d0b191046b69cea",
-      "size_bytes": 38528
+      "sha256": "e7c4a580d3dd6e02d1dd0f57d10edf8d5be905b71b3a012470cf7c544559530d",
+      "size_bytes": 44102
     },
     {
       "path": "scripts/ont_signal_comparison_runtime.py",
@@ -1104,11 +1164,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
+    "content_sha256": "4652d6f92ae02b714735fb1a47dcd34cc63fcb3ea0bdb4c5f74976d1d648f460",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "ef118c0c68d93e08544bb25191dbc0b473bd0340",
-  "successor_source_tree": "7331945f8be7c791889d5728031a18afd093c297",
+  "successor_source_commit": "2935a592de2e8a41bc02f2cf01b5abf03363eedd",
+  "successor_source_tree": "06b394a5e91bf5e74c997d1ceb7eabe8a8366687",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

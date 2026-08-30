@@ -254,7 +254,7 @@ def _job(stage_root: Path) -> tuple[OntRawSignalDerivationJob, dict[str, Any]]:
 # Contract tests: 12
 
 def test_contract_01_partitioned_profile_is_versioned() -> None:
-    assert ont_raw_signal.BLOW5_PROFILE_ID == "bms.blow5.partitioned-zstd-svb-zd.v2"
+    assert ont_raw_signal.BLOW5_PROFILE_ID == "bms.blow5.partitioned-zstd-svb-zd.v3"
 
 
 def test_contract_02_source_paths_require_immutable_authority(tmp_path: Path) -> None:
@@ -312,7 +312,133 @@ def test_contract_06_semantic_command_covers_every_partition() -> None:
     for group in groups:
         assert f"/stage/outputs/{group}.blow5" in command
         assert f"/stage/outputs/{group}.blow5.idx" in command
-    assert command[-4:] == ["--routing", "/stage/routing.json", "--receipt", "/stage/semantic-receipt.json"]
+    assert command[-6:] == [
+        "--routing", "/stage/routing.json",
+        "--metrics", "/stage/read-metrics.jsonl",
+        "--receipt", "/stage/semantic-receipt.json",
+    ]
+
+
+def test_literature_backed_raw_read_metric_formula_is_exact_and_excludes_custom_qc() -> None:
+    validator = _load_validator()
+    row = validator.raw_read_metric_row({
+        "read_id": "read-1", "signal": np.asarray([0, 1, 2], dtype=np.int16),
+        "len_raw_signal": 3, "digitisation": 4, "offset": -1.0, "range": 4.0,
+        "sampling_rate": 4, "channel_number": 7, "start_mux": 2, "start_time": 8,
+        "time_since_mux_change": 1.5, "num_reads_since_mux_change": 3,
+        "num_minknow_events": 6, "median_before": 74.0, "open_pore_level": 210.0,
+        "tracked_scaling_shift": 0.5, "tracked_scaling_scale": 1.25,
+        "predicted_scaling_shift": 0.25, "predicted_scaling_scale": 1.5,
+    })
+    assert row["sample_count"] == 3
+    assert row["duration_seconds"] == pytest.approx(0.75)
+    assert row["acquisition_start_seconds"] == pytest.approx(2.0)
+    assert row["current_mean_pa"] == pytest.approx(0.0)
+    assert row["current_median_pa"] == pytest.approx(0.0)
+    assert row["current_stddev_pa"] == pytest.approx(np.sqrt(2 / 3))
+    assert row["current_mad_pa"] == pytest.approx(1.0)
+    assert row["current_min_pa"] == pytest.approx(-1.0)
+    assert row["current_max_pa"] == pytest.approx(1.0)
+    assert row["minknow_event_rate_per_second"] == pytest.approx(8.0)
+    assert not {
+        "drift", "robust_tail_fraction", "abrupt_transition_fraction", "adc_rail_occupancy",
+    }.intersection(row)
+
+
+def test_literature_backed_raw_read_metric_formula_preserves_unavailable_metadata_as_null() -> None:
+    validator = _load_validator()
+    row = validator.raw_read_metric_row({
+        "read_id": "read-missing-metadata",
+        "signal": np.asarray([0, 1], dtype=np.int16),
+        "len_raw_signal": 2,
+        "digitisation": 2,
+        "offset": 0.0,
+        "range": 2.0,
+        "sampling_rate": 4,
+    })
+
+    for field in (
+        "channel_number",
+        "start_mux",
+        "start_time_samples",
+        "acquisition_start_seconds",
+        "num_reads_since_mux_change",
+        "num_minknow_events",
+        "minknow_event_rate_per_second",
+    ):
+        assert row[field] is None
+
+
+@pytest.mark.asyncio
+async def test_raw_read_metrics_publish_as_manifest_bound_parquet_and_query_by_exact_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services import ont_read_metrics
+
+    validator = _load_validator()
+    row = validator.raw_read_metric_row({
+        "read_id": "read-1", "signal": np.asarray([1, 2, 3], dtype=np.int16),
+        "len_raw_signal": 3, "digitisation": 2, "offset": 0.0, "range": 2.0,
+        "sampling_rate": 3, "channel_number": 1, "start_mux": 1, "start_time": 0,
+        "num_minknow_events": 3,
+    })
+    metrics_path = tmp_path / "read-metrics.jsonl"
+    identity = validator._write_raw_read_metrics(metrics_path, [row])
+    assert identity is not None
+    representation = OntRawSignalRepresentation(
+        id="rep-exact", run_id="run-exact", observed_generation=1,
+        role="source", source_kind="external_native", format="blow5",
+        source_fidelity="external_native", state="ready", reason_code="validated",
+        artifact_manifest={"schema": "test"}, manifest_sha256="a" * 64,
+        parent_representation_ids=[], parent_manifest_sha256s=[], compression={},
+        runtime_identity={"image_id": "sha256:" + "b" * 64}, validation_receipts={}, read_count=1,
+    )
+    monkeypatch.setenv("BMS_SCIENTIFIC_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'metrics.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            receipt = await ont_read_metrics.publish_read_metrics_from_validation(
+                session,
+                representation=representation,
+                metrics_path=metrics_path,
+                semantic_receipt={"read_count": 1, "read_metrics": identity},
+            )
+            await session.commit()
+            rows, found = await ont_read_metrics.load_read_metrics_for_ids(
+                session, representation=representation, read_ids=["read-1"],
+            )
+            assert found is not None and found.artifact_id == receipt.artifact_id
+            assert rows["read-1"]["current_median_pa"] == pytest.approx(2.0)
+            assert found.source_receipts_json["representation_manifest_sha256"] == "a" * 64
+            assert found.source_receipts_json["implementation_authority"]["validation_runtime_identity"] == {
+                "image_id": "sha256:" + "b" * 64,
+            }
+            assert found.source_receipts_json["bam_authority"] == {"state": "joined_at_sort_query"}
+            assert set(found.source_receipts_json) == {
+                "schema", "authority_scope", "representation_id",
+                "representation_manifest_sha256", "run_id", "observed_generation",
+                "read_authority", "bam_authority", "mapping_authority",
+                "package_authority", "implementation_authority", "metric_contract",
+                "metric_contract_sha256", "metrics_jsonl_sha256", "metrics_jsonl_bytes",
+                "row_count",
+            }
+            source_digest = ont_read_metrics.canonical_sha256(found.source_receipts_json)
+            from services.scientific_artifacts.writer import _artifact_id
+            assert found.artifact_id == _artifact_id(
+                ont_read_metrics.RAW_READ_METRICS_OWNER_KIND,
+                representation.id,
+                ont_read_metrics.RAW_READ_METRICS_ROLE,
+                source_digest,
+            )
+
+            found.source_receipts_json = {**found.source_receipts_json, "row_count": 2}
+            await session.flush()
+            assert await ont_read_metrics.find_read_metric_receipt(session, representation) is None
+    finally:
+        await engine.dispose()
 
 
 def test_contract_07_runtime_packages_both_executables() -> None:
@@ -1882,6 +2008,26 @@ def _publication_unit(staging_root: Path) -> tuple[Path, dict[str, int], dict[st
         (outputs / f"{group}.blow5").write_bytes(group.encode())
         (outputs / f"{group}.blow5.idx").write_bytes(b"index")
 
+    validator = _load_validator()
+    metric_rows = [
+        validator.raw_read_metric_row({
+            "read_id": read_id,
+            "signal": np.asarray([1, 2, 3], dtype=np.int16),
+            "len_raw_signal": 3,
+            "digitisation": 2,
+            "offset": 0.0,
+            "range": 2.0,
+            "sampling_rate": 3,
+            "channel_number": index,
+            "start_mux": 1,
+            "start_time": index * 3,
+            "num_minknow_events": 3,
+        })
+        for index, read_id in enumerate(("read-a", "read-b", "read-c"), start=1)
+    ]
+    metric_identity = validator._write_raw_read_metrics(stage / "read-metrics.jsonl", metric_rows)
+    assert metric_identity is not None
+
     def output_identity(path: Path) -> dict[str, int | str]:
         info = path.stat()
         return {
@@ -1906,6 +2052,7 @@ def _publication_unit(staging_root: Path) -> tuple[Path, dict[str, int], dict[st
         },
         "read_count": 3,
         "routing_sha256": _sha256(routing),
+        "read_metrics": metric_identity,
     }
     (stage / "semantic-receipt.json").write_text(
         json.dumps(semantic), encoding="utf-8"
@@ -1927,6 +2074,11 @@ async def test_contract_12_publication_emits_one_pair_per_partition(tmp_path: Pa
     source = _source(source_file, "acquisition")
     job, snapshot = _job(staging_root)
     monkeypatch.setenv(ont_raw_signal.BLOW5_STAGING_ROOT_ENV, str(staging_root))
+
+    async def publish_metrics(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(ont_raw_signal, "publish_read_metrics_from_validation", publish_metrics)
     session = _Session(job)
     representation = await ont_raw_signal.publish_derivation(session, job, source, commands)
     kinds = [artifact["kind"] for artifact in representation.artifact_manifest["artifacts"]]

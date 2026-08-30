@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 from typing import Any, Iterable, Mapping, Sequence
 import uuid
 
@@ -280,6 +281,15 @@ def guarded_delete_new_artifact(artifact: InstalledArtifact) -> bool:
 
 
 def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None) -> Path:
+    with verified_artifact_snapshot(artifact, root=root):
+        pass
+    relative_path, _expected_sha, _expected_size = _artifact_receipt_identity(artifact)
+    return artifact_root(root) / relative_path
+
+
+def _artifact_receipt_identity(
+    artifact: InstalledArtifact | Mapping[str, Any],
+) -> tuple[str, str, int]:
     if isinstance(artifact, InstalledArtifact):
         relative_path = artifact.relative_path
         expected_sha = artifact.content_sha256
@@ -292,23 +302,71 @@ def verify_artifact(artifact: InstalledArtifact | Mapping[str, Any], *, root: Pa
         relative_path = str(reference["relative_path"])
         expected_sha = str(reference["content_sha256"])
         expected_size = int(reference["size_bytes"])
+    return relative_path, expected_sha, expected_size
+
+
+@contextmanager
+def verified_artifact_snapshot(
+    artifact: InstalledArtifact | Mapping[str, Any],
+    *,
+    root: Path | str | None = None,
+):
+    """Yield a receipt-verified descriptor path without following any component."""
+    relative_path, expected_sha, expected_size = _artifact_receipt_identity(artifact)
     base = artifact_root(root)
-    path = (base / relative_path).resolve()
+    relative = Path(relative_path)
+    if (
+        not relative_path
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise ScientificArtifactError("artifact path escapes managed root")
+    descriptors: list[int] = []
     try:
-        path.relative_to(base)
-    except ValueError as exc:
-        raise ScientificArtifactError("artifact path escapes managed root") from exc
-    if path.is_symlink() or not path.is_file():
-        raise ScientificArtifactError("artifact is missing or is not a regular file")
-    observed_sha, observed_size = _content_digest(path)
-    if (observed_sha, observed_size) != (expected_sha, expected_size):
-        raise ScientificArtifactError("artifact bytes do not match its receipt")
-    return path
+        current = os.open(
+            base,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        descriptors.append(current)
+        for component in relative.parts[:-1]:
+            current = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=current,
+            )
+            descriptors.append(current)
+        leaf = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=current,
+        )
+        descriptors.append(leaf)
+        metadata = os.fstat(leaf)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ScientificArtifactError("artifact is missing or is not a regular verified file")
+        if metadata.st_size != expected_size:
+            raise ScientificArtifactError("artifact bytes do not match its receipt")
+        digest = hashlib.sha256()
+        os.lseek(leaf, 0, os.SEEK_SET)
+        while True:
+            block = os.read(leaf, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        os.lseek(leaf, 0, os.SEEK_SET)
+        if digest.hexdigest() != expected_sha:
+            raise ScientificArtifactError("artifact bytes do not match its receipt")
+        yield Path(f"/proc/self/fd/{leaf}")
+    except OSError as exc:
+        raise ScientificArtifactError("artifact path contains a symlink or unsafe component") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def read_rows(artifact: InstalledArtifact | Mapping[str, Any], *, root: Path | str | None = None, max_rows: int = 1_000_000) -> list[dict[str, Any]]:
-    path = verify_artifact(artifact, root=root)
-    table = pq.read_table(path)
-    if table.num_rows > max_rows:
-        raise ScientificArtifactError("artifact read exceeds configured row limit")
-    return [dict(row) for row in table.to_pylist()]
+    with verified_artifact_snapshot(artifact, root=root) as path:
+        table = pq.read_table(path)
+        if table.num_rows > max_rows:
+            raise ScientificArtifactError("artifact read exceeds configured row limit")
+        return [dict(row) for row in table.to_pylist()]

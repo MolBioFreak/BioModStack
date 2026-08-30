@@ -33,6 +33,7 @@ import {
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
+    alignmentReadIgvLocus,
     bindAlignmentSessionsToResultAuthority,
     createAlignmentLocusSlice,
     createLatestRequestGuard,
@@ -5875,11 +5876,23 @@ export function NGSToolkit() {
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}
                                         currentLocus={igvCurrentLocus}
+                                        locusSlice={igvLocusSlice}
                                         rawSignalBinding={rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? {
                                             runId: rawSignalRunId,
                                             observedGeneration: rawSignalObservedGeneration,
                                             representationId: rawSignalRepresentationId,
                                         } : null}
+                                        onNavigateIgv={(read) => {
+                                            const locus = alignmentReadIgvLocus(read);
+                                            if (locus) {
+                                                navigateFromSignalWorkbench(
+                                                    locus.contig,
+                                                    locus.start,
+                                                    locus.end,
+                                                    'sortable read table',
+                                                );
+                                            }
+                                        }}
                                         onOpenRawSignal={(read) => void openSignalWorkbenchForRead(read)}
                                     />
                                 )}

@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME="${BMS_ONT_CONTAINER_RUNTIME:-docker}"
 TAG="${BMS_ONT_SLOW5TOOLS_IMAGE_TAG:-biomodstack/ont-raw-signal:blue-crab-0.5.0-slow5tools-1.4.0}"
 POLICY_PATH="$REPO_ROOT/platform/api/config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
-EXPECTED_POLICY_SHA256="6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05"
+EXPECTED_POLICY_SHA256="7d504d40b1022120911400f74872b4d038d65dbbafd01ee5a0e318e9ade82a58"
 ACTUAL_POLICY_SHA256="$(sha256sum "$POLICY_PATH" | awk '{print $1}')"
 if [ "$ACTUAL_POLICY_SHA256" != "$EXPECTED_POLICY_SHA256" ]; then
     echo "ONT raw-signal runtime policy bytes do not match the checked-in authority" >&2

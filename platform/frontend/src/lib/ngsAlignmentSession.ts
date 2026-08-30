@@ -247,12 +247,14 @@ export interface AlignmentRead {
     mean_quality: number | null;
     contig: string | null;
     start_1based: number | null;
+    alignment_end_1based?: number | null;
     strand: '+' | '-';
     mapq: number | null;
     cigar: string | null;
     flags: number;
     unmapped: boolean;
     aligned_query_bases?: number;
+    aligned_reference_bases?: number;
     inserted_bases?: number;
     deleted_bases?: number;
     skipped_reference_bases?: number;
@@ -265,6 +267,72 @@ export interface AlignmentRead {
     reference_disagreement_rate?: number | null;
     sequence?: string | null;
     quality?: string | null;
+    sample_count?: number | null;
+    sampling_rate_hz?: number | null;
+    duration_seconds?: number | null;
+    channel_number?: number | null;
+    start_mux?: number | null;
+    acquisition_start_seconds?: number | null;
+    time_since_mux_change_seconds?: number | null;
+    median_before_pa?: number | null;
+    open_pore_level_pa?: number | null;
+    current_mean_pa?: number | null;
+    current_median_pa?: number | null;
+    current_stddev_pa?: number | null;
+    current_mad_pa?: number | null;
+    current_min_pa?: number | null;
+    current_max_pa?: number | null;
+    minknow_event_rate_per_second?: number | null;
+    dorado_emission_rate_bases_per_second?: number | null;
+    mapped_signal_span_samples?: number | null;
+    samples_per_aligned_reference_base?: number | null;
+}
+
+export type SortableReadField =
+    | 'read_id' | 'length' | 'mean_quality' | 'mapq' | 'aligned_query_bases'
+    | 'aligned_reference_bases' | 'inserted_bases' | 'deleted_bases' | 'clipped_bases'
+    | 'edit_distance' | 'reference_substitution_count' | 'reference_disagreement_rate'
+    | 'sample_count' | 'duration_seconds' | 'current_mean_pa' | 'current_median_pa'
+    | 'current_stddev_pa' | 'current_mad_pa' | 'current_min_pa' | 'current_max_pa'
+    | 'channel_number' | 'start_mux' | 'acquisition_start_seconds'
+    | 'time_since_mux_change_seconds' | 'median_before_pa' | 'open_pore_level_pa'
+    | 'minknow_event_rate_per_second' | 'dorado_emission_rate_bases_per_second'
+    | 'mapped_signal_span_samples' | 'samples_per_aligned_reference_base';
+
+export interface SortableAlignmentReadPage {
+    schema: 'bms.ngs.sortable-read-page.v1';
+    job_id: string;
+    session_id: string;
+    slice_id: string;
+    authority_sha256: string;
+    selected_read_count: number;
+    overlapping_read_count: number;
+    capped: boolean;
+    filtered_read_count: number;
+    sort_by: SortableReadField;
+    sort_direction: 'asc' | 'desc';
+    null_order: 'last';
+    tie_breaker: ['read_id', 'start_1based', 'flags'];
+    signal_metrics_state: 'ready' | 'unavailable' | 'not_bound';
+    signal_metrics_artifact_sha256: string | null;
+    raw_representation_id: string | null;
+    mapping_metrics_state: 'not_bound';
+    metric_contract: 'bms.ont.literature-backed-read-metrics.v1';
+    reads: AlignmentRead[];
+    next_cursor: string | null;
+    limit: number;
+}
+
+export interface SortableAlignmentReadOptions {
+    sortBy?: SortableReadField;
+    sortDirection?: 'asc' | 'desc';
+    q?: string;
+    metricMin?: number;
+    metricMax?: number;
+    cursor?: string;
+    limit?: number;
+    rawSignalBinding?: { runId: string; observedGeneration: number; representationId: string } | null;
+    signal?: AbortSignal;
 }
 
 export type AlignmentReadFilterPreset = 'all' | 'clean' | 'substitution_rich' | 'indels_gaps' | 'clipped';
@@ -363,6 +431,109 @@ export function buildAlignmentReadRequestParams(options: AlignmentReadRequestOpt
 
 export function normalizeAlignmentReadPage(page: AlignmentReadPage): AlignmentReadPage {
     return { ...page, scan_truncated: page.scan_truncated === true };
+}
+
+const sortableReadWireFields = [
+    'read_id', 'length', 'mean_quality', 'contig', 'start_1based', 'alignment_end_1based', 'strand', 'mapq', 'cigar',
+    'flags', 'unmapped', 'aligned_query_bases', 'aligned_reference_bases', 'inserted_bases',
+    'deleted_bases', 'skipped_reference_bases', 'clipped_bases', 'edit_distance',
+    'reference_substitution_count', 'reference_substitution_rate', 'aligned_fraction',
+    'clipped_fraction', 'reference_disagreement_rate', 'sample_count', 'sampling_rate_hz',
+    'duration_seconds', 'channel_number', 'start_mux', 'start_time_samples',
+    'acquisition_start_seconds', 'time_since_mux_change_seconds', 'num_reads_since_mux_change',
+    'num_minknow_events', 'minknow_event_rate_per_second', 'median_before_pa',
+    'open_pore_level_pa', 'tracked_scaling_shift', 'tracked_scaling_scale',
+    'predicted_scaling_shift', 'predicted_scaling_scale', 'current_mean_pa', 'current_median_pa',
+    'current_stddev_pa', 'current_mad_pa', 'current_min_pa', 'current_max_pa',
+    'dorado_move_stride_samples', 'dorado_emitted_bases', 'mapped_signal_start_sample',
+    'mapped_signal_end_sample', 'mapped_signal_span_samples',
+    'dorado_emission_rate_bases_per_second', 'samples_per_aligned_reference_base',
+    'signal_to_reference_dwell_mean_samples', 'signal_to_reference_dwell_median_samples',
+    'signal_to_reference_dwell_stddev_samples', 'signal_to_reference_dwell_mad_samples',
+] as const;
+
+export function normalizeSortableAlignmentReadPage(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedSliceId: string,
+    expectedSortBy: SortableReadField,
+    expectedSortDirection: 'asc' | 'desc',
+    expectedRawRepresentationId: string | null,
+): SortableAlignmentReadPage {
+    const topFields = [
+        'schema', 'job_id', 'session_id', 'slice_id', 'authority_sha256', 'selected_read_count',
+        'overlapping_read_count', 'capped', 'filtered_read_count', 'sort_by', 'sort_direction',
+        'null_order', 'tie_breaker', 'signal_metrics_state', 'signal_metrics_artifact_sha256',
+        'raw_representation_id', 'mapping_metrics_state', 'metric_contract', 'reads',
+        'next_cursor', 'limit',
+    ] as const;
+    requireClosedKeys(value, topFields, 'sortable read page');
+    const page = value as unknown as SortableAlignmentReadPage;
+    if (
+        page.schema !== 'bms.ngs.sortable-read-page.v1'
+        || page.job_id !== expectedJobId
+        || page.session_id !== expectedSessionId
+        || page.slice_id !== expectedSliceId
+        || !isSha256(page.authority_sha256)
+        || !isNonNegativeInteger(page.selected_read_count)
+        || !isNonNegativeInteger(page.overlapping_read_count)
+        || page.overlapping_read_count < page.selected_read_count
+        || typeof page.capped !== 'boolean'
+        || !isNonNegativeInteger(page.filtered_read_count)
+        || page.filtered_read_count > page.selected_read_count
+        || page.sort_by !== expectedSortBy
+        || page.sort_direction !== expectedSortDirection
+        || page.null_order !== 'last'
+        || JSON.stringify(page.tie_breaker) !== JSON.stringify(['read_id', 'start_1based', 'flags'])
+        || !['ready', 'unavailable', 'not_bound'].includes(page.signal_metrics_state)
+        || page.mapping_metrics_state !== 'not_bound'
+        || page.metric_contract !== 'bms.ont.literature-backed-read-metrics.v1'
+        || !Array.isArray(page.reads)
+        || !isPositiveInteger(page.limit)
+        || page.reads.length > page.limit
+        || (page.next_cursor !== null && (typeof page.next_cursor !== 'string' || page.next_cursor.length > 1024))
+    ) throw new Error('Invalid sortable read page authority.');
+    if (
+        (page.signal_metrics_state === 'ready') !== isSha256(page.signal_metrics_artifact_sha256)
+        || (page.signal_metrics_state === 'not_bound') !== (page.raw_representation_id === null)
+        || (page.raw_representation_id !== null && (typeof page.raw_representation_id !== 'string' || !page.raw_representation_id))
+        || page.raw_representation_id !== expectedRawRepresentationId
+    ) throw new Error('Invalid sortable raw-signal metric authority.');
+    const nullableIntegerFields = new Set([
+        'length', 'start_1based', 'alignment_end_1based', 'mapq', 'aligned_query_bases',
+        'aligned_reference_bases', 'inserted_bases', 'deleted_bases', 'skipped_reference_bases',
+        'clipped_bases', 'edit_distance', 'reference_substitution_count', 'sample_count',
+        'sampling_rate_hz', 'channel_number', 'start_mux', 'start_time_samples',
+        'num_reads_since_mux_change', 'num_minknow_events', 'dorado_move_stride_samples',
+        'dorado_emitted_bases', 'mapped_signal_start_sample', 'mapped_signal_end_sample',
+        'mapped_signal_span_samples',
+    ]);
+    for (const read of page.reads) {
+        requireClosedKeys(read, sortableReadWireFields, 'sortable read row');
+        const row = read as unknown as Record<string, unknown>;
+        if (
+            typeof read.read_id !== 'string' || !read.read_id || read.read_id.length > 255
+            || !isNonNegativeInteger(read.flags) || typeof read.unmapped !== 'boolean'
+            || !['+', '-'].includes(read.strand)
+            || (read.contig !== null && typeof read.contig !== 'string')
+            || (read.cigar !== null && typeof read.cigar !== 'string')
+            || sortableReadWireFields.some((field) => {
+                if (['read_id', 'contig', 'strand', 'cigar', 'flags', 'unmapped'].includes(field)) return false;
+                const fieldValue = row[field];
+                if (fieldValue === null) return false;
+                return nullableIntegerFields.has(field)
+                    ? !isNonNegativeInteger(fieldValue)
+                    : typeof fieldValue !== 'number' || !Number.isFinite(fieldValue);
+            })
+        ) throw new Error('Invalid sortable read row.');
+    }
+    return page;
+}
+
+export function alignmentReadIgvLocus(read: AlignmentRead): { contig: string; start: number; end: number } | null {
+    if (!read.contig || read.start_1based == null || read.alignment_end_1based == null) return null;
+    return { contig: read.contig, start: read.start_1based, end: read.alignment_end_1based };
 }
 
 export function buildFastqDownload(read: Pick<AlignmentRead, 'read_id' | 'sequence' | 'quality'>): string | null {
@@ -841,6 +1012,37 @@ export async function fetchAlignmentReads(
         signal: options.signal,
     });
     return normalizeAlignmentReadPage(response.data);
+}
+
+export async function fetchSortableAlignmentReads(
+    jobId: string,
+    sessionId: string,
+    sliceId: string,
+    options: SortableAlignmentReadOptions = {},
+): Promise<SortableAlignmentReadPage> {
+    const binding = options.rawSignalBinding;
+    const response = await api.get<SortableAlignmentReadPage>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/locus-slices/${encodeURIComponent(sliceId)}/reads`,
+        {
+            params: {
+                sort_by: options.sortBy ?? 'mean_quality',
+                sort_direction: options.sortDirection ?? 'desc',
+                q: options.q?.trim() || undefined,
+                metric_min: options.metricMin,
+                metric_max: options.metricMax,
+                cursor: options.cursor,
+                limit: options.limit ?? 50,
+                raw_run_id: binding?.runId,
+                raw_observed_generation: binding?.observedGeneration,
+                raw_representation_id: binding?.representationId,
+            },
+            signal: options.signal,
+        },
+    );
+    return normalizeSortableAlignmentReadPage(
+        response.data, jobId, sessionId, sliceId,
+        options.sortBy ?? 'mean_quality', options.sortDirection ?? 'desc', binding?.representationId ?? null,
+    );
 }
 
 export async function fetchAlignmentRead(

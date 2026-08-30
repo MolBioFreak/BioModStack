@@ -100,7 +100,10 @@ async def publish_table_rows(
     rows: Iterable[Mapping[str, Any]],
     schema: pa.Schema,
     installed_artifacts: list[Any] | None = None,
+    source_receipts: Mapping[str, Any] | None = None,
 ) -> Any:
+    if source_receipts is not None and canonical_sha256(source_receipts) != source_sha256:
+        raise ValueError("scientific artifact source receipts do not match source_sha256")
     artifact = install_parquet_rows(
         root=artifact_root(),
         owner_kind=owner_kind,
@@ -116,17 +119,27 @@ async def publish_table_rows(
     if installed_artifacts is not None:
         installed_artifacts.append(artifact)
     _track_new_artifact(session, artifact)
-    await _add_receipt(session, artifact, source_sha256)
+    await _add_receipt(session, artifact, source_sha256, source_receipts=source_receipts)
     return artifact
 
 
-async def _add_receipt(session: AsyncSession, artifact: Any, source_sha256: str) -> None:
+async def _add_receipt(
+    session: AsyncSession,
+    artifact: Any,
+    source_sha256: str,
+    *,
+    source_receipts: Mapping[str, Any] | None = None,
+) -> None:
     existing = await session.get(ScientificArtifactReceipt, artifact.artifact_id)
     if existing is not None:
         if (
             existing.content_sha256 != artifact.content_sha256
             or existing.size_bytes != artifact.size_bytes
             or existing.relative_path != artifact.relative_path
+            or (
+                source_receipts is not None
+                and existing.source_receipts_json != dict(source_receipts)
+            )
         ):
             raise ValueError(f"scientific artifact receipt conflict for {artifact.artifact_id}")
         return
@@ -146,12 +159,16 @@ async def _add_receipt(session: AsyncSession, artifact: Any, source_sha256: str)
             relative_path=artifact.relative_path,
             media_type=artifact.media_type,
             availability="available",
-            source_receipts_json={
-                "source_sha256": source_sha256,
-                "owner_kind": artifact.owner_kind,
-                "owner_id": artifact.owner_id,
-                "role": artifact.role,
-            },
+            source_receipts_json=(
+                dict(source_receipts)
+                if source_receipts is not None
+                else {
+                    "source_sha256": source_sha256,
+                    "owner_kind": artifact.owner_kind,
+                    "owner_id": artifact.owner_id,
+                    "role": artifact.role,
+                }
+            ),
             created_at=datetime.utcnow(),
         )
     )

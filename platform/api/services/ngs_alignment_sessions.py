@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import fcntl
 import heapq
@@ -23,7 +24,7 @@ import time
 from dataclasses import dataclass
 from collections import OrderedDict
 from contextlib import contextmanager
-from functools import lru_cache, wraps
+from functools import cmp_to_key, lru_cache, wraps
 from pathlib import Path
 from typing import Any, BinaryIO, Iterator, Mapping, cast
 
@@ -43,6 +44,7 @@ MAX_READ_PAGE = 200
 MAX_SEQUENCE_PAGE = 20
 MAX_READ_CURSOR = 9_999
 MAX_READ_SCAN = 10_000
+MAX_SORTABLE_READ_CURSOR_BYTES = 1024
 ALIGNMENT_PREVIEW_TARGET_READS = 2_000
 ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v3"
 ALIGNMENT_PRESENTATION_POLICY_VERSION = 3
@@ -76,6 +78,19 @@ LOCUS_MANIFEST_MAX_BYTES = 1024 * 1024
 LOCUS_CACHE_MAX_BYTES = 512 * 1024 * 1024
 LOCUS_CACHE_MAX_ENTRIES = 128
 LOCUS_GENERATION_CONCURRENCY = 1
+SORTABLE_READ_FIELDS = frozenset({
+    "read_id", "length", "mean_quality", "mapq", "aligned_query_bases",
+    "aligned_reference_bases", "inserted_bases", "deleted_bases",
+    "skipped_reference_bases", "clipped_bases", "edit_distance",
+    "reference_substitution_count", "reference_substitution_rate", "aligned_fraction",
+    "clipped_fraction", "reference_disagreement_rate", "sample_count",
+    "duration_seconds", "sampling_rate_hz", "current_mean_pa", "current_median_pa",
+    "current_stddev_pa", "current_mad_pa", "current_min_pa", "current_max_pa",
+    "channel_number", "start_mux", "acquisition_start_seconds",
+    "time_since_mux_change_seconds", "median_before_pa", "open_pore_level_pa",
+    "minknow_event_rate_per_second", "dorado_emission_rate_bases_per_second",
+    "mapped_signal_span_samples", "samples_per_aligned_reference_base",
+})
 _alignment_preview_lock = threading.Lock()
 LINKED_REPORT_ROLES = frozenset(
     {
@@ -3402,7 +3417,7 @@ def build_alignment_locus_slice(
                 for read in source.fetch(contig, start - 1, end):
                     if time.monotonic() > deadline:
                         raise AlignmentSessionError("locus slice time limit exceeded")
-                    if read.is_unmapped or read.is_secondary or not read.query_name:
+                    if read.is_unmapped or read.is_secondary or read.is_supplementary or not read.query_name:
                         continue
                     if read.query_name in overlapping_ids:
                         continue
@@ -3497,10 +3512,14 @@ def build_alignment_locus_slice(
                 "creation_revision": creation_revision, "creation_source_tree": creation_source_tree,
                 "selection_unit": "unique mapped primary read ID with associated supplementary records",
                 "inclusion_rules": [
-                    "mapped", "primary or supplementary", "query_name present", "overlaps requested locus",
+                    "mapped primary overlaps requested locus",
+                    "associated mapped supplementary for admitted primary identity",
+                    "query_name present",
                 ],
-                "exclusion_rules": ["secondary", "unmapped", "missing query_name", "outside requested locus"],
-                "flag_policy": "mapped primary and supplementary; secondary and unmapped excluded",
+                "exclusion_rules": [
+                    "secondary", "unmapped", "missing query_name", "primary outside requested locus",
+                ],
+                "flag_policy": "primary-overlap admission; associated supplementary retained; secondary and unmapped excluded",
                 "selected_record_counts": {
                     "primary": sum(
                         not record.is_supplementary for read_id in selected_ids for record in candidates[read_id]
@@ -3611,7 +3630,11 @@ def _iter_sam_lines(
     contig: str | None = None,
     start: int | None = None,
     end: int | None = None,
+    primary_only: bool = False,
+    scan_limit: int = MAX_READ_SCAN,
 ) -> Iterator[str]:
+    if scan_limit < 1 or scan_limit > LOCUS_MAX_RECORDS:
+        raise AlignmentSessionError("read scan limit is invalid")
     samtools = _samtools_command()
     samtools.verify_runtime()
     snapshots: list[BinaryIO] = []
@@ -3621,6 +3644,8 @@ def _iter_sam_lines(
         bam_snapshot = open_verified_artifact_snapshot(bam, expected_size=bam_size_bytes, expected_sha256=bam_sha256)
         snapshots.append(bam_snapshot)
         command = [*samtools, "view"]
+        if primary_only:
+            command.extend(["-F", "2308"])
         if index is not None:
             if index_sha256 is None or index_size_bytes is None:
                 index_sha256, index_size_bytes = _sha256_file_and_size(index)
@@ -3661,7 +3686,7 @@ def _iter_sam_lines(
     try:
         for line in process.stdout:
             lines.append(line.rstrip("\n"))
-            if len(lines) > MAX_READ_SCAN:
+            if len(lines) > scan_limit:
                 bounded_stop = True
                 break
     finally:
@@ -3692,7 +3717,7 @@ def _mean_quality(quality: str) -> float | None:
 
 def _alignment_quality_metrics(cigar: str, optional_fields: list[str], read_length: int | None) -> dict[str, Any]:
     metric_names = (
-        "aligned_query_bases", "inserted_bases", "deleted_bases", "skipped_reference_bases",
+        "aligned_query_bases", "aligned_reference_bases", "inserted_bases", "deleted_bases", "skipped_reference_bases",
         "clipped_bases", "edit_distance", "reference_substitution_count", "aligned_fraction",
         "clipped_fraction", "reference_substitution_rate", "reference_disagreement_rate",
     )
@@ -3730,6 +3755,7 @@ def _alignment_quality_metrics(cigar: str, optional_fields: list[str], read_leng
     )
     return {
         "aligned_query_bases": aligned_query_bases,
+        "aligned_reference_bases": aligned_reference_bases,
         "inserted_bases": counts["I"],
         "deleted_bases": counts["D"],
         "skipped_reference_bases": counts["N"],
@@ -3757,15 +3783,30 @@ def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | 
     sequence = fields[9]
     quality = fields[10]
     read_length = None if sequence == "*" else len(sequence)
+    cigar = None if fields[5] == "*" else fields[5]
+    start_1based = int(fields[3]) if fields[3].isdigit() and int(fields[3]) > 0 else None
+    alignment_end_1based = None
+    if start_1based is not None and cigar is not None and re.fullmatch(
+        r"(?:[1-9]\d*H)?(?:[1-9]\d*S)?(?:[1-9]\d*[MIDNP=X])+(?:[1-9]\d*S)?(?:[1-9]\d*H)?",
+        cigar,
+    ):
+        reference_span = sum(
+            int(length)
+            for length, operation in re.findall(r"(\d+)([MIDNSHP=X])", cigar)
+            if operation in {"M", "D", "N", "=", "X"}
+        )
+        if reference_span > 0:
+            alignment_end_1based = start_1based + reference_span - 1
     row: dict[str, Any] = {
         "read_id": fields[0],
         "length": read_length,
         "mean_quality": _mean_quality(quality),
         "contig": None if fields[2] == "*" else fields[2],
-        "start_1based": int(fields[3]) if fields[3].isdigit() and int(fields[3]) > 0 else None,
+        "start_1based": start_1based,
+        "alignment_end_1based": alignment_end_1based,
         "strand": "-" if flag & 16 else "+",
         "mapq": int(fields[4]) if fields[4].isdigit() else None,
-        "cigar": None if fields[5] == "*" else fields[5],
+        "cigar": cigar,
         "flags": flag,
         "unmapped": bool(flag & 4),
         **_alignment_quality_metrics(fields[5], fields[11:], read_length),
@@ -3774,6 +3815,245 @@ def _sam_line_to_read(line: str, *, include_sequence: bool) -> dict[str, Any] | 
         row["sequence"] = None if sequence == "*" else sequence
         row["quality"] = None if quality == "*" else quality
     return row
+
+
+def _empty_dorado_move_metrics() -> dict[str, int | float | None]:
+    return {
+        "dorado_move_stride_samples": None,
+        "dorado_emitted_bases": None,
+        "mapped_signal_start_sample": None,
+        "mapped_signal_end_sample": None,
+        "mapped_signal_span_samples": None,
+        "dorado_emission_rate_bases_per_second": None,
+        "samples_per_aligned_reference_base": None,
+    }
+
+
+def dorado_move_metrics(
+    optional_fields: list[str],
+    *,
+    signal_sample_count: int | None,
+    sampling_rate_hz: int | float | None,
+    aligned_reference_bases: int | None,
+) -> dict[str, int | float | None]:
+    """Decode exact Dorado move authority without claiming physical events."""
+    move_fields = [field for field in optional_fields if field.startswith("mv:")]
+    ts_fields = [field for field in optional_fields if field.startswith("ts:")]
+    ns_fields = [field for field in optional_fields if field.startswith("ns:")]
+    if len(move_fields) != 1 or len(ts_fields) != 1 or len(ns_fields) != 1:
+        return _empty_dorado_move_metrics()
+    if (
+        re.fullmatch(r"mv:B:c,(?:\d+,)*\d+", move_fields[0]) is None
+        or re.fullmatch(r"ts:i:\d+", ts_fields[0]) is None
+        or re.fullmatch(r"ns:i:\d+", ns_fields[0]) is None
+    ):
+        return _empty_dorado_move_metrics()
+    encoded = [int(value) for value in move_fields[0].split(",")[1:]]
+    if len(encoded) < 2:
+        return _empty_dorado_move_metrics()
+    stride, moves = encoded[0], encoded[1:]
+    start_sample = int(ts_fields[0][5:])
+    end_sample = int(ns_fields[0][5:])
+    if (
+        stride < 1
+        or any(value < 0 or value > 127 for value in moves)
+        or signal_sample_count is None
+        or isinstance(signal_sample_count, bool)
+        or signal_sample_count < 1
+        or start_sample < 0
+        or end_sample <= start_sample
+        or end_sample > signal_sample_count
+        or sampling_rate_hz is None
+        or isinstance(sampling_rate_hz, bool)
+        or not math.isfinite(float(sampling_rate_hz))
+        or float(sampling_rate_hz) <= 0
+    ):
+        return _empty_dorado_move_metrics()
+    emitted_bases = sum(moves)
+    span = end_sample - start_sample
+    return {
+        "dorado_move_stride_samples": stride,
+        "dorado_emitted_bases": emitted_bases,
+        "mapped_signal_start_sample": start_sample,
+        "mapped_signal_end_sample": end_sample,
+        "mapped_signal_span_samples": span,
+        "dorado_emission_rate_bases_per_second": emitted_bases * float(sampling_rate_hz) / span,
+        "samples_per_aligned_reference_base": (
+            span / aligned_reference_bases
+            if isinstance(aligned_reference_bases, int) and not isinstance(aligned_reference_bases, bool)
+            and aligned_reference_bases > 0 else None
+        ),
+    }
+
+
+def read_locus_primary_rows(
+    bam: Path,
+    *,
+    bam_sha256: str,
+    bam_size_bytes: int,
+    index: Path,
+    index_sha256: str,
+    index_size_bytes: int,
+) -> list[dict[str, Any]]:
+    """Read every admitted primary identity from one immutable bounded locus slice."""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in _iter_sam_lines(
+        bam, bam_sha256=bam_sha256, bam_size_bytes=bam_size_bytes,
+        index=index, index_sha256=index_sha256, index_size_bytes=index_size_bytes,
+        primary_only=True, scan_limit=LOCUS_MAX_RECORDS,
+    ):
+        fields = line.split("\t")
+        row = _sam_line_to_read(line, include_sequence=False)
+        if row is None:
+            continue
+        read_id = str(row["read_id"])
+        if read_id in seen:
+            raise AlignmentSessionError("locus slice contains duplicate primary read identities")
+        seen.add(read_id)
+        row["_dorado_optional_fields"] = fields[11:]
+        rows.append(row)
+        if len(rows) > LOCUS_MAX_READS:
+            raise AlignmentSessionError("locus slice exceeds the admitted read population")
+    return rows
+
+
+def enrich_locus_read_metrics(
+    reads: list[dict[str, Any]], raw_metrics: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for source in reads:
+        row = dict(source)
+        optional_fields = list(row.pop("_dorado_optional_fields", []))
+        raw = raw_metrics.get(str(row["read_id"]))
+        if raw is not None:
+            row.update(dict(raw))
+        row.update(dorado_move_metrics(
+            optional_fields,
+            signal_sample_count=row.get("sample_count"),
+            sampling_rate_hz=row.get("sampling_rate_hz"),
+            aligned_reference_bases=row.get("aligned_reference_bases"),
+        ))
+        enriched.append(row)
+    return enriched
+
+
+def _sortable_read_query_sha256(
+    *, authority_sha256: str, sort_by: str, sort_direction: str, query: str,
+    metric_min: float | None, metric_max: float | None,
+) -> str:
+    payload = {
+        "schema": "bms.ngs.sortable-read-query.v1",
+        "authority_sha256": authority_sha256,
+        "sort_by": sort_by,
+        "sort_direction": sort_direction,
+        "query": query,
+        "metric_min": metric_min,
+        "metric_max": metric_max,
+        "null_order": "last",
+        "tie_breaker": ["read_id", "start_1based", "flags"],
+    }
+    return hashlib.sha256(rfc8785.dumps(payload)).hexdigest()
+
+
+def _sortable_read_cursor(query_sha256: str, offset: int) -> str:
+    encoded = json.dumps(
+        {"v": 1, "q": query_sha256, "o": offset},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def _parse_sortable_read_cursor(cursor: str | None, query_sha256: str) -> int:
+    if cursor in (None, ""):
+        return 0
+    if len(str(cursor).encode("ascii", errors="ignore")) > MAX_SORTABLE_READ_CURSOR_BYTES:
+        raise AlignmentSessionError("sortable read cursor is invalid")
+    try:
+        token = str(cursor)
+        padding = "=" * (-len(token) % 4)
+        payload = json.loads(base64.b64decode(token + padding, altchars=b"-_", validate=True))
+    except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        raise AlignmentSessionError("sortable read cursor is invalid") from exc
+    offset = payload.get("o") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"v", "q", "o"}
+        or payload.get("v") != 1
+        or payload.get("q") != query_sha256
+        or not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or offset < 0
+        or offset > LOCUS_MAX_READS
+    ):
+        raise AlignmentSessionError("sortable read cursor does not match the query authority")
+    return offset
+
+
+def sort_locus_read_metrics_page(
+    reads: list[dict[str, Any]], *, authority_sha256: str, sort_by: str,
+    sort_direction: str, query: str | None, metric_min: float | None,
+    metric_max: float | None, cursor: str | None, limit: int,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{64}", authority_sha256):
+        raise AlignmentSessionError("sortable read authority is invalid")
+    if sort_by not in SORTABLE_READ_FIELDS or sort_direction not in {"asc", "desc"}:
+        raise AlignmentSessionError("sortable read order is invalid")
+    if limit < 1 or limit > MAX_READ_PAGE:
+        raise AlignmentSessionError("sortable read limit is invalid")
+    if metric_min is not None and (isinstance(metric_min, bool) or not math.isfinite(metric_min)):
+        raise AlignmentSessionError("sortable read metric minimum is invalid")
+    if metric_max is not None and (isinstance(metric_max, bool) or not math.isfinite(metric_max)):
+        raise AlignmentSessionError("sortable read metric maximum is invalid")
+    if metric_min is not None and metric_max is not None and metric_min > metric_max:
+        raise AlignmentSessionError("sortable read metric range is invalid")
+    needle = (query or "").strip().lower()
+    if len(needle) > 255:
+        raise AlignmentSessionError("sortable read query is invalid")
+
+    filtered: list[dict[str, Any]] = []
+    for row in reads:
+        if needle and needle not in str(row.get("read_id", "")).lower():
+            continue
+        value = row.get(sort_by)
+        if metric_min is not None or metric_max is not None:
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)):
+                continue
+            if metric_min is not None and float(value) < metric_min:
+                continue
+            if metric_max is not None and float(value) > metric_max:
+                continue
+        filtered.append(row)
+
+    def compare(left: Mapping[str, Any], right: Mapping[str, Any]) -> int:
+        left_value, right_value = left.get(sort_by), right.get(sort_by)
+        left_null, right_null = left_value is None, right_value is None
+        if left_null != right_null:
+            return 1 if left_null else -1
+        if not left_null and left_value != right_value:
+            direction = 1 if sort_direction == "asc" else -1
+            return direction if left_value > right_value else -direction
+        left_tie = (str(left.get("read_id", "")), int(left.get("start_1based") or 0), int(left.get("flags") or 0))
+        right_tie = (str(right.get("read_id", "")), int(right.get("start_1based") or 0), int(right.get("flags") or 0))
+        return (left_tie > right_tie) - (left_tie < right_tie)
+
+    filtered.sort(key=cmp_to_key(compare))
+    query_sha256 = _sortable_read_query_sha256(
+        authority_sha256=authority_sha256, sort_by=sort_by, sort_direction=sort_direction,
+        query=needle, metric_min=metric_min, metric_max=metric_max,
+    )
+    offset = _parse_sortable_read_cursor(cursor, query_sha256)
+    if offset > len(filtered):
+        raise AlignmentSessionError("sortable read cursor exceeds the result population")
+    page = filtered[offset:offset + limit]
+    next_offset = offset + len(page)
+    return {
+        "reads": page,
+        "next_cursor": _sortable_read_cursor(query_sha256, next_offset) if next_offset < len(filtered) else None,
+        "filtered_read_count": len(filtered),
+        "null_order": "last",
+        "tie_breaker": ["read_id", "start_1based", "flags"],
+    }
 
 
 def read_bam_page(

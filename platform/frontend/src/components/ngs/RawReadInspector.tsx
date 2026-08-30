@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { fetchOntRawSignalWaveform, requestOntRawSignalWaveform, type OntRawSignalWaveform } from '../../lib/api';
-
 import {
     buildFastqDownload,
+    alignmentReadIgvLocus,
     createLatestRequestGuard,
     DEFAULT_READ_QUERY_DEBOUNCE_MS,
     fetchAlignmentRead,
-    fetchAlignmentReads,
+    fetchSortableAlignmentReads,
     isAlignmentReadScanTruncatedError,
+    type AlignmentLocusSlice,
     type AlignmentRead,
+    type SortableReadField,
 } from '../../lib/ngsAlignmentSession';
 
 const RAW_WAVEFORM_POLL_ATTEMPTS = 130;
@@ -24,13 +26,10 @@ interface RawReadInspectorProps {
     jobId: string;
     sessionId: string;
     currentLocus?: ReadLocus | null;
+    locusSlice?: AlignmentLocusSlice | null;
     rawSignalBinding?: { runId: string; observedGeneration: number; representationId: string } | null;
     onOpenRawSignal?: (read: AlignmentRead) => void;
-}
-
-function requestWasAborted(reason: unknown): boolean {
-    const name = (reason as { name?: string } | null)?.name;
-    return name === 'AbortError' || name === 'CanceledError';
+    onNavigateIgv?: (read: AlignmentRead) => void;
 }
 
 interface GovernedRawSignalWaveformProps {
@@ -38,6 +37,56 @@ interface GovernedRawSignalWaveformProps {
     observedGeneration: number;
     representationId: string;
     readId: string;
+}
+
+const sortableFields: ReadonlyArray<{ value: SortableReadField; label: string; unit?: string }> = [
+    { value: 'mean_quality', label: 'Mean basecall quality' },
+    { value: 'length', label: 'Query length', unit: 'bp' },
+    { value: 'mapq', label: 'Mapping quality' },
+    { value: 'aligned_query_bases', label: 'Aligned query bases', unit: 'bp' },
+    { value: 'aligned_reference_bases', label: 'Aligned reference bases', unit: 'bp' },
+    { value: 'reference_substitution_count', label: 'Reference substitutions' },
+    { value: 'inserted_bases', label: 'Inserted bases', unit: 'bp' },
+    { value: 'deleted_bases', label: 'Deleted bases', unit: 'bp' },
+    { value: 'clipped_bases', label: 'Clipped bases', unit: 'bp' },
+    { value: 'reference_disagreement_rate', label: 'Reference disagreement rate' },
+    { value: 'sample_count', label: 'Signal sample count' },
+    { value: 'duration_seconds', label: 'Full-read duration', unit: 's' },
+    { value: 'current_mean_pa', label: 'Mean current', unit: 'pA' },
+    { value: 'current_median_pa', label: 'Median current', unit: 'pA' },
+    { value: 'current_stddev_pa', label: 'Current SD', unit: 'pA' },
+    { value: 'current_mad_pa', label: 'Current MAD', unit: 'pA' },
+    { value: 'current_min_pa', label: 'Minimum current', unit: 'pA' },
+    { value: 'current_max_pa', label: 'Maximum current', unit: 'pA' },
+    { value: 'channel_number', label: 'Channel' },
+    { value: 'start_mux', label: 'Mux' },
+    { value: 'acquisition_start_seconds', label: 'Acquisition start', unit: 's' },
+    { value: 'time_since_mux_change_seconds', label: 'Time since mux change', unit: 's' },
+    { value: 'median_before_pa', label: 'Median before', unit: 'pA' },
+    { value: 'open_pore_level_pa', label: 'Open-pore level', unit: 'pA' },
+    { value: 'minknow_event_rate_per_second', label: 'MinKNOW event-call rate', unit: 'events/s' },
+    { value: 'dorado_emission_rate_bases_per_second', label: 'Dorado move emission rate', unit: 'bases/s' },
+    { value: 'mapped_signal_span_samples', label: 'Mapped signal span', unit: 'samples' },
+    { value: 'samples_per_aligned_reference_base', label: 'Samples per aligned reference base' },
+    { value: 'read_id', label: 'Read ID' },
+];
+
+function requestWasAborted(reason: unknown): boolean {
+    const name = (reason as { name?: string } | null)?.name;
+    return name === 'AbortError' || name === 'CanceledError';
+}
+
+function metricValue(read: AlignmentRead, field: SortableReadField): unknown {
+    return (read as unknown as Record<string, unknown>)[field];
+}
+
+function formatMetric(value: unknown, field: SortableReadField): string {
+    if (value == null) return 'unavailable';
+    if (typeof value === 'string') return value;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 'unavailable';
+    if (field.endsWith('_rate') || field.includes('disagreement')) return `${(value * 100).toFixed(2)}%`;
+    if (Number.isInteger(value)) return value.toLocaleString();
+    return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
 }
 
 export function GovernedRawSignalWaveform({ runId, observedGeneration, representationId, readId }: GovernedRawSignalWaveformProps) {
@@ -53,10 +102,7 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
         setLoading(false);
         setError(null);
     }, [identityKey]);
-
-    useEffect(() => () => {
-        requestGenerationRef.current += 1;
-    }, []);
+    useEffect(() => () => { requestGenerationRef.current += 1; }, []);
 
     const waveformPoints = useMemo(() => {
         const samples = waveform?.state === 'ready' ? waveform.samples : null;
@@ -86,12 +132,8 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
                 current = await fetchOntRawSignalWaveform(current.lookup_id);
             }
             if (requestGeneration !== requestGenerationRef.current) return;
-            if (
-                current.run_id !== runId
-                || current.observed_generation !== observedGeneration
-                || current.representation_id !== representationId
-                || current.read_id !== exactReadId
-            ) {
+            if (current.run_id !== runId || current.observed_generation !== observedGeneration
+                || current.representation_id !== representationId || current.read_id !== exactReadId) {
                 throw new Error('Raw waveform response did not match the exact requested run generation and read.');
             }
             setWaveform(current);
@@ -108,15 +150,8 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
     return (
         <div className="space-y-2 rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-[10px]">
             <div className="font-semibold text-[var(--text-primary)]">Governed raw waveform</div>
-            <div className="break-all text-[var(--text-secondary)]">
-                Run <code>{runId}</code> generation {observedGeneration} · representation <code>{representationId}</code>
-            </div>
-            <button
-                type="button"
-                onClick={() => void inspectWaveform()}
-                disabled={!readId.trim() || loading}
-                className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40"
-            >
+            <div className="break-all text-[var(--text-secondary)]">Run <code>{runId}</code> generation {observedGeneration} · representation <code>{representationId}</code></div>
+            <button type="button" onClick={() => void inspectWaveform()} disabled={!readId.trim() || loading} className="rounded border border-emerald-500/50 px-2 py-1 font-semibold text-emerald-200 disabled:opacity-40">
                 {loading ? 'Inspecting…' : 'Inspect raw waveform'}
             </button>
             {error && <div role="alert" className="text-amber-200">Waveform unavailable: {error}</div>}
@@ -132,17 +167,27 @@ export function GovernedRawSignalWaveform({ runId, observedGeneration, represent
     );
 }
 
-export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSignalBinding = null, onOpenRawSignal }: RawReadInspectorProps) {
+export function RawReadInspector({
+    jobId,
+    sessionId,
+    currentLocus = null,
+    locusSlice = null,
+    rawSignalBinding = null,
+    onOpenRawSignal,
+    onNavigateIgv,
+}: RawReadInspectorProps) {
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
-    const [contig, setContig] = useState('');
-    const [start, setStart] = useState('');
-    const [end, setEnd] = useState('');
+    const [sortBy, setSortBy] = useState<SortableReadField>('mean_quality');
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+    const [metricMin, setMetricMin] = useState('');
+    const [metricMax, setMetricMax] = useState('');
     const [reads, setReads] = useState<AlignmentRead[]>([]);
     const [cursor, setCursor] = useState<string | null>(null);
+    const [population, setPopulation] = useState<{ selected: number; filtered: number; overlapping: number; capped: boolean } | null>(null);
+    const [signalMetricsState, setSignalMetricsState] = useState<'ready' | 'unavailable' | 'not_bound'>('not_bound');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [scanTruncated, setScanTruncated] = useState(false);
     const [selected, setSelected] = useState<AlignmentRead | null>(null);
     const [waveform, setWaveform] = useState<OntRawSignalWaveform | null>(null);
     const [waveformError, setWaveformError] = useState<string | null>(null);
@@ -163,11 +208,14 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
         detailGuardRef.current.reset();
         setReads([]);
         setCursor(null);
+        setPopulation(null);
+        setSignalMetricsState('not_bound');
         setSelected(null);
+        setWaveform(null);
+        setWaveformError(null);
         setError(null);
-        setScanTruncated(false);
         setLoading(false);
-    }, [jobId, sessionId]);
+    }, [jobId, sessionId, locusSlice?.slice_id]);
 
     useEffect(() => () => {
         listAbortRef.current?.abort();
@@ -176,14 +224,148 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
         detailGuardRef.current.reset();
     }, []);
 
-    const parsedLocus = useMemo(() => {
-        const parsedStart = Number(start);
-        const parsedEnd = Number(end);
-        if (!contig.trim() || !Number.isInteger(parsedStart) || !Number.isInteger(parsedEnd) || parsedStart < 1 || parsedEnd < parsedStart) {
-            return undefined;
+    const parsedMetricMin = metricMin.trim() === '' ? undefined : Number(metricMin);
+    const parsedMetricMax = metricMax.trim() === '' ? undefined : Number(metricMax);
+    const rawSignalRunId = rawSignalBinding?.runId;
+    const rawSignalObservedGeneration = rawSignalBinding?.observedGeneration;
+    const rawSignalRepresentationId = rawSignalBinding?.representationId;
+    const selectedField = sortableFields.find((field) => field.value === sortBy) || sortableFields[0];
+    const detailLocus = locusSlice
+        ? { contig: locusSlice.contig, start: locusSlice.start_1based, end: locusSlice.end_1based }
+        : currentLocus || undefined;
+
+    useEffect(() => {
+        detailAbortRef.current?.abort();
+        detailGuardRef.current.reset();
+        setSelected(null);
+        setWaveform(null);
+        setWaveformError(null);
+    }, [rawSignalRunId, rawSignalObservedGeneration, rawSignalRepresentationId]);
+
+    const loadPage = useCallback(async (nextCursor?: string) => {
+        listAbortRef.current?.abort();
+        const requestToken = listGuardRef.current.begin();
+        const rootRequest = !nextCursor;
+        if (rootRequest) {
+            detailAbortRef.current?.abort();
+            detailGuardRef.current.reset();
+            setReads([]);
+            setCursor(null);
+            setPopulation(null);
+            setSignalMetricsState('not_bound');
+            setSelected(null);
+            setWaveform(null);
+            setWaveformError(null);
         }
-        return { contig: contig.trim(), start: parsedStart, end: parsedEnd };
-    }, [contig, end, start]);
+        setError(null);
+        if (!locusSlice) {
+            setLoading(false);
+            return;
+        }
+        if ((parsedMetricMin !== undefined && !Number.isFinite(parsedMetricMin))
+            || (parsedMetricMax !== undefined && !Number.isFinite(parsedMetricMax))) {
+            setLoading(false);
+            setError('Metric bounds must be finite numbers.');
+            return;
+        }
+        const controller = new AbortController();
+        listAbortRef.current = controller;
+        setLoading(true);
+        try {
+            const page = await fetchSortableAlignmentReads(jobId, sessionId, locusSlice.slice_id, {
+                sortBy,
+                sortDirection,
+                q: debouncedQuery || undefined,
+                metricMin: parsedMetricMin,
+                metricMax: parsedMetricMax,
+                cursor: nextCursor,
+                limit: 50,
+                rawSignalBinding: rawSignalRunId !== undefined
+                    && rawSignalObservedGeneration !== undefined
+                    && rawSignalRepresentationId !== undefined
+                    ? {
+                        runId: rawSignalRunId,
+                        observedGeneration: rawSignalObservedGeneration,
+                        representationId: rawSignalRepresentationId,
+                    }
+                    : null,
+                signal: controller.signal,
+            });
+            if (!listGuardRef.current.isCurrent(requestToken)) return;
+            setReads(nextCursor ? (current) => [...current, ...page.reads] : page.reads);
+            setCursor(page.next_cursor);
+            setPopulation({
+                selected: page.selected_read_count,
+                filtered: page.filtered_read_count,
+                overlapping: page.overlapping_read_count,
+                capped: page.capped,
+            });
+            setSignalMetricsState(page.signal_metrics_state);
+        } catch (reason) {
+            if (!requestWasAborted(reason) && listGuardRef.current.isCurrent(requestToken)) {
+                setError(reason instanceof Error ? reason.message : String(reason));
+            }
+        } finally {
+            if (listGuardRef.current.isCurrent(requestToken)) setLoading(false);
+        }
+    }, [
+        debouncedQuery, jobId, locusSlice, parsedMetricMax, parsedMetricMin,
+        rawSignalObservedGeneration, rawSignalRepresentationId, rawSignalRunId,
+        sessionId, sortBy, sortDirection,
+    ]);
+
+    useEffect(() => { void loadPage(); }, [loadPage]);
+
+    const inspectRead = async (read: AlignmentRead) => {
+        detailAbortRef.current?.abort();
+        const controller = new AbortController();
+        detailAbortRef.current = controller;
+        const requestToken = detailGuardRef.current.begin();
+        const requestedRunId = rawSignalRunId;
+        const requestedGeneration = rawSignalObservedGeneration;
+        const requestedRepresentationId = rawSignalRepresentationId;
+        const requestedReadId = read.read_id;
+        setSelected(read);
+        setWaveform(null);
+        setWaveformError(null);
+        try {
+            const detail = await fetchAlignmentRead(jobId, sessionId, read.read_id, {
+                ...detailLocus,
+                signal: controller.signal,
+            });
+            if (detailGuardRef.current.isCurrent(requestToken)) setSelected({ ...read, ...detail });
+            if (requestedRunId !== undefined && requestedGeneration !== undefined
+                && requestedRepresentationId !== undefined && detailGuardRef.current.isCurrent(requestToken)) {
+                let current = await requestOntRawSignalWaveform(
+                    requestedRunId,
+                    requestedGeneration,
+                    requestedRepresentationId,
+                    requestedReadId,
+                );
+                for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
+                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                    if (!detailGuardRef.current.isCurrent(requestToken)) return;
+                    current = await fetchOntRawSignalWaveform(current.lookup_id);
+                }
+                if (detailGuardRef.current.isCurrent(requestToken)) {
+                    if (current.run_id !== requestedRunId || current.observed_generation !== requestedGeneration
+                        || current.representation_id !== requestedRepresentationId || current.read_id !== requestedReadId) {
+                        throw new Error('Raw waveform response did not match the exact requested run generation and read.');
+                    }
+                    setWaveform(current);
+                    if (current.state !== 'ready') setWaveformError(current.reason_code);
+                }
+            }
+        } catch (reason) {
+            if (!requestWasAborted(reason) && detailGuardRef.current.isCurrent(requestToken)) {
+                if (isAlignmentReadScanTruncatedError(reason)) {
+                    setError('Exact read detail scan ended before absence could be proved.');
+                } else {
+                    setError(reason instanceof Error ? reason.message : String(reason));
+                }
+            }
+        }
+    };
 
     const waveformPoints = useMemo(() => {
         const samples = waveform?.state === 'ready' ? waveform.samples : null;
@@ -197,89 +379,9 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
         }).join(' ');
     }, [waveform]);
 
-    const loadPage = useCallback(async (nextCursor?: string) => {
-        listAbortRef.current?.abort();
-        const controller = new AbortController();
-        listAbortRef.current = controller;
-        const requestToken = listGuardRef.current.begin();
-        setLoading(true);
-        setError(null);
-        if (!nextCursor) {
-            setSelected(null);
-            setScanTruncated(false);
-        }
-        try {
-            const page = await fetchAlignmentReads(jobId, sessionId, {
-                q: debouncedQuery || undefined,
-                cursor: nextCursor,
-                limit: 50,
-                ...parsedLocus,
-                signal: controller.signal,
-            });
-            if (!listGuardRef.current.isCurrent(requestToken)) return;
-            setReads(nextCursor ? (current) => [...current, ...page.reads] : page.reads);
-            setCursor(page.next_cursor);
-            setScanTruncated(page.scan_truncated);
-        } catch (reason) {
-            if (!requestWasAborted(reason) && listGuardRef.current.isCurrent(requestToken)) {
-                setError(reason instanceof Error ? reason.message : String(reason));
-            }
-        } finally {
-            if (listGuardRef.current.isCurrent(requestToken)) setLoading(false);
-        }
-    }, [debouncedQuery, jobId, parsedLocus, sessionId]);
-
-    useEffect(() => {
-        void loadPage();
-    }, [loadPage]);
-
-    const inspectRead = async (readId: string) => {
-        detailAbortRef.current?.abort();
-        const controller = new AbortController();
-        detailAbortRef.current = controller;
-        const requestToken = detailGuardRef.current.begin();
-        setLoading(true);
-        setError(null);
-        setSelected(null);
-        setWaveform(null);
-        setWaveformError(null);
-        try {
-            const detail = await fetchAlignmentRead(jobId, sessionId, readId, {
-                ...parsedLocus,
-                signal: controller.signal,
-            });
-            if (detailGuardRef.current.isCurrent(requestToken)) setSelected(detail);
-            if (rawSignalBinding && detailGuardRef.current.isCurrent(requestToken)) {
-                let current = await requestOntRawSignalWaveform(
-                    rawSignalBinding.runId,
-                    rawSignalBinding.observedGeneration,
-                    rawSignalBinding.representationId,
-                    readId,
-                );
-                for (let attempt = 0; attempt < RAW_WAVEFORM_POLL_ATTEMPTS && (current.state === 'requested' || current.state === 'running'); attempt += 1) {
-                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
-                    if (!detailGuardRef.current.isCurrent(requestToken)) return;
-                    current = await fetchOntRawSignalWaveform(current.lookup_id);
-                }
-                if (detailGuardRef.current.isCurrent(requestToken)) {
-                    setWaveform(current);
-                    if (current.state !== 'ready') setWaveformError(current.reason_code);
-                }
-            }
-        } catch (reason) {
-            if (!requestWasAborted(reason) && detailGuardRef.current.isCurrent(requestToken)) {
-                if (isAlignmentReadScanTruncatedError(reason)) setScanTruncated(true);
-                setError(reason instanceof Error ? reason.message : String(reason));
-            }
-        } finally {
-            if (detailGuardRef.current.isCurrent(requestToken)) setLoading(false);
-        }
-    };
-
     const copySequence = async () => {
         if (selected?.sequence) await navigator.clipboard.writeText(selected.sequence);
     };
-
     const downloadRead = () => {
         if (!selected) return;
         const fastq = buildFastqDownload(selected);
@@ -293,78 +395,98 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
         URL.revokeObjectURL(url);
     };
 
-    const useCurrentLocus = () => {
-        if (!currentLocus) return;
-        setContig(currentLocus.contig);
-        setStart(String(currentLocus.start));
-        setEnd(String(currentLocus.end));
-    };
-
     return (
-        <aside className="absolute right-2 top-2 bottom-2 z-20 w-[410px] overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)]/95 shadow-xl flex flex-col">
-            <div className="px-3 py-2 border-b border-[var(--border-primary)]">
-                <div className="text-xs font-semibold text-[var(--text-primary)]">Basecalled read inspector</div>
-                <div className={`text-[10px] ${rawSignalBinding ? 'text-emerald-300' : 'text-amber-300'}`}>
-                    {rawSignalBinding ? 'Indexed BLOW5 waveform lookup is available for this exact run generation.' : 'Raw electrical signal needs an exact indexed-BLOW5 run binding.'}
+        <aside className="absolute right-2 top-2 bottom-2 z-20 w-[min(760px,calc(100%-1rem))] overflow-hidden rounded-lg border border-[var(--border-primary)] bg-[var(--bg-secondary)]/95 shadow-xl flex flex-col">
+            <div className="space-y-2 border-b border-[var(--border-primary)] px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <div className="text-xs font-semibold text-[var(--text-primary)]">Sortable read workbench</div>
+                        <div className="text-[10px] text-[var(--text-secondary)]">Server-sorted over the complete admitted locus slice. Null values always sort last.</div>
+                    </div>
+                    <div className={`text-right text-[10px] ${signalMetricsState === 'ready' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                        {signalMetricsState === 'ready' ? 'Signal metrics ready' : signalMetricsState === 'unavailable' ? 'Signal metrics unavailable for this source' : 'Signal metrics not bound'}
+                    </div>
                 </div>
-                <div className="flex gap-1 mt-1">
-                    <input
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Filter by read ID (debounced)"
-                        className="min-w-0 flex-1 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs text-[var(--text-primary)]"
-                    />
-                    <button type="button" onClick={() => void loadPage()} disabled={loading} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">
-                        Search
-                    </button>
-                </div>
-                <div className="mt-1 grid grid-cols-[1fr_72px_72px_auto] gap-1">
-                    <input value={contig} onChange={(event) => setContig(event.target.value)} placeholder="Contig" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-0.5 text-[10px]" />
-                    <input value={start} onChange={(event) => setStart(event.target.value)} inputMode="numeric" placeholder="Start" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-0.5 text-[10px]" />
-                    <input value={end} onChange={(event) => setEnd(event.target.value)} inputMode="numeric" placeholder="End" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-1 py-0.5 text-[10px]" />
-                    <button type="button" onClick={useCurrentLocus} disabled={!currentLocus} className="rounded border border-[var(--border-primary)] px-1 py-0.5 text-[10px] disabled:opacity-40">IGV locus</button>
-                </div>
-                {scanTruncated && <div className="mt-1 text-[11px] text-amber-300">Scan budget exhausted; this result set may be incomplete.</div>}
-                {error && <div className="mt-1 text-[11px] text-red-300">{error}</div>}
-            </div>
-            <div className="flex-1 min-h-0 overflow-auto">
-                {reads.map((read) => (
-                    <button
-                        type="button"
-                        key={`${read.read_id}:${read.start_1based ?? 0}:${read.flags}`}
-                        onClick={() => void inspectRead(read.read_id)}
-                        className="w-full text-left px-3 py-1.5 border-b border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]"
-                    >
-                        <div className="text-xs font-mono text-[var(--text-primary)] truncate">{read.read_id}</div>
-                        <div className="text-[10px] text-[var(--text-secondary)]">
-                            {read.length ?? 'n/a'} bp · Q{read.mean_quality?.toFixed(1) ?? 'n/a'} · {read.contig || 'unmapped'}{read.start_1based ? `:${read.start_1based}` : ''} · {read.strand} · MAPQ {read.mapq ?? 'n/a'} · {read.cigar || 'no CIGAR'} · flags {read.flags}
-                        </div>
-                    </button>
-                ))}
-                {cursor && (
-                    <button type="button" onClick={() => void loadPage(cursor)} disabled={loading} className="w-full px-3 py-2 text-xs text-[var(--accent-secondary)]">
-                        {loading ? 'Loading…' : 'Load 50 more'}
-                    </button>
+                {!locusSlice && (
+                    <div role="status" className="rounded border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
+                        Load the bounded full-source locus track to admit a complete sortable read population.
+                    </div>
                 )}
-                {!loading && reads.length === 0 && <div className="p-3 text-xs text-[var(--text-secondary)]">No reads matched.</div>}
+                {locusSlice && population && (
+                    <div className="text-[10px] text-[var(--text-secondary)]">
+                        {population.filtered.toLocaleString()} matched · {population.selected.toLocaleString()} admitted · {population.overlapping.toLocaleString()} overlapping source identities{population.capped ? ' · capped by the 5,000-read locus policy' : ''}
+                    </div>
+                )}
+                <div className="grid grid-cols-[minmax(150px,1fr)_minmax(190px,1.2fr)_82px] gap-1">
+                    <input aria-label="Filter reads by ID" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter by read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
+                    <select aria-label="Sort reads by" value={sortBy} onChange={(event) => {
+                        setSortBy(event.target.value as SortableReadField);
+                        setMetricMin('');
+                        setMetricMax('');
+                    }} className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs">
+                        {sortableFields.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}
+                    </select>
+                    <button aria-label="Toggle sort direction" type="button" onClick={() => setSortDirection((current) => current === 'asc' ? 'desc' : 'asc')} className="rounded border border-[var(--border-primary)] px-2 py-1 text-xs">
+                        {sortDirection === 'asc' ? '↑ Asc' : '↓ Desc'}
+                    </button>
+                </div>
+                <div className="grid grid-cols-[1fr_1fr_auto] gap-1">
+                    <input aria-label="Selected metric minimum" value={metricMin} onChange={(event) => setMetricMin(event.target.value)} disabled={sortBy === 'read_id'} inputMode="decimal" placeholder="Selected metric minimum" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[10px]" />
+                    <input aria-label="Selected metric maximum" value={metricMax} onChange={(event) => setMetricMax(event.target.value)} disabled={sortBy === 'read_id'} inputMode="decimal" placeholder="Selected metric maximum" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-[10px]" />
+                    <button aria-label="Refresh sortable reads" type="button" onClick={() => void loadPage()} disabled={!locusSlice || loading} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Refresh</button>
+                </div>
+                {error && <div role="alert" className="text-[11px] text-red-300">{error}</div>}
             </div>
+
+            <div className="flex-1 min-h-0 overflow-auto">
+                <table className="w-full min-w-[700px] border-collapse text-[10px]">
+                    <thead className="sticky top-0 z-10 bg-[var(--bg-secondary)] text-left text-[var(--text-secondary)]">
+                        <tr>
+                            <th className="border-b border-[var(--border-primary)] px-2 py-1">Read identity</th>
+                            <th className="border-b border-[var(--border-primary)] px-2 py-1">{selectedField.label}{selectedField.unit ? ` (${selectedField.unit})` : ''}</th>
+                            <th className="border-b border-[var(--border-primary)] px-2 py-1">Q / MAPQ</th>
+                            <th className="border-b border-[var(--border-primary)] px-2 py-1">Alignment</th>
+                            <th className="border-b border-[var(--border-primary)] px-2 py-1">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {reads.map((read) => (
+                            <tr key={`${read.read_id}:${read.start_1based ?? 0}:${read.flags}`} className="border-b border-[var(--border-primary)] hover:bg-[var(--bg-tertiary)]">
+                                <td className="max-w-[250px] truncate px-2 py-1 font-mono text-[var(--text-primary)]" title={read.read_id}>{read.read_id}</td>
+                                <td className="px-2 py-1 font-mono text-[var(--accent-secondary)]">{formatMetric(metricValue(read, sortBy), sortBy)}</td>
+                                <td className="px-2 py-1">Q{read.mean_quality?.toFixed(1) ?? 'n/a'} / {read.mapq ?? 'n/a'}</td>
+                                <td className="px-2 py-1">{read.contig || 'unmapped'}{read.start_1based ? `:${read.start_1based}` : ''} · {read.cigar || 'no CIGAR'}</td>
+                                <td className="whitespace-nowrap px-2 py-1">
+                                    <button aria-label={`Navigate read ${read.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(read)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(read)} className="mr-1 rounded border border-cyan-500/40 px-1.5 py-0.5 text-cyan-200 disabled:opacity-35">IGV</button>
+                                    <button aria-label={`Open signal for read ${read.read_id}`} type="button" onClick={() => onOpenRawSignal?.(read)} disabled={!rawSignalBinding || !onOpenRawSignal} className="mr-1 rounded border border-emerald-500/40 px-1.5 py-0.5 text-emerald-200 disabled:opacity-35">Signal</button>
+                                    <button aria-label={`Inspect details for read ${read.read_id}`} type="button" onClick={() => void inspectRead(read)} className="rounded border border-[var(--border-primary)] px-1.5 py-0.5">Detail</button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {cursor && <button type="button" onClick={() => void loadPage(cursor)} disabled={loading} className="w-full px-3 py-2 text-xs text-[var(--accent-secondary)]">{loading ? 'Loading…' : 'Load 50 more'}</button>}
+                {!loading && locusSlice && reads.length === 0 && <div className="p-3 text-xs text-[var(--text-secondary)]">No admitted reads matched.</div>}
+                {loading && reads.length === 0 && <div className="p-3 text-xs text-[var(--text-secondary)]">Sorting the admitted locus population…</div>}
+            </div>
+
             {selected && (
-                <div className="max-h-[48%] overflow-auto border-t border-[var(--border-primary)] p-3 text-[11px]">
-                    <div className="font-mono text-[var(--text-primary)] break-all">{selected.read_id}</div>
-                    <div className="text-[var(--text-secondary)] mt-1">
-                        {selected.contig || 'unmapped'} · {selected.start_1based ?? 'n/a'} · {selected.strand} · MAPQ {selected.mapq ?? 'n/a'} · {selected.cigar || 'no CIGAR'} · flags {selected.flags}
+                <div className="max-h-[42%] overflow-auto border-t border-[var(--border-primary)] p-3 text-[11px]">
+                    <div className="flex items-start justify-between gap-2">
+                        <div>
+                            <div className="break-all font-mono text-[var(--text-primary)]">{selected.read_id}</div>
+                            <div className="mt-1 text-[var(--text-secondary)]">{selected.contig || 'unmapped'} · {selected.start_1based ?? 'n/a'} · {selected.strand} · MAPQ {selected.mapq ?? 'n/a'} · {selected.cigar || 'no CIGAR'}</div>
+                        </div>
+                        <div className="flex gap-1">
+                            <button aria-label={`Navigate selected read ${selected.read_id} in IGV`} type="button" onClick={() => onNavigateIgv?.(selected)} disabled={!onNavigateIgv || !alignmentReadIgvLocus(selected)} className="rounded border border-cyan-500/40 px-2 py-1 text-cyan-200 disabled:opacity-35">Navigate IGV</button>
+                            <button aria-label={`Open signal for selected read ${selected.read_id}`} type="button" onClick={() => onOpenRawSignal?.(selected)} disabled={!rawSignalBinding || !onOpenRawSignal} className="rounded border border-emerald-500/40 px-2 py-1 text-emerald-200 disabled:opacity-35">Open signal</button>
+                        </div>
                     </div>
                     {waveform?.state === 'ready' && waveform.samples && (
                         <div className="mt-2">
-                            <div className="text-[10px] text-[var(--text-secondary)]">Raw signal · {waveform.sample_count ?? waveform.samples.length} source samples · {waveform.samples.length} displayed · pA</div>
+                            <div className="text-[10px] text-[var(--text-secondary)]">Exact raw signal · {waveform.sample_count ?? waveform.samples.length} source samples · {waveform.samples.length} displayed · pA</div>
                             <svg viewBox="0 0 400 100" className="mt-1 h-24 w-full rounded bg-[var(--bg-primary)]" role="img" aria-label="Raw electrical signal waveform">
-                                <polyline
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="1"
-                                    className="text-cyan-300"
-                                    points={waveformPoints}
-                                />
+                                <polyline fill="none" stroke="currentColor" strokeWidth="1" className="text-cyan-300" points={waveformPoints} />
                             </svg>
                         </div>
                     )}
@@ -373,24 +495,9 @@ export function RawReadInspector({ jobId, sessionId, currentLocus = null, rawSig
                         <>
                             <div className="mt-2 text-[10px] text-[var(--text-secondary)]">Basecalled sequence</div>
                             <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 font-mono text-[10px] text-[var(--text-primary)]">{selected.sequence}</pre>
-                            <div className="mt-2 text-[10px] text-[var(--text-secondary)]">FASTQ quality string</div>
-                            {selected.quality ? (
-                                <pre className="max-h-20 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 font-mono text-[10px] text-[var(--text-primary)]">{selected.quality}</pre>
-                            ) : (
-                                <div className="rounded bg-amber-500/10 p-2 text-amber-300">Quality unavailable; FASTQ export is disabled.</div>
-                            )}
-                            <div className="flex gap-2 mt-2">
-                                <button
-                                    type="button"
-                                    onClick={() => onOpenRawSignal?.(selected)}
-                                    disabled={!rawSignalBinding || !onOpenRawSignal}
-                                    title={rawSignalBinding ? 'Open this exact read in the coordinated signal panel' : 'This read has no exact indexed-BLOW5 run binding.'}
-                                    className="rounded border border-[var(--accent-secondary)]/50 px-2 py-1 text-[var(--accent-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-                                >
-                                    Open raw signal
-                                </button>
+                            <div className="mt-2 flex gap-2">
                                 <button type="button" onClick={() => void copySequence()} className="rounded border border-[var(--border-primary)] px-2 py-1">Copy sequence</button>
-                                <button type="button" onClick={downloadRead} disabled={!buildFastqDownload(selected)} className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40">Download FASTQ</button>
+                                <button type="button" onClick={downloadRead} disabled={!buildFastqDownload(selected)} className="rounded border border-[var(--border-primary)] px-2 py-1 disabled:opacity-40">Download FASTQ</button>
                             </div>
                         </>
                     )}

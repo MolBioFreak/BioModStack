@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
@@ -64,6 +65,117 @@ def test_governed_read_query_validation_is_runtime_typed() -> None:
             "resource": "read",
             "retryable": False,
         }
+
+
+def test_sortable_locus_read_query_uses_typed_400_and_closed_openapi_contract() -> None:
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(id="job-a")
+    app.dependency_overrides[ngs_routes.get_session] = lambda: SimpleNamespace()
+    client = TestClient(app, client=("127.0.0.1", 40000))
+
+    path = "/api/jobs/job-a/alignment-sessions/session-a/locus-slices/slice-a/reads"
+    response = client.get(f"{path}?sort_by=unsupported")
+    assert response.status_code == 400
+    assert response.json() == {
+        "schema": "bms.ngs.error.v1",
+        "code": "NGS_RANGE_INVALID",
+        "message": "The sortable read query parameters are invalid.",
+        "job_id": "job-a",
+        "resource": "read",
+        "retryable": False,
+    }
+    schema_path = "/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/reads"
+    operation = app.openapi()["paths"][schema_path]["get"]
+    assert "422" not in operation["responses"]
+    assert operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith("OntSortableReadPageV1")
+
+
+@pytest.mark.parametrize(
+    "query_params",
+    [
+        {"metric_min": "nan"},
+        {"metric_max": "inf"},
+        {"metric_min": "-inf"},
+        {"metric_min": "2", "metric_max": "1"},
+    ],
+    ids=["non-finite-min", "non-finite-max", "negative-infinite-min", "reversed-range"],
+)
+def test_sortable_locus_route_rejects_invalid_metric_bounds_before_presentation_or_lookup(
+    query_params: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectLookup:
+        async def get(self, *_args: Any, **_kwargs: Any) -> None:
+            pytest.fail("representation lookup must not occur for invalid metric bounds")
+
+    @asynccontextmanager
+    async def reject_presentation(*_args: Any, **_kwargs: Any):
+        pytest.fail("presentation work must not occur for invalid metric bounds")
+        yield
+
+    monkeypatch.setattr(ngs_routes, "_prepared_presentation", reject_presentation)
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(
+        id="job-a",
+        params={},
+    )
+    app.dependency_overrides[ngs_routes.get_session] = lambda: RejectLookup()
+    client = TestClient(app, client=("127.0.0.1", 40000))
+
+    response = client.get(
+        "/api/jobs/job-a/alignment-sessions/session-a/locus-slices/slice-a/reads",
+        params=query_params,
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "schema": "bms.ngs.error.v1",
+        "code": "NGS_RANGE_INVALID",
+        "message": "The sortable read query parameters are invalid.",
+        "job_id": "job-a",
+        "resource": "read",
+        "retryable": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("raw_run_id", "raw_generation"),
+    [("run-other", 7), ("run-authorized", 8)],
+    ids=["cross-run", "cross-generation"],
+)
+def test_sortable_locus_route_rejects_raw_authority_outside_persisted_job_before_lookup(
+    raw_run_id: str,
+    raw_generation: int,
+) -> None:
+    class RejectLookup:
+        async def get(self, *_args: Any, **_kwargs: Any) -> None:
+            pytest.fail("representation lookup must not occur for cross-authority raw metrics")
+
+    app = _ngs_app()
+    app.include_router(ngs_routes.router, prefix="/api")
+    app.dependency_overrides[ngs_routes.require_alignment_job] = lambda: SimpleNamespace(
+        id="job-a",
+        params={
+            "source_instrument_run_id": "run-authorized",
+            "source_instrument_observed_generation": 7,
+        },
+    )
+    app.dependency_overrides[ngs_routes.get_session] = lambda: RejectLookup()
+    client = TestClient(app, client=("127.0.0.1", 40000))
+
+    response = client.get(
+        "/api/jobs/job-a/alignment-sessions/session-a/locus-slices/slice-a/reads",
+        params={
+            "raw_run_id": raw_run_id,
+            "raw_observed_generation": raw_generation,
+            "raw_representation_id": "rep-a",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "NGS_AUTHORITY_CONFLICT"
 
 
 def test_content_disposition_uses_descriptor_authority() -> None:
@@ -526,6 +638,89 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
         service.build_alignment_locus_slice(source, **{**common, "contig": "../bad"})
     with pytest.raises(service.AlignmentSessionError, match="span"):
         service.build_alignment_locus_slice(source, **{**common, "end": service.LOCUS_MAX_SPAN + 1})
+
+
+def test_locus_admission_requires_primary_overlap_when_only_supplementary_is_inside(
+    tmp_path: Path,
+) -> None:
+    import pysam
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "supplementary-only-overlap.bam"
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "plasmid", "LN": 1000}]}
+    with pysam.AlignmentFile(source, "wb", header=header) as output:
+        primary = pysam.AlignedSegment()
+        primary.query_name = "outside-primary"
+        primary.query_sequence = "A" * 40
+        primary.flag = 0
+        primary.reference_id = 0
+        primary.reference_start = 9
+        primary.mapping_quality = 60
+        primary.cigar = ((0, 40),)
+        primary.query_qualities = pysam.qualitystring_to_array("I" * 40)
+        output.write(primary)
+
+        supplementary = pysam.AlignedSegment()
+        supplementary.query_name = primary.query_name
+        supplementary.query_sequence = primary.query_sequence
+        supplementary.flag = 2048
+        supplementary.reference_id = 0
+        supplementary.reference_start = 499
+        supplementary.mapping_quality = 30
+        supplementary.cigar = ((0, 40),)
+        supplementary.query_qualities = primary.query_qualities
+        output.write(supplementary)
+    pysam.index(str(source))
+    index = Path(f"{source}.bai")
+    bam_sha, bam_size = service._sha256_file_and_size(source)
+    bai_sha, bai_size = service._sha256_file_and_size(index)
+
+    package = service.build_alignment_locus_slice(
+        source,
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        source_identity=service.source_stat_identity(source),
+        source_index_identity=service.source_stat_identity(index),
+        source_manifest_sha256="f" * 64,
+        presentation_authority_sha256="a" * 64,
+        presentation_manifest_sha256="b" * 64,
+        job_id="job-primary-overlap",
+        session_id="7" * 24,
+        contig="plasmid",
+        start=500,
+        end=550,
+        max_reads=10,
+        cache_root=tmp_path / "cache",
+    )
+
+    assert package["receipt"]["overlapping_read_count"] == 0
+    assert package["receipt"]["selected_read_count"] == 0
+    assert service.read_locus_primary_rows(
+        package["bam_path"],
+        bam_sha256=package["bam_metadata"]["sha256"],
+        bam_size_bytes=package["bam_metadata"]["size_bytes"],
+        index=package["index_path"],
+        index_sha256=package["index_metadata"]["sha256"],
+        index_size_bytes=package["index_metadata"]["size_bytes"],
+    ) == []
+
+
+def test_sortable_read_alignment_end_consumes_reference_skip_and_is_typed() -> None:
+    from routers import ngs_alignment_sessions as routes
+    from services import ngs_alignment_sessions as service
+
+    row = service._sam_line_to_read(
+        "read-n\t0\tplasmid\t10\t60\t10M50N20M\t*\t0\t0\t" + "A" * 30 + "\t" + "I" * 30,
+        include_sequence=False,
+    )
+
+    assert row is not None
+    assert row["alignment_end_1based"] == 89
+    validated = routes.OntSortableReadV1.model_validate(row)
+    assert validated.alignment_end_1based == 89
 
 
 def test_alignment_indexing_deadline_terminates_the_child(
@@ -3951,3 +4146,84 @@ def test_rotation_validates_signal_alignment_package_without_fastq_projection(
     asyncio.run(validate(job))
 
     assert calls == ["signal"]
+
+
+def test_sortable_locus_page_is_server_sorted_null_last_and_query_bound() -> None:
+    from services import ngs_alignment_sessions as service
+
+    rows = [
+        {"read_id": "read-b", "start_1based": 20, "flags": 0, "duration_seconds": 2.0, "mean_quality": 12.0},
+        {"read_id": "read-a", "start_1based": 10, "flags": 0, "duration_seconds": None, "mean_quality": 18.0},
+        {"read_id": "read-c", "start_1based": 30, "flags": 16, "duration_seconds": 1.0, "mean_quality": 15.0},
+    ]
+    first = service.sort_locus_read_metrics_page(
+        rows, authority_sha256="a" * 64, sort_by="duration_seconds", sort_direction="desc",
+        query=None, metric_min=None, metric_max=None, cursor=None, limit=1,
+    )
+    assert [row["read_id"] for row in first["reads"]] == ["read-b"]
+    assert first["next_cursor"]
+    assert first["null_order"] == "last"
+    assert first["tie_breaker"] == ["read_id", "start_1based", "flags"]
+
+    second = service.sort_locus_read_metrics_page(
+        rows, authority_sha256="a" * 64, sort_by="duration_seconds", sort_direction="desc",
+        query=None, metric_min=None, metric_max=None, cursor=first["next_cursor"], limit=1,
+    )
+    assert [row["read_id"] for row in second["reads"]] == ["read-c"]
+    final = service.sort_locus_read_metrics_page(
+        rows, authority_sha256="a" * 64, sort_by="duration_seconds", sort_direction="desc",
+        query=None, metric_min=None, metric_max=None, cursor=second["next_cursor"], limit=5,
+    )
+    assert [row["read_id"] for row in final["reads"]] == ["read-a"]
+
+    with pytest.raises(service.AlignmentSessionError, match="cursor.*query"):
+        service.sort_locus_read_metrics_page(
+            rows, authority_sha256="a" * 64, sort_by="mean_quality", sort_direction="desc",
+            query=None, metric_min=None, metric_max=None, cursor=first["next_cursor"], limit=1,
+        )
+
+
+def test_sortable_locus_page_filters_before_pagination_and_has_stable_ties() -> None:
+    from services import ngs_alignment_sessions as service
+
+    rows = [
+        {"read_id": "read-c", "start_1based": 30, "flags": 0, "mean_quality": 10.0},
+        {"read_id": "read-a", "start_1based": 10, "flags": 16, "mean_quality": 10.0},
+        {"read_id": "other", "start_1based": 20, "flags": 0, "mean_quality": 20.0},
+    ]
+    page = service.sort_locus_read_metrics_page(
+        rows, authority_sha256="b" * 64, sort_by="mean_quality", sort_direction="asc",
+        query="READ-", metric_min=10.0, metric_max=10.0, cursor=None, limit=50,
+    )
+    assert [row["read_id"] for row in page["reads"]] == ["read-a", "read-c"]
+    assert page["filtered_read_count"] == 2
+
+
+def test_dorado_move_metrics_require_complete_legal_signal_bounds() -> None:
+    from services import ngs_alignment_sessions as service
+
+    metrics = service.dorado_move_metrics(
+        ["mv:B:c,5,0,1,0,127,3", "ts:i:10", "ns:i:670"],
+        signal_sample_count=700, sampling_rate_hz=4000, aligned_reference_bases=100,
+    )
+    assert metrics == {
+        "dorado_move_stride_samples": 5,
+        "dorado_emitted_bases": 131,
+        "mapped_signal_start_sample": 10,
+        "mapped_signal_end_sample": 670,
+        "mapped_signal_span_samples": 660,
+        "dorado_emission_rate_bases_per_second": pytest.approx(131 * 4000 / 660),
+        "samples_per_aligned_reference_base": 6.6,
+    }
+    assert service.dorado_move_metrics(
+        ["mv:B:c,5,0,1", "ts:i:10"],
+        signal_sample_count=700, sampling_rate_hz=4000, aligned_reference_bases=100,
+    ) == {
+        "dorado_move_stride_samples": None,
+        "dorado_emitted_bases": None,
+        "mapped_signal_start_sample": None,
+        "mapped_signal_end_sample": None,
+        "mapped_signal_span_samples": None,
+        "dorado_emission_rate_bases_per_second": None,
+        "samples_per_aligned_reference_base": None,
+    }
