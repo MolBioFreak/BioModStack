@@ -294,9 +294,9 @@ export function BioXpCockpit() {
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = currentCatalogV2 === undefined
+    const motionControlsAvailable = dashboard === undefined
         ? undefined
-        : currentCatalogV2.actions.some((action) => action.interrupt === false && action.enabled === true);
+        : dashboard.motion.enabled === true;
     const motionLabel = motionControlsAvailable === true
         ? 'Available — exact recovered-OEM controls admitted'
         : motionControlsAvailable === false
