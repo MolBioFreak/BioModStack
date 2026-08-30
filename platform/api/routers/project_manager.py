@@ -1630,18 +1630,6 @@ async def list_domain_capabilities(
             if not _capability_applies_to_domain(capability, experiment_mode):
                 continue
             if not _capability_is_allowed_for_domain(capability, experiment_mode):
-                if domain_kind == "protein_in_silico":
-                    items.append({
-                        "capability_id": capability.get("capability_id"),
-                        "capability_version": capability.get("capability_version"),
-                        "label": capability.get("label"),
-                        "scientific_role": capability.get("scientific_role"),
-                        "plannable": False,
-                        "exposure_state": capability.get("exposure_state"),
-                        "unavailable_reason": capability.get("unavailable_reason")
-                        or capability.get("status_reason")
-                        or "This capability does not yet have complete Project planning and result authority.",
-                    })
                 continue
             capability_contract = workflow_plan_capability_contract(capability["capability_id"])
             pinned = capability_contract["capability"]

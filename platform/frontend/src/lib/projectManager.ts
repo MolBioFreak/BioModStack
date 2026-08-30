@@ -857,7 +857,8 @@ export interface ProteinTargetAuthority {
     target_id: string;
     label: string;
     role: string;
-    entity_receipt_ids: string[];
+    source_receipt_ids: string[];
+    dataset_member_refs: Array<{ dataset_revision_id: string; member_id: string }>;
 }
 
 export interface ProteinDomainAuthority {
@@ -889,7 +890,7 @@ export function proteinDomainAuthority(domain: HierarchyMutationResult): Protein
     const nested = payload.domain_payload;
     if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return null;
     const raw = nested as JsonObject;
-    if (typeof raw.experiment_mode !== 'string' || !Array.isArray(raw.targets)) return null;
+    if (raw.schema !== 'bms.protein-in-silico-experiment.v3' || typeof raw.experiment_mode !== 'string' || !Array.isArray(raw.targets)) return null;
     const targets: ProteinTargetAuthority[] = [];
     for (const value of raw.targets) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -898,14 +899,24 @@ export function proteinDomainAuthority(domain: HierarchyMutationResult): Protein
             typeof target.target_id !== 'string'
             || typeof target.label !== 'string'
             || typeof target.role !== 'string'
-            || !Array.isArray(target.entity_receipt_ids)
-            || target.entity_receipt_ids.some((receiptId) => typeof receiptId !== 'string')
+            || !Array.isArray(target.source_receipt_ids)
+            || target.source_receipt_ids.some((receiptId) => typeof receiptId !== 'string')
+            || !Array.isArray(target.dataset_member_refs)
         ) return null;
+        const datasetMemberRefs = target.dataset_member_refs.flatMap((value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+            const reference = value as JsonObject;
+            return typeof reference.dataset_revision_id === 'string' && typeof reference.member_id === 'string'
+                ? [{ dataset_revision_id: reference.dataset_revision_id, member_id: reference.member_id }]
+                : [];
+        });
+        if (datasetMemberRefs.length !== target.dataset_member_refs.length) return null;
         targets.push({
             target_id: target.target_id,
             label: target.label,
             role: target.role,
-            entity_receipt_ids: target.entity_receipt_ids as string[],
+            source_receipt_ids: target.source_receipt_ids as string[],
+            dataset_member_refs: datasetMemberRefs,
         });
     }
     const strings = (value: JsonValue | undefined): string[] => Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : [];
@@ -918,9 +929,9 @@ export function proteinDomainAuthority(domain: HierarchyMutationResult): Protein
         experiment_mode: raw.experiment_mode,
         scientific_objective: typeof raw.scientific_objective === 'string' ? raw.scientific_objective : '',
         targets,
-        planned_capabilities: strings(raw.planned_capabilities),
+        planned_capabilities: strings(raw.planned_capability_ids),
         comparison_groups: comparisons,
-        validation_strategy: strings(raw.validation_strategy),
+        validation_strategy: strings(raw.validation_capability_ids),
     };
 }
 
