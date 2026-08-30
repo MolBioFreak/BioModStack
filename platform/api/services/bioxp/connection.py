@@ -133,6 +133,7 @@ class BioXpConnectionService:
         self._v1_workflow_lock = asyncio.Lock()
         self._v2_enqueue_lock = asyncio.Lock()
         self._v2_query_lock = asyncio.Lock()
+        self._v2_query_cache: dict[str, tuple[int, float, dict[str, Any]]] = {}
         self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
@@ -470,6 +471,7 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"}
         async with self.active_query_lease(
             expected_generation=expected_generation,
             require_fresh=True,
@@ -477,13 +479,27 @@ class BioXpConnectionService:
             try:
                 async with asyncio.timeout(15.0):
                     async with self._v2_query_lock:
-                        return await self._request_client(
+                        now = asyncio.get_running_loop().time()
+                        if cacheable:
+                            cached = self._v2_query_cache.get(route_name)
+                            if cached is not None:
+                                cached_generation, cached_at, cached_payload = cached
+                                if cached_generation == expected_generation and now - cached_at <= 5.0:
+                                    return cached_payload
+                        payload = await self._request_client(
                             client,
                             route_name,
                             params=params,
                             path_params=path_params,
                             timeout_override=12.0,
                         )
+                        if cacheable:
+                            self._v2_query_cache[route_name] = (
+                                expected_generation,
+                                asyncio.get_running_loop().time(),
+                                payload,
+                            )
+                        return payload
             except TimeoutError as exc:
                 raise RobotTimeoutError(
                     "BioXP v2 query lane timed out before a robot response was received",
@@ -867,6 +883,7 @@ class BioXpConnectionService:
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
         self._automatic_snapshot_refresh = None
+        self._v2_query_cache.clear()
         self._capabilities = ()
         self._startup_lifecycle = None
         self._maintenance_state = None
