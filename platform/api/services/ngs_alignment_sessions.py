@@ -11,6 +11,7 @@ import mimetypes
 import os
 import random
 import re
+import signal
 import shutil
 import sqlite3
 import stat
@@ -46,9 +47,25 @@ ALIGNMENT_PREVIEW_TARGET_READS = 2_000
 ALIGNMENT_PREVIEW_POLICY = "primary-read-presentation-v3"
 ALIGNMENT_PRESENTATION_POLICY_VERSION = 3
 ALIGNMENT_PREVIEW_MAX_BYTES = 32 * 1024 * 1024
+ALIGNMENT_PREVIEW_INDEX_MAX_BYTES = 8 * 1024 * 1024
+ALIGNMENT_COVERAGE_MAX_BYTES = 4 * 1024 * 1024
+ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES = 1024 * 1024
+ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES = (
+    ALIGNMENT_PREVIEW_MAX_BYTES
+    + ALIGNMENT_PREVIEW_INDEX_MAX_BYTES
+    + ALIGNMENT_COVERAGE_MAX_BYTES
+    + ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES
+)
+ALIGNMENT_PRESENTATION_WORK_MAX_BYTES = 256 * 1024 * 1024
+ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES = 2
+ALIGNMENT_PRESENTATION_CACHE_MAX_BYTES = max(
+    2 * ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES,
+    ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES + ALIGNMENT_PRESENTATION_WORK_MAX_BYTES,
+)
 ALIGNMENT_PREVIEW_MAX_RECORDS = 20_000
 ALIGNMENT_COVERAGE_MAX_BINS = 4_096
 ALIGNMENT_PRESENTATION_MAX_SECONDS = 120.0
+ALIGNMENT_SELECTED_IDS_MAX_BYTES = 2 * 1024 * 1024
 LOCUS_MAX_SPAN = 1_000_000
 LOCUS_MAX_READS = 5_000
 LOCUS_MAX_RECORDS = 20_000
@@ -94,6 +111,10 @@ _snapshot_inflight_bytes = 0
 
 class AlignmentSessionError(ValueError):
     """Raised when a requested session or artifact is unsafe or unavailable."""
+
+
+class _AlignmentDerivativeByteLimit(AlignmentSessionError):
+    """Raised when the kernel-enforced derivative file limit is reached."""
 
 
 class _SnapshotLease:
@@ -2255,38 +2276,146 @@ def _record_sort_key(read: Any) -> tuple[int, int, str, int]:
     )
 
 
-def _write_bam_for_ids(
+_BOUNDED_BAM_WRITER = r"""
+import json
+import resource
+import sys
+
+import pysam
+
+source_path, output_path, ids_path, index_path, contig, start, end, include_supplementary, byte_limit = sys.argv[1:]
+limit = int(byte_limit)
+resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+with open(ids_path, "r", encoding="utf-8") as handle:
+    selected_ids = set(json.load(handle))
+open_kwargs = {} if index_path == "-" else {"index_filename": index_path}
+written = 0
+with pysam.AlignmentFile(source_path, "rb", **open_kwargs) as source:
+    with pysam.AlignmentFile(output_path, "wb", header=source.header) as output:
+        records = (
+            source.fetch(until_eof=True)
+            if contig == "-"
+            else source.fetch(contig, int(start) - 1, int(end))
+        )
+        for record in records:
+            if record.query_name not in selected_ids or record.is_unmapped or record.is_secondary:
+                continue
+            if include_supplementary != "1" and record.is_supplementary:
+                continue
+            output.write(record)
+            written += 1
+print(written)
+"""
+
+
+def _path_descriptor_fds(*paths: Path | None) -> tuple[int, ...]:
+    descriptors: set[int] = set()
+    for path in paths:
+        if path is None:
+            continue
+        parts = path.parts
+        if len(parts) >= 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+            descriptors.add(int(parts[4]))
+    return tuple(sorted(descriptors))
+
+
+def _write_bam_for_ids_bounded(
     path: Path,
-    header: dict[str, Any],
-    records: dict[str, list[Any]],
+    source_path: Path,
     ids: list[str],
     *,
-    deadline: float | None = None,
+    byte_limit: int,
+    deadline: float,
+    label: str,
+    index_path: Path | None = None,
+    contig: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+    include_supplementary: bool = False,
 ) -> int:
-    selected = sorted((record for read_id in ids for record in records[read_id]), key=_record_sort_key)
-    with pysam.AlignmentFile(path, "wb", header=header) as output:
-        for record in selected:
-            if deadline is not None and time.monotonic() > deadline:
-                raise AlignmentSessionError("alignment derivative time limit exceeded")
-            output.write(record)
-    return len(selected)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AlignmentSessionError(f"{label} time limit exceeded")
+    ids_path = path.parent / ".selected-read-ids.json"
+    ids_bytes = rfc8785.dumps(ids)
+    if len(ids_bytes) > ALIGNMENT_SELECTED_IDS_MAX_BYTES:
+        raise AlignmentSessionError(f"{label} selected read identities exceed the byte limit")
+    ids_path.write_bytes(ids_bytes)
+    path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                _BOUNDED_BAM_WRITER,
+                os.fspath(source_path),
+                os.fspath(path),
+                os.fspath(ids_path),
+                os.fspath(index_path) if index_path is not None else "-",
+                contig or "-",
+                str(start or 0),
+                str(end or 0),
+                "1" if include_supplementary else "0",
+                str(byte_limit),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=remaining,
+            pass_fds=_path_descriptor_fds(source_path, index_path, path, ids_path),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AlignmentSessionError(f"{label} time limit exceeded") from exc
+    except OSError as exc:
+        raise AlignmentSessionError(f"{label} BAM generation failed") from exc
+    finally:
+        ids_path.unlink(missing_ok=True)
+    observed_size = path.stat().st_size if path.exists() else 0
+    byte_limited = (
+        observed_size >= byte_limit
+        or "File too large" in result.stderr
+        or result.returncode == -signal.SIGXFSZ
+    )
+    if result.returncode != 0:
+        if byte_limited:
+            raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise AlignmentSessionError(f"{label} BAM generation failed: {detail}")
+    if observed_size > byte_limit:
+        raise _AlignmentDerivativeByteLimit(f"{label} byte ceiling exceeded")
+    try:
+        return int(result.stdout.strip())
+    except ValueError as exc:
+        raise AlignmentSessionError(f"{label} BAM generation returned an invalid receipt") from exc
 
 
-def _index_bam_with_deadline(path: Path, *, deadline: float, label: str) -> None:
+def _index_bam_with_deadline(
+    path: Path,
+    *,
+    deadline: float,
+    label: str,
+    byte_limit: int | None = None,
+) -> None:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise AlignmentSessionError(f"{label} time limit exceeded")
     parts = path.parts
     pass_fds: tuple[int, ...] = ()
-    if len(parts) >= 6 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
+    if len(parts) >= 5 and parts[1:4] == ("proc", "self", "fd") and parts[4].isdigit():
         pass_fds = (int(parts[4]),)
     try:
         result = subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "import pysam,sys; pysam.index(sys.argv[1])",
+                (
+                    "import resource,sys,pysam; "
+                    "limit=int(sys.argv[2]); "
+                    "resource.setrlimit(resource.RLIMIT_FSIZE,(limit,limit)) if limit else None; "
+                    "pysam.index(sys.argv[1])"
+                ),
                 os.fspath(path),
+                str(byte_limit or 0),
             ],
             check=False,
             capture_output=True,
@@ -2298,9 +2427,23 @@ def _index_bam_with_deadline(path: Path, *, deadline: float, label: str) -> None
         raise AlignmentSessionError(f"{label} time limit exceeded") from exc
     except OSError as exc:
         raise AlignmentSessionError(f"{label} indexing failed") from exc
+    index_path = Path(f"{path}.bai")
+    observed_size = index_path.stat().st_size if index_path.exists() else 0
+    byte_limited = (
+        byte_limit is not None
+        and (
+            observed_size >= byte_limit
+            or "File too large" in result.stderr
+            or result.returncode == -signal.SIGXFSZ
+        )
+    )
     if result.returncode != 0:
+        if byte_limited:
+            raise AlignmentSessionError(f"{label} index byte ceiling exceeded")
         detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise AlignmentSessionError(f"{label} indexing failed: {detail}")
+    if byte_limit is not None and observed_size > byte_limit:
+        raise AlignmentSessionError(f"{label} index byte ceiling exceeded")
 
 
 def _selected_set_digest(ids: list[str]) -> str:
@@ -2551,6 +2694,106 @@ def _cleanup_locus_cache(
         raise AlignmentSessionError("locus slice cache capacity unavailable")
 
 
+def _presentation_entry_size(candidate: Path) -> int | None:
+    if candidate.is_symlink() or not candidate.is_dir():
+        return None
+    expected = {
+        "alignment-preview.bam",
+        "alignment-preview.bam.bai",
+        "full-source-primary-coverage.bedgraph",
+        "manifest.json",
+    }
+    size = 0
+    observed: set[str] = set()
+    try:
+        for child in candidate.iterdir():
+            if child.is_symlink() or not child.is_file():
+                return None
+            observed.add(child.name)
+            size += child.stat().st_size
+    except OSError:
+        return None
+    return size if observed == expected else None
+
+
+def _cleanup_presentation_namespace(
+    namespace: Path,
+    namespace_fd: int,
+    *,
+    active: Path | None = None,
+    protected_names: set[str] | None = None,
+    reserve_bytes: int = 0,
+    reserve_entries: int = 0,
+) -> None:
+    protected = set(protected_names or ())
+    if active is not None:
+        protected.add(active.name)
+    for candidate in list(namespace.iterdir()):
+        name = candidate.name
+        if (
+            name in {".generation.tmp", ".generation.orphan"}
+            or re.fullmatch(r"\.[0-9a-f]{64}-.*", name)
+            or name.startswith(".orphan-")
+        ):
+            _remove_locus_transient(namespace_fd, name)
+    entries: list[tuple[int, str, int]] = []
+    protected_size = 0
+    protected_count = 0
+    for candidate in list(namespace.iterdir()):
+        if re.fullmatch(r"[0-9a-f]{64}", candidate.name) is None:
+            continue
+        size = _presentation_entry_size(candidate)
+        if (
+            size is None
+            or _load_derived_package(
+                candidate,
+                expected_authority_sha256=candidate.name,
+            ) is None
+        ):
+            _remove_locus_transient(namespace_fd, candidate.name)
+            continue
+        if candidate.name in protected:
+            protected_size += size
+            protected_count += 1
+            continue
+        manifest = candidate / "manifest.json"
+        mtime = manifest.stat().st_mtime_ns if manifest.is_file() else candidate.stat().st_mtime_ns
+        entries.append((mtime, candidate.name, size))
+    total = protected_size + reserve_bytes + sum(item[2] for item in entries)
+    count = protected_count + reserve_entries + len(entries)
+    for _mtime, name, size in sorted(entries):
+        if (
+            total <= ALIGNMENT_PRESENTATION_CACHE_MAX_BYTES
+            and count <= ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES
+        ):
+            break
+        _remove_locus_transient(namespace_fd, name)
+        total -= size
+        count -= 1
+    if (
+        total > ALIGNMENT_PRESENTATION_CACHE_MAX_BYTES
+        or count > ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES
+    ):
+        raise AlignmentSessionError("alignment presentation cache capacity unavailable")
+
+
+def _presentation_names_for_manifest(namespace: Path, manifest_sha256: str | None) -> set[str]:
+    if manifest_sha256 is None:
+        return set()
+    names: set[str] = set()
+    for candidate in namespace.iterdir():
+        if re.fullmatch(r"[0-9a-f]{64}", candidate.name) is None:
+            continue
+        manifest = candidate / "manifest.json"
+        if manifest.is_file() and not manifest.is_symlink():
+            try:
+                if hashlib.sha256(manifest.read_bytes()).hexdigest() == manifest_sha256:
+                    names.add(candidate.name)
+            except OSError:
+                continue
+    return names
+
+
 def _load_derived_package(
     directory: Path,
     *,
@@ -2734,6 +2977,13 @@ def build_alignment_presentation(
             fcntl.flock(producer_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise AlignmentSessionError("alignment presentation generation is already in progress") from exc
+        namespace_fd = int(namespace_parts[4])
+        protected_names = _presentation_names_for_manifest(namespace, expected_manifest_sha256)
+        _cleanup_presentation_namespace(
+            namespace,
+            namespace_fd,
+            protected_names=protected_names,
+        )
         if destination.exists() or destination.is_symlink():
             if expected_manifest_sha256 is not None:
                 if destination.is_symlink():
@@ -2745,17 +2995,24 @@ def build_alignment_presentation(
                         expected_manifest_sha256=expected_manifest_sha256,
                     )
                 if cached is not None and cached["manifest"].get("authority_sha256") == cache_key:
+                    _cleanup_presentation_namespace(
+                        namespace,
+                        namespace_fd,
+                        active=destination,
+                        protected_names=protected_names,
+                    )
                     return cached
                 raise AlignmentSessionError("alignment presentation manifest authority is invalid")
-            namespace_fd = int(namespace_parts[4])
-            orphan_name = f".orphan-{cache_key}-{os.getpid()}-{time.time_ns()}"
-            os.rename(cache_key, orphan_name, src_dir_fd=namespace_fd, dst_dir_fd=namespace_fd)
-            orphan_metadata = os.stat(orphan_name, dir_fd=namespace_fd, follow_symlinks=False)
-            if stat.S_ISLNK(orphan_metadata.st_mode):
-                os.unlink(orphan_name, dir_fd=namespace_fd)
-            else:
-                shutil.rmtree(orphan_name, dir_fd=namespace_fd)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{cache_key}-", dir=namespace))
+            _remove_locus_transient(namespace_fd, cache_key)
+        _cleanup_presentation_namespace(
+            namespace,
+            namespace_fd,
+            protected_names=protected_names,
+            reserve_bytes=ALIGNMENT_PRESENTATION_WORK_MAX_BYTES,
+            reserve_entries=1,
+        )
+        os.mkdir(".generation.tmp", mode=0o750, dir_fd=namespace_fd)
+        temporary = namespace / ".generation.tmp"
         source_handle = index_handle = None
         candidate_db: sqlite3.Connection | None = None
         deadline = time.monotonic() + max_seconds
@@ -2768,6 +3025,10 @@ def build_alignment_presentation(
                 raise AlignmentSessionError("alignment presentation source changed during materialization")
             candidate_db_path = temporary / "preview-candidates.sqlite3"
             candidate_db = sqlite3.connect(candidate_db_path)
+            candidate_db.execute("PRAGMA page_size=4096")
+            candidate_db.execute(
+                f"PRAGMA max_page_count={ALIGNMENT_PRESENTATION_WORK_MAX_BYTES // 4096}"
+            )
             candidate_db.execute("PRAGMA journal_mode=OFF")
             candidate_db.execute("PRAGMA synchronous=OFF")
             candidate_db.execute("PRAGMA temp_store=FILE")
@@ -2904,25 +3165,36 @@ def build_alignment_presentation(
                             start = bin_index * bin_width
                             end = min(length, start + bin_width)
                             output.write(f"{contig}\t{start}\t{end}\t{aligned_bases / (end - start):.6f}\n")
+            if coverage_path.stat().st_size > ALIGNMENT_COVERAGE_MAX_BYTES:
+                raise AlignmentSessionError("alignment presentation coverage byte ceiling exceeded")
             retained_ids = sorted(selected, key=lambda value: _rank_read(bam_sha256, value))
             preview_path = temporary / "alignment-preview.bam"
             while True:
-                selected_record_count = _write_bam_for_ids(
-                    preview_path, header, selected, retained_ids, deadline=deadline,
-                )
-                if preview_path.stat().st_size <= max_output_bytes:
+                try:
+                    selected_record_count = _write_bam_for_ids_bounded(
+                        preview_path,
+                        Path(_descriptor_path(source_handle.fileno())),
+                        retained_ids,
+                        byte_limit=max_output_bytes,
+                        deadline=deadline,
+                        label="alignment presentation",
+                    )
                     break
-                if not retained_ids:
-                    raise AlignmentSessionError("alignment preview byte ceiling is too small")
-                retained_ids.pop()
+                except _AlignmentDerivativeByteLimit:
+                    if not retained_ids:
+                        raise AlignmentSessionError("alignment preview byte ceiling is too small")
+                    retained_ids.pop()
             if time.monotonic() > deadline:
                 raise AlignmentSessionError("alignment presentation time limit exceeded")
             _index_bam_with_deadline(
                 preview_path,
                 deadline=deadline,
                 label="alignment presentation",
+                byte_limit=ALIGNMENT_PREVIEW_INDEX_MAX_BYTES,
             )
             preview_index = Path(f"{preview_path}.bai")
+            if preview_index.stat().st_size > ALIGNMENT_PREVIEW_INDEX_MAX_BYTES:
+                raise AlignmentSessionError("alignment presentation index byte ceiling exceeded")
             outputs = {}
             for key, path in (("bam", preview_path), ("index", preview_index), ("coverage", coverage_path)):
                 digest, size = _sha256_file_and_size(path)
@@ -2984,21 +3256,27 @@ def build_alignment_presentation(
                 "unrepresented_strata": unrepresented,
                 "output_byte_ceiling": max_output_bytes, "outputs": outputs,
             }
+            manifest_bytes = rfc8785.dumps(manifest)
+            if len(manifest_bytes) > ALIGNMENT_PRESENTATION_MANIFEST_MAX_BYTES:
+                raise AlignmentSessionError("alignment presentation manifest byte ceiling exceeded")
+            package_size = len(manifest_bytes) + sum(item["size_bytes"] for item in outputs.values())
+            if package_size > ALIGNMENT_PRESENTATION_ENTRY_MAX_BYTES:
+                raise AlignmentSessionError("alignment presentation package byte ceiling exceeded")
             manifest_handle = (temporary / "manifest.json").open("wb")
             try:
-                manifest_handle.write(rfc8785.dumps(manifest))
+                manifest_handle.write(manifest_bytes)
                 manifest_handle.flush()
                 os.fsync(manifest_handle.fileno())
             finally:
                 manifest_handle.close()
-            os.replace(temporary, destination)
-            directory_fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+            os.rename(".generation.tmp", cache_key, src_dir_fd=namespace_fd, dst_dir_fd=namespace_fd)
+            directory_fd = os.dup(namespace_fd)
             try:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
         except Exception as exc:
-            shutil.rmtree(temporary, ignore_errors=True)
+            _remove_locus_transient(namespace_fd, ".generation.tmp")
             if isinstance(exc, AlignmentSessionError):
                 raise
             raise AlignmentSessionError(f"alignment presentation generation failed: {exc}") from exc
@@ -3016,6 +3294,12 @@ def build_alignment_presentation(
             )
         if package is None:
             raise AlignmentSessionError("alignment presentation failed integrity validation")
+        _cleanup_presentation_namespace(
+            namespace,
+            namespace_fd,
+            active=destination,
+            protected_names=protected_names,
+        )
         return package
 
 
@@ -3098,7 +3382,12 @@ def build_alignment_locus_slice(
             _remove_locus_transient(cache_fd, orphan_name)
         _cleanup_locus_cache(
             cache_base,
-            reserve_bytes=max_output_bytes + LOCUS_INDEX_MAX_BYTES + LOCUS_MANIFEST_MAX_BYTES,
+            reserve_bytes=(
+                max_output_bytes
+                + LOCUS_INDEX_MAX_BYTES
+                + LOCUS_MANIFEST_MAX_BYTES
+                + ALIGNMENT_SELECTED_IDS_MAX_BYTES
+            ),
             reserve_entries=1,
         )
         os.mkdir(temporary_name, mode=0o750, dir_fd=cache_fd)
@@ -3148,21 +3437,33 @@ def build_alignment_locus_slice(
             locus_bam = temporary / "locus.bam"
             byte_cap_applied = False
             while True:
-                selected_records = _write_bam_for_ids(
-                    locus_bam, header, candidates, selected_ids, deadline=deadline,
-                )
-                if locus_bam.stat().st_size <= max_output_bytes:
+                try:
+                    selected_records = _write_bam_for_ids_bounded(
+                        locus_bam,
+                        bam,
+                        selected_ids,
+                        byte_limit=max_output_bytes,
+                        deadline=deadline,
+                        label="locus slice",
+                        index_path=index,
+                        contig=contig,
+                        start=start,
+                        end=end,
+                        include_supplementary=True,
+                    )
                     break
-                if not selected_ids:
-                    raise AlignmentSessionError("locus slice byte ceiling is too small")
-                selected_ids.pop()
-                byte_cap_applied = True
+                except _AlignmentDerivativeByteLimit:
+                    if not selected_ids:
+                        raise AlignmentSessionError("locus slice byte ceiling is too small")
+                    selected_ids.pop()
+                    byte_cap_applied = True
             if time.monotonic() > deadline:
                 raise AlignmentSessionError("locus slice time limit exceeded")
             _index_bam_with_deadline(
                 locus_bam,
                 deadline=deadline,
                 label="locus slice",
+                byte_limit=LOCUS_INDEX_MAX_BYTES,
             )
             locus_index = Path(f"{locus_bam}.bai")
             if locus_index.stat().st_size > LOCUS_INDEX_MAX_BYTES:

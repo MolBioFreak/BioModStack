@@ -327,6 +327,79 @@ def test_presentation_byte_ceiling_reduces_selection_deterministically(tmp_path:
     assert first["manifest"]["selected_read_set_sha256"] == second["manifest"]["selected_read_set_sha256"]
 
 
+def test_bounded_bam_writer_never_exceeds_kernel_file_limit(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    _index, _bam_sha, _bam_size, _bai_sha, _bai_size = _write_governed_alignment_fixture(source)
+    output = tmp_path / "bounded.bam"
+    with pytest.raises(service._AlignmentDerivativeByteLimit, match="byte ceiling exceeded"):
+        service._write_bam_for_ids_bounded(
+            output,
+            source,
+            [f"read-{index:03d}" for index in range(12)],
+            byte_limit=100,
+            deadline=time.monotonic() + 10,
+            label="test derivative",
+        )
+    assert output.stat().st_size <= 100
+
+
+def test_presentation_namespace_bounds_entries_and_cleans_crash_residue(tmp_path: Path) -> None:
+    from services import ngs_alignment_sessions as service
+
+    source = tmp_path / "source.bam"
+    index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
+    cache_root = tmp_path / "cache"
+    common = dict(
+        bam_sha256=bam_sha,
+        bam_size_bytes=bam_size,
+        index=index,
+        index_sha256=bai_sha,
+        index_size_bytes=bai_size,
+        job_id="job-bounded",
+        session_id="9" * 24,
+        mode="primary",
+        cache_root=cache_root,
+        target_reads=3,
+        max_output_bytes=1_000_000,
+    )
+    first = service.build_alignment_presentation(
+        source,
+        source_manifest_sha256=f"{1:064x}",
+        **common,
+    )
+    second = service.build_alignment_presentation(
+        source,
+        source_manifest_sha256=f"{2:064x}",
+        **common,
+    )
+    namespace = cache_root / "job-bounded" / ("9" * 24)
+    legacy_temporary = namespace / f".{('a' * 64)}-crashed"
+    legacy_temporary.mkdir()
+    (legacy_temporary / "preview-candidates.sqlite3").write_bytes(b"abandoned")
+    legacy_orphan = namespace / ".orphan-abandoned"
+    legacy_orphan.mkdir()
+    (legacy_orphan / "alignment-preview.bam").write_bytes(b"abandoned")
+    third = service.build_alignment_presentation(
+        source,
+        source_manifest_sha256=f"{3:064x}",
+        expected_manifest_sha256=first["manifest_metadata"]["sha256"],
+        **common,
+    )
+    retained = sorted(
+        path.name for path in namespace.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    assert len(retained) == service.ALIGNMENT_PRESENTATION_CACHE_MAX_ENTRIES
+    assert first["manifest"]["authority_sha256"] in retained
+    assert second["manifest"]["authority_sha256"] not in retained
+    assert third["manifest"]["authority_sha256"] in retained
+    assert sorted(path.name for path in namespace.iterdir() if path.name.startswith(".")) == [
+        ".generation.lock",
+    ]
+
+
 def test_presentation_uses_direct_verified_descriptor_above_snapshot_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
