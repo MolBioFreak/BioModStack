@@ -571,7 +571,14 @@ class OperatorDashboardXTmclWaitPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     mode: str = Field(min_length=1, max_length=80)
     classification: str = Field(min_length=1, max_length=80)
-    apartment_equivalence: str = Field(min_length=1, max_length=80)
+    apartment_equivalence: str | None = Field(default=None, min_length=1, max_length=80)
+    source_anchor: str | None = Field(default=None, min_length=1, max_length=240)
+
+    @model_validator(mode="after")
+    def bind_exact_wait_policy_authority(self):
+        if (self.apartment_equivalence is None) == (self.source_anchor is None):
+            raise ValueError("TMCL wait policy requires exactly one authority field")
+        return self
 
 
 class OperatorDashboardXTmclProvenance(BaseModel):
@@ -610,6 +617,7 @@ class OperatorDashboardXTmclProvenance(BaseModel):
     multipart_received: StrictBool | None = None
     multipart: OperatorDashboardXTmclMultipart | None = None
     wait_policy: OperatorDashboardXTmclWaitPolicy | None = None
+    oem_receive_queue_cleared: StrictInt | None = Field(default=None, ge=0)
     skipped_count: StrictInt | None = Field(default=None, ge=0)
     skipped_frames: list[OperatorDashboardXTmclSkippedFrame] = Field(default_factory=list, max_length=256)
     skipped_frames_truncated: StrictBool | None = None
@@ -3393,6 +3401,7 @@ class OperatorDashboardPipetteChannel(BaseModel):
     delivery_verified: StrictBool
     controller_acknowledged: StrictBool | None
     completion_verified: StrictBool
+    semantic_query_response_verified: StrictBool | None = None
     hardware_precondition_verified: StrictBool
     hardware_postcondition_verified: StrictBool
     state_reconciled: StrictBool
