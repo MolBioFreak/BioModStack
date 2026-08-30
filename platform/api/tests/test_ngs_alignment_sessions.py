@@ -427,6 +427,11 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
     }
     with pysam.AlignmentFile(first["bam_path"], "rb") as sliced:
         assert len({record.query_name for record in sliced.fetch(until_eof=True)}) == 3
+    tampered_receipt = json.loads(second["manifest_path"].read_text(encoding="utf-8"))
+    tampered_receipt["source_manifest_sha256"] = "0" * 64
+    second["manifest_path"].write_bytes(rfc8785.dumps(tampered_receipt))
+    with pytest.raises(service.AlignmentSessionError, match="authority"):
+        service.resolve_cached_alignment_locus_slice(second["slice_id"], cache_root=tmp_path / "cache")
     with pytest.raises(service.AlignmentSessionError, match="contig"):
         service.build_alignment_locus_slice(source, **{**common, "contig": "../bad"})
     with pytest.raises(service.AlignmentSessionError, match="span"):

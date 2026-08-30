@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e4162f0cc1b7df1350c349280d665c6273901b3ca7980876d6fb9140ddfc4475",
+  "content_sha256": "5b78305d3ff0024f40fcbee4873e1d9a157d0c5f4292e07f2efb83ccb116d0e4",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -414,8 +414,8 @@
     },
     {
       "path": "platform/api/routers/ngs_alignment_sessions.py",
-      "sha256": "11ed8a820e91c965df38599dbe61e9c6d4beac584b350fd43e37648d77f22a66",
-      "size_bytes": 70886
+      "sha256": "d0b46988bcc1c9084384fc1208bef0c0caf01230491ad8e7978deccb088f2ca2",
+      "size_bytes": 71907
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
@@ -559,8 +559,8 @@
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
-      "sha256": "4ed98d7667e97a4c163b52252096d36741ebbc45bf22c89d9fb6a8445a8d0fea",
-      "size_bytes": 156265
+      "sha256": "8c57d56d62655a1b9b4735444d462fe382a29a4777e83e9196f37f10d7c43b84",
+      "size_bytes": 157277
     },
     {
       "path": "platform/api/services/ngs_molbio_capabilities.py",
@@ -679,8 +679,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_alignment_sessions.py",
-      "sha256": "1d12144be94b046af1f6719ae033dfe82abbd69f8df086b765de329ae7ccfb95",
-      "size_bytes": 146175
+      "sha256": "88c3e1717b30b7985efd1f3122b3da6ddaee8de15393a25dfb71b7cc47e095c3",
+      "size_bytes": 146571
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
@@ -1107,8 +1107,8 @@
     "content_sha256": "a7879702ddaa246dfbe69335dc56ea99fc96b33c3e7053c92d5f8e35c9cd2d62",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "2c97d5cc1439d92f169bce78c371962f5b175763",
-  "successor_source_tree": "c5ae6e2f61c15d542a7f302bfc88f26d959700a6",
+  "successor_source_commit": "afb1fe707dbe8f7a2345eeb99b331e8f4b2ab74c",
+  "successor_source_tree": "658a4b6abd2068eedf2045a3cc8fff59e9ab489d",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

@@ -1530,14 +1530,28 @@ async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice
         raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
                                message="The governed locus artifact was not found.", job_id=job_id, resource="artifact")
     try:
-        package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
-        if package["receipt"].get("job_id") != job_id or package["receipt"].get("session_id") != session_id:
-            raise service.AlignmentSessionError("alignment locus slice not found")
-        path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
-                                  "manifest": ("manifest_path", "manifest_metadata")}[kind]
-        if package[metadata_key].get("sha256") != artifact_sha256:
-            raise service.AlignmentSessionError("alignment locus artifact digest does not match")
-        return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, _pinned_result_root):
+            package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
+            receipt = package["receipt"]
+            current = presentation["manifest"]
+            if receipt.get("job_id") != job_id or receipt.get("session_id") != session_id:
+                raise service.AlignmentSessionError("alignment locus slice not found")
+            current_fields = {
+                "source_manifest_sha256": current.get("source_manifest_sha256"),
+                "source_alignment_sha256": current.get("source_alignment_sha256"),
+                "source_alignment_size_bytes": current.get("source_alignment_size_bytes"),
+                "source_index_sha256": current.get("source_index_sha256"),
+                "source_index_size_bytes": current.get("source_index_size_bytes"),
+                "source_identity": current.get("source_stat_identity"),
+                "source_index_identity": current.get("source_index_stat_identity"),
+            }
+            if any(receipt.get(key) != value for key, value in current_fields.items()):
+                raise service.AlignmentSessionError("alignment locus slice source authority is stale")
+            path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                      "manifest": ("manifest_path", "manifest_metadata")}[kind]
+            if package[metadata_key].get("sha256") != artifact_sha256:
+                raise service.AlignmentSessionError("alignment locus artifact digest does not match")
+            return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 

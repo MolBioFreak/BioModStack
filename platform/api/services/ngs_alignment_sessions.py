@@ -3209,6 +3209,24 @@ def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | No
     receipt = json.loads(manifest_path.read_bytes())
     if receipt.get("slice_id") != slice_id:
         raise AlignmentSessionError("alignment locus slice integrity mismatch")
+    authority = {
+        "schema": "bms.ngs.alignment-locus-authority.v1",
+        "job_id": receipt.get("job_id"),
+        "session_id": receipt.get("session_id"),
+        "source_manifest_sha256": receipt.get("source_manifest_sha256"),
+        "source_alignment_sha256": receipt.get("source_alignment_sha256"),
+        "source_alignment_size_bytes": receipt.get("source_alignment_size_bytes"),
+        "source_index_sha256": receipt.get("source_index_sha256"),
+        "source_index_size_bytes": receipt.get("source_index_size_bytes"),
+        "contig": receipt.get("contig"),
+        "start_1based": receipt.get("start_1based"),
+        "end_1based": receipt.get("end_1based"),
+        "source_identity": receipt.get("source_identity"),
+        "source_index_identity": receipt.get("source_index_identity"),
+        "policy": receipt.get("policy"),
+    }
+    if hashlib.sha256(rfc8785.dumps(authority)).hexdigest() != slice_id:
+        raise AlignmentSessionError("alignment locus slice authority mismatch")
     for key, path in (("bam", bam_path), ("index", index_path)):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if receipt["outputs"][key] != {"sha256": digest, "size_bytes": path.stat().st_size}:
