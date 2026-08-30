@@ -2980,7 +2980,8 @@ def build_alignment_preview(
 def build_alignment_locus_slice(
     bam: Path, *, bam_sha256: str, bam_size_bytes: int, index: Path, index_sha256: str,
     index_size_bytes: int, source_identity: dict[str, int], source_index_identity: dict[str, int],
-    source_manifest_sha256: str,
+    source_manifest_sha256: str, presentation_authority_sha256: str,
+    presentation_manifest_sha256: str,
     job_id: str, session_id: str, contig: str, start: int, end: int, max_reads: int,
     cache_root: Path | None = None, max_records: int = LOCUS_MAX_RECORDS,
     max_output_bytes: int = LOCUS_MAX_BYTES, max_seconds: float = LOCUS_MAX_SECONDS,
@@ -3004,7 +3005,9 @@ def build_alignment_locus_slice(
         "max_seconds": max_seconds,
     }
     authority = {
-        "schema": "bms.ngs.alignment-locus-authority.v1", "job_id": job_id, "session_id": session_id,
+        "schema": "bms.ngs.alignment-locus-authority.v2", "job_id": job_id, "session_id": session_id,
+        "presentation_authority_sha256": presentation_authority_sha256,
+        "presentation_manifest_sha256": presentation_manifest_sha256,
         "source_manifest_sha256": source_manifest_sha256, "source_alignment_sha256": bam_sha256,
         "source_alignment_size_bytes": bam_size_bytes, "source_index_sha256": index_sha256,
         "source_index_size_bytes": index_size_bytes, "contig": contig, "start_1based": start,
@@ -3116,8 +3119,10 @@ def build_alignment_locus_slice(
             if source_stat_identity(bam) != source_identity or source_stat_identity(index) != source_index_identity:
                 raise AlignmentSessionError("source identity changed during locus slice generation")
             receipt = {
-                "schema": "bms.ngs.alignment-locus-slice-manifest.v1", "slice_id": slice_id,
+                "schema": "bms.ngs.alignment-locus-slice-manifest.v2", "slice_id": slice_id,
                 "job_id": job_id, "session_id": session_id,
+                "presentation_authority_sha256": presentation_authority_sha256,
+                "presentation_manifest_sha256": presentation_manifest_sha256,
                 "source_manifest_sha256": source_manifest_sha256,
                 "source_alignment_sha256": bam_sha256,
                 "source_alignment_size_bytes": bam_size_bytes,
@@ -3210,9 +3215,11 @@ def resolve_cached_alignment_locus_slice(slice_id: str, *, cache_root: Path | No
     if receipt.get("slice_id") != slice_id:
         raise AlignmentSessionError("alignment locus slice integrity mismatch")
     authority = {
-        "schema": "bms.ngs.alignment-locus-authority.v1",
+        "schema": "bms.ngs.alignment-locus-authority.v2",
         "job_id": receipt.get("job_id"),
         "session_id": receipt.get("session_id"),
+        "presentation_authority_sha256": receipt.get("presentation_authority_sha256"),
+        "presentation_manifest_sha256": receipt.get("presentation_manifest_sha256"),
         "source_manifest_sha256": receipt.get("source_manifest_sha256"),
         "source_alignment_sha256": receipt.get("source_alignment_sha256"),
         "source_alignment_size_bytes": receipt.get("source_alignment_size_bytes"),

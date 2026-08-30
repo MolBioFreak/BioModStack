@@ -1445,6 +1445,26 @@ def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]
     }
 
 
+def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict[str, Any]) -> None:
+    current = presentation["manifest"]
+    current_source_fields = {
+        "source_manifest_sha256": current.get("source_manifest_sha256"),
+        "source_alignment_sha256": current.get("source_alignment_sha256"),
+        "source_alignment_size_bytes": current.get("source_alignment_size_bytes"),
+        "source_index_sha256": current.get("source_index_sha256"),
+        "source_index_size_bytes": current.get("source_index_size_bytes"),
+        "source_identity": current.get("source_identity"),
+        "source_index_identity": current.get("source_index_identity"),
+    }
+    if any(receipt.get(key) != value for key, value in current_source_fields.items()):
+        raise service.AlignmentSessionError("alignment locus slice source authority is stale")
+    if (
+        receipt.get("presentation_authority_sha256") != current.get("authority_sha256")
+        or receipt.get("presentation_manifest_sha256") != presentation["manifest_metadata"].get("sha256")
+    ):
+        raise service.AlignmentSessionError("alignment locus slice presentation authority is stale")
+
+
 @router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
             response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
 async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
@@ -1502,6 +1522,8 @@ async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAl
                     index_size_bytes=manifest["source_index_size_bytes"],
                     source_identity=identity, source_index_identity=index_identity,
                     source_manifest_sha256=manifest["package_manifest_sha256"],
+                    presentation_authority_sha256=manifest["authority_sha256"],
+                    presentation_manifest_sha256=presentation["manifest_metadata"]["sha256"],
                     job_id=job_id, session_id=session_id, contig=body.contig,
                     start=body.start_1based, end=body.end_1based, max_reads=body.max_reads,
                 )
@@ -1533,20 +1555,9 @@ async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice
         async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, _pinned_result_root):
             package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
             receipt = package["receipt"]
-            current = presentation["manifest"]
             if receipt.get("job_id") != job_id or receipt.get("session_id") != session_id:
                 raise service.AlignmentSessionError("alignment locus slice not found")
-            current_fields = {
-                "source_manifest_sha256": current.get("source_manifest_sha256"),
-                "source_alignment_sha256": current.get("source_alignment_sha256"),
-                "source_alignment_size_bytes": current.get("source_alignment_size_bytes"),
-                "source_index_sha256": current.get("source_index_sha256"),
-                "source_index_size_bytes": current.get("source_index_size_bytes"),
-                "source_identity": current.get("source_stat_identity"),
-                "source_index_identity": current.get("source_index_stat_identity"),
-            }
-            if any(receipt.get(key) != value for key, value in current_fields.items()):
-                raise service.AlignmentSessionError("alignment locus slice source authority is stale")
+            _require_current_locus_authority(receipt, presentation)
             path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
                                       "manifest": ("manifest_path", "manifest_metadata")}[kind]
             if package[metadata_key].get("sha256") != artifact_sha256:

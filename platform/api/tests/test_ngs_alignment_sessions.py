@@ -399,7 +399,10 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
         bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
         index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
         source_index_identity=index_identity,
-        source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
+        source_manifest_sha256="f" * 64,
+        presentation_authority_sha256="a" * 64,
+        presentation_manifest_sha256="b" * 64,
+        job_id="job-f", session_id="6" * 24,
         contig="plasmid", start=1, end=600, max_reads=3, cache_root=tmp_path / "cache",
     )
     monkeypatch.setattr(
@@ -454,6 +457,8 @@ def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(
         source_identity=service.source_stat_identity(source),
         source_index_identity=service.source_stat_identity(index),
         source_manifest_sha256="9" * 64,
+        presentation_authority_sha256="a" * 64,
+        presentation_manifest_sha256="b" * 64,
         job_id="job-deep",
         session_id="7" * 24,
         contig="plasmid",
@@ -470,6 +475,91 @@ def test_locus_slice_caps_output_records_without_rejecting_a_deep_source_region(
     assert package["receipt"]["capped"] is True
     with pysam.AlignmentFile(package["bam_path"], "rb") as sliced:
         assert sliced.count(until_eof=True) <= 3
+
+
+def _locus_authority_test_packages() -> tuple[dict[str, Any], dict[str, Any]]:
+    source_identity = {
+        "device": "1", "inode": "2", "size_bytes": 1024,
+        "mtime_ns": "3", "ctime_ns": "4",
+    }
+    presentation = {
+        "manifest": {
+            "authority_sha256": "a" * 64,
+            "source_manifest_sha256": "b" * 64,
+            "source_alignment_sha256": "c" * 64,
+            "source_alignment_size_bytes": 1024,
+            "source_index_sha256": "d" * 64,
+            "source_index_size_bytes": 128,
+            "source_identity": source_identity,
+            "source_index_identity": {**source_identity, "inode": "5", "size_bytes": 128},
+        },
+        "manifest_metadata": {"sha256": "e" * 64},
+    }
+    receipt = {
+        "job_id": "job-a",
+        "session_id": "1" * 24,
+        "presentation_authority_sha256": "a" * 64,
+        "presentation_manifest_sha256": "e" * 64,
+        "source_manifest_sha256": "b" * 64,
+        "source_alignment_sha256": "c" * 64,
+        "source_alignment_size_bytes": 1024,
+        "source_index_sha256": "d" * 64,
+        "source_index_size_bytes": 128,
+        "source_identity": source_identity,
+        "source_index_identity": {**source_identity, "inode": "5", "size_bytes": 128},
+    }
+    return presentation, receipt
+
+
+def test_locus_artifact_authority_accepts_the_current_presentation() -> None:
+    from routers import ngs_alignment_sessions as router
+
+    presentation, receipt = _locus_authority_test_packages()
+    router._require_current_locus_authority(receipt, presentation)
+
+
+def test_locus_artifact_authority_rejects_a_superseded_presentation() -> None:
+    from routers import ngs_alignment_sessions as router
+    from services import ngs_alignment_sessions as service
+
+    presentation, receipt = _locus_authority_test_packages()
+    receipt["presentation_authority_sha256"] = "f" * 64
+    with pytest.raises(service.AlignmentSessionError, match="presentation authority is stale"):
+        router._require_current_locus_authority(receipt, presentation)
+
+
+@pytest.mark.asyncio
+async def test_locus_artifact_get_serves_a_current_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import asynccontextmanager
+    from routers import ngs_alignment_sessions as router
+    from services import ngs_alignment_sessions as service
+
+    presentation, receipt = _locus_authority_test_packages()
+    locus_package = {
+        "receipt": receipt,
+        "bam_path": tmp_path / "locus.bam",
+        "bam_metadata": {"sha256": "6" * 64},
+    }
+
+    @asynccontextmanager
+    async def prepared(_job_id: str, _session_id: str, _job: Any):
+        yield presentation, tmp_path
+
+    async def serve(*_args: Any, **_kwargs: Any) -> str:
+        return "served"
+
+    monkeypatch.setattr(router, "_prepared_presentation", prepared)
+    monkeypatch.setattr(service, "resolve_cached_alignment_locus_slice", lambda _slice_id: locus_package)
+    monkeypatch.setattr(router, "_serve_artifact", serve)
+
+    response = await router.get_alignment_locus_slice_artifact(
+        "job-a", "1" * 24, "7" * 64, "6" * 64, "bam",
+        cast(Request, SimpleNamespace()), SimpleNamespace(),
+    )
+    assert response == "served"
 
 
 @pytest.mark.asyncio
@@ -616,7 +706,10 @@ def test_locus_slice_rejects_source_identity_mismatch(tmp_path: Path) -> None:
             source, bam_sha256=bam_sha, bam_size_bytes=bam_size, index=index,
             index_sha256=bai_sha, index_size_bytes=bai_size, source_identity=identity,
             source_index_identity=service.source_stat_identity(index),
-            source_manifest_sha256="f" * 64, job_id="job-f", session_id="6" * 24,
+            source_manifest_sha256="f" * 64,
+            presentation_authority_sha256="a" * 64,
+            presentation_manifest_sha256="b" * 64,
+            job_id="job-f", session_id="6" * 24,
             contig="plasmid", start=1, end=100, max_reads=3, cache_root=tmp_path / "cache",
         )
 
