@@ -22,7 +22,7 @@ from build_identity import current_build_identity
 from readiness import collect_runtime_readiness, http_readiness
 from dev_issue_screenshot_upload_limit import DevIssueScreenshotUploadLimitMiddleware
 from frustrampnn_upload_limit import FrustraMPNNUploadLimitMiddleware
-from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
+from routers import analyses, analytics, boltz_api_jobs, boltzgen, conformational_mapping, designs, dev_issues, execution_targets, external_imports, experiment_workspaces, files, frameworks, frustrampnn, gpu, inputs, jobs, md_results, mobile_apk_updates, mobile_ui_updates, models, molecular_dynamics, molbio_ngs_experiments, molbio_ops, msa, ngs_alignment_sessions, ngs_molbio_n5, nucleotide_sequences, ont_devices, ont_runs, ont_signal_workbench, payload_ownership_audit, plr_results, project_manager, projects, queue, rcsb, ribocentre, rna_structure, sequence_qc, shape_blueprint, smiles_converter, system, telemetry, templates, user_sequences, user_templates, viewer_resources
 from runtime_policy import (
     WorkflowAdmissionBlocked,
     workflow_launch_block_detail,
@@ -336,6 +336,11 @@ app.include_router(templates.router, prefix="/api/templates", tags=["templates"]
 app.include_router(inputs.router, prefix="/api/inputs", tags=["inputs"])
 app.include_router(boltz_api_jobs.router, prefix="/api/jobs/boltz-api", tags=["boltz-api-jobs"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(
+    execution_targets.router,
+    prefix="/api/execution-targets",
+    tags=["execution-targets"],
+)
 app.include_router(external_imports.router, prefix="/api/jobs/imports/external", tags=["external-result-imports"])
 app.include_router(md_results.router, prefix="/api/jobs", tags=["molecular-dynamics-results"])
 app.include_router(viewer_resources.router, prefix="/api/jobs", tags=["viewer-resources"])

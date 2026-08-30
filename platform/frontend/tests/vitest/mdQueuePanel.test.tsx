@@ -56,6 +56,41 @@ describe('MD queue integration in the dashboard job queue', () => {
         client.clear();
     });
 
+    it('shows remote queue authority without exposing local GPU controls', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['queue'], response([{
+            id: 'remote-1', name: 'Remote Protenix', model_id: 'protenix', mode: 'predict',
+            queue_status: 'queued', paused: false, priority: 0, vram_estimate_mb: 12000,
+            assigned_gpu: null, pinned_gpu: 0, display_gpu_ids: null,
+            execution_target_id: 'vast:123', remote_state: 'waiting_remote_gpu',
+            scheduler_candidate_gpus: [0], scheduler_ready: true, scheduler_blockers: [],
+            created_at: '2026-08-30T12:00:00Z', started_at: null,
+        }]));
+        client.setQueryData(['system'], response({ gpus: [{ index: 0, name: 'Local GPU' }] }));
+        client.setQueryData(['cancelledJobs'], response([]));
+
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => {
+            root.render(
+                <MemoryRouter>
+                    <QueryClientProvider client={client}>
+                        <JobQueuePanel />
+                    </QueryClientProvider>
+                </MemoryRouter>,
+            );
+            await Promise.resolve();
+        });
+
+        expect(container.textContent).toContain('Vast · waiting_remote_gpu');
+        expect(container.querySelector('button[title="Pin to GPU"]')).toBeNull();
+        expect(container.querySelector('button[title="Force Launch"]')).toBeNull();
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
     it('marks MD rows in the dashboard table and links to the existing operations/results owner', async () => {
         Object.defineProperty(window, 'matchMedia', {
             configurable: true,

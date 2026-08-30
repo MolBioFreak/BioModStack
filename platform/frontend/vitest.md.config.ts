@@ -9,6 +9,7 @@ export default defineConfig({
             './tests/vitest/mdTrajectoryFrameControls.test.tsx',
             './tests/vitest/mdFailedLaunchMounted.test.tsx',
             './tests/vitest/mdQueuePanel.test.tsx',
+            './tests/vitest/remoteExecutionSurfaces.test.tsx',
             './tests/vitest/molecularDynamicsGen2Mounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2ShellRoundTrip.test.tsx',
             './tests/vitest/molstarViewerLoadStateMounted.test.tsx',

@@ -35,6 +35,7 @@ import { getWorkflowModelTopics } from './workflowModelInventory.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import {
     hydrateFrustraMpnnSettings,
     mergeFrustraMpnnLaunchParams,
@@ -1819,6 +1820,7 @@ export function JobSubmission() {
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
+            <ExecutionTargetPicker />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}

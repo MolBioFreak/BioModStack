@@ -83,6 +83,7 @@ from migrations.add_ont_signal_comparisons import migrate as migrate_ont_signal_
 from migrations.seal_ont_read_metric_receipt_immutability import (
     migrate as seal_ont_read_metric_receipt_immutability,
 )
+from migrations.add_remote_execution import migrate as migrate_remote_execution
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -158,6 +159,7 @@ MIGRATIONS: List[Migration] = [
         "seal_ont_read_metric_receipt_immutability",
         seal_ont_read_metric_receipt_immutability,
     ),
+    Migration(45, "add_remote_execution", migrate_remote_execution),
 ]
 
 

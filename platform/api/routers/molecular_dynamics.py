@@ -854,7 +854,9 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
                 "source_stage_job_id": parent.id,
                 "source_stage_family": parent.stage_family,
                 "source_stage_mode": source_stage_key,
-            }, pinned_gpu=parent.pinned_gpu),
+            }, pinned_gpu=parent.pinned_gpu, execution_target_id=parent.execution_target_id,
+               parent_job_id=None, child_stage=None, batch_id=None, batch_name=None,
+               sequence_length=None, launch_context_id=None),
             BackgroundTasks(), session, _preallocated_job_id=new_id, _commit=False,
             _md_output_creation=output_creation, _md_input_resolver=input_resolver,
         )
@@ -862,6 +864,9 @@ async def reorchestrate_failed_md_run(job_id: str, command: LifecycleCommand,
         new_run = await session.get(MdRun, created.id)
         if new_job is None or new_run is None:
             raise HTTPException(status_code=409, detail={"code": "MD_REORCHESTRATE_FAILED", "message": "The new MD root was not durably materialized."})
+        if parent.execution_target_id:
+            new_job.execution_source_revision = parent.execution_source_revision
+            new_job.execution_source_tree = parent.execution_source_tree
         source_input = (run.normalized_request or {}).get("input") or {}
         new_input = (new_run.normalized_request or {}).get("input") or {}
         for field in ("structure", "coordinates", "topology"):

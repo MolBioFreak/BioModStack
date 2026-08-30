@@ -44,6 +44,7 @@ from database import (
     current_launch_context_id,
     get_session,
     Job,
+    ExecutionTarget,
     Design,
     FrustraMPNNResult,
     ConformationalMappingRequest,
@@ -5094,6 +5095,12 @@ async def list_jobs(
         Job.selection_source_job_id,
         Job.selection_dataset_name,
         Job.pinned_gpu,
+        Job.execution_target_id,
+        Job.execution_source_revision,
+        Job.execution_source_tree,
+        Job.execution_bundle_sha256,
+        Job.remote_attempt_id,
+        Job.remote_state,
         Job.current_stage,
         Job.completed_stages,
         Job.awaiting_input,
@@ -5246,6 +5253,12 @@ async def list_jobs(
             provenance=None if summary else job.provenance,
             saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
             pinned_gpu=job.pinned_gpu,
+            execution_target_id=job.execution_target_id,
+            execution_source_revision=job.execution_source_revision,
+            execution_source_tree=job.execution_source_tree,
+            execution_bundle_sha256=job.execution_bundle_sha256,
+            remote_attempt_id=job.remote_attempt_id,
+            remote_state=job.remote_state,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5340,6 +5353,12 @@ async def import_proteinbase_bundle_job(
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
         pinned_gpu=job.pinned_gpu,
+        execution_target_id=job.execution_target_id,
+        execution_source_revision=job.execution_source_revision,
+        execution_source_tree=job.execution_source_tree,
+        execution_bundle_sha256=job.execution_bundle_sha256,
+        remote_attempt_id=job.remote_attempt_id,
+        remote_state=job.remote_state,
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5451,6 +5470,54 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    inherited_source_revision: str | None = None
+    inherited_source_tree: str | None = None
+    selected_execution_target: ExecutionTarget | None = None
+    execution_parent: Job | None = None
+    if job_data.parent_job_id:
+        execution_parent = await session.get(Job, str(job_data.parent_job_id))
+        if execution_parent is not None:
+            parent_target_id = str(execution_parent.execution_target_id or "").strip() or None
+            requested_target_id = str(job_data.execution_target_id or "").strip() or None
+            if requested_target_id is not None and requested_target_id != parent_target_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Child execution_target_id must match the parent Job",
+                )
+            job_data.execution_target_id = parent_target_id
+            inherited_source_revision = execution_parent.execution_source_revision
+            inherited_source_tree = execution_parent.execution_source_tree
+    if job_data.execution_target_id:
+        selected_execution_target = await session.get(
+            ExecutionTarget,
+            str(job_data.execution_target_id),
+        )
+        if (
+            selected_execution_target is None
+            or not selected_execution_target.active
+            or selected_execution_target.state != "ready"
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="execution_target_id is not an active ready execution target",
+            )
+        if execution_parent is not None:
+            if not inherited_source_revision or not inherited_source_tree:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Remote parent Job is missing its immutable source identity",
+                )
+        else:
+            try:
+                from services.remote_execution.bundle import current_source_identity
+
+                inherited_source_revision, inherited_source_tree = current_source_identity()
+            except Exception as exc:
+                logger.exception("Unable to capture the remote Job source identity")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Committed BMS source identity is unavailable",
+                ) from exc
     if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
         try:
             job_data.params = normalize_plr_structure_validators(job_data.params or {})
@@ -5491,10 +5558,20 @@ async def _create_job(
                     )
                 },
             )
-        from routers.gpu import get_gpu_stats_with_error
+        if selected_execution_target is not None:
+            capabilities = (
+                selected_execution_target.capabilities
+                if isinstance(selected_execution_target.capabilities, dict)
+                else {}
+            )
+            remote_gpu_count = int(capabilities.get("gpu_count") or 0)
+            valid_gpu_indices = list(range(remote_gpu_count))
+            gpu_error = None if remote_gpu_count > 0 else "remote target has no GPU inventory"
+        else:
+            from routers.gpu import get_gpu_stats_with_error
 
-        live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
-        valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
+            live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
+            valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
         if gpu_error or pinned_gpu not in valid_gpu_indices:
             raise HTTPException(
                 status_code=422,
@@ -5745,6 +5822,12 @@ async def _create_job(
                 provenance=existing_child.provenance,
                 saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
                 pinned_gpu=existing_child.pinned_gpu,
+                execution_target_id=existing_child.execution_target_id,
+                execution_source_revision=existing_child.execution_source_revision,
+                execution_source_tree=existing_child.execution_source_tree,
+                execution_bundle_sha256=existing_child.execution_bundle_sha256,
+                remote_attempt_id=existing_child.remote_attempt_id,
+                remote_state=existing_child.remote_state,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -5963,6 +6046,9 @@ async def _create_job(
             priority=10,  # HIGH priority - unblocks inference jobs
             job_phase='msa_generation',
             msa_sequences=sequences_for_msa,
+            execution_target_id=job_data.execution_target_id,
+            execution_source_revision=inherited_source_revision,
+            execution_source_tree=inherited_source_tree,
         )
         session.add(msa_job)
         logger.info(f"[MSA BATCH] Created MSA batch job {msa_job_id[:8]}... for {len(sequences_for_msa)} sequences")
@@ -6253,6 +6339,9 @@ async def _create_job(
             selection_dataset_name=provenance_selection_dataset_name,
             selected_loop_scope=provenance_selection_scope,
             provenance=provenance_payload,
+            execution_target_id=job_data.execution_target_id,
+            execution_source_revision=inherited_source_revision,
+            execution_source_tree=inherited_source_tree,
             # GPU Orchestrator fields
             queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
@@ -6323,6 +6412,8 @@ async def _create_job(
         await session.commit()
     
     # Refresh first job for response
+    if first_job is None:
+        raise HTTPException(status_code=500, detail="Job creation produced no canonical Job")
     await session.refresh(first_job)
     
     if num_jobs > 1:
@@ -6367,6 +6458,12 @@ async def _create_job(
         provenance=first_job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
         pinned_gpu=first_job.pinned_gpu,
+        execution_target_id=first_job.execution_target_id,
+        execution_source_revision=first_job.execution_source_revision,
+        execution_source_tree=first_job.execution_source_tree,
+        execution_bundle_sha256=first_job.execution_bundle_sha256,
+        remote_attempt_id=first_job.remote_attempt_id,
+        remote_state=first_job.remote_state,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -7589,6 +7686,12 @@ async def get_job(
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
         pinned_gpu=job.pinned_gpu,
+        execution_target_id=job.execution_target_id,
+        execution_source_revision=job.execution_source_revision,
+        execution_source_tree=job.execution_source_tree,
+        execution_bundle_sha256=job.execution_bundle_sha256,
+        remote_attempt_id=job.remote_attempt_id,
+        remote_state=job.remote_state,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -7856,10 +7959,14 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         selected_input_artifact_class=resubmit_selected_input_artifact_class,
         selected_input_schema_version=resubmit_selected_input_schema_version,
+        execution_target_id=original_job.execution_target_id,
+        execution_source_revision=original_job.execution_source_revision,
+        execution_source_tree=original_job.execution_source_tree,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
         sequence_length=resubmit_sequence_length,
+        pinned_gpu=original_job.pinned_gpu,
         priority=0,
         paused=False,
         retry_count=0,

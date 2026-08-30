@@ -1393,6 +1393,80 @@ async def _claim_job_for_gpu(
     return scheduler_params
 
 
+async def _claim_remote_job(
+    session: Any,
+    job: Any,
+    *,
+    gpu_id: int | None,
+    vram_estimate_mb: int,
+    gpu_ids: List[int] | None = None,
+    admission_snapshot: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    """Atomically claim one Job for its persisted remote execution target."""
+    from sqlalchemy import update
+    from database import Job
+    from services.execution_ownership import attach_scheduler_gpu_assignment
+
+    target_id = str(getattr(job, "execution_target_id", "") or "").strip()
+    if not target_id:
+        return None
+    original = _normalize_job_params(getattr(job, "params", None))
+    scheduler_params = (
+        attach_scheduler_gpu_assignment(original, int(gpu_id))
+        if gpu_id is not None
+        else original
+    )
+    provenance = dict(getattr(job, "provenance", None) or {})
+    provenance["remote_execution_assignment"] = {
+        "schema": "bms.remote-execution-assignment.v1",
+        "execution_target_id": target_id,
+        "gpu_index": gpu_id,
+        "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
+        "admission_snapshot": dict(admission_snapshot or {}),
+        "claimed_at": datetime.utcnow().isoformat() + "Z",
+    }
+    transition = await session.execute(
+        update(Job)
+        .where(
+            Job.id == str(job.id),
+            Job.status == "queued",
+            Job.queue_status == "queued",
+            Job.paused.is_(False),
+            Job.assigned_gpu.is_(None),
+            Job.execution_target_id == target_id,
+            Job.params == original,
+            Job.started_at.is_(None),
+            Job.nextflow_run_id.is_(None),
+        )
+        .values(
+            status="running",
+            queue_status="running",
+            started_at=datetime.utcnow(),
+            assigned_gpu=gpu_id,
+            vram_estimate_mb=int(vram_estimate_mb),
+            params=scheduler_params,
+            provenance=provenance,
+            remote_state="staging",
+            error_message=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(transition.rowcount or 0) != 1:
+        await session.rollback()
+        await session.refresh(job)
+        return None
+    job.status = "running"
+    job.queue_status = "running"
+    job.started_at = job.started_at or datetime.utcnow()
+    job.assigned_gpu = gpu_id
+    job.vram_estimate_mb = int(vram_estimate_mb)
+    job.params = scheduler_params
+    job.provenance = provenance
+    job.remote_state = "staging"
+    job.error_message = None
+    return scheduler_params
+
+
 def _md_analysis_has_gpu_assignment(job: Any) -> bool:
     if str(getattr(job, "model_id", "") or "").strip().lower() != "molecular_dynamics":
         return False
@@ -2515,6 +2589,54 @@ class GPUOrchestrator:
             )
             pending_jobs = result.scalars().all()
 
+            inherited_remote_jobs = []
+            rejected_target_drift_jobs = []
+            for pending_job in pending_jobs:
+                if not pending_job.parent_job_id:
+                    continue
+                parent_job = await session.get(Job, str(pending_job.parent_job_id))
+                if parent_job is None:
+                    continue
+                parent_target_id = str(parent_job.execution_target_id or "").strip() or None
+                child_target_id = str(pending_job.execution_target_id or "").strip() or None
+                if child_target_id is not None and child_target_id != parent_target_id:
+                    pending_job.status = "failed"
+                    pending_job.queue_status = "failed"
+                    pending_job.error_message = "REMOTE_EXECUTION_TARGET_LINEAGE_DRIFT"
+                    pending_job.completed_at = datetime.utcnow()
+                    rejected_target_drift_jobs.append(pending_job)
+                    continue
+                if parent_target_id and child_target_id is None:
+                    pending_job.execution_target_id = parent_target_id
+                    child_target_id = parent_target_id
+                    inherited_remote_jobs.append(pending_job)
+                if parent_target_id and child_target_id == parent_target_id:
+                    parent_revision = str(parent_job.execution_source_revision or "").strip()
+                    parent_tree = str(parent_job.execution_source_tree or "").strip()
+                    child_revision = str(pending_job.execution_source_revision or "").strip()
+                    child_tree = str(pending_job.execution_source_tree or "").strip()
+                    if (
+                        not parent_revision
+                        or not parent_tree
+                        or (child_revision and child_revision != parent_revision)
+                        or (child_tree and child_tree != parent_tree)
+                    ):
+                        pending_job.status = "failed"
+                        pending_job.queue_status = "failed"
+                        pending_job.error_message = "REMOTE_EXECUTION_SOURCE_LINEAGE_DRIFT"
+                        pending_job.completed_at = datetime.utcnow()
+                        rejected_target_drift_jobs.append(pending_job)
+                        continue
+                    if not child_revision or not child_tree:
+                        pending_job.execution_source_revision = parent_revision
+                        pending_job.execution_source_tree = parent_tree
+                        if pending_job not in inherited_remote_jobs:
+                            inherited_remote_jobs.append(pending_job)
+            if inherited_remote_jobs or rejected_target_drift_jobs:
+                await session.commit()
+                rejected_ids = {job.id for job in rejected_target_drift_jobs}
+                pending_jobs = [job for job in pending_jobs if job.id not in rejected_ids]
+
             rejected_analysis_jobs = [job for job in pending_jobs if _md_analysis_has_gpu_assignment(job)]
             for job in rejected_analysis_jobs:
                 job.status = "failed"
@@ -2527,6 +2649,169 @@ class GPUOrchestrator:
                 await session.commit()
                 rejected_ids = {job.id for job in rejected_analysis_jobs}
                 pending_jobs = [job for job in pending_jobs if job.id not in rejected_ids]
+
+            # Remote Jobs retain the canonical queue and launch authority, but
+            # consume only the GPU namespace of their persisted execution target.
+            remote_jobs = [job for job in pending_jobs if job.execution_target_id]
+            if remote_jobs:
+                running_remote_result = await session.execute(
+                    select(Job).where(
+                        Job.queue_status == "running",
+                        Job.execution_target_id.isnot(None),
+                    )
+                )
+                active_remote_jobs = list(running_remote_result.scalars().all())
+                from services.remote_execution.targets import (
+                    get_ready_target,
+                    remote_target_telemetry,
+                )
+
+                remote_telemetry_cache: dict[str, dict[str, Any]] = {}
+
+                for job in remote_jobs:
+                    try:
+                        target = await get_ready_target(session, str(job.execution_target_id))
+                    except Exception as exc:
+                        job.remote_state = "waiting_target"
+                        job.error_message = str(exc)[:1500]
+                        continue
+                    target_active = [
+                        active
+                        for active in active_remote_jobs
+                        if active.execution_target_id == job.execution_target_id
+                    ]
+                    if target_active:
+                        job.remote_state = "waiting_remote_worker"
+                        continue
+                    vram = job.vram_estimate_mb
+                    if vram is None:
+                        vram = estimate_vram(
+                            job.model_id or "default",
+                            job.sequence_length or 300,
+                            _normalize_job_params(job.params),
+                        )
+                    gpu_consuming = int(vram) != 0
+                    capabilities = target.capabilities if isinstance(target.capabilities, dict) else {}
+                    gpu_count = int(capabilities.get("gpu_count") or 0)
+                    gpu_vram_mb = int(capabilities.get("gpu_vram_mb") or 0)
+                    if gpu_consuming and gpu_vram_mb > 0 and int(vram) > gpu_vram_mb:
+                        job.remote_state = "waiting_remote_capacity"
+                        job.error_message = (
+                            f"Remote GPU capacity {gpu_vram_mb} MB is below the "
+                            f"{int(vram)} MB scheduler estimate"
+                        )
+                        continue
+                    job_params = _normalize_job_params(job.params)
+                    requested_remote_gpus = _normalize_pinned_gpus(
+                        job_params.get("pinned_gpus") or job_params.get("bcp_gpu_ids")
+                    )
+                    if gpu_consuming and not requested_remote_gpus:
+                        requested_remote_gpus = [
+                            int(job.pinned_gpu) if isinstance(job.pinned_gpu, int) else 0
+                        ]
+                    requested_remote_gpus = sorted(set(requested_remote_gpus or []))
+                    remote_gpu = requested_remote_gpus[0] if requested_remote_gpus else None
+                    if any(gpu_id < 0 or gpu_id >= gpu_count for gpu_id in requested_remote_gpus):
+                        job.remote_state = "waiting_remote_gpu"
+                        job.error_message = "Pinned remote GPU is outside the active target inventory"
+                        continue
+                    admission_snapshot: Dict[str, Any] = {}
+                    if gpu_consuming:
+                        telemetry = remote_telemetry_cache.get(str(target.id))
+                        if telemetry is None:
+                            telemetry = await remote_target_telemetry(target)
+                            remote_telemetry_cache[str(target.id)] = telemetry
+                        if not telemetry.get("available"):
+                            job.remote_state = "waiting_remote_telemetry"
+                            job.error_message = str(
+                                telemetry.get("error") or "Remote GPU telemetry is unavailable"
+                            )[:1500]
+                            continue
+                        telemetry_by_index = {
+                            int(row["index"]): row
+                            for row in telemetry.get("gpus", [])
+                            if isinstance(row, dict) and isinstance(row.get("index"), int)
+                        }
+                        insufficient = []
+                        admitted_devices = []
+                        for gpu_id in requested_remote_gpus:
+                            row = telemetry_by_index.get(gpu_id)
+                            if row is None:
+                                insufficient.append(f"GPU {gpu_id} is absent from live telemetry")
+                                continue
+                            total_mb = int(row.get("memory_total_mb") or 0)
+                            used_mb = int(row.get("memory_used_mb") or 0)
+                            try:
+                                fill = max(
+                                    0.05,
+                                    min(0.99, float(config.get("global", {}).get("target_vram_fill", 0.75))),
+                                )
+                            except (TypeError, ValueError):
+                                fill = 0.75
+                            try:
+                                margin_mb = max(
+                                    0,
+                                    int(config.get("global", {}).get("vram_safety_margin_mb", 2048)),
+                                )
+                            except (TypeError, ValueError):
+                                margin_mb = 2048
+                            available_mb = max(0, int(total_mb * fill) - used_mb - margin_mb)
+                            admitted_devices.append(
+                                {
+                                    "gpu_index": gpu_id,
+                                    "gpu_uuid": row.get("uuid"),
+                                    "memory_total_mb": total_mb,
+                                    "memory_used_mb": used_mb,
+                                    "target_fill": fill,
+                                    "safety_margin_mb": margin_mb,
+                                    "available_mb": available_mb,
+                                }
+                            )
+                            if available_mb < int(vram):
+                                insufficient.append(
+                                    f"GPU {gpu_id} has {available_mb} MB admissible; "
+                                    f"{int(vram)} MB is required"
+                                )
+                        if insufficient:
+                            job.remote_state = "waiting_remote_capacity"
+                            job.error_message = "; ".join(insufficient)[:1500]
+                            continue
+                        admission_snapshot = {
+                            "schema": "bms.remote-gpu-admission.v1",
+                            "observed_at": telemetry.get("observed_at"),
+                            "required_per_gpu_mb": int(vram),
+                            "devices": admitted_devices,
+                        }
+                    claimed_params = await _claim_remote_job(
+                        session,
+                        job,
+                        gpu_id=remote_gpu,
+                        gpu_ids=requested_remote_gpus,
+                        vram_estimate_mb=int(vram),
+                        admission_snapshot=admission_snapshot,
+                    )
+                    if claimed_params is None:
+                        continue
+                    await session.commit()
+                    remote_launch = self.launch_nextflow_job(
+                        job_id=job.id,
+                        model_id=job.model_id,
+                        mode=job.mode,
+                        params=claimed_params,
+                        output_dir=job.child_output_dir or job.output_dir,
+                    )
+                    if not isinstance(remote_launch, asyncio.Task):
+                        await remote_launch
+                    active_remote_jobs.append(job)
+                    logger.info(
+                        "[LAUNCH REMOTE] %s on %s GPU %s",
+                        job.name,
+                        job.execution_target_id,
+                        remote_gpu,
+                    )
+                await session.commit()
+                remote_ids = {job.id for job in remote_jobs}
+                pending_jobs = [job for job in pending_jobs if job.id not in remote_ids]
             
             
             if not pending_jobs:
@@ -2857,7 +3142,22 @@ class GPUOrchestrator:
                     )
                 )
                 running_jobs = result.scalars().all()
-                
+
+                remote_jobs = [job for job in running_jobs if job.execution_target_id]
+                if remote_jobs:
+                    from services.remote_execution.executor import reconcile_remote_job
+
+                    for remote_job in remote_jobs:
+                        try:
+                            await reconcile_remote_job(session, remote_job)
+                        except Exception as remote_error:
+                            logger.warning(
+                                "[REMOTE COMPLETION] Job %s remains pending reconciliation: %s",
+                                remote_job.id,
+                                remote_error,
+                            )
+                    running_jobs = [job for job in running_jobs if not job.execution_target_id]
+
                 if not running_jobs:
                     return
 

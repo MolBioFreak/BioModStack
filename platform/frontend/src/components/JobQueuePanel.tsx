@@ -748,6 +748,7 @@ function JobRow({
     const candidateGpuLabel = formatGpuList(job.scheduler_candidate_gpus, gpuCatalog);
     const launchGpuLabel = formatGpuList(job.display_gpu_ids, gpuCatalog);
     const isMd = isMolecularDynamicsJob(job.model_id, job.mode);
+    const isRemoteJob = Boolean(job.execution_target_id);
 
     return (
         <div className="bg-slate-700/30 rounded-lg p-3 hover:bg-slate-700/50 transition-colors">
@@ -777,12 +778,21 @@ function JobRow({
                             ) : (
                                 <VramBadge vramMb={job.vram_estimate_mb} label="Est" tone="muted" />
                             )}
-                            <GPUBadge
-                                displayGpuIds={job.display_gpu_ids}
-                                assignedGpu={job.assigned_gpu}
-                                pinnedGpu={job.pinned_gpu}
-                                gpuCatalog={gpuCatalog}
-                            />
+                            {isRemoteJob ? (
+                                <span
+                                    className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-300"
+                                    title={job.execution_target_id ?? undefined}
+                                >
+                                    Vast · {job.remote_state || 'queued'}
+                                </span>
+                            ) : (
+                                <GPUBadge
+                                    displayGpuIds={job.display_gpu_ids}
+                                    assignedGpu={job.assigned_gpu}
+                                    pinnedGpu={job.pinned_gpu}
+                                    gpuCatalog={gpuCatalog}
+                                />
+                            )}
                             {job.priority > 0 && (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400">
                                     P{job.priority}
@@ -809,7 +819,7 @@ function JobRow({
                                 </span>
                             ) : null}
                         </div>
-                        {(job.queue_status === 'queued' || (job.display_gpu_ids?.length ?? 0) > 1) && (
+                        {!isRemoteJob && (job.queue_status === 'queued' || (job.display_gpu_ids?.length ?? 0) > 1) && (
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                                 {launchGpuLabel && (job.display_gpu_ids?.length ?? 0) > 1 && (
                                     <span className="text-slate-400">
@@ -846,7 +856,7 @@ function JobRow({
                     {/* Priority controls removed - was redundant */}
 
                     {/* Pin to GPU */}
-                    {job.queue_status !== 'running' && onPin && (
+                    {!isRemoteJob && job.queue_status !== 'running' && onPin && (
                         <div className="relative">
                             <button
                                 onClick={() => setShowPinMenu(!showPinMenu)}
@@ -881,7 +891,7 @@ function JobRow({
                     )}
 
                     {/* Force Launch - only for queued jobs */}
-                    {job.queue_status === 'queued' && onForceLaunch && (
+                    {!isRemoteJob && job.queue_status === 'queued' && onForceLaunch && (
                         <div className="relative">
                             <button
                                 onClick={() => setShowForceMenu(!showForceMenu)}

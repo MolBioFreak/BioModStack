@@ -133,6 +133,12 @@ class Job(Base):
     output_dir = Column(String(500), nullable=True)
     nextflow_run_id = Column(String(100), nullable=True)
     error_message = Column(Text, nullable=True)
+    execution_target_id = Column(String(160), nullable=True, index=True)
+    execution_source_revision = Column(String(64), nullable=True)
+    execution_source_tree = Column(String(64), nullable=True)
+    execution_bundle_sha256 = Column(String(64), nullable=True)
+    remote_attempt_id = Column(String(64), nullable=True, index=True)
+    remote_state = Column(String(32), nullable=True)
     
     # ═══════════════════════════════════════════════════════════════════════════
     # GPU ORCHESTRATOR: Queue Management
@@ -205,6 +211,52 @@ class Job(Base):
     
     # Relationship to designs
     designs = relationship("Design", back_populates="job", cascade="all, delete-orphan")
+
+
+class ExecutionTarget(Base):
+    """One operator-activated execution-only worker target."""
+
+    __tablename__ = "execution_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "provider_instance_id",
+            name="uq_execution_target_provider_instance",
+        ),
+        CheckConstraint("provider IN ('vast')", name="ck_execution_target_provider"),
+        Index(
+            "uq_execution_targets_one_active",
+            "active",
+            unique=True,
+            sqlite_where=text("active = 1"),
+        ),
+        Index("ix_execution_targets_provider_state", "provider", "state"),
+    )
+
+    id = Column(String(160), primary_key=True)
+    provider = Column(String(32), nullable=False)
+    provider_instance_id = Column(String(128), nullable=False)
+    name = Column(String(255), nullable=True)
+    state = Column(String(32), nullable=False, default="discovered")
+    active = Column(Boolean, nullable=False, default=False)
+    host = Column(String(255), nullable=True)
+    port = Column(Integer, nullable=True)
+    username = Column(String(64), nullable=True)
+    remote_root = Column(String(500), nullable=False, default="/opt/biomodstack")
+    host_key_sha256 = Column(String(64), nullable=True)
+    capabilities = Column(JSON, nullable=False, default=dict)
+    pricing = Column(JSON, nullable=False, default=dict)
+    provider_metadata = Column(JSON, nullable=False, default=dict)
+    last_error = Column(Text, nullable=True)
+    last_seen_at = Column(LenientSQLiteDateTime, nullable=True)
+    activated_at = Column(LenientSQLiteDateTime, nullable=True)
+    created_at = Column(LenientSQLiteDateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(
+        LenientSQLiteDateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
 
 
 class OntInstrumentRun(Base):
