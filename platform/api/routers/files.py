@@ -404,12 +404,14 @@ async def upload_file(
         raise HTTPException(status_code=403, detail="Use the job-scoped governed artifact route")
     
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         descriptor = os.open(file_path, flags, 0o644)
         with os.fdopen(descriptor, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Upload destination already exists")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {e}")
         

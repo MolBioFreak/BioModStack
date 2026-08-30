@@ -269,6 +269,30 @@ def _app(factory) -> FastAPI:
 
 
 @pytest.mark.asyncio
+async def test_protein_domain_tree_exposes_revision_edit_action(read_model_store):
+    async with read_model_store() as session:
+        project, global_experiment, domain = await _hierarchy(session)
+        read_model = await build_project_manager_read_model(
+            session,
+            project_id=project.id,
+            focus_id=global_experiment.id,
+            selected_node_key=f"domain_experiment:{domain.id}",
+            map_limit=PAGE_LIMIT,
+            lineage_limit=PAGE_LIMIT,
+            result_limit=PAGE_LIMIT,
+            note_limit=PAGE_LIMIT,
+            activity_limit=PAGE_LIMIT,
+        )
+
+    domain_node = next(
+        node
+        for node in read_model["tree"]["nodes"]
+        if node["node_key"] == f"domain_experiment:{domain.id}"
+    )
+    assert domain_node["allowed_actions"] == ["edit", "attach", "add_note", "archive"]
+
+
+@pytest.mark.asyncio
 async def test_attachment_lineage_result_note_and_activity_pages_are_truthful_and_repeat_context(
     read_model_store,
 ):

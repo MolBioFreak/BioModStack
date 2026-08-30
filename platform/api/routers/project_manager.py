@@ -89,7 +89,10 @@ from services.global_experiments.receipts import attach_verified_entity
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 from services.ngs_molbio_connector import exact_local_launch_authority
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, capability_inventory
-from services.protein_project_capabilities import protein_capability_inventory
+from services.protein_project_capabilities import (
+    ProteinProjectCapabilityError,
+    protein_capability_inventory,
+)
 from services.ngs_molbio_n5 import (
     ResourceAdmissionDenied,
     persist_admission_refusal,
@@ -413,6 +416,12 @@ def _launch_context_error(exc: LaunchContextError) -> HTTPException:
 @router.get("/api/domain-adapters")
 async def list_domain_adapters() -> dict:
     return {"schema": "bms.global.adapter-registry.v1", "adapters": registry.list()}
+
+
+@router.get("/api/protein-project-capabilities")
+async def list_protein_project_capabilities() -> dict[str, Any]:
+    """Expose the server-owned Protein taxonomy for Domain intent authoring."""
+    return protein_capability_inventory()
 
 
 async def _launch_context_document(
@@ -1300,13 +1309,16 @@ def _domain_capability_authority(
     return experiment_mode, inventory
 
 
-def _capability_is_allowed_for_domain(capability: dict[str, Any], experiment_mode: str) -> bool:
+def _capability_applies_to_domain(capability: dict[str, Any], experiment_mode: str) -> bool:
     allowed_modes = capability.get("allowed_domain_modes")
+    return isinstance(allowed_modes, list) and experiment_mode in allowed_modes
+
+
+def _capability_is_allowed_for_domain(capability: dict[str, Any], experiment_mode: str) -> bool:
     return (
         capability.get("plannable") is True
         and capability.get("exposure_state") == "accepted"
-        and isinstance(allowed_modes, list)
-        and experiment_mode in allowed_modes
+        and _capability_applies_to_domain(capability, experiment_mode)
     )
 
 
@@ -1608,8 +1620,15 @@ async def list_domain_capabilities(
         _project, _experiment, domain = await _domain_hierarchy(session, project_id, experiment_id, domain_id)
         revision = await session.get(ExperimentRevision, domain.current_revision_id or "")
         experiment_mode, inventory = _domain_capability_authority(revision)
+        try:
+            revision_payload = json.loads(revision.canonical_payload) if revision is not None else {}
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValidationFailure("current Domain revision authority is malformed") from exc
+        domain_kind = revision_payload.get("domain_kind")
         items = []
         for capability in inventory["capabilities"]:
+            if not _capability_applies_to_domain(capability, experiment_mode):
+                continue
             if not _capability_is_allowed_for_domain(capability, experiment_mode):
                 continue
             capability_contract = workflow_plan_capability_contract(capability["capability_id"])
@@ -1620,6 +1639,8 @@ async def list_domain_capabilities(
                 "capability_version": pinned["capability_version"],
                 "label": pinned["label"],
                 "scientific_role": pinned["scientific_role"],
+                "plannable": True,
+                "exposure_state": pinned["exposure_state"],
                 "launch_mode": pinned["launch_mode"],
                 "workflow_family": pinned["workflow_family"],
                 "workflow_adapter_id": pinned["workflow_adapter_id"],
@@ -1632,16 +1653,21 @@ async def list_domain_capabilities(
                 "capability_contract": capability_contract,
                 "capability_contract_sha256": hashlib.sha256(contract_json.encode("utf-8")).hexdigest(),
             })
-        items.sort(key=lambda item: (item["label"].casefold(), item["capability_id"]))
+        items.sort(key=lambda item: (str(item.get("label") or "").casefold(), str(item.get("capability_id") or "")))
         return {
-            "schema": "bms.ngs-molbio.domain-capability-list.v1",
+            "schema": (
+                "bms.protein.domain-capability-list.v1"
+                if domain_kind == "protein_in_silico"
+                else "bms.ngs-molbio.domain-capability-list.v1"
+            ),
+            "domain_kind": domain_kind,
             "domain_id": domain_id,
             "domain_revision_id": domain.current_revision_id,
             "experiment_mode": experiment_mode,
             "inventory_sha256": inventory["content_sha256"],
             "items": items,
         }
-    except NgsMolBioCapabilityError as exc:
+    except (NgsMolBioCapabilityError, ProteinProjectCapabilityError) as exc:
         raise HTTPException(503, detail={"code": "capability_authority_unavailable", "message": str(exc)}) from exc
     except ExperimentServiceError as exc:
         raise _service_error(exc) from exc

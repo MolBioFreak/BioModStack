@@ -20,21 +20,28 @@ def test_domain_activity_uses_the_frozen_singular_route() -> None:
     assert "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/activities" not in paths
 
 
-def test_protein_domain_exposes_accepted_esmfold2_plan_capability() -> None:
+def test_protein_domain_exposes_each_accepted_structure_predictor() -> None:
     revision = SimpleNamespace(canonical_payload=json.dumps({
         "domain_kind": "protein_in_silico",
-        "domain_payload": {"experiment_mode": "folding_structure_prediction"},
+        "domain_payload": {"experiment_mode": "prediction"},
     }))
     experiment_mode, inventory = project_manager._domain_capability_authority(cast(Any, revision))
 
-    assert experiment_mode == "folding_structure_prediction"
-    assert [item["capability_id"] for item in inventory["capabilities"]] == [
-        "protein.structure_prediction.esmfold2"
+    assert experiment_mode == "prediction"
+    accepted = [
+        item for item in inventory["capabilities"]
+        if project_manager._capability_is_allowed_for_domain(item, experiment_mode)
     ]
-    capability = inventory["capabilities"][0]
-    assert project_manager._capability_is_allowed_for_domain(capability, experiment_mode)
-    contract = workflow_plan_capability_contract(capability["capability_id"])
-    assert contract["allowed_model_modes"] == [{"model_id": "esmfold2", "mode": "predict"}]
+    assert [item["capability_id"] for item in accepted] == [
+        "protein.structure_prediction.boltz2",
+        "protein.structure_prediction.esmfold2",
+        "protein.structure_prediction.protenix_v2",
+    ]
+    assert [workflow_plan_capability_contract(item["capability_id"])["allowed_model_modes"] for item in accepted] == [
+        [{"model_id": "boltz2", "mode": "predict"}],
+        [{"model_id": "esmfold2", "mode": "predict"}],
+        [{"model_id": "protenix", "mode": "predict"}],
+    ]
 
 
 def test_protein_plan_draft_binds_source_receipt_and_native_request() -> None:
@@ -46,7 +53,7 @@ def test_protein_plan_draft_binds_source_receipt_and_native_request() -> None:
         capability_contract=contract,
         domain_payload={
             "domain_kind": "protein_in_silico",
-            "domain_payload": {"target": {"source_receipt_ids": ["receipt-1"]}},
+            "domain_payload": {"targets": [{"source_receipt_ids": ["receipt-1"]}]},
         },
     ))
 

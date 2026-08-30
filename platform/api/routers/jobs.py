@@ -5262,7 +5262,7 @@ async def import_proteinbase_bundle_job(
     request: ProteinBaseBundleImportRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Import an uploaded ProteinBase JSONL bundle as a synthetic completed job."""
+    """Import an uploaded ProteinBase CSV or JSONL bundle as a completed job."""
     try:
         resolved_bundle_path = resolve_allowed_path(request.bundle_path)
     except ValueError as exc:
@@ -5280,10 +5280,10 @@ async def import_proteinbase_bundle_job(
             dataset_name=request.dataset_name,
             job_name=request.job_name,
         )
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"ProteinBase bundle is not valid JSONL: {exc}") from exc
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"ProteinBase bundle must be UTF-8 text: {exc}") from exc
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"ProteinBase bundle is invalid: {exc}") from exc
 
     await session.refresh(job)
 

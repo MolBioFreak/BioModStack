@@ -337,6 +337,70 @@ _SURFACE_BUILDERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
 }
 
 
+_EXPLICITLY_UNSUPPORTED_COMPARISON_REASONS = {
+    "design": "No registered producer-native compatibility receipt exists for arbitrary Design results.",
+    "typed_core_job_result": "Typed core Job results require a family-specific compatibility adapter before comparison.",
+    "rfd3_local_redesign_request": "RFD3 whole-result candidate sets have no registered Project comparison adapter.",
+    "conformational_mapping_request": "CM cross-request and cross-backend comparison requires a separate immutable compatibility authority.",
+    "md_result": "MD runs have no registered Project comparison adapter with replica, units, and analysis compatibility.",
+    "frustrampnn_result": "Attach an immutable FrustraMPNN comparison receipt to compare exact landscapes.",
+}
+
+
+def _comparison_projection(
+    receipt: ExperimentExternalEntityReceipt,
+    payload: dict[str, Any],
+    *,
+    readiness: str,
+) -> tuple[dict[str, Any], list[str]]:
+    entity_kind = str(payload["entity_kind"])
+    actions = ["open"]
+    if readiness == "ready" and entity_kind in {
+        "design",
+        "typed_core_job_result",
+        "rfd3_local_redesign_request",
+        "conformational_mapping_request",
+        "md_result",
+        "frustrampnn_result",
+        "frustrampnn_comparison",
+        "frustrampnn_guidance",
+    }:
+        actions.append("attach_evidence")
+    if entity_kind == "frustrampnn_comparison":
+        metadata = _metadata_payload(payload)
+        compatibility = metadata.get("compatibility")
+        status = compatibility.get("status") if isinstance(compatibility, dict) else None
+        if status == "comparable" and readiness == "ready":
+            actions.append("compare")
+            return {
+                "state": "available",
+                "reason": None,
+                "authority": {
+                    "adapter_id": str(payload["verifier_id"]),
+                    "adapter_version": str(metadata.get("adapter_version") or "1"),
+                    "receipt_id": receipt.id,
+                    "receipt_sha256": hashlib.sha256(
+                        receipt.acknowledgement_json.encode("utf-8")
+                    ).hexdigest(),
+                },
+            }, actions
+        reasons = compatibility.get("reasons") if isinstance(compatibility, dict) else None
+        reason = "; ".join(str(item) for item in reasons or [] if str(item).strip())
+        return {
+            "state": "incompatible",
+            "reason": reason[:2048] or "Native FrustraMPNN compatibility authority marks these landscapes incompatible.",
+            "authority": None,
+        }, actions
+    unsupported_reason = _EXPLICITLY_UNSUPPORTED_COMPARISON_REASONS.get(entity_kind)
+    if unsupported_reason is not None:
+        return {
+            "state": "unavailable",
+            "reason": unsupported_reason,
+            "authority": None,
+        }, actions
+    return {"state": "not_applicable", "reason": None, "authority": None}, actions
+
+
 async def result_surface_for_receipt(
     session: AsyncSession,
     *,
@@ -365,6 +429,14 @@ async def result_surface_for_receipt(
         }
     readiness = str(details["readiness"])
     surface_kind = str(details["surface_kind"])
+    comparison, available_actions = _comparison_projection(
+        receipt,
+        payload,
+        readiness=readiness,
+    ) if surface_kind != "unsupported" else (
+        {"state": "not_applicable", "reason": None, "authority": None},
+        [],
+    )
     provenance = {
         "store_id": payload.get("store_id"),
         "entity_revision_id": payload.get("entity_revision_id"),
@@ -386,6 +458,6 @@ async def result_surface_for_receipt(
         "native_summary": _typed_payload("bms.result-surface.native-summary.v1", _metadata_payload(payload)),
         "scientific_acceptance": scientific_acceptance,
         "provenance": _typed_payload("bms.result-surface.provenance.v1", provenance),
-        "comparison": {"state": "not_applicable", "reason": None, "authority": None},
-        "available_actions": [] if surface_kind == "unsupported" else ["open"],
+        "comparison": comparison,
+        "available_actions": available_actions,
     })

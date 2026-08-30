@@ -545,7 +545,7 @@ class FrustraMPNNEffectiveSettings(_StrictFrozenModel):
             self.requested_settings.classification_policy
         ):
             raise ValueError("threshold policy SHA-256 does not match requested settings")
-        if self.value_sources != settings_value_sources(self.settings_value_origin):
+        if self.value_sources != effective_settings_value_sources(self.requested_settings):
             raise ValueError("settings value-source metadata does not match requested values")
         _, inventory_sha256 = load_capability_inventory()
         if self.capability_inventory_byte_sha256 != inventory_sha256:
@@ -860,6 +860,22 @@ def settings_value_sources(
     )
 
 
+def effective_settings_value_sources(
+    requested: FrustraMPNNRequestedSettings,
+) -> FrustraMPNNSettingsValueSources:
+    """Resolve field authority for current and historical requested settings."""
+
+    sources = settings_value_sources(requested.settings_value_origin)
+    if requested.schema_version == 1:
+        return sources.model_copy(
+            update={
+                "batching_enabled": "bms_default",
+                "structures_per_job": "bms_default",
+            }
+        )
+    return sources
+
+
 def load_capability_inventory() -> tuple[dict[str, Any], str]:
     """Validate Phase 0 inventory and return it with SHA-256 of exact file bytes."""
 
@@ -958,7 +974,7 @@ def _build_effective_settings(
         "resolution_identity": resolution_identity.model_dump(
             mode="json", exclude_none=False
         ),
-        "value_sources": settings_value_sources(requested.settings_value_origin).model_dump(
+        "value_sources": effective_settings_value_sources(requested).model_dump(
             mode="json", exclude_none=False
         ),
     }

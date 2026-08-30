@@ -1145,8 +1145,11 @@ class FrustraMpnnComparisonAdapter:
                 entity_id=row.comparison_id,
                 entity_kind=self.entity_kind,
                 label=f"{row.reference_parent_job_id} → {row.target_parent_job_id}"[:160],
-                canonical_state=str(row.status),
-                metadata={"compatibility_status": (row.payload_json or {}).get("compatibility", {}).get("status")},
+                canonical_state="immutable",
+                metadata={
+                    "compatibility_status": (row.payload_json or {}).get("compatibility", {}).get("status"),
+                    "comparison_status": str(row.status),
+                },
             )
             for row in rows
         ]
@@ -1161,6 +1164,15 @@ class FrustraMpnnComparisonAdapter:
         compatibility = row.payload_json.get("compatibility")
         if not isinstance(compatibility, dict) or compatibility.get("status") not in {"comparable", "incompatible"}:
             raise AdapterError("source_contract_invalid", "FrustraMPNN compatibility receipt is invalid")
+        reference_landscape_sha256 = _sha256(
+            row.reference_landscape_sha256,
+            "FrustraMPNN reference landscape digest",
+        )
+        target_landscape_sha256 = _sha256(
+            row.target_landscape_sha256,
+            "FrustraMPNN target landscape digest",
+        )
+
         return _receipt(
             self,
             entity_id=row.comparison_id,
@@ -1172,8 +1184,11 @@ class FrustraMpnnComparisonAdapter:
                 frustrampnn_invocation_id=row.reference_invocation_id,
             ),
             metadata={
-                "canonical_state": str(row.status),
+                "canonical_state": "immutable",
+                "comparison_status": str(row.status),
                 "compatibility": compatibility,
+                "reference_landscape_sha256": reference_landscape_sha256,
+                "target_landscape_sha256": target_landscape_sha256,
                 "reference_parent_job_id": row.reference_parent_job_id,
                 "reference_invocation_id": row.reference_invocation_id,
                 "target_parent_job_id": row.target_parent_job_id,
@@ -3288,7 +3303,15 @@ class TypedCoreJobResultAdapter:
 
     async def search(self, core_session: AsyncSession, *, query: str, limit: int) -> list[EntityProjection]:
         normalized = _search_inputs(query, limit)
-        statement = select(Job).where(Job.model_id == self.model_id)
+        statement = (
+            select(Job)
+            .join(Design, Design.job_id == Job.id)
+            .where(
+                Job.model_id == self.model_id,
+                Job.status.in_(("completed", "succeeded")),
+            )
+            .distinct()
+        )
         if normalized:
             pattern = f"%{normalized}%"
             statement = statement.where(or_(Job.id.ilike(pattern), Job.name.ilike(pattern)))
@@ -3305,16 +3328,46 @@ class TypedCoreJobResultAdapter:
         job = await core_session.get(Job, entity_id)
         if job is None or job.model_id != self.model_id:
             raise AdapterError("entity_not_found", "typed core Job does not exist for this adapter")
-        if str(job.status).lower() not in {"completed", "succeeded", "failed", "cancelled", "canceled"}:
-            raise AdapterError("source_contract_unavailable", "typed core Job is not terminal")
+        if str(job.status).lower() not in {"completed", "succeeded"}:
+            raise AdapterError(
+                "source_contract_unavailable",
+                "typed core Job has no successful producer-native result authority",
+            )
+        designs = list(
+            (
+                await core_session.scalars(
+                    select(Design)
+                    .where(Design.job_id == job.id)
+                    .order_by(Design.id)
+                    .limit(1001)
+                )
+            ).all()
+        )
+        if not designs or len(designs) > 1000:
+            raise AdapterError(
+                "source_contract_unavailable",
+                "typed core Job has no bounded producer-native Design result set",
+            )
+        design_adapter = CoreProteinResultAdapter()
+        verified_designs = [
+            await design_adapter.verify(core_session, design.id)
+            for design in designs
+        ]
+        artifact_authority = [
+            {
+                "design_id": receipt["entity_id"],
+                "entity_revision_id": receipt["entity_revision_id"],
+                "content_digest": receipt["content_digest"],
+                "contract_digest": receipt["contract_digest"],
+            }
+            for receipt in verified_designs
+        ]
         authority = {
             "job_id": job.id,
             "model_id": job.model_id,
             "mode": job.mode,
             "status": job.status,
-            "params_sha256": _canonical_json_sha256(dict(job.params or {})),
-            "stage_outputs": job.stage_outputs or {},
-            "provenance": job.provenance or {},
+            "artifacts": artifact_authority,
         }
         content_digest = _canonical_json_sha256(authority)
         return _receipt(
@@ -3322,12 +3375,14 @@ class TypedCoreJobResultAdapter:
             entity_id=job.id,
             content_digest=content_digest,
             contract_digest=_canonical_json_sha256({"model_id": job.model_id, "mode": job.mode, "params": job.params or {}}),
-            reopen_uri=f"/jobs/{job.id}",
+            reopen_uri=f"/designs/{job.id}",
             metadata={
                 "canonical_state": str(job.status),
                 "job_status": str(job.status),
                 "model_id": job.model_id,
                 "mode": job.mode,
+                "artifact_count": len(artifact_authority),
+                "artifact_authority": "verified_producer_design_receipts",
                 "result_contract_id": "typed_core_job_result_v1",
             },
         )

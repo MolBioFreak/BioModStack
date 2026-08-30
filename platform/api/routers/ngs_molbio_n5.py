@@ -61,6 +61,14 @@ from services.ngs_molbio_runtime_status import (
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
 from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
 from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
+from services.global_experiments.project_datasets import (
+    InvalidProteinDatasetLifecycle,
+    create_protein_dataset,
+    protein_dataset_kind_records,
+    require_protein_domain_hierarchy,
+    revise_protein_dataset,
+    set_protein_dataset_lifecycle,
+)
 from services.ngs_molbio_n5 import (
     InvalidLifecycleTransition,
     create_project_dataset,
@@ -146,7 +154,7 @@ def _error(exc: ExperimentServiceError) -> HTTPException:
         return HTTPException(404, detail={"code": "not_found", "message": message})
     if isinstance(exc, IdempotencyConflict):
         return HTTPException(409, detail={"code": "idempotency_conflict", "message": message})
-    if isinstance(exc, InvalidLifecycleTransition):
+    if isinstance(exc, (InvalidLifecycleTransition, InvalidProteinDatasetLifecycle)):
         return HTTPException(409, detail={"code": "invalid_lifecycle_transition", "message": message})
     if isinstance(exc, RevisionConflict):
         return HTTPException(409, detail={"code": "stale_generation", "message": message})
@@ -203,6 +211,28 @@ def _member_doc(row: ExperimentDatasetRevisionMember) -> dict[str, Any]:
     return {**value, "canonical_member_sha256": row.content_sha256, "size_bytes": row.size_bytes}
 
 
+async def _dataset_domain_kind(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+) -> str:
+    try:
+        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        return "ngs_molbio"
+    except ValidationFailure as exc:
+        if str(exc) != "unsupported_dataset_kind":
+            raise
+    await require_protein_domain_hierarchy(
+        session,
+        project_id=project_id,
+        experiment_id=experiment_id,
+        domain_id=domain_id,
+    )
+    return "protein_in_silico"
+
+
 @router.get(D + "/dataset-kinds")
 async def list_dataset_kinds(
     project_id: str,
@@ -211,8 +241,14 @@ async def list_dataset_kinds(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-        registry_document, enabled_records = enabled_dataset_kind_records()
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        registry_document, enabled_records = (
+            protein_dataset_kind_records()
+            if domain_kind == "protein_in_silico"
+            else enabled_dataset_kind_records()
+        )
         items = [
             {
                 "dataset_kind": row["dataset_kind"],
@@ -240,7 +276,9 @@ async def list_dataset_kinds(
 @router.get(D + "/datasets")
 async def list_datasets(project_id: str, experiment_id: str, domain_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         scope = f"datasets:{project_id}:{experiment_id}:{domain_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
         statement = select(ExperimentAggregateHead).where(ExperimentAggregateHead.aggregate_kind == "dataset", ExperimentAggregateHead.workspace_id == project_id, ExperimentAggregateHead.parent_id == domain_id).order_by(ExperimentAggregateHead.created_at.desc(), ExperimentAggregateHead.aggregate_id.desc()).limit(limit + 1)
@@ -259,7 +297,11 @@ async def create_dataset_route(project_id: str, experiment_id: str, domain_id: s
     payload = await _body(request, DatasetCreate, 64 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await create_project_dataset(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, actor=actor, idempotency_key=_key(request), **payload.model_dump())
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        create_dataset = create_protein_dataset if domain_kind == "protein_in_silico" else create_project_dataset
+        result = await create_dataset(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, actor=actor, idempotency_key=_key(request), **payload.model_dump())
         await session.commit()
         return _bounded_response(result)
     except ExperimentServiceError as exc:
@@ -270,7 +312,9 @@ async def create_dataset_route(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}")
 async def get_dataset_route(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         head = await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
         return _bounded_response({"schema": "bms.dataset-head.v1", "project_id": project_id, "global_experiment_id": experiment_id, "domain_id": domain_id, "dataset_id": dataset_id, "name": head.display_name, "dataset_kind": head.dataset_kind, "current_revision_id": head.current_revision_id, "head_generation": head.head_generation, "lifecycle_state": head.lifecycle_state, "created_at": head.created_at, "updated_at": head.updated_at})
     except ExperimentServiceError as exc:
@@ -289,7 +333,11 @@ async def archive_dataset_route(
     payload = await _body(request, DatasetLifecycleRequest, 16 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await set_project_dataset_lifecycle(
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        set_lifecycle = set_protein_dataset_lifecycle if domain_kind == "protein_in_silico" else set_project_dataset_lifecycle
+        result = await set_lifecycle(
             session,
             project_id=project_id,
             experiment_id=experiment_id,
@@ -320,7 +368,11 @@ async def restore_dataset_route(
     payload = await _body(request, DatasetLifecycleRequest, 16 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await set_project_dataset_lifecycle(
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        set_lifecycle = set_protein_dataset_lifecycle if domain_kind == "protein_in_silico" else set_project_dataset_lifecycle
+        result = await set_lifecycle(
             session,
             project_id=project_id,
             experiment_id=experiment_id,
@@ -345,7 +397,11 @@ async def revise_dataset_route(project_id: str, experiment_id: str, domain_id: s
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
         body = payload.model_dump(mode="json")
-        result = await revise_project_dataset(session, core_session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, dataset_id=dataset_id, actor=actor, idempotency_key=_key(request), **body)
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        revise_dataset = revise_protein_dataset if domain_kind == "protein_in_silico" else revise_project_dataset
+        result = await revise_dataset(session, core_session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, dataset_id=dataset_id, actor=actor, idempotency_key=_key(request), **body)
         await session.commit()
         return _bounded_response(result)
     except ExperimentServiceError as exc:
@@ -356,7 +412,9 @@ async def revise_dataset_route(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}/revisions")
 async def list_dataset_revisions(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
         scope = f"dataset-revisions:{project_id}:{domain_id}:{dataset_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
@@ -382,7 +440,9 @@ async def _exact_revision(session: AsyncSession, *, project_id: str, domain_id: 
 @router.get(D + "/datasets/{dataset_id}/revisions/{revision_id}")
 async def get_dataset_revision(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, revision_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         revision = await _exact_revision(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id, revision_id=revision_id)
         rows = list((await session.scalars(select(ExperimentDatasetRevisionMember).where(ExperimentDatasetRevisionMember.revision_id == revision_id).order_by(ExperimentDatasetRevisionMember.ordinal).limit(101))).all())
         result = {"schema": "bms.dataset-revision.v1", "dataset_id": dataset_id, "revision_id": revision_id, "revision_number": revision.revision_number, "parent_revision_id": revision.parent_revision_id, "revision_sha256": revision.payload_sha256, "member_count": len(json.loads(revision.canonical_payload).get("members", [])), "created_at": revision.created_at}
@@ -398,7 +458,9 @@ async def get_dataset_revision(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}/revisions/{revision_id}/members")
 async def list_dataset_members(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, revision_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=100, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         await _exact_revision(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id, revision_id=revision_id)
         scope = f"dataset-members:{project_id}:{domain_id}:{revision_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
