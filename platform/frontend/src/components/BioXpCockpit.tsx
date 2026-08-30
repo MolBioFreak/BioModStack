@@ -249,10 +249,14 @@ export function BioXpCockpit() {
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const dashboardMotion = dashboard?.motion;
-    const motionLabel = dashboardMotion
-        ? dashboardMotion.enabled ? 'Enabled — Z provider ready; each command verifies live controller state' : `Blocked${dashboardMotion.reason ? ` — ${dashboardMotion.reason}` : ''}`
-        : 'Unavailable';
+    const motionControlsAvailable = currentCatalogV2 === undefined
+        ? undefined
+        : currentCatalogV2.actions.some((action) => action.interrupt === false && action.enabled === true);
+    const motionLabel = motionControlsAvailable === true
+        ? 'Available — exact recovered-OEM controls admitted'
+        : motionControlsAvailable === false
+            ? `Blocked${dashboard?.motion.reason ? ` — ${dashboard.motion.reason}` : ''}`
+            : 'Updating';
     const recentCommands = useMemo(
         () => (!linkConnected || historyQuery.isError ? [] : (historyQuery.data?.receipts ?? [])).filter((record) => typeof record.status === 'string' && typeof record.action_id === 'string').slice(0, historyLimit),
         [historyQuery.data?.receipts, historyQuery.isError, linkConnected, historyLimit],
@@ -674,7 +678,7 @@ export function BioXpCockpit() {
                     </div>
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Motion</dt>
-                        <dd className={`mt-1 break-words ${dashboardMotion?.enabled === false ? 'text-amber-200' : 'text-slate-100'}`}>{motionLabel}</dd>
+                        <dd className={`mt-1 break-words ${motionControlsAvailable === false ? 'text-amber-200' : 'text-slate-100'}`}>{motionLabel}</dd>
                     </div>
                     <div className="rounded bg-slate-900/70 p-3">
                         <dt className="text-slate-400">Connection generation</dt>
@@ -731,6 +735,7 @@ export function BioXpCockpit() {
                 data={dashboard}
                 isLoading={dashboardQuery.isLoading}
                 error={dashboardQuery.error}
+                motionControlsAvailable={motionControlsAvailable}
             />
 
             <BioXpOperatorReports generation={generation} connected={linkConnected} />
