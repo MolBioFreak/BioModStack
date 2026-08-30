@@ -1215,9 +1215,9 @@ export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enable
     queryFn: async () => (await api.get<BioXpOperatorDashboardV2>('/api/bioxp/operator-controls/v2/dashboard')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
-    staleTime: 2_000,
+    staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1230,9 +1230,9 @@ export const useBioXpOperatorControlCatalogV2 = (
     queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
-    staleTime: 2_000,
+    staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
     refetchIntervalInBackground: false,
 });
 

@@ -14,7 +14,6 @@ import {
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
     useBioXpOperatorDashboard,
-    useBioXpOperatorDashboardV2,
     useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
     useInterruptBioXpOperatorActionV1,
@@ -162,25 +161,20 @@ export function BioXpCockpit() {
     const generation = connection?.generation ?? 0;
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
     const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
-    const dashboardV2Query = useBioXpOperatorDashboardV2(generation, robotControlReady);
-    const currentDashboardV2 = robotControlReady && dashboardV2Query.error == null && !dashboardV2Query.isStale
-        ? dashboardV2Query.data
-        : undefined;
-    const dashboardAuthorityVersion = currentDashboardV2 === undefined ? null : 'fresh-v2-dashboard';
     const catalogV2Query = useBioXpOperatorControlCatalogV2(
         generation,
-        linkConnected,
-        dashboardAuthorityVersion,
+        robotControlReady,
+        robotControlReady ? 'current-robot-control' : null,
     );
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
     const [yStepInput, setYStepInput] = useState(1000);
     const [yTargetInput, setYTargetInput] = useState(0);
-    const currentCatalogV2 = linkConnected && catalogV2Query.error == null && !catalogV2Query.isStale
+    const currentCatalogV2 = robotControlReady && catalogV2Query.error == null
         ? catalogV2Query.data
         : undefined;
-    const v2AuthorityCoherent = currentDashboardV2 !== undefined
-        && currentCatalogV2 !== undefined;
+    const currentDashboardV2 = currentCatalogV2?.dashboard;
+    const v2AuthorityCoherent = currentCatalogV2 !== undefined;
     const yAxisV2 = v2AuthorityCoherent ? currentDashboardV2?.y_axis : undefined;
     const yReceiptCommandId = yCommandId
         ?? yAxisV2?.active_command?.command_id
@@ -355,7 +349,7 @@ export function BioXpCockpit() {
     const zAbsoluteMaximum = integerMaximum(zAbsoluteInput);
 
     const v2ActionDisabledReason = (actionId: string): string | null => {
-        if (!v2AuthorityCoherent) return 'Fresh v2 catalog or dashboard authority is unavailable.';
+        if (!v2AuthorityCoherent) return 'Current robot control state is unavailable.';
         const action = v2NormalActionById(actionId);
         if (!action) return 'Robot action unavailable.';
         return action.enabled === true ? null : action.disabled_reason ?? 'Robot action unavailable.';
@@ -848,7 +842,6 @@ export function BioXpCockpit() {
                         )}
                         {interruptYStop.data && <details className="mt-2 text-xs"><summary>Latest independent Y STOP receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(interruptYStop.data, null, 2)}</pre></details>}
                         {yReceiptQuery.error && <p role="alert" className="mt-2 text-sm text-red-300">Y receipt unavailable: {bioXpErrorText(yReceiptQuery.error)}</p>}
-                        {!v2AuthorityCoherent && <p className="mt-2 text-xs text-amber-200">Fresh v2 catalog or dashboard authority is unavailable. Normal Y controls remain disabled; addressed STOP remains independent.</p>}
                     </article>
                     <article data-testid="serial206-xy-oem-panel" style={{ order: 1 }} className="rounded-lg border border-cyan-700/60 bg-cyan-950/20 p-3 lg:col-span-2">
                         <h3 className="font-semibold">Combined XY Capability</h3>

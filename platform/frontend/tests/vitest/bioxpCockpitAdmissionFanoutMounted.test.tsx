@@ -1081,13 +1081,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"dispatch_state"');
     });
 
-    it.each([
-        ['dashboard error', () => { state.v2Dashboard.error = new Error('dashboard query failed'); }],
-        ['dashboard stale', () => { state.v2Dashboard.isStale = true; }],
-        ['catalog error', () => { state.v2Catalog.error = new Error('catalog query failed'); }],
-        ['catalog stale', () => { state.v2Catalog.isStale = true; }],
-    ])('fails normal Y closed for an isolated %s condition', async (_label, applyFault) => {
-        applyFault();
+    it('fails normal Y closed when current robot control state is unavailable', async () => {
+        state.v2Catalog.error = new Error('catalog query failed');
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
@@ -1096,10 +1091,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
-        expect(section.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable');
+        expect(section.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
 
-    it('disables Z normal controls when fresh v2 authority is unavailable instead of rendering dead controls', async () => {
+    it('disables Z normal controls when current robot control state is unavailable instead of rendering dead controls', async () => {
         state.catalog.data.actions.push({
             ...xAbsoluteAction(),
             action_id: 'oem.z.move_absolute',
@@ -1107,7 +1102,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             disabled_reason: null,
             inputs: [{ name: 'position_steps', type: 'integer', required: true, minimum: 0, maximum: 160000 }],
         });
-        state.v2Dashboard.isStale = true;
+        state.v2Catalog.error = new Error('catalog query failed');
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
