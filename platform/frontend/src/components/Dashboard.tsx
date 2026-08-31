@@ -15,6 +15,7 @@ import { StructureReorchestratePanel } from './dashboard/StructureReorchestrateP
 import {
     buildStructureReorchestrateOverrides,
     deriveStructureReorchestrateSettings,
+    isLegacyRf3StructureJob,
     isStructureReorchestrateJob,
     type StructureReorchestrateSettings,
 } from './dashboard/reorchestrateStructureSettings';
@@ -273,6 +274,11 @@ export function Dashboard() {
         } catch (error) {
             const apiError = error as UntypedApiValue;
             alert(`Could not load full job settings: ${apiError.response?.data?.detail || apiError.message}`);
+            return;
+        }
+
+        if (isLegacyRf3StructureJob(detailedJob)) {
+            alert('RF3 is available for historical result review only. New Structure submissions and retries use current predictors.');
             return;
         }
 

@@ -12,7 +12,6 @@ interface StructureReorchestratePanelProps {
 const predictorLabel: Record<StructurePredictor, string> = {
     boltz: 'Boltz-2',
     fold_cp: 'NVIDIA Fold-CP',
-    rf3: 'RoseTTAFold 3',
     protenix: 'Protenix',
     esmfold2: 'ESMFold2',
 };
@@ -42,9 +41,6 @@ export function StructureReorchestratePanel({
         update({ boltzCp: { ...settings.boltzCp, ...patch } });
     };
 
-    const updateRf3 = (patch: Partial<StructureReorchestrateSettings['rf3']>) => {
-        update({ rf3: { ...settings.rf3, ...patch } });
-    };
 
     const updateProtenix = (patch: Partial<StructureReorchestrateSettings['protenix']>) => {
         update({ protenix: { ...settings.protenix, ...patch } });
@@ -324,38 +320,6 @@ export function StructureReorchestratePanel({
                 </div>
             )}
 
-            {settings.predictors.includes('rf3') && (
-                <div className={sectionClass}>
-                    <div>
-                        <h3 className="text-base font-semibold text-slate-100">RoseTTAFold 3 settings</h3>
-                        <p className="mt-1 text-sm text-slate-400">Expose only the RF3 knobs that matter for this retry.</p>
-                    </div>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <label className="text-sm text-slate-300">
-                            Recycle iterations
-                            <input
-                                type="number"
-                                min={1}
-                                value={settings.rf3.numRecycles}
-                                onChange={(event) => updateRf3({ numRecycles: toPositiveInteger(event.target.value, settings.rf3.numRecycles) })}
-                                className={numberInputClass}
-                                disabled={disabled}
-                            />
-                        </label>
-                        <label className="text-sm text-slate-300">
-                            Num samples
-                            <input
-                                type="number"
-                                min={1}
-                                value={settings.rf3.numSamples}
-                                onChange={(event) => updateRf3({ numSamples: toPositiveInteger(event.target.value, settings.rf3.numSamples) })}
-                                className={numberInputClass}
-                                disabled={disabled}
-                            />
-                        </label>
-                    </div>
-                </div>
-            )}
 
             {settings.predictors.includes('protenix') && (
                 <div className={sectionClass}>

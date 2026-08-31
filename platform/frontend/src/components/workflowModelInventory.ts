@@ -27,7 +27,7 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'structure_prediction',
         label: 'Structure Prediction',
-        modelTopics: ['boltz2', 'fold_cp', 'rf3', 'protenix', 'esmfold2', 'frustrampnn'],
+        modelTopics: ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn'],
         sourceFiles: [
             'platform/api/config/templates/structure_prediction.yaml',
             'platform/api/config/models/boltz_cp_experimental.yaml',

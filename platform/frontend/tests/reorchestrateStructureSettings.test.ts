@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
     buildStructureReorchestrateOverrides,
     deriveStructureReorchestrateSettings,
+    isLegacyRf3StructureJob,
     isStructureReorchestrateJob,
 } from '../src/components/dashboard/reorchestrateStructureSettings.js';
 
@@ -120,7 +121,7 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
     });
 });
 
-test('marks multi-predictor structure jobs as relevant and exposes only the active model families', () => {
+test('recognizes legacy RF3 ensemble jobs without reopening their retry surface', () => {
     const job = {
         model_id: 'boltz2',
         mode: 'predict',
@@ -133,13 +134,11 @@ test('marks multi-predictor structure jobs as relevant and exposes only the acti
         },
     };
 
-    const settings = deriveStructureReorchestrateSettings(job);
-    assert.equal(isStructureReorchestrateJob(job), true);
-    assert.deepEqual(settings.predictors, ['boltz', 'rf3', 'protenix']);
-    assert.equal(settings.skipMsa, false);
+    assert.equal(isLegacyRf3StructureJob(job), true);
+    assert.equal(isStructureReorchestrateJob(job), false);
 });
 
-test('normalizes legacy complex all runs to boltz plus protenix for re-orchestration', () => {
+test('preserves historical complex all semantics as Boltz plus Protenix', () => {
     const job = {
         model_id: 'boltz2',
         mode: 'complex',
@@ -151,8 +150,9 @@ test('normalizes legacy complex all runs to boltz plus protenix for re-orchestra
     };
 
     const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(isLegacyRf3StructureJob(job), false);
+    assert.equal(isStructureReorchestrateJob(job), true);
     assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
-    assert.equal(settings.msaProvider, 'colabfold_api');
 });
 
 test('uses the 200-step Boltz default when retry metadata omitted sampling steps', () => {

@@ -4,6 +4,7 @@ import {
     deriveBoltzCpGpuLaunchSettings,
     getBoltzQualityPresetValues,
     getPredictorFamiliesForSelection,
+
     normalizeMsaTargetShardMinSizeGb,
     normalizeMsaTargetShardMode,
     normalizeMsaTargetShards,
@@ -46,11 +47,7 @@ export interface StructureReorchestrateSettings {
         writeFullPae: boolean;
         seed: string;
     };
-    rf3: {
-        useMsa: boolean;
-        numRecycles: number;
-        numSamples: number;
-    };
+
     protenix: {
         useMsa: boolean;
         modelWeights: string;
@@ -87,11 +84,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
         writeFullPae: false,
         seed: '',
     },
-    rf3: {
-        useMsa: true,
-        numRecycles: 10,
-        numSamples: 1,
-    },
+
     protenix: {
         useMsa: true,
         modelWeights: 'protenix-v2',
@@ -102,7 +95,7 @@ const DEFAULTS: StructureReorchestrateSettings = {
     },
 };
 
-const PREDICTOR_ORDER: StructurePredictor[] = ['boltz', 'rf3', 'protenix'];
+const PREDICTOR_ORDER: StructurePredictor[] = ['boltz', 'fold_cp', 'protenix', 'esmfold2'];
 
 const toBoolean = (value: unknown, fallback: boolean): boolean => {
     if (typeof value === 'boolean') return value;
@@ -161,9 +154,6 @@ const hasPredictorHints = (params: Record<string, unknown>, predictor: Structure
             'boltz_use_potentials',
         ].some((key) => key in params);
     }
-    if (predictor === 'rf3') {
-        return ['rf3_use_msa', 'rf3_num_recycles', 'rf3_num_samples'].some((key) => key in params);
-    }
     return [
         'protenix_use_msa',
         'protenix_model_weights',
@@ -202,6 +192,12 @@ const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
     const params = job.params || {};
     const explicit = String(params.pred_method || '').trim().toLowerCase();
     const predictionMode: StructurePredictionMode = String(job.mode || '').trim().toLowerCase() === 'complex' ? 'complex' : 'predict';
+    if (predictionMode === 'complex' && (explicit === 'both' || explicit === 'all')) {
+        return ['boltz', 'protenix'];
+    }
+    if (isLegacyRf3StructureJob(job)) {
+        return [];
+    }
     if (explicit) {
         const explicitPredictors = getPredictorFamiliesForSelection(predictionMode, explicit);
         if (explicitPredictors.length > 0) {
@@ -217,18 +213,31 @@ const resolvePredictors = (job: StructureRetryJob): StructurePredictor[] => {
     if (validator.includes('boltz') || modelId.includes('boltz') || hasPredictorHints(params, 'boltz')) {
         hinted.add('boltz');
     }
-    if (validator.includes('rf3') || modelId.includes('rf3') || hasPredictorHints(params, 'rf3')) {
-        hinted.add('rf3');
-    }
     if (validator.includes('protenix') || modelId.includes('protenix') || hasPredictorHints(params, 'protenix')) {
         hinted.add('protenix');
     }
+    if (isBoltzCpLaunch(job)) {
+        hinted.add('fold_cp');
+    }
+    if (validator.includes('esmfold2') || modelId.includes('esmfold2')) {
+        hinted.add('esmfold2');
+    }
 
     const hintedPredictors = PREDICTOR_ORDER.filter((predictor) => hinted.has(predictor));
-    if (predictionMode === 'complex') {
-        return hintedPredictors.filter((predictor) => predictor !== 'rf3');
-    }
     return hintedPredictors;
+};
+
+export const isLegacyRf3StructureJob = (job: StructureRetryJob): boolean => {
+    const params = job.params || {};
+    const explicit = String(params.pred_method || '').trim().toLowerCase();
+    const predictionMode: StructurePredictionMode = String(job.mode || '').trim().toLowerCase() === 'complex' ? 'complex' : 'predict';
+    const validator = String(params.structure_validator || '').trim().toLowerCase();
+    const modelId = String(job.model_id || '').trim().toLowerCase();
+    return explicit === 'rf3'
+        || (predictionMode === 'predict' && (explicit === 'both' || explicit === 'all'))
+        || validator.includes('rf3')
+        || modelId.includes('rf3')
+        || ['rf3_use_msa', 'rf3_num_recycles', 'rf3_num_samples'].some((key) => key in params);
 };
 
 export const isStructureReorchestrateJob = (job: StructureRetryJob): boolean => resolvePredictors(job).length > 0;
@@ -265,11 +274,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
             writeFullPae: toBoolean(params.bcp_write_full_pae ?? params.write_full_pae, DEFAULTS.boltzCp.writeFullPae),
             seed: normalizeBoltzCpSeed(params.bcp_seed ?? params.seed),
         },
-        rf3: {
-            useMsa: toBoolean(params.rf3_use_msa, DEFAULTS.rf3.useMsa),
-            numRecycles: toInteger(params.rf3_num_recycles, DEFAULTS.rf3.numRecycles),
-            numSamples: toInteger(params.rf3_num_samples, DEFAULTS.rf3.numSamples),
-        },
+
         protenix: {
             useMsa: toBoolean(params.protenix_use_msa, DEFAULTS.protenix.useMsa),
             modelWeights: normalizeProtenixModel(typeof params.protenix_model_weights === 'string' ? params.protenix_model_weights : undefined),
@@ -281,9 +286,9 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
     };
 
     const activeUseMsa = settings.predictors.map((predictor) => {
-        if (predictor === 'boltz') return settings.boltz.useMsa;
-        if (predictor === 'rf3') return settings.rf3.useMsa;
-        return settings.protenix.useMsa;
+        if (predictor === 'boltz' || predictor === 'fold_cp') return settings.boltz.useMsa;
+        if (predictor === 'protenix') return settings.protenix.useMsa;
+        return false;
     });
     settings.skipMsa = activeUseMsa.length > 0 && activeUseMsa.every((value) => value === false);
 
@@ -294,6 +299,9 @@ export const buildStructureReorchestrateOverrides = (
     job: StructureRetryJob,
     next: StructureReorchestrateSettings,
 ): Record<string, unknown> => {
+    if (isLegacyRf3StructureJob(job)) {
+        throw new Error('RF3 is retained for historical result review only and cannot be retried.');
+    }
     const previous = deriveStructureReorchestrateSettings(job);
     const overrides: Record<string, unknown> = {};
 
@@ -365,11 +373,6 @@ export const buildStructureReorchestrateOverrides = (
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);
     }
 
-    if (next.predictors.includes('rf3')) {
-        maybeSet('rf3_use_msa', next.skipMsa ? false : previous.rf3.useMsa, previous.rf3.useMsa);
-        maybeSet('rf3_num_recycles', next.rf3.numRecycles, previous.rf3.numRecycles);
-        maybeSet('rf3_num_samples', next.rf3.numSamples, previous.rf3.numSamples);
-    }
 
     if (next.predictors.includes('protenix')) {
         maybeSet('protenix_use_msa', next.skipMsa ? false : previous.protenix.useMsa, previous.protenix.useMsa);

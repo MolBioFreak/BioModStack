@@ -5,7 +5,10 @@ import {
 
 export type StructurePredictionMode = 'predict' | 'complex';
 export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'protenix' | 'esmfold2';
+export type LegacyStructurePredictorFamily = 'rf3';
+export type LegacyStructurePredictorSelection = LegacyStructurePredictorFamily | 'both' | 'all';
 export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'boltz_protenix';
+export type StructurePredictorRequest = StructurePredictorSelection | LegacyStructurePredictorSelection;
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
@@ -25,7 +28,7 @@ export interface StructurePredictorOption {
 }
 
 export interface ResolvedStructurePredictorSelection {
-    requestedSelection: StructurePredictorSelection;
+    requestedSelection: StructurePredictorRequest;
     canonicalSelection: StructurePredictorSelection;
     families: StructurePredictorFamily[];
     valid: boolean;
@@ -385,8 +388,18 @@ const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
 ];
 
-const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
+export const isLegacyStructurePredictorSelection = (
+    value: string | null | undefined,
+): value is LegacyStructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'rf3' || normalized === 'both' || normalized === 'all';
+};
+
+const toPredictorSelection = (value: string | null | undefined): StructurePredictorRequest => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (isLegacyStructurePredictorSelection(normalized)) {
+        return normalized;
+    }
     if (normalized === 'boltz_api' || normalized === 'fold_cp' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'boltz_protenix') {
         return normalized;
     }
@@ -402,6 +415,16 @@ export const resolveStructurePredictorSelection = (
     selection: StructurePredictorSelection | string | null | undefined,
 ): ResolvedStructurePredictorSelection => {
     const requestedSelection = toPredictorSelection(selection);
+
+    if (isLegacyStructurePredictorSelection(requestedSelection)) {
+        return {
+            requestedSelection,
+            canonicalSelection: 'boltz',
+            families: [],
+            valid: false,
+            error: 'RF3 is retained for historical result review only and cannot be submitted or retried.',
+        };
+    }
 
     if (mode === 'complex') {
         if (requestedSelection === 'fold_cp') {

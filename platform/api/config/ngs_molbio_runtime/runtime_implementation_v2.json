@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "8cedb29348ab1d01cc9be2db6ba17447c62b08c265273e9501bd257c04c71fb8",
+  "content_sha256": "be9247b0de034b0f475539b95fb0d45c3b55bb401d0960e8fc0b2f94976fb9e1",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -1167,8 +1167,8 @@
     "content_sha256": "4652d6f92ae02b714735fb1a47dcd34cc63fcb3ea0bdb4c5f74976d1d648f460",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "0195dd7f4fca67a5299bb8a0a7d29fbfdab0af69",
-  "successor_source_tree": "c356935a56bd0b63bc11864eecc87942de43c8a3",
+  "successor_source_commit": "cc2c7a7ed650f387b43b96f74122bcd978abe9d8",
+  "successor_source_tree": "0d8b5bf194ed39bf14669933fba827314e911ff8",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

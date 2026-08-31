@@ -11,7 +11,7 @@ description: >
 
 stages:
   - name: Structure Prediction
-    tool: Boltz-2 / NVIDIA Fold-CP
+    tool: Boltz-2 / NVIDIA Fold-CP / Boltz API / Protenix V2 / ESMFold2
     description: Run the selected predictor through the shared Structure launch surface.
   - name: Frustration Mapping
     tool: FrustraMPNN
@@ -27,10 +27,14 @@ user_params:
   - name: pred_method
     label: Structure Predictor
     type: enum
-    enum: [boltz, fold_cp]
+    enum: [boltz, fold_cp, boltz_api, protenix, esmfold2, boltz_protenix]
     enum_labels:
       boltz: Boltz-2 (Fast, SOTA accuracy)
       fold_cp: NVIDIA Fold-CP (OEM context parallelism)
+      boltz_api: Boltz API (Remote Boltz-2.1)
+      protenix: Protenix V2
+      esmfold2: ESMFold2
+      boltz_protenix: Boltz-2 + Protenix V2 (Complex only)
     default: boltz
     required: true
     description: Deep learning model for structure prediction
