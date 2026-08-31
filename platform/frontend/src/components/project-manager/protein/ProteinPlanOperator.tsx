@@ -27,7 +27,7 @@ interface ProteinPlanOperatorProps {
     inputDatasetRevisionIds: string[];
 }
 
-interface SchemaField {
+export interface SchemaField {
     name: string;
     title: string;
     type: 'string' | 'integer' | 'number' | 'boolean';
@@ -98,8 +98,12 @@ function initialValues(plan: DomainWorkflowPlanHead | undefined, fields: SchemaF
     return values;
 }
 
-function fieldError(field: SchemaField, value: JsonValue | undefined): string | null {
-    if (value === undefined || value === null || value === '') return field.required ? `${field.title} is required.` : null;
+export function fieldError(field: SchemaField, value: JsonValue | undefined): string | null {
+    if (value === undefined || value === null) return field.required ? `${field.title} is required.` : null;
+    if (value === '') {
+        if (field.type === 'string' && field.enumValues?.includes('')) return null;
+        return field.required ? `${field.title} is required.` : null;
+    }
     if (field.type === 'boolean' && typeof value !== 'boolean') return `${field.title} must be true or false.`;
     if ((field.type === 'integer' || field.type === 'number') && typeof value !== 'number') return `${field.title} must be numeric.`;
     if (field.type === 'integer' && !Number.isInteger(value)) return `${field.title} must be an integer.`;
