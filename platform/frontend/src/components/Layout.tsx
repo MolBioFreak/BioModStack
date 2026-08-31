@@ -148,16 +148,7 @@ async function collectUiDiagnosticsPayload(): Promise<UiDiagnosticsPayload> {
     });
 }
 
-const SHOW_SYSTEM_ANALYTICS_TAB_KEY = 'show_system_analytics_tab';
 const SHOW_DEV_FEATURES_KEY = 'show_dev_features';
-
-function readShowSystemAnalyticsTab(): boolean {
-    try {
-        return localStorage.getItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY) === 'true';
-    } catch {
-        return false;
-    }
-}
 
 function readShowDevFeatures(): boolean {
     try {
@@ -364,17 +355,13 @@ function useIsMobileTopbar(): boolean {
 
 interface TopbarUtilityControlsProps {
     showSystemMenus: boolean;
-    showSystemAnalyticsTab: boolean;
     showDevFeatures: boolean;
-    onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
     onSetShowDevFeatures: (enabled: boolean) => void;
 }
 
 function TopbarUtilityControls({
     showSystemMenus,
-    showSystemAnalyticsTab,
     showDevFeatures,
-    onSetShowSystemAnalyticsTab,
     onSetShowDevFeatures,
 }: TopbarUtilityControlsProps) {
     return (
@@ -384,9 +371,7 @@ function TopbarUtilityControls({
 
             {showSystemMenus && <MSAServerSettingsMenu />}
             <DebugMenu
-                showSystemAnalyticsTab={showSystemAnalyticsTab}
                 showDevFeatures={showDevFeatures}
-                onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
                 onSetShowDevFeatures={onSetShowDevFeatures}
             />
         </>
@@ -395,9 +380,7 @@ function TopbarUtilityControls({
 
 function MobileTopbarTools({
     showSystemMenus,
-    showSystemAnalyticsTab,
     showDevFeatures,
-    onSetShowSystemAnalyticsTab,
     onSetShowDevFeatures,
 }: TopbarUtilityControlsProps) {
     const [isOpen, setIsOpen] = useState(false);
@@ -471,9 +454,7 @@ function MobileTopbarTools({
                     <div className="grid grid-cols-1 gap-2 overflow-visible [&>div]:w-full [&>div>button]:w-full [&>div>button]:justify-center [&>button]:w-full [&>button]:justify-center">
                         <TopbarUtilityControls
                             showSystemMenus={showSystemMenus}
-                            showSystemAnalyticsTab={showSystemAnalyticsTab}
                             showDevFeatures={showDevFeatures}
-                            onSetShowSystemAnalyticsTab={onSetShowSystemAnalyticsTab}
                             onSetShowDevFeatures={onSetShowDevFeatures}
                         />
                     </div>
@@ -487,7 +468,6 @@ export function Layout({ children }: LayoutProps) {
     const location = useLocation();
     const isMobileTopbar = useIsMobileTopbar();
     const bmsFeatureState = useBmsFeatureState();
-    const [showSystemAnalyticsTab, setShowSystemAnalyticsTab] = useState<boolean>(() => readShowSystemAnalyticsTab());
     const [showDevFeatures, setShowDevFeatures] = useState<boolean>(() => readShowDevFeatures());
     const showBioXpDevFeature = isBmsFeatureVisible(bmsFeatureState, 'bioxp', showDevFeatures);
 
@@ -498,16 +478,7 @@ export function Layout({ children }: LayoutProps) {
     useEffect(() => {
         const activeTab = document.querySelector<HTMLElement>('[data-bms-primary-nav-active="true"]');
         activeTab?.scrollIntoView({ block: 'nearest', inline: 'center' });
-    }, [location.pathname, showSystemAnalyticsTab, showDevFeatures]);
-
-    const handleSetShowSystemAnalyticsTab = (enabled: boolean) => {
-        setShowSystemAnalyticsTab(enabled);
-        try {
-            localStorage.setItem(SHOW_SYSTEM_ANALYTICS_TAB_KEY, String(enabled));
-        } catch {
-            // Ignore localStorage failures and keep UI responsive.
-        }
-    };
+    }, [location.pathname, showDevFeatures]);
 
     const handleSetShowDevFeatures = (enabled: boolean) => {
         setShowDevFeatures(enabled);
@@ -560,9 +531,7 @@ export function Layout({ children }: LayoutProps) {
                             {isMobileTopbar && (
                                 <MobileTopbarTools
                                     showSystemMenus={showSystemMenus}
-                                    showSystemAnalyticsTab={showSystemAnalyticsTab}
                                     showDevFeatures={showDevFeatures}
-                                    onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
                                     onSetShowDevFeatures={handleSetShowDevFeatures}
                                 />
                             )}
@@ -658,20 +627,18 @@ export function Layout({ children }: LayoutProps) {
                                     Stats Toolkit
                                 </Link>
 
-                                {showSystemAnalyticsTab && (
-                                    <Link
-                                        to="/infra"
-                                        data-bms-primary-nav-active={isActive('/infra') ? 'true' : undefined}
-                                        className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                        style={{
-                                            backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                            color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                        }}
-                                        title="System Analytics"
-                                    >
-                                        System Analytics
-                                    </Link>
-                                )}
+                                <Link
+                                    to="/infra"
+                                    data-bms-primary-nav-active={isActive('/infra') ? 'true' : undefined}
+                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
+                                    style={{
+                                        backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
+                                        color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                                    }}
+                                    title="System Analytics"
+                                >
+                                    System Analytics
+                                </Link>
                                 {showBioXpDevFeature && (
                                     <Link
                                         to="/bioxp"
@@ -696,9 +663,7 @@ export function Layout({ children }: LayoutProps) {
                             >
                                 <TopbarUtilityControls
                                     showSystemMenus={showSystemMenus}
-                                    showSystemAnalyticsTab={showSystemAnalyticsTab}
                                     showDevFeatures={showDevFeatures}
-                                    onSetShowSystemAnalyticsTab={handleSetShowSystemAnalyticsTab}
                                     onSetShowDevFeatures={handleSetShowDevFeatures}
                                 />
                             </div>
@@ -963,14 +928,10 @@ function DiagnosticsMenu() {
 }
 
 function DebugMenu({
-    showSystemAnalyticsTab,
     showDevFeatures,
-    onSetShowSystemAnalyticsTab,
     onSetShowDevFeatures,
 }: {
-    showSystemAnalyticsTab: boolean;
     showDevFeatures: boolean;
-    onSetShowSystemAnalyticsTab: (enabled: boolean) => void;
     onSetShowDevFeatures: (enabled: boolean) => void;
 }) {
     const [isOpen, setIsOpen] = useState(false);
@@ -1056,15 +1017,6 @@ function DebugMenu({
                         </div>
 
                         <div className="p-2 border-b border-slate-700">
-                            <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
-                                <span className="text-sm text-slate-300">Show System Analytics tab</span>
-                                <input
-                                    type="checkbox"
-                                    checked={showSystemAnalyticsTab}
-                                    onChange={(event) => onSetShowSystemAnalyticsTab(event.target.checked)}
-                                    className="h-4 w-4"
-                                />
-                            </label>
                             <label className="flex items-center justify-between gap-3 px-2 py-2 rounded-lg hover:bg-slate-700/40 transition-colors">
                                 <span>
                                     <span className="block text-sm text-slate-300">Show dev tools</span>

@@ -27,7 +27,7 @@ from services.remote_execution.contracts import (
     RemoteResultManifest,
 )
 from services.remote_execution.transport import RemoteConnection, RemoteTransportError
-from services.remote_execution.vast import _normalize
+from services.remote_execution.vast import _fetch_owned_instances, _normalize
 from services.nextflow import apply_msa_manifest_to_child_jobs
 from tools import bms_remote_worker as worker
 
@@ -126,6 +126,50 @@ def test_vast_inventory_normalization_drops_provider_payload() -> None:
     })
     assert target.provider_instance_id == "123"
     assert target.raw == {}
+
+
+def test_vast_inventory_uses_current_v1_instances_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Headers:
+        @staticmethod
+        def get_content_type() -> str:
+            return "application/json"
+
+    class Response:
+        headers = Headers()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        @staticmethod
+        def read(_limit: int) -> bytes:
+            return b'{"instances":[],"success":true}'
+
+    class Opener:
+        @staticmethod
+        def open(request, timeout: int):
+            captured["url"] = request.full_url
+            captured["timeout"] = timeout
+            return Response()
+
+    monkeypatch.setenv("VAST_API_KEY", "test-key")
+    monkeypatch.delenv("BMS_VAST_API_BASE_URL", raising=False)
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: Opener())
+
+    inventory = _fetch_owned_instances()
+
+    assert captured == {
+        "url": "https://console.vast.ai/api/v1/instances/?owner=me",
+        "timeout": 15,
+    }
+    assert inventory.available is True
+    assert inventory.instances == []
 
 
 def test_transport_rejects_shell_unsafe_target_fields() -> None:

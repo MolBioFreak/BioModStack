@@ -48,6 +48,21 @@ test('NGS primary navigation clears unrelated page query state', () => {
     assert.ok(!ngsLink.includes('location.search'), 'NGS primary navigation must not inherit stale job or result query state');
 });
 
+test('System Analytics remains visible in primary navigation without a debug toggle', () => {
+    const source = layoutSource();
+    const linkIndex = source.indexOf('to="/infra"');
+    const linkStart = source.lastIndexOf('<Link', linkIndex);
+    const linkEnd = source.indexOf('</Link>', linkIndex);
+    const linkContext = source.slice(Math.max(0, linkStart - 120), linkEnd);
+    const debugStart = source.indexOf('function DebugMenu');
+    const debugEnd = source.indexOf('interface HardwarePowerLimits', debugStart);
+    const debugBlock = source.slice(debugStart, debugEnd);
+
+    assert.ok(linkIndex > 0 && linkStart > 0 && linkEnd > linkStart, 'System Analytics primary navigation link must exist');
+    assert.ok(!linkContext.includes('showSystemAnalyticsTab &&'), 'System Analytics navigation must not depend on a local debug preference');
+    assert.ok(!debugBlock.includes('Show System Analytics tab'), 'Debug menu must not hide an operator telemetry surface');
+});
+
 test('primary navigation rail is separate from utility menus so dropdowns are not clipped', () => {
     const source = layoutSource();
     const railStart = source.indexOf('<DragScrollRail');

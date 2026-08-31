@@ -12,7 +12,7 @@ from typing import Any
 
 from .contracts import DiscoveredExecutionTarget, ExecutionTargetInventoryResponse
 
-DEFAULT_API_BASE = "https://console.vast.ai/api/v0"
+DEFAULT_API_BASE = "https://console.vast.ai/api/v1"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 
