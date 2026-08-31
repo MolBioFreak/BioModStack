@@ -10,6 +10,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+CONFIG = REPO_ROOT / "nextflow.config"
 PROJECTOR = REPO_ROOT / "scripts" / "project_protein_design_metadata.py"
 WORKFLOW = REPO_ROOT / "workflows" / "protein_design.nf"
 
@@ -268,6 +269,18 @@ def test_projector_rejects_missing_duplicate_and_unmatched_metadata(
     assert completed.returncode == 2
     assert message in completed.stderr
     assert not (tmp_path / "all_designs.csv").exists()
+
+
+def test_pyrosetta_tasks_bind_the_managed_api_runtime_read_only() -> None:
+    config = CONFIG.read_text(encoding="utf-8")
+    pyrosetta_config = config.split("withLabel: pyrosetta_tools {", 1)[1].split(
+        "withLabel:", 1
+    )[0]
+
+    assert (
+        "--bind ${params.cm_api_runtime_dir}:${params.cm_api_runtime_dir}:ro"
+        in pyrosetta_config
+    )
 
 
 def test_workflow_schedules_terminal_metadata_binding_and_projection_before_publication() -> None:
