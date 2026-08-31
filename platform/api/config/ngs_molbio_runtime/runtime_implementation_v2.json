@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "fb212a7df86da5d992600bdd22b755ddfe6489350ecad58af636ed75f4ac6cca",
+  "content_sha256": "2beed7507d26bb6cb5b73041da9b4618940d41acd38dfc4a7cd8bacb48394a3e",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -169,8 +169,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "01e3156a761d802442ed3a4c7001a3ff9124f9a32260f72c5ba26cf30e71cf7f",
-      "size_bytes": 96807
+      "sha256": "9b1d3f8989967c82b084419617701173727c57177b14e69912162a75aa9c45f0",
+      "size_bytes": 96921
     },
     {
       "path": "platform/api/config/models/nanopore.yaml",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "bbbd02703c35d1e66d929ede41cc456cb61ed9a8",
-  "successor_source_tree": "bfc7acfe02920c462725dfac72420651d5e67811",
+  "successor_source_commit": "8c171f062306cfd01591018c158cb0a657e25b85",
+  "successor_source_tree": "6905780cf605f77f19ba153e6f9cb79114b30e54",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
