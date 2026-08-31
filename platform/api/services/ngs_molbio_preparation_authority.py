@@ -594,6 +594,36 @@ async def _current_hierarchy_revision_authority(
                 "expected_sha256": expected_sha256,
             }
         )
+    if head.aggregate_kind == "domain_experiment":
+        parent_head = await session.get(ExperimentAggregateHead, str(head.parent_id or ""))
+        parent_revision = (
+            await session.get(ExperimentRevision, str(parent_head.current_revision_id))
+            if parent_head is not None and parent_head.current_revision_id
+            else None
+        )
+        parent_identity = (
+            "parent_global_revision",
+            0,
+            str(parent_revision.resource_id if parent_revision is not None else ""),
+        )
+        parent_row = rows_by_identity.get(parent_identity)
+        if (
+            parent_head is None
+            or parent_head.aggregate_kind != "experiment"
+            or parent_head.workspace_id != project_id
+            or parent_head.parent_id != project_id
+            or parent_revision is None
+            or parent_revision.subject_id != parent_head.aggregate_id
+            or parent_revision.payload_sha256
+            != hashlib.sha256(parent_revision.canonical_payload.encode("utf-8")).hexdigest()
+            or parent_row is None
+            or parent_row.metadata_json != _canonical({"authority": "server_resolved"})
+            or parent_row.expected_sha256 != parent_revision.payload_sha256
+        ):
+            raise PreparationInputAuthorityError(
+                "current Domain parent Global revision authority diverges"
+            )
+        expected_identities.add(parent_identity)
     if set(rows_by_identity) != expected_identities:
         raise PreparationInputAuthorityError("current hierarchy revision dependencies are missing or extraneous")
 
