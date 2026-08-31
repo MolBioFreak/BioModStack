@@ -125,6 +125,11 @@ class BioXpConnectionService:
         if v2_enqueue_timeout_seconds <= 0 or interrupt_timeout_seconds <= 0:
             raise ValueError("BioXP request timeouts must be positive")
         self.active_probe_interval_seconds = active_probe_interval_seconds
+        self.snapshot_refresh_interval_seconds = (
+            max(20.0, active_probe_interval_seconds * 2.0)
+            if active_probe_interval_seconds is not None
+            else None
+        )
         self.v2_enqueue_timeout_seconds = v2_enqueue_timeout_seconds
         self.interrupt_timeout_seconds = interrupt_timeout_seconds
         self.clock = clock or _utcnow
@@ -822,7 +827,7 @@ class BioXpConnectionService:
             return
 
     def _start_snapshot_refresh_locked(self) -> None:
-        if self.active_probe_interval_seconds is None or self._client is None:
+        if self.snapshot_refresh_interval_seconds is None or self._client is None:
             return
         self._snapshot_refresh_task = asyncio.create_task(
             self._snapshot_refresh_loop(),
@@ -837,10 +842,10 @@ class BioXpConnectionService:
         task.cancel()
 
     async def _snapshot_refresh_loop(self) -> None:
-        assert self.active_probe_interval_seconds is not None
+        assert self.snapshot_refresh_interval_seconds is not None
         try:
             while True:
-                await asyncio.sleep(self.active_probe_interval_seconds)
+                await asyncio.sleep(self.snapshot_refresh_interval_seconds)
                 await self._snapshot_refresh_once()
         except asyncio.CancelledError:
             raise

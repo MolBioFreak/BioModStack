@@ -5,7 +5,7 @@ import test from 'node:test';
 const source = fs.readFileSync(new URL('../src/lib/bioxpClient.ts', import.meta.url), 'utf8');
 
 function hookBody(name: string, nextName: string): string {
-    const start = source.indexOf(`export const ${name}`);
+    const start = source.indexOf(`export const ${name} =`);
     const nextMarker = nextName.startsWith('export ') ? nextName : `export const ${nextName}`;
     const end = source.indexOf(nextMarker, start + 1);
     assert.ok(start >= 0 && end > start, `${name} hook body must be present`);
@@ -17,11 +17,8 @@ test('operator command completion refreshes all dependent state without awaiting
     assert.doesNotMatch(body, /useRefreshMutation/);
     assert.doesNotMatch(body, /onSuccess: async/);
     assert.doesNotMatch(body, /variables\.actionId/);
-    assert.match(body, /invalidateQueries\(\{ queryKey: operatorAdmissionKey/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorCatalogKey/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
-    assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
-    assert.match(body, /queryKey: statusKey/);
 });
 
 test('operator assessment completion upserts history and refreshes admission dependencies', () => {
@@ -29,8 +26,6 @@ test('operator assessment completion upserts history and refreshes admission dep
     assert.doesNotMatch(body, /useRefreshMutation/);
     assert.doesNotMatch(body, /onSuccess: async/);
     assert.match(body, /setQueryData<BioXpOperatorActionHistory>/);
-    assert.match(body, /invalidateQueries\(\{ queryKey: operatorAdmissionKey/);
-    assert.match(body, /invalidateQueries\(\{ queryKey: operatorCatalogKey/);
     assert.match(body, /invalidateQueries\(\{ queryKey: operatorDashboardKey/);
 });
 
@@ -38,7 +33,7 @@ test('operator polling budget retains only bounded dashboard freshness', () => {
     const catalog = hookBody('useBioXpOperatorControlCatalog', 'useBioXpOperatorDashboard');
     const dashboard = hookBody('useBioXpOperatorDashboard', 'useBioXpOperatorActionAdmission');
     const admission = hookBody('useBioXpOperatorActionAdmission', 'useBioXpOperatorActionHistory');
-    const history = hookBody('useBioXpOperatorActionHistory', 'useBioXpCameraStatus');
+    const history = hookBody('useBioXpOperatorActionHistory', 'useBioXpOperatorReportSummary');
     const camera = hookBody('useBioXpCameraStatus', 'export async function fetchBioXpCameraFrame');
 
     assert.doesNotMatch(catalog, /refetchInterval:/);

@@ -193,6 +193,9 @@ export function BioXpCockpit() {
         currentGenerationRef.current = generation;
     }, [generation]);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
+    const [reportsOpen, setReportsOpen] = useState(false);
+    const [advancedOpen, setAdvancedOpen] = useState(false);
+    const [cameraOpen, setCameraOpen] = useState(false);
     const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
     const dashboardV2Query = useBioXpOperatorDashboardV2(generation, robotControlReady);
     const currentDashboardV2 = robotControlReady && dashboardV2Query.error == null && !dashboardV2Query.isStale
@@ -294,7 +297,7 @@ export function BioXpCockpit() {
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = dashboard === undefined
+    const motionControlsAvailable = dashboard === undefined || connection?.hardware_fresh !== true
         ? undefined
         : dashboard.motion.enabled === true;
     const motionLabel = motionControlsAvailable === true
@@ -871,7 +874,10 @@ export function BioXpCockpit() {
                 motionControlsAvailable={motionControlsAvailable}
             />
 
-            <BioXpOperatorReports generation={generation} connected={linkConnected} />
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
+                <summary className="cursor-pointer text-lg font-semibold">Operator reports</summary>
+                {reportsOpen && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
+            </details>
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
@@ -1305,19 +1311,15 @@ export function BioXpCockpit() {
                 )}
             </section>
 
-            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                <p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p>
-                <div className="mt-4">
-                    <BioXpOperatorControlTabs generation={generation} connected={robotControlReady} />
-                </div>
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
             </details>
 
-            <BioXpCameraPanel
-                connected={linkConnected}
-                connectionGeneration={linkConnected ? generation : null}
-                mutationEnabled={status?.mutation_access?.enabled === true}
-            />
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
+                <summary className="cursor-pointer text-lg font-semibold">Camera</summary>
+                {cameraOpen && <div className="mt-4"><BioXpCameraPanel connected={linkConnected} connectionGeneration={linkConnected ? generation : null} mutationEnabled={status?.mutation_access?.enabled === true} /></div>}
+            </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">

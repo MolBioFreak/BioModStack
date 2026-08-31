@@ -1291,8 +1291,6 @@ export const useBioXpOperatorControlCatalog = (
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 15_000 : false,
-    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorDashboard = (connectionGeneration: number, enabled = true) => useQuery({
@@ -1314,7 +1312,7 @@ export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enable
     gcTime: 0,
     staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 10_000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1329,7 +1327,7 @@ export const useBioXpOperatorControlCatalogV2 = (
     gcTime: 0,
     staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 10_000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1677,7 +1675,6 @@ export const useBioXpOperatorActionHistory = (
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
-    refetchInterval: (query) => bioXpReceiptIsNonTerminal(query.state.data?.receipts?.[0] ?? null) ? 400 : false,
 });
 
 export const useBioXpOperatorReportSummary = (
@@ -1888,7 +1885,6 @@ export const useBioXpCameraStreamState = (
         })).data;
     },
     enabled: enabled && connectionGeneration !== null,
-    refetchInterval: enabled && connectionGeneration !== null ? 2_000 : false,
     retry: false,
 });
 
