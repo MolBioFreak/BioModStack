@@ -1831,6 +1831,31 @@ async def build_project_manager_read_model(
         source_receipts,
         reverifications_by_receipt,
     )
+    source_receipts_by_id = {receipt.id: receipt for receipt in source_receipts}
+    for node in map_nodes:
+        if node.get("node_type") != "external_entity_receipt":
+            continue
+        identity = node.get("canonical_identity")
+        receipt_id = identity.get("receipt_id") if isinstance(identity, dict) else None
+        receipt = source_receipts_by_id.get(str(receipt_id)) if receipt_id is not None else None
+        if receipt is not None:
+            node["reconciliation"] = _receipt_reconciliation(
+                receipt,
+                reverifications_by_receipt.get(receipt.id),
+            )
+    if selected.get("node_type") == "external_entity_receipt":
+        identity = selected.get("canonical_identity")
+        selected_receipt_id = identity.get("receipt_id") if isinstance(identity, dict) else None
+        selected_receipt = (
+            source_receipts_by_id.get(str(selected_receipt_id))
+            if selected_receipt_id is not None
+            else None
+        )
+        if selected_receipt is not None:
+            selected["reconciliation"] = _receipt_reconciliation(
+                selected_receipt,
+                reverifications_by_receipt.get(selected_receipt.id),
+            )
     digest_set = sorted({receipt.content_digest for receipt in source_receipts})
     source_digest_set_sha256 = hashlib.sha256(canonical_json(digest_set).encode("utf-8")).hexdigest()
     adapter_versions = sorted(

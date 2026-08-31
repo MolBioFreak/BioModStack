@@ -629,6 +629,12 @@ async def test_source_reverification_receipt_renews_project_reconciliation(read_
         "last_verified_at": verified_at.isoformat(),
         "reason": None,
     }
+    receipt_node = next(
+        node
+        for node in read_model["map"]["nodes"]
+        if node["node_key"] == f"external_entity_receipt:{source_receipt_id}"
+    )
+    assert receipt_node["reconciliation"] == read_model["reconciliation"]
 
 
 @pytest.mark.asyncio
