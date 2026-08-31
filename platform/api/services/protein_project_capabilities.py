@@ -533,6 +533,35 @@ _CAPABILITIES = [
     _capability("protein.recipe.dna_polymerase_engineering", label="DNA Polymerase Engineering", family="protein_recipe", category="typed_recipe", role="dna_polymerase_engineering", allowed_modes=["design", "redesign", "exploration"], plannable=False, exposure_state="catalogued", availability_state="unavailable", availability_reason="The typed recipe is defined, but no atomic Project orchestration authority spans its required stages.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=[], viewer_id=None, accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
 ]
 
+_PROJECT_READY_CAPABILITY_IDS = frozenset({
+    "protein.structure_prediction.boltz2",
+    "protein.structure_prediction.esmfold2",
+    "protein.structure_prediction.protenix_v2",
+    "protein.de_novo.local_redesign",
+    "protein.conformational_mapping.protenix_v2",
+    "protein.conformational_mapping.confornets",
+})
+
+for _record in _CAPABILITIES:
+    _is_project_ready = _record["capability_id"] in _PROJECT_READY_CAPABILITY_IDS
+    _record.update(
+        project_setup_state="ready" if _is_project_ready else "unavailable",
+        project_setup_adapter_id=(
+            _record.get("workflow_adapter_id") if _is_project_ready else None
+        ),
+        safe_setup_destination=(
+            f"/projects/workflow-setup/{_record['capability_id']}"
+            if _is_project_ready
+            else None
+        ),
+        source_requirements=(
+            list(_record.get("accepted_source_roles") or []) if _is_project_ready else []
+        ),
+        follow_up_compatible_capability_ids=(
+            sorted(_PROJECT_READY_CAPABILITY_IDS) if _is_project_ready else []
+        ),
+    )
+
 _CAPABILITY_BY_ID = {record["capability_id"]: record for record in _CAPABILITIES}
 if len(_CAPABILITY_BY_ID) != len(_CAPABILITIES):
     raise RuntimeError("duplicate Protein Project capability ID")
@@ -540,8 +569,13 @@ if set(_CAPABILITY_BY_ID) != set(_PARAMETER_SCHEMAS):
     raise RuntimeError("Protein Project capability and parameter-schema registries disagree")
 
 
-def protein_capability_inventory() -> dict[str, Any]:
-    payload = {"schema": _INVENTORY_SCHEMA, "capabilities": _CAPABILITIES}
+def protein_capability_inventory(*, project_ready_only: bool = False) -> dict[str, Any]:
+    capabilities = (
+        [record for record in _CAPABILITIES if record["project_setup_state"] == "ready"]
+        if project_ready_only
+        else _CAPABILITIES
+    )
+    payload = {"schema": _INVENTORY_SCHEMA, "capabilities": capabilities}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return copy.deepcopy({**payload, "content_sha256": hashlib.sha256(canonical.encode()).hexdigest()})
 

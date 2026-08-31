@@ -149,7 +149,12 @@ async def project_store(tmp_path: Path):
 def _remove_parent_revision_authority_migration(db_path: Path) -> None:
     connection = sqlite3.connect(db_path)
     try:
-        connection.execute("DELETE FROM experiment_schema_migrations WHERE version = 20")
+        connection.execute("DELETE FROM experiment_schema_migrations WHERE version >= 20")
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_workflow_setup_contract_immutable")
+        connection.execute("DROP TRIGGER IF EXISTS trg_experiment_workflow_setup_terminal_immutable")
+        connection.execute("DROP INDEX IF EXISTS ix_experiment_workflow_setups_project_updated")
+        connection.execute("DROP INDEX IF EXISTS ix_experiment_workflow_setups_experiment")
+        connection.execute("DROP TABLE IF EXISTS workflow_setup_contexts")
         connection.execute("DROP TRIGGER IF EXISTS trg_experiment_domain_parent_global_revision_insert")
         connection.execute("DROP TRIGGER IF EXISTS trg_experiment_revision_edge_immutable_delete")
         connection.execute("DROP INDEX IF EXISTS ux_experiment_domain_parent_global_revision")
