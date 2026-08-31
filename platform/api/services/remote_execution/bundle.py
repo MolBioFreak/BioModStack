@@ -364,10 +364,6 @@ def prepare_remote_bundle(
         or any(_under(local_output, reserved_root.resolve()) for reserved_root in reserved_output_roots)
     ):
         raise RemoteBundleError("Remote Job output must remain under BMS-managed storage")
-    if local_output.exists():
-        for output_entry in local_output.rglob("*"):
-            if output_entry.is_symlink():
-                raise RemoteBundleError(f"Remote Job output seed contains a symlink: {output_entry}")
     attempt_id = str(attempt_id or uuid.uuid4())
     try:
         parsed_attempt_id = uuid.UUID(attempt_id)

@@ -995,6 +995,12 @@ function LogsModal({
                             Failed to load logs
                         </div>
                     ) : (
+                        <>
+                        {logs.nextflow_log_source === 'remote_pending' && (
+                            <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                                Remote logs have not returned to BioModStack yet.
+                            </div>
+                        )}
                         <pre className="text-sm text-slate-300 font-mono whitespace-pre-wrap break-words">
                             {activeTab === 'parsed' && (
                                 logs.parsed_error || <span className="text-slate-500 italic">No specific error extracted</span>
@@ -1009,6 +1015,7 @@ function LogsModal({
                                 logs.nextflow_log || <span className="text-slate-500 italic">No Nextflow log available</span>
                             )}
                         </pre>
+                        </>
                     )}
                 </div>
 

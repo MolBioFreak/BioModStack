@@ -291,6 +291,55 @@ def test_remote_execution_migration_is_idempotent(tmp_path: Path) -> None:
     assert "ix_execution_targets_leased_job_id" in target_indexes
 
 
+@pytest.mark.asyncio
+async def test_stage_bundle_never_uploads_existing_local_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_output = tmp_path / "old-results"
+    local_output.mkdir()
+    (local_output / "stale-result.cif").write_text("stale", encoding="utf-8")
+    local_attempt = tmp_path / "attempt"
+    local_attempt.mkdir()
+    (local_attempt / "execution-envelope.json").write_text("{}", encoding="utf-8")
+    bundle = SimpleNamespace(
+        remote_runtime_dir="/remote/runtime",
+        remote_attempt_dir="/remote/attempts/current",
+        remote_output_alias="/remote/data/results/current",
+        remote_source_dir="/remote/source",
+        local_output_dir=local_output,
+        local_attempt_dir=local_attempt,
+        source_transfer=SimpleNamespace(remote_destination="/remote/source/archive"),
+        runtime_transfers=(
+            SimpleNamespace(
+                remote_destination="/remote/runtime/data/runtime/cm-api-python/releases/release-1"
+            ),
+        ),
+        input_transfers=(),
+    )
+    copied_sources: list[Path] = []
+
+    async def fake_remote(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    async def fake_rsync(
+        _connection: object,
+        source: Path,
+        _destination: str,
+        **_kwargs: object,
+    ) -> None:
+        copied_sources.append(source)
+
+    monkeypatch.setattr(executor_module, "run_remote", fake_remote)
+    monkeypatch.setattr(executor_module, "rsync_to_remote", fake_rsync)
+    monkeypatch.setattr(executor_module, "_transfer_plan", fake_remote)
+
+    await executor_module._stage_bundle(SimpleNamespace(), bundle)  # type: ignore[arg-type]
+
+    assert local_attempt in copied_sources
+    assert local_output not in copied_sources
+
+
 def test_verified_remote_generation_replaces_stale_output_atomically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

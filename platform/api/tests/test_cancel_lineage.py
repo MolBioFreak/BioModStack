@@ -16,7 +16,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job
+from database import Base, ExecutionTarget, Job
 import services.job_control as job_control
 from services.job_control import _job_is_cancelable, _lineage_has_cancelable_jobs, _sort_jobs_for_cancellation, cancel_job_lineage
 
@@ -225,6 +225,58 @@ async def test_terminal_cancel_requires_owned_unit_stop_and_empty_proof(
         assert job.assigned_gpu is None
         assert job.completed_at is not None
         assert job.params["cancellation_receipt"]["state"] == "completed"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_remote_terminal_cancel_releases_exclusive_target_lease_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-cancel.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(job_control, "cancel_nextflow_job", lambda _run_id: _async_bool(True))
+
+    async with factory() as session:
+        session.add(
+            ExecutionTarget(
+                id="vast:123",
+                provider="vast",
+                provider_instance_id="123",
+                name="vast",
+                state="ready",
+                active=True,
+                leased_job_id="remote-cancel",
+                lease_acquired_at=datetime.utcnow(),
+            )
+        )
+        session.add(
+            Job(
+                id="remote-cancel",
+                name="remote-cancel",
+                model_id="boltz2",
+                mode="predict",
+                params={},
+                status="running",
+                queue_status="running",
+                created_at=datetime.utcnow(),
+                nextflow_run_id="remote:remote-cancel:11111111-1111-4111-8111-111111111111",
+                remote_attempt_id="11111111-1111-4111-8111-111111111111",
+                execution_target_id="vast:123",
+                assigned_gpu=0,
+            )
+        )
+        await session.commit()
+
+        await cancel_job_lineage("remote-cancel", session)
+        await cancel_job_lineage("remote-cancel", session)
+        target = await session.get(ExecutionTarget, "vast:123")
+        assert target is not None
+        assert target.leased_job_id is None
+        assert target.lease_acquired_at is None
 
     await engine.dispose()
 

@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import async_session, Job, MdRun
+from database import async_session, ExecutionTarget, Job, MdRun
 from schemas import JobStatus
 from services.execution_ownership import release_scheduler_gpu_assignment
 from services.nextflow import cancel_nextflow_job
@@ -277,6 +277,20 @@ async def cancel_job_lineage(
         )
         if terminalized.rowcount != 1:
             terminal_conflicts.append(str(job.id))
+        elif job.execution_target_id:
+            await session.execute(
+                update(ExecutionTarget)
+                .where(
+                    ExecutionTarget.id == str(job.execution_target_id),
+                    ExecutionTarget.leased_job_id == str(job.id),
+                )
+                .values(
+                    leased_job_id=None,
+                    lease_acquired_at=None,
+                    updated_at=completed_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
 
     if terminal_conflicts:
         await session.rollback()

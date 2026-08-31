@@ -9558,9 +9558,44 @@ async def get_job_logs(
         "parsed_error": None,
         "nextflow_log_source": None,
     }
+
+    if job.execution_target_id:
+        logs_data["nextflow_log_source"] = "remote_pending"
+        output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
+
+        def _bounded_remote_log(path: Path) -> str | None:
+            if not path.is_file():
+                return None
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(0, 2)
+                    size = handle.tell()
+                    handle.seek(max(0, size - 1_048_576))
+                    content = handle.read(1_048_576).decode("utf-8", errors="replace")
+                bounded_tail = max(1, min(int(tail), 5000))
+                return "\n".join(content.splitlines()[-bounded_tail:])
+            except OSError:
+                return None
+
+        if output_path is not None:
+            remote_log_root = output_path / "_remote"
+            logs_data["nextflow_log"] = _bounded_remote_log(remote_log_root / "nextflow.log")
+            logs_data["command_log"] = _bounded_remote_log(remote_log_root / "supervisor.log")
+        if logs_data["nextflow_log"] is not None or logs_data["command_log"] is not None:
+            logs_data["nextflow_log_source"] = "remote_returned"
+        logs_data["parsed_error"] = extract_error_from_logs(
+            logs_data["command_log"],
+            None,
+        )
+        if not logs_data["parsed_error"] and logs_data["nextflow_log"]:
+            logs_data["parsed_error"] = extract_error_from_logs(logs_data["nextflow_log"], None)
+        if not logs_data["parsed_error"] and job.error_message:
+            logs_data["parsed_error"] = str(job.error_message)[:4000]
+        return logs_data
     
     # --- Step 1: Find the nextflow log for THIS job ---
     nf_log_content = None
+    output_path = None
     nf_log_candidates = []
     
     if job.output_dir:
@@ -9692,7 +9727,10 @@ async def get_job_logs(
     return logs_data
 
 
-def extract_error_from_logs(command_log: str = None, command_err: str = None) -> str:
+def extract_error_from_logs(
+    command_log: Optional[str] = None,
+    command_err: Optional[str] = None,
+) -> Optional[str]:
     """
     Extract meaningful error message from log files.
     

@@ -200,13 +200,6 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/apptainer-cache",
         ],
     )
-    if bundle.local_output_dir.exists():
-        await rsync_to_remote(
-            connection,
-            bundle.local_output_dir,
-            f"{bundle.remote_attempt_dir}/results",
-            delete=False,
-        )
     output_alias = PurePosixPath(bundle.remote_output_alias)
     await run_remote(connection, ["mkdir", "-p", str(output_alias.parent)])
     link_writer = (
