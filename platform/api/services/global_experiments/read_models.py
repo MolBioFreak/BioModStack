@@ -218,6 +218,35 @@ async def _attachment_count(
     )
 
 
+async def _complete_attachment_receipts(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    focused_domain_ids: list[str],
+) -> list[ExperimentExternalEntityReceipt]:
+    if not focused_domain_ids:
+        return []
+    receipts = list(
+        await session.scalars(
+            select(ExperimentExternalEntityReceipt)
+            .join(
+                ExperimentLineageEdge,
+                ExperimentLineageEdge.target_resource_id == ExperimentExternalEntityReceipt.id,
+            )
+            .where(*_attachment_predicates(project_id, focused_domain_ids))
+            .distinct()
+            .order_by(
+                ExperimentExternalEntityReceipt.created_at.desc(),
+                ExperimentExternalEntityReceipt.id.desc(),
+            )
+            .limit(MAX_TREE_NODES + 1)
+        )
+    )
+    if len(receipts) > MAX_TREE_NODES:
+        raise ValidationFailure("Focused source receipt set exceeds the supported bound")
+    return receipts
+
+
 def _receipt_acknowledgement(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any] | None:
     try:
         acknowledgement = json.loads(receipt.acknowledgement_json or "{}")
@@ -1673,16 +1702,27 @@ async def build_project_manager_read_model(
         project_id=project_id,
         focused_domain_ids=collection_domain_ids,
     )
-    source_receipts_by_id = {
-        receipt.id: receipt
-        for _edge, receipt in map_rows + lineage_rows + result_rows
-    }
-    if selected.get("node_type") == "external_entity_receipt":
-        receipt_id = str((selected.get("canonical_identity") or {}).get("receipt_id") or "")
-        receipt = await session.get(ExperimentExternalEntityReceipt, receipt_id)
-        if receipt is not None:
-            source_receipts_by_id[receipt.id] = receipt
-    source_receipts = list(source_receipts_by_id.values())
+    receipt_domain_ids = collection_domain_ids
+    selected_domain_id: str | None = None
+    if selected.get("node_type") == "domain_experiment":
+        candidate = str((selected.get("canonical_identity") or {}).get("entity_id") or "")
+        if candidate in collection_domain_ids:
+            selected_domain_id = candidate
+    else:
+        parent_node_key = str(selected.get("parent_node_key") or "")
+        if parent_node_key.startswith("domain_experiment:"):
+            candidate = parent_node_key.split(":", 1)[1]
+            if candidate in collection_domain_ids:
+                selected_domain_id = candidate
+    if selected_domain_id is not None:
+        receipt_domain_ids = [selected_domain_id]
+
+    source_receipts = await _complete_attachment_receipts(
+        session,
+        project_id=project_id,
+        focused_domain_ids=receipt_domain_ids,
+    )
+    source_receipts_by_id = {receipt.id: receipt for receipt in source_receipts}
     reverifications_by_receipt: dict[str, dict[str, Any]] = {}
     if source_receipts:
         reverification_rows = list(
