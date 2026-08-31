@@ -16,7 +16,7 @@ def prepare(request: dict) -> tuple[dict, dict]:
     native = {
         "generation_0": {
             "dialect": 2,
-            "contig": f"{generation['min_length']}-{generation['max_length']}",
+            "length": f"{generation['min_length']}-{generation['max_length']}",
         }
     }
     receipt = {

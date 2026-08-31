@@ -87,7 +87,7 @@ class GenerationProducerTests(unittest.TestCase):
                 check=True,
             )
 
-            native = {"generation_0": {"dialect": 2, "contig": "2-3"}}
+            native = {"generation_0": {"dialect": 2, "length": "2-3"}}
             self.assertEqual(json.loads(native_path.read_text()), native)
             receipt = json.loads(receipt_path.read_text())
             self.assertEqual(receipt["schema"], "bms.rfd3.generation.preparation-receipt.v1")
