@@ -558,19 +558,23 @@ async def prepare_workflow_setup_launch(
         ]
     )
     await session.flush()
-    context = await create_prepared_launch_context(
-        session,
-        project_id=project_id,
-        global_experiment_id=row.global_experiment_id,
-        domain_experiment_id=row.domain_experiment_id,
-        preparation_id=preparation_id,
-        return_uri=_return_uri(row),
-    )
     response = {
         **await _detailed_document(session, row),
         "preparation_id": preparation_id,
-        "launch_context_id": context.launch_context_id,
     }
+    launch_mode = capability.get("launch_mode")
+    if launch_mode == "typed_launcher_handoff":
+        context = await create_prepared_launch_context(
+            session,
+            project_id=project_id,
+            global_experiment_id=row.global_experiment_id,
+            domain_experiment_id=row.domain_experiment_id,
+            preparation_id=preparation_id,
+            return_uri=_return_uri(row),
+        )
+        response["launch_context_id"] = context.launch_context_id
+    elif launch_mode != "managed_materialization":
+        raise ValidationFailure("workflow setup capability has no accepted launch mode")
     await _claim(
         session, scope=scope, key=idempotency_key, request_sha256=request_sha256,
         result_resource_id=row.setup_context_id, response=response,

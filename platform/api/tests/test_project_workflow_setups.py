@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import sqlite3
@@ -336,6 +337,33 @@ async def test_prepare_launch_freezes_authorities_without_run_or_job_submission(
         assert await session.scalar(select(func.count()).select_from(ExperimentWorkflowPreparation)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentLaunchContext)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentRunGroup)) == 0
+
+
+@pytest.mark.asyncio
+async def test_managed_preparation_issues_no_typed_launch_context(setup_store, monkeypatch) -> None:
+    capability = workflow_setups.protein_capability_record("protein.structure_prediction.esmfold2")
+    capability["launch_mode"] = "managed_materialization"
+    monkeypatch.setattr(workflow_setups, "protein_capability_record", lambda _capability_id: copy.deepcopy(capability))
+    async with setup_store() as session:
+        project = await _project(session)
+        setup = await workflow_setups.create_workflow_setup(
+            session, project_id=project.id, relationship_kind="primary",
+            global_experiment_id=None, experiment_name="Managed target", experiment_objective="Fold",
+            domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
+            idempotency_key="managed-create-0001",
+        )
+        await workflow_setups.save_workflow_setup_draft(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+            draft={"sequence": "MQIFVK"}, expected_generation=0,
+            idempotency_key="managed-draft-0001",
+        )
+        prepared = await workflow_setups.prepare_workflow_setup_launch(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+            expected_generation=1, idempotency_key="managed-prepare-0001",
+        )
+        assert prepared["preparation_id"]
+        assert "launch_context_id" not in prepared
+        assert await session.scalar(select(func.count()).select_from(ExperimentLaunchContext)) == 0
 
 
 @pytest.mark.asyncio

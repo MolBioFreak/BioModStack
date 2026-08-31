@@ -259,6 +259,10 @@ async def _project_bound_job(
             "Historical v1 launch contexts are display-only and cannot be projected.",
             status_code=409,
         )
+    if context.workflow_id is not None:
+        await mark_workflow_setup_submitted(
+            session, project_id=context.project_id, workflow_id=context.workflow_id
+        )
     if context.contract_version == "2" and context.run_attempt_id:
         attempt = await session.get(ExperimentRunAttempt, context.run_attempt_id)
         run = await session.get(ExperimentWorkflowRun, attempt.workflow_run_id if attempt else "")
@@ -714,10 +718,6 @@ async def bind_launch_context_to_job(
                 canonical_batch_id=None,
             )
         projection = await _project_bound_job(session, core_session, context, job, binding)
-        if context.workflow_id is not None:
-            await mark_workflow_setup_submitted(
-                session, project_id=context.project_id, workflow_id=context.workflow_id
-            )
         await session.commit()
         await publish_launch_context_binding(
             core_session,
@@ -2291,6 +2291,17 @@ async def launch_domain_run_group(project_id: str, experiment_id: str, domain_id
             source_domain_id=domain_id,
         )
         await reserve_run_group(session, group_id=group.resource_id, domain_id=domain_id, actor=actor)
+        for preparation_id in preparation_ids:
+            if preparation_id in contexts:
+                continue
+            preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
+            revision = await session.get(
+                ExperimentRevision, preparation.workflow_revision_id if preparation is not None else ""
+            )
+            if revision is not None:
+                await mark_workflow_setup_submitted(
+                    session, project_id=project_id, workflow_id=revision.subject_id
+                )
         await session.commit()
         return await _run_group_document(session, group)
     except ResourceAdmissionDenied as exc:

@@ -126,7 +126,10 @@ test('mounted launcher hydrates and reports the exact Project-owned native draft
         renderer = create(
             <MemoryRouter><QueryClientProvider client={queryClient}>
                 <ConformationalMappingLauncher
-                    services={{ listSources: async () => [] } as never}
+                    services={{
+                        listSources: async () => [],
+                        loadFrustrampnnIntegration: async () => ({ workflows: { conformational_mapping: { default_enabled: true, enabled_summary: 'Required.' } } }),
+                    } as never}
                     initialValues={{
                         backend: 'confornets',
                         request: {

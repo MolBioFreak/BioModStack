@@ -5,6 +5,7 @@ import {
     createProjectWorkflowSetup,
     deleteProjectWorkflowSetup,
     getProjectWorkflowSetup,
+    launchDomainRunGroup,
     listProteinProjectCapabilities,
     prepareProjectWorkflowSetup,
     projectManagerErrorMessage,
@@ -99,9 +100,21 @@ export function useProjectWorkflowSetup() {
     const startRun = async (exactSettings: JsonObject) => {
         const saved = await saveDraft(exactSettings);
         const prepared = await prepareProjectWorkflowSetup(saved.project_id, saved.setup_context_id, saved.generation);
-        if (!prepared.launch_context_id) throw new Error('The server did not issue immutable launch authority.');
+        if (!prepared.preparation_id) throw new Error('The server did not issue immutable preparation authority.');
+        await launchDomainRunGroup(
+            prepared.project_id,
+            prepared.global_experiment_id,
+            prepared.domain_experiment_id,
+            [{ preparation_id: prepared.preparation_id, launch_context_id: prepared.launch_context_id ?? null }],
+        );
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], prepared);
+        if (!prepared.launch_context_id) {
+            navigate(prepared.return_uri);
+            return prepared;
+        }
         const next = new URLSearchParams(searchParams);
+        next.delete('setup_context_id');
+        next.delete('project_id');
         next.set('launch_context_id', prepared.launch_context_id);
         navigate(`${window.location.pathname}?${next.toString()}`);
         return prepared;

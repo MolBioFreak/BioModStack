@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
     getProjectWorkflowSetup: vi.fn(),
     saveProjectWorkflowSetupDraft: vi.fn(),
     prepareProjectWorkflowSetup: vi.fn(),
+    launchDomainRunGroup: vi.fn(),
     deleteProjectWorkflowSetup: vi.fn(),
 }));
 vi.mock('../../src/lib/projectManager', async (original) => ({ ...(await original<Record<string, unknown>>()), ...api }));
@@ -127,13 +128,34 @@ describe('Project workflow setup', () => {
             if (!projectSetup.setup) return <p>Loading setup</p>;
             return <button onClick={() => void projectSetup.startRun({ sequence: 'EDITED' })}>Start run</button>;
         }
-        api.prepareProjectWorkflowSetup.mockResolvedValue({ ...setup, generation: 3, launch_context_id: 'launch-1' });
+        api.prepareProjectWorkflowSetup.mockResolvedValue({ ...setup, generation: 3, preparation_id: 'prep-1', launch_context_id: 'launch-1' });
+        api.launchDomainRunGroup.mockResolvedValue({ run_group_id: 'run-group-1' });
         await render(<PrepareHarness/>, '/submit?setup_context_id=setup-1&project_id=project-1');
         await waitUntil(() => expect(container.textContent).toContain('Start run'));
         await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Start run')?.click());
         await waitUntil(() => expect(api.saveProjectWorkflowSetupDraft).toHaveBeenCalledWith('project-1', 'setup-1', { expected_generation: 2, draft: { sequence: 'EDITED' } }));
         expect(api.prepareProjectWorkflowSetup).toHaveBeenCalledWith('project-1', 'setup-1', 3);
+        expect(api.launchDomainRunGroup).toHaveBeenCalledWith('project-1', 'experiment-1', 'domain-1', [{ preparation_id: 'prep-1', launch_context_id: 'launch-1' }]);
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('launch_context_id=launch-1'));
+        expect(container.querySelector('[data-testid="location"]')?.textContent).not.toContain('setup_context_id');
+        expect(container.querySelector('[data-testid="location"]')?.textContent).not.toContain('project_id');
+    });
+
+    it('starts managed Project work without fabricating a typed launch context', async () => {
+        function ManagedHarness() {
+            const projectSetup = useProjectWorkflowSetup();
+            if (!projectSetup.setup) return <p>Loading setup</p>;
+            return <button onClick={() => void projectSetup.startRun({ backend: 'confornets', request: {} })}>Start managed run</button>;
+        }
+        api.prepareProjectWorkflowSetup.mockResolvedValue({ ...setup, generation: 3, preparation_id: 'prep-managed' });
+        api.launchDomainRunGroup.mockResolvedValue({ run_group_id: 'run-group-managed' });
+        await render(<ManagedHarness/>, '/submit?setup_context_id=setup-1&project_id=project-1');
+        await waitUntil(() => expect(container.textContent).toContain('Start managed run'));
+        await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Start managed run')?.click());
+        await waitUntil(() => expect(api.launchDomainRunGroup).toHaveBeenCalledWith(
+            'project-1', 'experiment-1', 'domain-1', [{ preparation_id: 'prep-managed', launch_context_id: null }],
+        ));
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('/projects/project-1'));
     });
 
     it('keeps diagnostics absent until Technical details is disclosed', async () => {
