@@ -6,6 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1924,7 +1925,11 @@ async def build_project_manager_read_model(
                 "validation_state": setup.validation_state,
                 "latest_run_state": latest_run["normalized_state"] if latest_run is not None else None,
                 "result_count": len(latest_run["output_receipt_ids"]) if latest_run is not None else 0,
-                "reopen_route": f"/projects/{project_id}/workflow-setups/{setup.setup_context_id}",
+                "reopen_route": (
+                    f"{setup.setup_destination}{'&' if '?' in setup.setup_destination else '?'}"
+                    f"setup_context_id={quote(setup.setup_context_id, safe='')}"
+                    f"&project_id={quote(project_id, safe='')}"
+                ),
                 "allowed_actions": actions,
             }
         )

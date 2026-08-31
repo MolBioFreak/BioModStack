@@ -11,12 +11,13 @@ import {
     saveProjectWorkflowSetupDraft,
     type JsonObject,
     type ProjectWorkflowSetup,
+    type ProjectWorkflowSetupNavigation,
 } from '../../lib/projectManager';
 
 const INPUT = 'w-full rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content';
 const BUTTON = 'rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent disabled:cursor-not-allowed disabled:opacity-50';
 
-function nativeDestination(setup: ProjectWorkflowSetup): string {
+function nativeDestination(setup: ProjectWorkflowSetupNavigation | ProjectWorkflowSetup): string {
     const destination = new URL(setup.setup_destination, window.location.origin);
     if (destination.origin !== window.location.origin) throw new Error('The setup destination is not local to BioModStack.');
     destination.searchParams.set('setup_context_id', setup.setup_context_id);
@@ -30,15 +31,14 @@ export function NewProjectExperimentDialog({ projectId, globalExperimentId, open
     const [objective, setObjective] = useState('');
     const [capabilityId, setCapabilityId] = useState('');
     const capabilities = useQuery({ queryKey: ['protein-project-setup-capabilities'], queryFn: ({ signal }) => listProteinProjectCapabilities(signal), enabled: open, retry: false });
-    const ready = useMemo(() => (capabilities.data?.capabilities ?? []).filter((item) => item.project_setup_state === 'ready'), [capabilities.data]);
+    const ready = useMemo(() => capabilities.data?.capabilities ?? [], [capabilities.data]);
     const create = useMutation({
         mutationFn: () => createProjectWorkflowSetup(projectId, {
             schema: 'bms.project-workflow-setup.create.v1',
-            context: globalExperimentId ? 'follow_up' : 'primary',
-            ...(globalExperimentId ? { global_experiment_id: globalExperimentId } : {}),
-            name: globalExperimentId ? name.trim() || 'Related workflow' : name.trim(),
-            objective: objective.trim(),
-            domain: 'protein',
+            relationship_kind: globalExperimentId ? 'follow_up' : 'primary',
+            global_experiment_id: globalExperimentId ?? null,
+            ...(globalExperimentId ? {} : { experiment: { name: name.trim(), objective: objective.trim() } }),
+            domain_kind: 'protein_in_silico',
             capability_id: capabilityId,
         }),
         onSuccess: (setup) => navigate(nativeDestination(setup)),
@@ -61,7 +61,7 @@ export function NewProjectExperimentDialog({ projectId, globalExperimentId, open
 export function ProjectWorkflowCard({ projectId, setup }: { projectId: string; setup: ProjectWorkflowSetup }) {
     const queryClient = useQueryClient();
     const remove = useMutation({ mutationFn: () => deleteProjectWorkflowSetup(projectId, setup.setup_context_id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['project-workflow-setups', projectId] }) });
-    return <article className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-accent">Workflow</p><h3 className="mt-1 font-semibold text-content">{setup.workflow_label}</h3></div><span className="rounded-full border border-warning/40 px-2 py-1 text-xs text-warning">{setup.state === 'draft' ? 'Setup incomplete' : setup.state}</span></div><div className="mt-4 flex flex-wrap gap-2"><Link className={BUTTON} to={nativeDestination(setup)}>Resume setup</Link><button type="button" className={BUTTON} disabled={remove.isPending} onClick={() => remove.mutate()}>Delete draft</button></div>{remove.error && <p role="alert" className="mt-2 text-xs text-error">{projectManagerErrorMessage(remove.error)}</p>}</article>;
+    return <article className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-[10px] font-semibold uppercase tracking-[.16em] text-accent">Workflow</p><h3 className="mt-1 font-semibold text-content">{setup.workflow_label}</h3></div><span className="rounded-full border border-warning/40 px-2 py-1 text-xs text-warning">{setup.state === 'open' ? 'Setup incomplete' : setup.state}</span></div><div className="mt-4 flex flex-wrap gap-2"><Link className={BUTTON} to={nativeDestination(setup)}>Resume setup</Link><button type="button" className={BUTTON} disabled={remove.isPending} onClick={() => remove.mutate()}>Delete draft</button></div>{remove.error && <p role="alert" className="mt-2 text-xs text-error">{projectManagerErrorMessage(remove.error)}</p>}</article>;
 }
 
 export function ProjectTechnicalDetails({ setup, children }: { setup: ProjectWorkflowSetup; children?: React.ReactNode }) {
@@ -70,29 +70,41 @@ export function ProjectTechnicalDetails({ setup, children }: { setup: ProjectWor
 }
 
 export function ProjectWorkflowSetupBanner({ setup }: { setup: ProjectWorkflowSetup }) {
-    return <aside aria-label="Project workflow setup context" className="border-b border-accent/30 bg-accent/10 px-4 py-3"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-content">{setup.project_label} · {setup.experiment_label}</p><p className="text-xs text-content-secondary">{setup.workflow_label} · {setup.state === 'draft' ? 'Setup incomplete' : setup.state}</p></div><Link className={BUTTON} to={setup.return_uri}>Back to experiment</Link></div>{Object.entries(setup.field_errors).length > 0 && <ul className="mx-auto mt-2 max-w-7xl text-xs text-error">{Object.entries(setup.field_errors).map(([field, message]) => <li key={field}><strong>{field}:</strong> {message}</li>)}</ul>}</aside>;
+    return <aside aria-label="Project workflow setup context" className="border-b border-accent/30 bg-accent/10 px-4 py-3"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-content">{setup.project_label} · {setup.experiment_label}</p><p className="text-xs text-content-secondary">{setup.workflow_label} · {setup.state === 'open' ? 'Setup incomplete' : setup.state}</p></div><Link className={BUTTON} to={setup.return_uri}>Back to experiment</Link></div>{Object.entries(setup.field_errors).length > 0 && <ul className="mx-auto mt-2 max-w-7xl text-xs text-error">{Object.entries(setup.field_errors).map(([field, message]) => <li key={field}><strong>{field}:</strong> {message}</li>)}</ul>}</aside>;
 }
 
 export function useProjectWorkflowSetup() {
     const [searchParams] = useSearchParams();
+    const navigate = useNavigate();
     const setupContextId = searchParams.get('setup_context_id');
     const projectId = searchParams.get('project_id');
     const active = Boolean(setupContextId && projectId);
     const queryClient = useQueryClient();
     const query = useQuery({ queryKey: ['project-workflow-setup', projectId, setupContextId], queryFn: ({ signal }) => getProjectWorkflowSetup(projectId as string, setupContextId as string, signal), enabled: active, retry: false });
     const setup = query.data;
-    const settings = setup?.draft.settings && typeof setup.draft.settings === 'object' && !Array.isArray(setup.draft.settings) ? setup.draft.settings as JsonObject : {};
+    const settings = setup?.draft ?? {};
     const saveDraft = async (exactSettings: JsonObject) => {
         if (!setup) throw new Error('Project workflow setup is not hydrated.');
-        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: setup.generation, draft: { ...setup.draft, settings: exactSettings } });
+        const updated = await saveProjectWorkflowSetupDraft(setup.project_id, setup.setup_context_id, { expected_generation: setup.generation, draft: exactSettings });
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], updated);
         return updated;
     };
-    const prepare = async () => {
+    const prepare = async (expectedGeneration = setup?.generation) => {
         if (!setup) throw new Error('Project workflow setup is not hydrated.');
-        const updated = await prepareProjectWorkflowSetup(setup.project_id, setup.setup_context_id);
+        if (expectedGeneration === undefined) throw new Error('Project workflow setup generation is unavailable.');
+        const updated = await prepareProjectWorkflowSetup(setup.project_id, setup.setup_context_id, expectedGeneration);
         queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], updated);
         return updated;
     };
-    return { active, setup, settings, isLoading: query.isLoading, error: query.error, saveDraft, prepare };
+    const startRun = async (exactSettings: JsonObject) => {
+        const saved = await saveDraft(exactSettings);
+        const prepared = await prepareProjectWorkflowSetup(saved.project_id, saved.setup_context_id, saved.generation);
+        if (!prepared.launch_context_id) throw new Error('The server did not issue immutable launch authority.');
+        queryClient.setQueryData(['project-workflow-setup', projectId, setupContextId], prepared);
+        const next = new URLSearchParams(searchParams);
+        next.set('launch_context_id', prepared.launch_context_id);
+        navigate(`${window.location.pathname}?${next.toString()}`);
+        return prepared;
+    };
+    return { active, setup, settings, isLoading: query.isLoading, error: query.error, saveDraft, prepare, startRun };
 }

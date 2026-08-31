@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const transport = vi.hoisted(() => ({
     get: vi.fn(),
     post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
     patch: vi.fn(),
 }));
 
@@ -31,6 +33,8 @@ import * as projectManagerContract from '../../src/lib/projectManager';
 beforeEach(() => {
     transport.get.mockReset();
     transport.post.mockReset();
+    transport.put.mockReset();
+    transport.delete.mockReset();
     transport.patch.mockReset();
 });
 
@@ -69,6 +73,36 @@ const resultSurface = {
 };
 
 describe('Project Manager API contract', () => {
+    it('parses the bounded six-row picker and exact create/detail setup representations', async () => {
+        const contract = projectManagerContract as unknown as {
+            listProteinProjectCapabilities: () => Promise<unknown>;
+            createProjectWorkflowSetup: (projectId: string, request: unknown) => Promise<unknown>;
+            getProjectWorkflowSetup: (projectId: string, setupId: string) => Promise<unknown>;
+        };
+        const row = {
+            capability_id: 'protein.structure_prediction.esmfold2', label: 'ESMFold2 structure prediction',
+            state: 'ready', adapter_id: 'bms.esmfold2.project-setup.v1',
+            setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
+            source_requirements: ['protein_sequence_receipt'],
+            follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
+        };
+        transport.get.mockResolvedValueOnce({ data: { schema: 'bms.protein-project-workflow-picker.v1', capabilities: Array.from({ length: 6 }, (_, index) => ({ ...row, capability_id: `${row.capability_id}.${index}` })) } });
+        await expect(contract.listProteinProjectCapabilities()).resolves.toMatchObject({ capabilities: expect.any(Array) });
+        const created = {
+            schema: 'bms.project-workflow-setup.create-response.v1', setup_context_id: 'setup-1', project_id: 'project-1',
+            global_experiment_id: 'global-1', domain_experiment_id: 'domain-1', relationship_kind: 'primary',
+            capability_id: row.capability_id, state: 'open', validation_state: 'incomplete', generation: 0,
+            setup_destination: row.setup_destination, return_uri: '/projects/project-1?focus=global-1',
+        };
+        transport.post.mockResolvedValueOnce({ data: created });
+        await expect(contract.createProjectWorkflowSetup('project-1', {
+            schema: 'bms.project-workflow-setup.create.v1', relationship_kind: 'primary', global_experiment_id: null,
+            experiment: { name: 'Fold', objective: 'Predict' }, domain_kind: 'protein_in_silico', capability_id: row.capability_id,
+        })).resolves.toEqual(created);
+        const detail = { ...created, schema: 'bms.project-workflow-setup.detail.v1', project_label: 'Project', experiment_label: 'Fold', workflow_label: row.label, draft: {}, field_errors: {}, diagnostics: {} };
+        transport.get.mockResolvedValueOnce({ data: detail });
+        await expect(contract.getProjectWorkflowSetup('project-1', 'setup-1')).resolves.toEqual(detail);
+    });
     it('reads a closed FrustraMPNN result scope from exact Project lineage', async () => {
         const contract = projectManagerContract as unknown as {
             fetchDomainFrustraMpnnResults?: (

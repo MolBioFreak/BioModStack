@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
+    deleteProjectWorkflowSetup,
     getDomainExperiment,
     getGlobalExperiment,
     getProject,
@@ -16,6 +17,7 @@ import {
     type JsonValue,
     type ProteinWorkspaceSection,
     type ProjectManagerReadModel,
+    type ProjectWorkflowTask,
     type ResultSurface,
 } from '../../../lib/projectManager';
 import DomainDatasetOperator from '../../molbio-ngs/DomainDatasetOperator';
@@ -62,6 +64,11 @@ function AuthorityCard({ label, value, full = false }: { label: string; value: s
 
 function EmptyState({ children }: { children: string }) {
     return <p className="rounded-xl border border-dashed border-border-primary bg-surface-secondary p-6 text-center text-sm text-content-muted">{children}</p>;
+}
+
+function WorkflowTaskCard({ projectId, task, onDeleted }: { projectId: string; task: ProjectWorkflowTask; onDeleted: () => void }) {
+    const remove = useMutation({ mutationFn: () => deleteProjectWorkflowSetup(projectId, task.setup_context_id), onSuccess: onDeleted });
+    return <article className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap justify-between gap-3"><div><h3 className="font-semibold text-content">{task.workflow_label}</h3><p className="mt-1 text-xs text-content-secondary">{task.experiment_name}</p></div><span className="rounded-full border border-warning/40 px-2 py-1 text-xs text-warning">{task.setup_state === 'open' ? 'Setup incomplete' : task.setup_state}</span></div><div className="mt-3 flex gap-2"><Link className={BUTTON} to={task.reopen_route}>Resume</Link>{task.allowed_actions.includes('delete') && <button type="button" className={BUTTON} disabled={remove.isPending} onClick={() => remove.mutate()}>Delete draft</button>}</div>{remove.error && <p role="alert" className="mt-2 text-xs text-error">{projectManagerErrorMessage(remove.error)}</p>}</article>;
 }
 
 function RecordCards({ items, empty }: { items: JsonObject[]; empty: string }) {
@@ -148,6 +155,7 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
     const selectSection = (next: ProteinWorkspaceSection) => { const query = new URLSearchParams(searchParams); query.set('workspace', 'protein'); query.set('section', next); setSearchParams(query); };
     const results = summary.data.result_previews;
     const comparisonSurfaces = results.filter((surface) => surface.comparison.state !== 'not_applicable');
+    const workflowTasks = summary.data.tasks.filter((task) => task.global_experiment_id === globalExperimentId && task.setup_state !== 'deleted');
 
     return <div className="min-h-full bg-surface" data-protein-project-workspace="true">
         <header className="border-b border-border-primary bg-surface-secondary px-4 py-4 lg:px-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Project</p><h1 className="mt-1 text-xl font-semibold text-content">{projectData.name}</h1><p className="mt-1 text-sm text-content-secondary">Experiment · {globalExperimentData.name} · Protein</p></div><div className="flex gap-2"><button type="button" className={BUTTON} onClick={() => setWorkflowDialogOpen(true)}>Add workflow</button><Link to={projectReturn} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary">Back to Project Manager</Link></div></div></header>
@@ -156,7 +164,7 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
             {reopen.error && <p role="alert" className="mb-4 rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(reopen.error)}</p>}
             {reverify.error && <p role="alert" className="mb-4 rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(reverify.error)}</p>}
             {section === 'overview' && summary.data.source_receipt_ids.length > 0 && summary.data.reconciliation.state !== 'current' && <section className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4"><div><h2 className="text-sm font-semibold text-warning">Source freshness requires verification</h2><p className="mt-1 text-xs text-content-secondary">Verify the attached immutable source identity and digest again.</p></div><button type="button" className={BUTTON} disabled={reverify.isPending} onClick={() => reverify.mutate()}>{reverify.isPending ? 'Reverifying…' : 'Reverify sources'}</button></section>}
-            {section === 'overview' && <Overview summary={summary.data} authority={authority} onAddWorkflow={() => setWorkflowDialogOpen(true)} />}
+            {section === 'overview' && <><Overview summary={summary.data} authority={authority} onAddWorkflow={() => setWorkflowDialogOpen(true)} />{workflowTasks.length > 0 && <section className="mt-4 grid gap-3 lg:grid-cols-2" aria-label="Workflow setup tasks">{workflowTasks.map((task) => <WorkflowTaskCard key={task.setup_context_id} projectId={projectId} task={task} onDeleted={() => void summary.refetch()}/>)}</section>}</>}
             {section === 'targets' && <div className="space-y-3">{authority.targets.length ? authority.targets.map((target) => <article key={target.target_id} className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-semibold text-content">{target.label}</h2><p className="mt-1 font-mono text-xs text-content-muted">{target.target_id}</p></div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-secondary">{target.role}</span></div><p className="mt-3 text-xs text-content-secondary">Source receipts: {target.source_receipt_ids.length ? target.source_receipt_ids.join(', ') : 'none recorded'}</p><p className="mt-1 text-xs text-content-secondary">Dataset members: {target.dataset_member_refs.length ? target.dataset_member_refs.map((member) => `${member.dataset_revision_id}:${member.member_id}`).join(', ') : 'none recorded'}</p></article>) : <EmptyState>No targets are recorded in the current Protein Domain revision.</EmptyState>}<p className="rounded-lg border border-border-primary bg-surface-secondary p-3 text-xs text-content-muted">Target changes are disabled here because Project Manager owns the Protein Domain revision. Use “Back to Project Manager” and edit the exact Domain revision.</p></div>}
             {section === 'datasets' && <DomainDatasetOperator projectId={projectId} globalExperimentId={globalExperimentId} domainExperimentId={domainExperimentId} canMutate mutationBlocker={null} currentStateRevisionId={null} selectedRevisionIds={selectedDatasetRevisionIds} onSelectedRevisionIdsChange={setSelectedDatasetRevisionIds} />}
             {section === 'plans' && <section className="rounded-xl border border-border-primary bg-surface-secondary p-5"><h2 className="text-lg font-semibold text-content">Workflows</h2><p className="mt-2 text-sm text-content-secondary">Add a ready Protein workflow or resume an incomplete setup from this experiment.</p><button type="button" className={`${BUTTON} mt-4`} onClick={() => setWorkflowDialogOpen(true)}>Add workflow</button></section>}

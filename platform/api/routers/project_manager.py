@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +89,7 @@ from services.global_experiments.workflow_setups import (
     create_workflow_setup,
     delete_workflow_setup,
     get_workflow_setup,
+    mark_workflow_setup_submitted,
     prepare_workflow_setup_launch,
     save_workflow_setup_draft,
 )
@@ -123,14 +124,27 @@ class StrictRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class WorkflowSetupExperimentRequest(StrictRequestModel):
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(min_length=1, max_length=2000)
+
+
 class WorkflowSetupCreateRequest(StrictRequestModel):
     schema_id: Literal["bms.project-workflow-setup.create.v1"] = Field(alias="schema")
     relationship_kind: Literal["primary", "follow_up"]
     global_experiment_id: str | None = Field(default=None, min_length=1, max_length=128)
-    experiment_name: str | None = Field(default=None, min_length=1, max_length=255)
-    experiment_objective: str | None = Field(default=None, min_length=1, max_length=2000)
+    experiment: WorkflowSetupExperimentRequest | None = None
     domain_kind: Literal["protein_in_silico"]
     capability_id: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_relationship(self) -> "WorkflowSetupCreateRequest":
+        if self.relationship_kind == "primary":
+            if self.global_experiment_id is not None or self.experiment is None:
+                raise ValueError("primary setup requires experiment and no global_experiment_id")
+        elif self.global_experiment_id is None or self.experiment is not None:
+            raise ValueError("follow_up setup requires global_experiment_id and no experiment")
+        return self
 
 
 class WorkflowSetupDraftRequest(StrictRequestModel):
@@ -464,8 +478,8 @@ async def create_project_workflow_setup(
             project_id=project_id,
             relationship_kind=payload.relationship_kind,
             global_experiment_id=payload.global_experiment_id,
-            experiment_name=payload.experiment_name,
-            experiment_objective=payload.experiment_objective,
+            experiment_name=payload.experiment.name if payload.experiment else None,
+            experiment_objective=payload.experiment.objective if payload.experiment else None,
             domain_kind=payload.domain_kind,
             capability_id=payload.capability_id,
             idempotency_key=_idempotency_key(request),
@@ -700,6 +714,10 @@ async def bind_launch_context_to_job(
                 canonical_batch_id=None,
             )
         projection = await _project_bound_job(session, core_session, context, job, binding)
+        if context.workflow_id is not None:
+            await mark_workflow_setup_submitted(
+                session, project_id=context.project_id, workflow_id=context.workflow_id
+            )
         await session.commit()
         await publish_launch_context_binding(
             core_session,

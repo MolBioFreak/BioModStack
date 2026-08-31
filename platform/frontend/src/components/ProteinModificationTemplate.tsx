@@ -11,6 +11,7 @@ interface ProteinModificationTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, unknown>;
     requiredPinnedGpu?: number | null;
+    onDraftChange?: (draft: Record<string, unknown>) => void;
 }
 
 type DeNovoBackend = 'disco' | 'laproteina';
@@ -46,6 +47,7 @@ export function ProteinModificationTemplate({
     onBack,
     initialValues,
     requiredPinnedGpu = null,
+    onDraftChange,
 }: ProteinModificationTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -106,6 +108,7 @@ export function ProteinModificationTemplate({
                 initialValues={initialValues}
                 submissionModelId={reopenValidatedPipeline ? 'protein_modification_experimental' : 'protein_local_redesign'}
                 requiredPinnedGpu={requiredPinnedGpu}
+                onDraftChange={onDraftChange}
             />
         );
     }

@@ -37,6 +37,7 @@ export default defineConfig({
             './tests/vitest/projectManagerPage.test.tsx',
             './tests/vitest/projectReturnBanner.test.tsx',
             './tests/vitest/projectWorkflowSetup.test.tsx',
+            './tests/vitest/projectNativeOwnersMounted.test.tsx',
             './tests/vitest/devIssueLedgerScreenshot.test.tsx',
             './tests/vitest/ngsResultRoutingMounted.test.tsx',
             './tests/vitest/ngsWorkflowChooserMounted.test.tsx',

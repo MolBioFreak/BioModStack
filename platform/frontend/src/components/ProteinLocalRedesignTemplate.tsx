@@ -30,6 +30,7 @@ interface ProteinLocalRedesignTemplateProps {
     initialValues?: Record<string, unknown>;
     submissionModelId?: string;
     requiredPinnedGpu?: number | null;
+    onDraftChange?: (draft: Record<string, unknown>) => void;
 }
 
 type RegionMode = 'manual_ranges' | 'interface_shell';
@@ -253,6 +254,7 @@ export function ProteinLocalRedesignTemplate({
     initialValues,
     submissionModelId = 'protein_local_redesign',
     requiredPinnedGpu = null,
+    onDraftChange,
 }: ProteinLocalRedesignTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -356,7 +358,9 @@ export function ProteinLocalRedesignTemplate({
         }
         if (typeof initialValues.model_number === 'number') setSelectedModelNumber(initialValues.model_number);
         if (typeof initialValues.design_chains === 'string' && initialValues.design_chains.trim()) setDesignChain(initialValues.design_chains.trim());
+        if (Array.isArray(initialValues.design_chains)) setDesignChain(initialValues.design_chains.filter((value): value is string => typeof value === 'string').join(','));
         if (typeof initialValues.context_chains === 'string') setContextChains(normalizeChainList(initialValues.context_chains));
+        if (Array.isArray(initialValues.context_chains)) setContextChains(initialValues.context_chains.filter((value): value is string => typeof value === 'string'));
         if (initialValues.region_mode === 'manual_ranges' || initialValues.region_mode === 'interface_shell') {
             setRegionMode(initialValues.region_mode);
         }
@@ -629,6 +633,26 @@ export function ProteinLocalRedesignTemplate({
         if (regionMode !== 'manual_ranges') return;
         setManualRangesText(selectedEditableResidues.size > 0 ? derivedManualRanges : '');
     }, [regionMode, selectedEditableResidues, derivedManualRanges]);
+
+    const projectDraftJson = JSON.stringify({
+        input_structure: sourcePath ?? '', redesign_mode: nativeRedesignMode,
+        design_chains: normalizeChainList(designChain), context_chains: contextChains,
+        redesign_ranges: manualRangesText,
+        sequence_policy: nativeRedesignMode === 'minimal_insertion'
+            ? 'insert_only'
+            : rfd3SequenceRecallRanges ? 'explicit_positions' : 'preserve',
+        select_unfixed_sequence: rfd3SequenceRecallRanges,
+        insertion_anchor: nativeInsertionAnchor.trim(),
+        insertion_min_length: Number.parseInt(nativeInsertionMinLength, 10),
+        insertion_max_length: Number.parseInt(nativeInsertionMaxLength, 10),
+        partial_t: nativePartialT, ligand: nativeLigand.trim(), num_designs: numDesigns,
+        seed: parseOptionalIntegerInput(nativeSeed) ?? 0,
+        dump_trajectories: nativeDumpTrajectories, write_full_json: true,
+        profile_id: nativeProfileId,
+    });
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
+    }, [onDraftChange, projectDraftJson]);
 
     const handleResidueRoleSelectionChange = (residues: Set<string>) => {
         const filtered = new Set(Array.from(residues).filter((key) => designResidueKeys.has(key)));

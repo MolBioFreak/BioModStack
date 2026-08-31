@@ -768,9 +768,11 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const [projectDraftValues, setProjectDraftValues] = useState<Record<string, UntypedApiValue>>({});
     useEffect(() => {
         if (!projectSetup.active || !projectSetup.setup) return;
         setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
+        setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
     }, [projectSetup.active, projectSetup.setup?.generation]);
     const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
         const route = mdHandoff.route;
@@ -792,7 +794,7 @@ export function JobSubmission() {
             !context?.launch_context_id
             || hydratedLaunchContextRef.current === context.launch_context_id
             || !scheduler
-            || !['esmfold2', 'molecular_dynamics'].includes(String(scheduler.model_id))
+            || !['esmfold2', 'boltz2', 'protenix', 'molecular_dynamics'].includes(String(scheduler.model_id))
             || !schedulerParams
             || typeof schedulerParams !== 'object'
             || Array.isArray(schedulerParams)
@@ -1781,7 +1783,7 @@ export function JobSubmission() {
         },
     });
 
-    if (preparedStructureScheduler) {
+    if (preparedStructureScheduler && !projectSetup.active) {
         return (
             <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
                 <main className="mx-auto max-w-4xl space-y-5">
@@ -1832,7 +1834,7 @@ export function JobSubmission() {
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
-            {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft((clonedValues ?? projectSetup.settings) as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.prepare()}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
+            {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft(projectDraftValues as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.startRun(projectDraftValues as JsonObject)}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
             <ExecutionTargetPicker />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
@@ -1977,6 +1979,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     onOpenTemplateManager={openTemplateManager}
                                     initialValues={clonedValues}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                     sourceSequenceId={mdHandoff.route?.sourceSequenceId ?? null}
                                     mdDraftId={mdHandoff.route?.draftId ?? null}
                                     returnTemplate={mdHandoff.route?.returnTemplate ?? null}
@@ -1991,6 +1994,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                     requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                 />
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (
@@ -2010,6 +2014,7 @@ export function JobSubmission() {
                                         ...(templateDetail?.preset_params || {}),
                                         ...(clonedValues || {}),
                                     }}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                 />
                             ) : (
                                 <>

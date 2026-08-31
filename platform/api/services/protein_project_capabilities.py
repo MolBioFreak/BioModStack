@@ -542,6 +542,15 @@ _PROJECT_READY_CAPABILITY_IDS = frozenset({
     "protein.conformational_mapping.confornets",
 })
 
+_PROJECT_SETUP_DESTINATIONS = {
+    "protein.structure_prediction.boltz2": "/submit?template=structure_prediction&pred_method=boltz",
+    "protein.structure_prediction.esmfold2": "/submit?template=structure_prediction&pred_method=esmfold2",
+    "protein.structure_prediction.protenix_v2": "/submit?template=structure_prediction&pred_method=protenix",
+    "protein.de_novo.local_redesign": "/submit?template=protein_local_redesign",
+    "protein.conformational_mapping.protenix_v2": "/submit?template=conformational_mapping&backend=protenix_v2",
+    "protein.conformational_mapping.confornets": "/submit?template=conformational_mapping&backend=confornets",
+}
+
 for _record in _CAPABILITIES:
     _is_project_ready = _record["capability_id"] in _PROJECT_READY_CAPABILITY_IDS
     _record.update(
@@ -550,7 +559,7 @@ for _record in _CAPABILITIES:
             _record.get("workflow_adapter_id") if _is_project_ready else None
         ),
         safe_setup_destination=(
-            f"/projects/workflow-setup/{_record['capability_id']}"
+            _PROJECT_SETUP_DESTINATIONS[_record["capability_id"]]
             if _is_project_ready
             else None
         ),
@@ -570,11 +579,25 @@ if set(_CAPABILITY_BY_ID) != set(_PARAMETER_SCHEMAS):
 
 
 def protein_capability_inventory(*, project_ready_only: bool = False) -> dict[str, Any]:
-    capabilities = (
-        [record for record in _CAPABILITIES if record["project_setup_state"] == "ready"]
-        if project_ready_only
-        else _CAPABILITIES
-    )
+    if project_ready_only:
+        capabilities = [
+            {
+                "capability_id": record["capability_id"],
+                "label": record["label"],
+                "state": "ready",
+                "adapter_id": record["project_setup_adapter_id"],
+                "setup_destination": record["safe_setup_destination"],
+                "source_requirements": list(record["source_requirements"]),
+                "follow_up_compatible_capability_ids": list(record["follow_up_compatible_capability_ids"]),
+            }
+            for record in _CAPABILITIES
+            if record["project_setup_state"] == "ready"
+        ]
+        return copy.deepcopy({
+            "schema": "bms.protein-project-workflow-picker.v1",
+            "capabilities": capabilities,
+        })
+    capabilities = _CAPABILITIES
     payload = {"schema": _INVENTORY_SCHEMA, "capabilities": capabilities}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return copy.deepcopy({**payload, "content_sha256": hashlib.sha256(canonical.encode()).hexdigest()})

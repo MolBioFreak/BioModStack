@@ -541,6 +541,22 @@ export interface BoundedPage<T> {
     next_cursor: string | null;
 }
 
+export interface ProjectWorkflowTask {
+    setup_context_id: string;
+    global_experiment_id: string;
+    experiment_name: string;
+    workflow_id: string;
+    workflow_name: string;
+    relationship_kind: 'primary' | 'follow_up';
+    workflow_label: string;
+    setup_state: 'open' | 'submitted' | 'deleted';
+    validation_state: 'incomplete' | 'ready' | 'invalid';
+    latest_run_state: string | null;
+    result_count: number;
+    reopen_route: string;
+    allowed_actions: string[];
+}
+
 export interface ProjectManagerReadModel {
     schema: 'bms.project-manager.read-model.v1';
     subject_id: string;
@@ -573,6 +589,7 @@ export interface ProjectManagerReadModel {
         activity: BoundedPage<ProjectActivity>;
     };
     project: ProjectHeadSummary;
+    tasks: ProjectWorkflowTask[];
     tree: { nodes: ProjectTreeNode[] };
     map: {
         focus_node_key: string;
@@ -1017,47 +1034,52 @@ export interface FrustraMpnnExperimentScope {
 export interface ProteinProjectSetupCapability {
     capability_id: string;
     label: string;
-    project_setup_state: 'ready' | 'unavailable';
-    project_setup_adapter_id: string | null;
-    setup_destination: string | null;
-    source_requirements: JsonObject;
-    compatibility: JsonObject;
+    state: 'ready';
+    adapter_id: string;
+    setup_destination: string;
+    source_requirements: string[];
+    follow_up_compatible_capability_ids: string[];
 }
 
 export interface ProteinProjectCapabilityInventory {
-    schema: 'bms.protein-project.capability-inventory.v1';
+    schema: 'bms.protein-project-workflow-picker.v1';
     capabilities: ProteinProjectSetupCapability[];
 }
 
 export interface ProjectWorkflowSetupCreate {
     schema: 'bms.project-workflow-setup.create.v1';
-    context: 'primary' | 'follow_up';
-    global_experiment_id?: string;
-    name: string;
-    objective: string;
-    domain: 'protein';
+    relationship_kind: 'primary' | 'follow_up';
+    global_experiment_id: string | null;
+    experiment?: { name: string; objective: string };
+    domain_kind: 'protein_in_silico';
     capability_id: string;
 }
 
-export interface ProjectWorkflowSetup {
-    schema: 'bms.project-workflow-setup.v1';
+export interface ProjectWorkflowSetupNavigation {
+    schema: 'bms.project-workflow-setup.create-response.v1';
     setup_context_id: string;
     project_id: string;
     global_experiment_id: string;
     domain_experiment_id: string;
-    context: 'primary' | 'follow_up';
+    relationship_kind: 'primary' | 'follow_up';
     capability_id: string;
-    state: 'draft' | 'prepared' | 'submitted';
-    validation_state: 'unknown' | 'valid' | 'invalid';
+    state: 'open' | 'submitted' | 'deleted';
+    validation_state: 'incomplete' | 'ready' | 'invalid';
     setup_destination: string;
     return_uri: string;
     generation: number;
+}
+
+export interface ProjectWorkflowSetup extends Omit<ProjectWorkflowSetupNavigation, 'schema'> {
+    schema: 'bms.project-workflow-setup.detail.v1';
     project_label: string;
     experiment_label: string;
     workflow_label: string;
     draft: JsonObject;
     field_errors: Record<string, string>;
     diagnostics: JsonObject;
+    preparation_id?: string;
+    launch_context_id?: string;
 }
 
 const segment = (value: string) => encodeURIComponent(value);
@@ -1384,13 +1406,38 @@ function parseJsonPage(value: unknown, label: string, extra: readonly string[] =
     return parsed;
 }
 
+function parseProjectWorkflowTask(value: unknown, label: string): ProjectWorkflowTask {
+    const task = exactRecord(value, label, [
+        'setup_context_id', 'global_experiment_id', 'experiment_name', 'workflow_id', 'workflow_name',
+        'relationship_kind', 'workflow_label', 'setup_state', 'validation_state', 'latest_run_state',
+        'result_count', 'reopen_route', 'allowed_actions',
+    ]);
+    const reopenRoute = requireString(task.reopen_route, `${label}.reopen_route`);
+    if (!reopenRoute.startsWith('/') || reopenRoute.startsWith('//')) throw new Error(`${label}.reopen_route must be a safe local route.`);
+    return {
+        setup_context_id: requireString(task.setup_context_id, `${label}.setup_context_id`),
+        global_experiment_id: requireString(task.global_experiment_id, `${label}.global_experiment_id`),
+        experiment_name: requireString(task.experiment_name, `${label}.experiment_name`),
+        workflow_id: requireString(task.workflow_id, `${label}.workflow_id`),
+        workflow_name: requireString(task.workflow_name, `${label}.workflow_name`),
+        relationship_kind: requireLiteral(task.relationship_kind, `${label}.relationship_kind`, ['primary', 'follow_up'] as const),
+        workflow_label: requireString(task.workflow_label, `${label}.workflow_label`),
+        setup_state: requireLiteral(task.setup_state, `${label}.setup_state`, ['open', 'submitted', 'deleted'] as const),
+        validation_state: requireLiteral(task.validation_state, `${label}.validation_state`, ['incomplete', 'ready', 'invalid'] as const),
+        latest_run_state: requireNullableString(task.latest_run_state, `${label}.latest_run_state`),
+        result_count: requireInteger(task.result_count, `${label}.result_count`),
+        reopen_route: reopenRoute,
+        allowed_actions: requireStringArray(task.allowed_actions, `${label}.allowed_actions`),
+    };
+}
+
 export function normalizeProjectManagerReadModel(value: unknown): ProjectManagerReadModel {
     const label = 'Project Manager read model';
     const record = exactRecord(value, label, [
         'schema', 'subject_id', 'subject_generation', 'assembled_at', 'source_receipt_ids', 'source_digest_set_sha256',
         'adapter_versions', 'reconciliation', 'counts', 'status_summary', 'recent_activity', 'result_previews', 'pagination',
         'project', 'tree', 'map', 'selection', 'runs', 'warnings', 'allowed_actions',
-    ]);
+    ], ['tasks']);
     const project = exactRecord(record.project, `${label}.project`, ['id', 'project_scope', 'name', 'objective', 'lifecycle_state', 'head_generation', 'current_revision_id', 'updated_at']);
     const tree = exactRecord(record.tree, `${label}.tree`, ['nodes']);
     const map = exactRecord(record.map, `${label}.map`, ['focus_node_key', 'nodes', 'edges', 'truncated', 'next_cursor']);
@@ -1447,6 +1494,7 @@ export function normalizeProjectManagerReadModel(value: unknown): ProjectManager
             current_revision_id: requireNullableString(project.current_revision_id, `${label}.project.current_revision_id`),
             updated_at: requireString(project.updated_at, `${label}.project.updated_at`),
         },
+        tasks: requireArray(record.tasks ?? [], `${label}.tasks`, parseProjectWorkflowTask),
         tree: { nodes: requireArray(tree.nodes, `${label}.tree.nodes`, parseTreeNode) },
         map: {
             focus_node_key: requireString(map.focus_node_key, `${label}.map.focus_node_key`),
@@ -1763,69 +1811,84 @@ export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAd
 
 function parseProteinProjectCapability(value: unknown, label: string): ProteinProjectSetupCapability {
     const record = exactRecord(value, label, [
-        'capability_id', 'label', 'project_setup_state', 'project_setup_adapter_id', 'setup_destination',
-        'source_requirements', 'compatibility',
+        'capability_id', 'label', 'state', 'adapter_id', 'setup_destination',
+        'source_requirements', 'follow_up_compatible_capability_ids',
     ]);
-    const state = requireLiteral(record.project_setup_state, `${label}.project_setup_state`, ['ready', 'unavailable'] as const);
-    const adapterId = requireNullableString(record.project_setup_adapter_id, `${label}.project_setup_adapter_id`);
-    const destination = requireNullableString(record.setup_destination, `${label}.setup_destination`);
-    if (state === 'ready' && (!adapterId || !destination || !destination.startsWith('/') || destination.startsWith('//'))) {
+    const destination = requireString(record.setup_destination, `${label}.setup_destination`);
+    if (!destination.startsWith('/') || destination.startsWith('//')) {
         throw new Error(`${label} is ready without a safe native setup destination and adapter.`);
     }
     return {
         capability_id: requireString(record.capability_id, `${label}.capability_id`),
         label: requireString(record.label, `${label}.label`),
-        project_setup_state: state,
-        project_setup_adapter_id: adapterId,
+        state: requireLiteral(record.state, `${label}.state`, ['ready'] as const),
+        adapter_id: requireString(record.adapter_id, `${label}.adapter_id`),
         setup_destination: destination,
-        source_requirements: requireJsonObject(record.source_requirements, `${label}.source_requirements`),
-        compatibility: requireJsonObject(record.compatibility, `${label}.compatibility`),
+        source_requirements: requireStringArray(record.source_requirements, `${label}.source_requirements`),
+        follow_up_compatible_capability_ids: requireStringArray(record.follow_up_compatible_capability_ids, `${label}.follow_up_compatible_capability_ids`),
     };
 }
 
 export function parseProteinProjectCapabilityInventory(value: unknown): ProteinProjectCapabilityInventory {
     const record = exactRecord(value, 'protein capability inventory', ['schema', 'capabilities']);
-    if (record.schema !== 'bms.protein-project.capability-inventory.v1') throw new Error('Protein capability inventory schema is unsupported.');
+    if (record.schema !== 'bms.protein-project-workflow-picker.v1') throw new Error('Protein capability inventory schema is unsupported.');
     return {
         schema: record.schema,
         capabilities: requireArray(record.capabilities, 'protein capability inventory.capabilities', parseProteinProjectCapability),
     };
 }
 
-export function parseProjectWorkflowSetup(value: unknown): ProjectWorkflowSetup {
+function parseSetupNavigation(value: unknown, detailed: boolean): ProjectWorkflowSetupNavigation | ProjectWorkflowSetup {
+    const details = ['project_label', 'experiment_label', 'workflow_label', 'draft', 'field_errors', 'diagnostics'];
     const record = exactRecord(value, 'project workflow setup', [
-        'schema', 'setup_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'context',
+        'schema', 'setup_context_id', 'project_id', 'global_experiment_id', 'domain_experiment_id', 'relationship_kind',
         'capability_id', 'state', 'validation_state', 'setup_destination', 'return_uri', 'generation',
-        'project_label', 'experiment_label', 'workflow_label', 'draft', 'field_errors', 'diagnostics',
-    ]);
-    if (record.schema !== 'bms.project-workflow-setup.v1') throw new Error('Project workflow setup schema is unsupported.');
+        ...(detailed ? details : []),
+    ], detailed ? ['preparation_id', 'launch_context_id'] : []);
+    const expectedSchema = detailed ? 'bms.project-workflow-setup.detail.v1' : 'bms.project-workflow-setup.create-response.v1';
+    if (record.schema !== expectedSchema) throw new Error('Project workflow setup schema is unsupported.');
     const destination = requireString(record.setup_destination, 'project workflow setup.setup_destination');
     const returnUri = requireString(record.return_uri, 'project workflow setup.return_uri');
     if (!destination.startsWith('/') || destination.startsWith('//')) throw new Error('Project workflow setup destination must be a safe local route.');
     if (!returnUri.startsWith('/') || returnUri.startsWith('//')) throw new Error('Project workflow setup return_uri must be a safe local route.');
-    const rawErrors = exactRecord(record.field_errors, 'project workflow setup.field_errors', [], Object.keys(record.field_errors as UnknownRecord));
-    const fieldErrors: Record<string, string> = {};
-    for (const [key, item] of Object.entries(rawErrors)) fieldErrors[key] = requireString(item, `project workflow setup.field_errors.${key}`);
-    return {
-        schema: record.schema,
+    const base: ProjectWorkflowSetupNavigation = {
+        schema: 'bms.project-workflow-setup.create-response.v1',
         setup_context_id: requireString(record.setup_context_id, 'project workflow setup.setup_context_id'),
         project_id: requireString(record.project_id, 'project workflow setup.project_id'),
         global_experiment_id: requireString(record.global_experiment_id, 'project workflow setup.global_experiment_id'),
         domain_experiment_id: requireString(record.domain_experiment_id, 'project workflow setup.domain_experiment_id'),
-        context: requireLiteral(record.context, 'project workflow setup.context', ['primary', 'follow_up'] as const),
+        relationship_kind: requireLiteral(record.relationship_kind, 'project workflow setup.relationship_kind', ['primary', 'follow_up'] as const),
         capability_id: requireString(record.capability_id, 'project workflow setup.capability_id'),
-        state: requireLiteral(record.state, 'project workflow setup.state', ['draft', 'prepared', 'submitted'] as const),
-        validation_state: requireLiteral(record.validation_state, 'project workflow setup.validation_state', ['unknown', 'valid', 'invalid'] as const),
+        state: requireLiteral(record.state, 'project workflow setup.state', ['open', 'submitted', 'deleted'] as const),
+        validation_state: requireLiteral(record.validation_state, 'project workflow setup.validation_state', ['incomplete', 'ready', 'invalid'] as const),
         setup_destination: destination,
         return_uri: returnUri,
         generation: requireInteger(record.generation, 'project workflow setup.generation'),
+    };
+    if (!detailed) return base;
+    const rawErrors = exactRecord(record.field_errors, 'project workflow setup.field_errors', [], Object.keys(record.field_errors as UnknownRecord));
+    const fieldErrors: Record<string, string> = {};
+    for (const [key, item] of Object.entries(rawErrors)) fieldErrors[key] = requireString(item, `project workflow setup.field_errors.${key}`);
+    return {
+        ...base,
+        schema: 'bms.project-workflow-setup.detail.v1',
         project_label: requireString(record.project_label, 'project workflow setup.project_label'),
         experiment_label: requireString(record.experiment_label, 'project workflow setup.experiment_label'),
         workflow_label: requireString(record.workflow_label, 'project workflow setup.workflow_label'),
         draft: requireJsonObject(record.draft, 'project workflow setup.draft'),
         field_errors: fieldErrors,
         diagnostics: requireJsonObject(record.diagnostics, 'project workflow setup.diagnostics'),
+        ...(record.preparation_id === undefined ? {} : { preparation_id: requireString(record.preparation_id, 'project workflow setup.preparation_id') }),
+        ...(record.launch_context_id === undefined ? {} : { launch_context_id: requireString(record.launch_context_id, 'project workflow setup.launch_context_id') }),
     };
+}
+
+export function parseProjectWorkflowSetup(value: unknown): ProjectWorkflowSetup {
+    return parseSetupNavigation(value, true) as ProjectWorkflowSetup;
+}
+
+export function parseProjectWorkflowSetupNavigation(value: unknown): ProjectWorkflowSetupNavigation {
+    return parseSetupNavigation(value, false) as ProjectWorkflowSetupNavigation;
 }
 
 export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<ProteinProjectCapabilityInventory> {
@@ -1833,9 +1896,9 @@ export async function listProteinProjectCapabilities(signal?: AbortSignal): Prom
     return parseProteinProjectCapabilityInventory(response.data);
 }
 
-export async function createProjectWorkflowSetup(projectId: string, request: ProjectWorkflowSetupCreate): Promise<ProjectWorkflowSetup> {
+export async function createProjectWorkflowSetup(projectId: string, request: ProjectWorkflowSetupCreate): Promise<ProjectWorkflowSetupNavigation> {
     const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups`, request);
-    return parseProjectWorkflowSetup(response.data);
+    return parseProjectWorkflowSetupNavigation(response.data);
 }
 
 export async function getProjectWorkflowSetup(projectId: string, setupContextId: string, signal?: AbortSignal): Promise<ProjectWorkflowSetup> {
@@ -1848,8 +1911,8 @@ export async function saveProjectWorkflowSetupDraft(projectId: string, setupCont
     return parseProjectWorkflowSetup(response.data);
 }
 
-export async function prepareProjectWorkflowSetup(projectId: string, setupContextId: string): Promise<ProjectWorkflowSetup> {
-    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/prepare-launch`);
+export async function prepareProjectWorkflowSetup(projectId: string, setupContextId: string, expectedGeneration: number): Promise<ProjectWorkflowSetup> {
+    const response = await api.post<unknown>(`/api/projects/${segment(projectId)}/workflow-setups/${segment(setupContextId)}/prepare-launch`, { expected_generation: expectedGeneration });
     return parseProjectWorkflowSetup(response.data);
 }
 

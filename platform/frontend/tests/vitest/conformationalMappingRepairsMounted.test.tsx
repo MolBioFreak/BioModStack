@@ -117,6 +117,37 @@ test('mounted launcher uses independent record/source and science/preview column
 });
 
 
+test('mounted launcher hydrates and reports the exact Project-owned native draft', async () => {
+    const drafts: Record<string, unknown>[] = [];
+    sessionStorage.clear();
+    const queryClient = client();
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+        renderer = create(
+            <MemoryRouter><QueryClientProvider client={queryClient}>
+                <ConformationalMappingLauncher
+                    services={{ listSources: async () => [] } as never}
+                    initialValues={{
+                        backend: 'confornets',
+                        request: {
+                            backend: 'confornets', ordered_seeds: [73], samples_per_seed: 4,
+                            confornets: { task: 'diversity', runs: 2, saved_steps: [100], confornet_count: 3, samples: 4, max_steps: 100 },
+                        },
+                    }}
+                    onDraftChange={(draft) => drafts.push(draft)}
+                />
+            </QueryClientProvider></MemoryRouter>,
+        );
+    });
+    await flush();
+    assert.ok(drafts.length > 0);
+    assert.equal(drafts.at(-1)?.backend, 'confornets');
+    assert.deepEqual((drafts.at(-1)?.request as Record<string, unknown> | null)?.ordered_seeds, [73]);
+    await act(async () => renderer!.unmount());
+    queryClient.clear();
+});
+
+
 test('mounted launcher round-trips reference state-landscape authority into the typed request', async () => {
     const submissions: CmSubmitRequest[] = [];
     const mounted = await mountLauncher({

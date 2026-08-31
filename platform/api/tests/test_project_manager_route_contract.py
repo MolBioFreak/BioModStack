@@ -33,8 +33,8 @@ def test_project_workflow_setup_routes_and_create_contract_are_registered() -> N
     payload = model.model_validate({
         "schema": "bms.project-workflow-setup.create.v1",
         "relationship_kind": "primary",
-        "experiment_name": "Fold target",
-        "experiment_objective": "Predict structure",
+        "global_experiment_id": None,
+        "experiment": {"name": "Fold target", "objective": "Predict target"},
         "domain_kind": "protein_in_silico",
         "capability_id": "protein.structure_prediction.esmfold2",
     })

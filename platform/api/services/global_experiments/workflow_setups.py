@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError as JsonSchemaValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from experiment_models import (
@@ -57,14 +58,14 @@ def _return_uri(row: ExperimentWorkflowSetupContext) -> str:
     return f"/projects/{row.project_id}?focus={row.global_experiment_id}&selected={selected}"
 
 
-def _document(row: ExperimentWorkflowSetupContext, *, detailed: bool = False) -> dict[str, Any]:
+def _document(row: ExperimentWorkflowSetupContext) -> dict[str, Any]:
     document: dict[str, Any] = {
-        "schema": "bms.project-workflow-setup.v1",
+        "schema": "bms.project-workflow-setup.create-response.v1",
         "setup_context_id": row.setup_context_id,
         "project_id": row.project_id,
         "global_experiment_id": row.global_experiment_id,
         "domain_experiment_id": row.domain_experiment_id,
-        "workflow_id": row.workflow_id,
+
         "relationship_kind": row.relationship_kind,
         "capability_id": row.capability_id,
         "state": row.lifecycle_state,
@@ -73,19 +74,33 @@ def _document(row: ExperimentWorkflowSetupContext, *, detailed: bool = False) ->
         "setup_destination": row.setup_destination,
         "return_uri": _return_uri(row),
     }
-    if detailed:
-        document.update(
-            draft=json.loads(row.draft_json),
-            draft_sha256=row.draft_sha256,
-            capability_contract_sha256=row.capability_contract_sha256,
-            diagnostics={
-                "created_at": row.created_at,
-                "updated_at": row.updated_at,
-                "submitted_at": row.submitted_at,
-                "deleted_at": row.deleted_at,
-            },
-        )
     return document
+
+
+async def _detailed_document(
+    session: AsyncSession, row: ExperimentWorkflowSetupContext
+) -> dict[str, Any]:
+    project = await session.get(ExperimentAggregateHead, row.project_id)
+    experiment = await session.get(ExperimentAggregateHead, row.global_experiment_id)
+    capability = json.loads(row.capability_contract_json)["capability"]
+    return {
+        **_document(row),
+        "schema": "bms.project-workflow-setup.detail.v1",
+        "project_label": project.display_name if project is not None else row.project_id,
+        "experiment_label": experiment.display_name if experiment is not None else row.global_experiment_id,
+        "workflow_label": capability["label"],
+        "draft": json.loads(row.draft_json),
+        "field_errors": {},
+        "diagnostics": {
+            "workflow_id": row.workflow_id,
+            "draft_sha256": row.draft_sha256,
+            "capability_contract_sha256": row.capability_contract_sha256,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "submitted_at": row.submitted_at,
+            "deleted_at": row.deleted_at,
+        },
+    }
 
 
 async def _project(session: AsyncSession, project_id: str) -> ExperimentAggregateHead:
@@ -319,6 +334,8 @@ async def create_workflow_setup(
     setup_context_id = f"workflow-setup:{uuid.uuid4()}"
     timestamp = _now()
     contract_json = canonical_json(contract)
+    initial_draft, initial_validation_state = _materialize_draft(contract["parameter_schema"], {})
+    initial_draft_json = canonical_json(initial_draft)
     session.add(
         ExperimentResource(
             id=setup_context_id,
@@ -340,10 +357,10 @@ async def create_workflow_setup(
         capability_contract_json=contract_json,
         capability_contract_sha256=sha256_text(contract_json),
         setup_destination=destination,
-        draft_json="{}",
-        draft_sha256=sha256_text("{}"),
+        draft_json=initial_draft_json,
+        draft_sha256=sha256_text(initial_draft_json),
         generation=0,
-        validation_state="incomplete",
+        validation_state=initial_validation_state,
         lifecycle_state="open",
         created_at=timestamp,
         updated_at=timestamp,
@@ -369,7 +386,9 @@ async def get_workflow_setup(
     setup_context_id: str,
 ) -> dict[str, Any]:
     await _project(session, project_id)
-    return _document(await _owned_setup(session, project_id, setup_context_id), detailed=True)
+    return await _detailed_document(
+        session, await _owned_setup(session, project_id, setup_context_id)
+    )
 
 
 async def save_workflow_setup_draft(
@@ -404,7 +423,7 @@ async def save_workflow_setup_draft(
     row.validation_state = validation_state
     row.updated_at = _now()
     await session.flush()
-    response = _document(row, detailed=True)
+    response = await _detailed_document(session, row)
     await _claim(
         session, scope=scope, key=idempotency_key, request_sha256=request_sha256,
         result_resource_id=row.setup_context_id, response=response,
@@ -473,6 +492,20 @@ async def prepare_workflow_setup_launch(
     workflow.lifecycle_state = "active"
     workflow.updated_at = timestamp
     await session.flush()
+    capability = json.loads(row.capability_contract_json)["capability"]
+    model_modes = capability.get("allowed_model_modes")
+    if not isinstance(model_modes, list) or len(model_modes) != 1:
+        raise ValidationFailure("workflow setup capability has no exact native model and mode")
+    model_mode = model_modes[0]
+    if not isinstance(model_mode, dict) or not isinstance(model_mode.get("model_id"), str) or not isinstance(model_mode.get("mode"), str):
+        raise ValidationFailure("workflow setup native model and mode authority is malformed")
+    scheduler_payload = {
+        "name": workflow.display_name,
+        "model_id": model_mode["model_id"],
+        "mode": model_mode["mode"],
+        "params": json.loads(row.draft_json),
+    }
+    scheduler_json = canonical_json(scheduler_payload)
     preparation_id = new_id("preparation")
     validation_id = new_id("validation")
     for resource_id, kind, owner in (
@@ -514,7 +547,7 @@ async def prepare_workflow_setup_launch(
                 workflow_revision_id=revision_id,
                 normalized_request_json=row.draft_json,
                 normalized_request_sha256=row.draft_sha256,
-                scheduler_payload_json=payload_json,
+                scheduler_payload_json=scheduler_json,
                 validation_status="valid",
                 validation_receipt_json=validation_json,
                 validation_resource_id=validation_id,
@@ -533,12 +566,8 @@ async def prepare_workflow_setup_launch(
         preparation_id=preparation_id,
         return_uri=_return_uri(row),
     )
-    row.lifecycle_state = "submitted"
-    row.submitted_at = timestamp
-    row.updated_at = timestamp
-    await session.flush()
     response = {
-        **_document(row, detailed=True),
+        **await _detailed_document(session, row),
         "preparation_id": preparation_id,
         "launch_context_id": context.launch_context_id,
     }
@@ -574,7 +603,7 @@ async def delete_workflow_setup(
     if resource is not None:
         resource.archived_at = timestamp
     await session.flush()
-    response = _document(row, detailed=True)
+    response = await _detailed_document(session, row)
     await _claim(
         session, scope=scope, key=idempotency_key, request_sha256=request_sha256,
         result_resource_id=row.setup_context_id, response=response,
@@ -582,10 +611,40 @@ async def delete_workflow_setup(
     return response
 
 
+async def mark_workflow_setup_submitted(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    workflow_id: str,
+) -> None:
+    rows = list((await session.scalars(
+        select(ExperimentWorkflowSetupContext).where(
+            ExperimentWorkflowSetupContext.project_id == project_id,
+            ExperimentWorkflowSetupContext.workflow_id == workflow_id,
+            ExperimentWorkflowSetupContext.lifecycle_state != "deleted",
+        ).limit(2)
+    )).all())
+    if not rows:
+        return
+    if len(rows) != 1:
+        raise ValidationFailure("canonical Job binding resolves an ambiguous workflow setup")
+    row = rows[0]
+    if row.lifecycle_state == "submitted":
+        return
+    if row.lifecycle_state != "open":
+        raise ValidationFailure("only an open workflow setup can be submitted")
+    timestamp = _now()
+    row.lifecycle_state = "submitted"
+    row.submitted_at = timestamp
+    row.updated_at = timestamp
+    await session.flush()
+
+
 __all__ = [
     "create_workflow_setup",
     "delete_workflow_setup",
     "get_workflow_setup",
+    "mark_workflow_setup_submitted",
     "prepare_workflow_setup_launch",
     "save_workflow_setup_draft",
 ]

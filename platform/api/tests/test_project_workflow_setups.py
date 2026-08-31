@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 from pathlib import Path
 
@@ -98,11 +99,17 @@ def test_setup_context_persistence_authority_is_registered() -> None:
 
 def test_project_picker_exposes_exactly_six_ready_capabilities() -> None:
     inventory = protein_capability_inventory(project_ready_only=True)
+    assert set(inventory) == {"schema", "capabilities"}
+    assert inventory["schema"] == "bms.protein-project-workflow-picker.v1"
     assert {item["capability_id"] for item in inventory["capabilities"]} == READY_CAPABILITIES
     for item in inventory["capabilities"]:
-        assert item["project_setup_state"] == "ready"
-        assert item["project_setup_adapter_id"]
-        assert item["safe_setup_destination"].startswith("/projects/workflow-setup/")
+        assert set(item) == {
+            "capability_id", "label", "state", "adapter_id", "setup_destination",
+            "source_requirements", "follow_up_compatible_capability_ids",
+        }
+        assert item["state"] == "ready"
+        assert item["adapter_id"]
+        assert item["setup_destination"].startswith("/submit?template=")
         assert isinstance(item["source_requirements"], list)
         assert set(item["follow_up_compatible_capability_ids"]) <= READY_CAPABILITIES
 
@@ -177,10 +184,15 @@ async def test_primary_setup_atomically_creates_shell_context_and_no_execution(s
             idempotency_key="primary-create-0001",
         )
         assert replay == document
-        assert document["schema"] == "bms.project-workflow-setup.v1"
+        assert set(document) == {
+            "schema", "setup_context_id", "project_id", "global_experiment_id",
+            "domain_experiment_id", "relationship_kind", "capability_id", "state",
+            "validation_state", "generation", "setup_destination", "return_uri",
+        }
+        assert document["schema"] == "bms.project-workflow-setup.create-response.v1"
         assert document["state"] == "open"
         assert document["validation_state"] == "incomplete"
-        assert document["setup_destination"].startswith("/projects/workflow-setup/")
+        assert document["setup_destination"].startswith("/submit?template=")
         assert document["return_uri"].startswith(f"/projects/{project.id}?")
         row = await session.get(ExperimentWorkflowSetupContext, document["setup_context_id"])
         assert row is not None
@@ -310,12 +322,83 @@ async def test_prepare_launch_freezes_authorities_without_run_or_job_submission(
             session, project_id=project.id, setup_context_id=setup["setup_context_id"],
             expected_generation=1, idempotency_key="prepare-launch-0001",
         )
-        assert prepared["state"] == "submitted"
+        assert prepared["state"] == "open"
         assert prepared["launch_context_id"]
         assert prepared["preparation_id"]
+        preparation = await session.get(ExperimentWorkflowPreparation, prepared["preparation_id"])
+        assert preparation is not None
+        assert json.loads(preparation.scheduler_payload_json) == {
+            "name": "Target — ESMFold2 structure prediction",
+            "model_id": "esmfold2",
+            "mode": "predict",
+            "params": json.loads(preparation.normalized_request_json),
+        }
         assert await session.scalar(select(func.count()).select_from(ExperimentWorkflowPreparation)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentLaunchContext)) == 1
         assert await session.scalar(select(func.count()).select_from(ExperimentRunGroup)) == 0
+
+
+@pytest.mark.asyncio
+async def test_setup_becomes_submitted_only_after_authoritative_job_binding(setup_store) -> None:
+    async with setup_store() as session:
+        project = await _project(session)
+        setup = await workflow_setups.create_workflow_setup(
+            session, project_id=project.id, relationship_kind="primary",
+            global_experiment_id=None, experiment_name="Bind target", experiment_objective="Fold",
+            domain_kind="protein_in_silico", capability_id="protein.structure_prediction.esmfold2",
+            idempotency_key="primary-bind-0001",
+        )
+        await workflow_setups.save_workflow_setup_draft(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+            draft={"sequence": "MQIFVK"}, expected_generation=0,
+            idempotency_key="draft-bind-0001",
+        )
+        prepared = await workflow_setups.prepare_workflow_setup_launch(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+            expected_generation=1, idempotency_key="prepare-bind-0001",
+        )
+        assert prepared["state"] == "open"
+        await workflow_setups.mark_workflow_setup_submitted(
+            session, project_id=project.id, workflow_id=prepared["diagnostics"]["workflow_id"]
+        )
+        submitted = await workflow_setups.get_workflow_setup(
+            session, project_id=project.id, setup_context_id=setup["setup_context_id"]
+        )
+        assert submitted["state"] == "submitted"
+        with pytest.raises(ValidationFailure, match="submitted"):
+            await workflow_setups.delete_workflow_setup(
+                session, project_id=project.id, setup_context_id=setup["setup_context_id"],
+                idempotency_key="delete-submitted-0001",
+            )
+
+
+@pytest.mark.asyncio
+async def test_resume_is_hydrated_but_create_stays_navigation_bounded(setup_store) -> None:
+    async with setup_store() as session:
+        project = await _project(session)
+        created = await workflow_setups.create_workflow_setup(
+            session, project_id=project.id, relationship_kind="primary",
+            global_experiment_id=None, experiment_name="Hydrated target",
+            experiment_objective="Preserve exact native values",
+            domain_kind="protein_in_silico",
+            capability_id="protein.structure_prediction.esmfold2",
+            idempotency_key="primary-hydrate-0001",
+        )
+        assert "draft" not in created and "diagnostics" not in created
+        resumed = await workflow_setups.get_workflow_setup(
+            session, project_id=project.id, setup_context_id=created["setup_context_id"]
+        )
+        assert resumed["schema"] == "bms.project-workflow-setup.detail.v1"
+        assert resumed["relationship_kind"] == "primary"
+        assert resumed["state"] == "open"
+        assert resumed["validation_state"] == "incomplete"
+        assert resumed["project_label"] == "Protein Project"
+        assert resumed["experiment_label"] == "Hydrated target"
+        assert resumed["workflow_label"] == "ESMFold2 structure prediction"
+        assert resumed["draft"]["pred_method"] == "esmfold2"
+        assert "sequence" not in resumed["draft"]
+        assert resumed["field_errors"] == {}
+        assert resumed["diagnostics"]["workflow_id"]
 
 
 @pytest.mark.asyncio
@@ -331,11 +414,13 @@ async def test_task_first_read_model_projects_setup_relationship_and_actions(set
         )
         read_model = await build_project_manager_read_model(session, project_id=project.id)
         task = next(item for item in read_model["tasks"] if item["setup_context_id"] == setup["setup_context_id"])
+        setup_row = await session.get(ExperimentWorkflowSetupContext, setup["setup_context_id"])
+        assert setup_row is not None
         assert task == {
             "setup_context_id": setup["setup_context_id"],
             "global_experiment_id": setup["global_experiment_id"],
             "experiment_name": "Familiar experiment",
-            "workflow_id": setup["workflow_id"],
+            "workflow_id": setup_row.workflow_id,
             "workflow_name": "Familiar experiment — Boltz-2 structure prediction",
             "relationship_kind": "primary",
             "workflow_label": "Boltz-2 structure prediction",
@@ -343,7 +428,11 @@ async def test_task_first_read_model_projects_setup_relationship_and_actions(set
             "validation_state": "incomplete",
             "latest_run_state": None,
             "result_count": 0,
-            "reopen_route": f"/projects/{project.id}/workflow-setups/{setup['setup_context_id']}",
+            "reopen_route": (
+                f"/submit?template=structure_prediction&pred_method=boltz"
+                f"&setup_context_id={setup['setup_context_id'].replace(':', '%3A')}"
+                f"&project_id={project.id}"
+            ),
             "allowed_actions": ["resume", "edit", "delete"],
         }
         assert "tree" in read_model and "map" in read_model and "selection" in read_model

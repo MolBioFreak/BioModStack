@@ -2216,7 +2216,10 @@ CREATE TABLE workflow_setup_contexts (
     capability_id TEXT NOT NULL,
     capability_contract_json TEXT NOT NULL,
     capability_contract_sha256 TEXT NOT NULL CHECK(length(capability_contract_sha256) = 64),
-    setup_destination TEXT NOT NULL CHECK(setup_destination LIKE '/projects/workflow-setup/%'),
+    setup_destination TEXT NOT NULL CHECK(
+        setup_destination LIKE '/submit?template=%'
+        AND setup_destination NOT LIKE '//%'
+    ),
     draft_json TEXT NOT NULL DEFAULT '{}',
     draft_sha256 TEXT NOT NULL CHECK(length(draft_sha256) = 64),
     generation INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0),

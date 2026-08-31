@@ -23,17 +23,16 @@ import {
 } from '../../src/components/project-manager/ProjectWorkflowSetup';
 
 const ready = {
-    capability_id: 'esmfold2_prediction', label: 'ESMFold2 structure prediction', project_setup_state: 'ready',
-    project_setup_adapter_id: 'bms.esmfold2.project-setup.v1', setup_destination: '/submit?template=structure_prediction&predictor=esmfold2',
-    source_requirements: { kind: 'protein_sequence' }, compatibility: { experiment_modes: ['prediction'] },
+    capability_id: 'protein.structure_prediction.esmfold2', label: 'ESMFold2 structure prediction', state: 'ready',
+    adapter_id: 'bms.esmfold2.project-setup.v1', setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
+    source_requirements: ['protein_sequence_receipt'], follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
 };
-const unavailable = { ...ready, capability_id: 'proteinmpnn', label: 'ProteinMPNN', project_setup_state: 'unavailable', project_setup_adapter_id: null, setup_destination: null };
 const setup = {
-    schema: 'bms.project-workflow-setup.v1', setup_context_id: 'setup-1', project_id: 'project-1',
-    global_experiment_id: 'experiment-1', domain_experiment_id: 'domain-1', context: 'primary', capability_id: ready.capability_id,
-    state: 'draft', validation_state: 'valid', setup_destination: ready.setup_destination, return_uri: '/projects/project-1?focus=experiment-1&selected=domain_experiment%3Adomain-1',
+    schema: 'bms.project-workflow-setup.detail.v1', setup_context_id: 'setup-1', project_id: 'project-1',
+    global_experiment_id: 'experiment-1', domain_experiment_id: 'domain-1', relationship_kind: 'primary', capability_id: ready.capability_id,
+    state: 'open', validation_state: 'ready', setup_destination: ready.setup_destination, return_uri: '/projects/project-1?focus=experiment-1&selected=domain_experiment%3Adomain-1',
     generation: 2, project_label: 'Ubiquitin Project', experiment_label: 'Fold ubiquitin', workflow_label: ready.label,
-    draft: { settings: { sequence: 'MQLK', recycles: 3 }, source: { kind: 'protein_sequence' } }, field_errors: {}, diagnostics: { preparation_record_id: 'prep-secret', request_sha256: 'a'.repeat(64) },
+    draft: { sequence: 'MQLK', recycles: 3 }, field_errors: {}, diagnostics: { preparation_record_id: 'prep-secret', request_sha256: 'a'.repeat(64) },
 };
 let container: HTMLDivElement; let root: Root; let client: QueryClient;
 async function flush() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); }
@@ -49,7 +48,7 @@ function HookHarness() {
 }
 beforeEach(() => {
     Object.values(api).forEach((mock) => mock.mockReset());
-    api.listProteinProjectCapabilities.mockResolvedValue({ schema: 'bms.protein-project.capability-inventory.v1', capabilities: [ready, unavailable] });
+    api.listProteinProjectCapabilities.mockResolvedValue({ schema: 'bms.protein-project-workflow-picker.v1', capabilities: [ready] });
     api.createProjectWorkflowSetup.mockResolvedValue(setup);
     api.getProjectWorkflowSetup.mockResolvedValue(setup);
     api.saveProjectWorkflowSetupDraft.mockResolvedValue({ ...setup, generation: 3 });
@@ -63,7 +62,7 @@ describe('Project workflow setup', () => {
     it('lists only server-ready workflows and creates a primary setup before navigating to its native destination', async () => {
         await render(<NewProjectExperimentDialog projectId="project-1" open onClose={() => undefined}/>);
         await waitUntil(() => expect(container.textContent).toContain(ready.label));
-        expect(container.textContent).not.toContain('ProteinMPNN');
+
         const inputs = container.querySelectorAll<HTMLInputElement>('input');
         await act(async () => {
             const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -74,7 +73,11 @@ describe('Project workflow setup', () => {
         const create = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Continue to setup');
         await act(async () => create?.click());
         await waitUntil(() => expect(api.createProjectWorkflowSetup).toHaveBeenCalledTimes(1));
-        expect(api.createProjectWorkflowSetup).toHaveBeenCalledWith('project-1', expect.objectContaining({ schema: 'bms.project-workflow-setup.create.v1', context: 'primary', name: 'Fold ubiquitin', objective: 'Predict a stable structure', domain: 'protein', capability_id: ready.capability_id }));
+        expect(api.createProjectWorkflowSetup).toHaveBeenCalledWith('project-1', {
+            schema: 'bms.project-workflow-setup.create.v1', relationship_kind: 'primary', global_experiment_id: null,
+            experiment: { name: 'Fold ubiquitin', objective: 'Predict a stable structure' },
+            domain_kind: 'protein_in_silico', capability_id: ready.capability_id,
+        });
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('/submit?template=structure_prediction'));
         expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('setup_context_id=setup-1');
     });
@@ -87,7 +90,10 @@ describe('Project workflow setup', () => {
         const create = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Continue to setup');
         await act(async () => create?.click());
         await waitUntil(() => expect(api.createProjectWorkflowSetup).toHaveBeenCalled());
-        expect(api.createProjectWorkflowSetup).toHaveBeenCalledWith('project-1', expect.objectContaining({ context: 'follow_up', global_experiment_id: 'experiment-1' }));
+        expect(api.createProjectWorkflowSetup).toHaveBeenCalledWith('project-1', {
+            schema: 'bms.project-workflow-setup.create.v1', relationship_kind: 'follow_up', global_experiment_id: 'experiment-1',
+            domain_kind: 'protein_in_silico', capability_id: ready.capability_id,
+        });
     });
 
     it('shows incomplete setup actions and deletes only the Project-owned draft', async () => {
@@ -113,6 +119,21 @@ describe('Project workflow setup', () => {
         await render(<HookHarness/>, '/submit?template=structure_prediction');
         expect(container.textContent).toContain('Standalone launcher');
         expect(api.getProjectWorkflowSetup).not.toHaveBeenCalled();
+    });
+
+    it('saves current values before preparation and navigates with immutable launch authority', async () => {
+        function PrepareHarness() {
+            const projectSetup = useProjectWorkflowSetup();
+            if (!projectSetup.setup) return <p>Loading setup</p>;
+            return <button onClick={() => void projectSetup.startRun({ sequence: 'EDITED' })}>Start run</button>;
+        }
+        api.prepareProjectWorkflowSetup.mockResolvedValue({ ...setup, generation: 3, launch_context_id: 'launch-1' });
+        await render(<PrepareHarness/>, '/submit?setup_context_id=setup-1&project_id=project-1');
+        await waitUntil(() => expect(container.textContent).toContain('Start run'));
+        await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Start run')?.click());
+        await waitUntil(() => expect(api.saveProjectWorkflowSetupDraft).toHaveBeenCalledWith('project-1', 'setup-1', { expected_generation: 2, draft: { sequence: 'EDITED' } }));
+        expect(api.prepareProjectWorkflowSetup).toHaveBeenCalledWith('project-1', 'setup-1', 3);
+        await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('launch_context_id=launch-1'));
     });
 
     it('keeps diagnostics absent until Technical details is disclosed', async () => {
