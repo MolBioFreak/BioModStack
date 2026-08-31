@@ -1561,7 +1561,7 @@ export function InfraLiveTelemetry({
         .filter(isRenderableTelemetryChartPoint)
         .map((point) => buildChartSample(point, 1000));
     const latestPoint = historyPoints.at(-1);
-    const payload = liveStatusQuery.isError ? undefined : liveStatusQuery.data?.data;
+    const payload = liveStatusQuery.data?.data;
     const latestTimestampMs = historyQuery.data?.next_cursor_ms ?? latestPoint?.timestamp_ms ?? null;
     const staleAfterMs = resolveTelemetryStaleAfterMs(pollIntervalMs);
     const freshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
@@ -1576,7 +1576,6 @@ export function InfraLiveTelemetry({
         latestTimestampMs ?? undefined,
         freshnessObservedAtMs,
         staleAfterMs,
-        historyQuery.isError || liveStatusQuery.isError,
     );
     const historyIsStale = Boolean(latestPoint) && !historyIsFresh;
     const nominalXDomain = resolveTelemetryNominalDomain(

@@ -61,11 +61,9 @@ export function isTelemetryHistoryFresh(
     latestTimestampMs: number | undefined,
     generatedAtMs: number,
     staleAfterMs: number,
-    requestFailed: boolean,
 ): boolean {
     if (
-        requestFailed
-        || latestTimestampMs == null
+        latestTimestampMs == null
         || !Number.isFinite(latestTimestampMs)
         || !Number.isFinite(generatedAtMs)
         || staleAfterMs < 0

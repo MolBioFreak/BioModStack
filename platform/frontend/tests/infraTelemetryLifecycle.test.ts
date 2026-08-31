@@ -36,11 +36,20 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
     assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
     assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
-    assert.match(telemetrySource, /const payload = liveStatusQuery\.isError \? undefined : liveStatusQuery\.data\?\.data;/);
+    assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data;/);
+    assert.doesNotMatch(
+        telemetrySource,
+        /const payload = liveStatusQuery\.isError \? undefined : liveStatusQuery\.data\?\.data;/,
+        'a transient live-status refetch error must retain the last successful payload',
+    );
     assert.match(telemetrySource, /const latestTimestampMs = historyQuery\.data\?\.next_cursor_ms \?\? latestPoint\?\.timestamp_ms \?\? null;/);
     assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?liveStatusQuery\.data\?\.data\.timestamp/);
     assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?historyQuery\.errorUpdatedAt[\s\S]*?liveStatusQuery\.errorUpdatedAt/);
-    assert.match(telemetrySource, /historyQuery\.isError \|\| liveStatusQuery\.isError/);
+    assert.doesNotMatch(
+        telemetrySource,
+        /isTelemetryHistoryFresh\([\s\S]*?historyQuery\.isError \|\| liveStatusQuery\.isError[\s\S]*?\)/,
+        'transport errors must not be reported as stale collection when persisted samples remain fresh',
+    );
     assert.match(telemetrySource, /resolveTelemetryNominalDomain\([\s\S]*?freshnessObservedAtMs,[\s\S]*?historyQuery\.isError \|\| historyIsStale/);
     assert.match(telemetrySource, /refetchOnWindowFocus: false/);
     assert.match(telemetrySource, /buildChartSample\(point, 1000\)/);
@@ -101,15 +110,14 @@ test('fresh plotted telemetry reaches the right edge while stale telemetry prese
     assert.equal(staleThresholdResolver(2_000), 10_000);
     assert.equal(staleThresholdResolver(5_000), 15_000);
     assert.equal(
-        isTelemetryHistoryFresh(100_000, 120_000, staleThresholdResolver(5_000), false),
+        isTelemetryHistoryFresh(100_000, 120_000, staleThresholdResolver(5_000)),
         false,
         'the slow poll preset must not classify API-stale telemetry as frontend-fresh',
     );
 
-    assert.equal(isTelemetryHistoryFresh(119_000, 120_000, 10_000, false), true);
-    assert.equal(isTelemetryHistoryFresh(119_000, 120_000, 10_000, true), false);
-    assert.equal(isTelemetryHistoryFresh(109_999, 120_000, 10_000, false), false);
-    assert.equal(isTelemetryHistoryFresh(undefined, 120_000, 10_000, false), false);
+    assert.equal(isTelemetryHistoryFresh(119_000, 120_000, 10_000), true);
+    assert.equal(isTelemetryHistoryFresh(109_999, 120_000, 10_000), false);
+    assert.equal(isTelemetryHistoryFresh(undefined, 120_000, 10_000), false);
 
     assert.deepEqual(
         resolveTelemetryPlotDomain(nominalDomain, 119_000, true),
@@ -163,7 +171,7 @@ test('live status ages telemetry freshness between slow history fetches', () => 
 
     assert.equal(observedAtMs, liveStatusObservedAtMs);
     assert.equal(
-        isTelemetryHistoryFresh(latestSampleAtMs, observedAtMs, 15_000, false),
+        isTelemetryHistoryFresh(latestSampleAtMs, observedAtMs, 15_000),
         false,
         'a live-status poll must reveal staleness before a 30-second history refetch',
     );
