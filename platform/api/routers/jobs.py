@@ -1286,6 +1286,28 @@ def _to_bool(value: object) -> bool:
     return False
 
 
+def _should_normalize_antibody_job_params(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> bool:
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if (
+        normalized_model_id == "protein_local_redesign"
+        and normalized_mode == "local_redesign"
+    ) or (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "region_redesign"
+    ):
+        return False
+    return not (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "de_novo_design"
+        and str((params or {}).get("generator") or "rfd3").strip().lower() == "rfd3"
+    )
+
+
 def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(params, dict):
         return {}
@@ -5665,12 +5687,11 @@ async def _create_job(
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
-        is_protein_local_redesign = (
-            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
-        ) or (
-            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
-        )
-        if not is_protein_local_redesign:
+        if _should_normalize_antibody_job_params(
+            normalized_model_id,
+            normalized_mode,
+            job_data.params,
+        ):
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":

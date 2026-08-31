@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, Design, Job
+from routers import jobs as jobs_router
 from routers.jobs import get_rfd3_generation_result
 from services import rfd3_generation as generation_contract
 from services.nextflow import build_nextflow_command, resolve_nextflow_entrypoint
@@ -100,6 +101,19 @@ def test_rfd3_is_the_default_general_generation_authority(tmp_path: Path) -> Non
         f"--rfd3_generation_request_path {request_path}",
     ):
         assert expected in joined
+
+
+def test_general_rfd3_skips_unrelated_antibody_parameter_normalization() -> None:
+    assert jobs_router._should_normalize_antibody_job_params(
+        MODEL_ID,
+        MODE,
+        {"generator": "rfd3"},
+    ) is False
+    assert jobs_router._should_normalize_antibody_job_params(
+        MODEL_ID,
+        MODE,
+        {"generator": "disco"},
+    ) is True
 
 
 def test_general_rfd3_request_rejects_invalid_ranges_and_unknown_fields() -> None:
