@@ -392,6 +392,13 @@ export interface BioXpOperatorCommandQueueV2 {
     items: BioXpOperatorQueueItemV2[];
 }
 
+export interface BioXpOperatorActionHistoryV2 {
+    schema_version: 'bioxp.operator_action_history.v2';
+    items: BioXpOperatorReceiptV2[];
+    next_cursor: string | null;
+    limit: number;
+}
+
 export interface BioXpOperatorDashboardV2 {
     schema_version: 'bioxp.operator_dashboard.v2';
     generated_at: number;
@@ -401,6 +408,7 @@ export interface BioXpOperatorDashboardV2 {
     active_commands: BioXpOperatorReceiptV2[];
     command_queue: BioXpOperatorCommandQueueV2;
     latest_receipts: BioXpOperatorReceiptV2[];
+    telemetry: BioXpOperatorDashboard | null;
     deck?: {
         current_location: string | null;
         current_well: string | null;

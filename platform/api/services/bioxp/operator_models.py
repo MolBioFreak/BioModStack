@@ -4755,6 +4755,7 @@ class OperatorDashboardV2(BaseModel):
     active_commands: list[OperatorActionReceiptV2]
     command_queue: OperatorQueueV1
     latest_receipts: list[OperatorActionReceiptV2]
+    telemetry: OperatorDashboard | None = None
     deck: OperatorDeckDashboardV1 | None = None
 
     @field_validator("generated_at")

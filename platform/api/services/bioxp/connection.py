@@ -476,7 +476,7 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"}
+        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2", "operator_dashboard"}
         async with self.active_query_lease(
             expected_generation=expected_generation,
             require_fresh=True,

@@ -14,7 +14,6 @@ import {
 
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
-    useBioXpOperatorDashboard,
     useBioXpOperatorDashboardV2,
     useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
@@ -196,11 +195,12 @@ export function BioXpCockpit() {
     const [reportsOpen, setReportsOpen] = useState(false);
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [cameraOpen, setCameraOpen] = useState(false);
-    const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
-    const dashboardV2Query = useBioXpOperatorDashboardV2(generation, robotControlReady);
-    const currentDashboardV2 = robotControlReady && dashboardV2Query.error == null && !dashboardV2Query.isStale
-        ? dashboardV2Query.data
+    const [pipettesOpen, setPipettesOpen] = useState(false);
+    const dashboardQuery = useBioXpOperatorDashboardV2(generation, robotControlReady);
+    const currentDashboardV2 = robotControlReady && dashboardQuery.error == null && !dashboardQuery.isStale
+        ? dashboardQuery.data
         : undefined;
+    const currentTelemetry = currentDashboardV2?.telemetry ?? undefined;
     const dashboardAuthorityVersion = currentDashboardV2 === undefined ? null : 'fresh-v2-dashboard';
     const catalogV2Query = useBioXpOperatorControlCatalogV2(
         generation,
@@ -235,13 +235,13 @@ export function BioXpCockpit() {
     const interruptZAbort = useInterruptBioXpOperatorActionV1();
     const interruptAggregateAbort = useInterruptBioXpOperatorActionV1();
     const invokeXYMethod = useSubmitBioXpOperatorMethodV1();
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
+    const historyQuery = useBioXpOperatorActionHistory(generation, false, historyLimit);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
     const operatorCatalog = useBioXpOperatorControlCatalog(
         generation,
-        linkConnected,
-        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+        linkConnected && advancedOpen,
+        null,
     );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const emergencyAction = useInvokeBioXpOperatorAction();
@@ -272,7 +272,7 @@ export function BioXpCockpit() {
     const [freshnessMinutes, setFreshnessMinutes] = useState('30');
     const [freshnessDisabled, setFreshnessDisabled] = useState(false);
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
-    const dashboard = !linkConnected || dashboardQuery.isError ? undefined : dashboardQuery.data;
+    const dashboard = !robotControlReady || dashboardQuery.isError ? undefined : currentTelemetry;
     const ownershipGeneration = catalog?.ownership_generation ?? 0;
     useEffect(() => {
         const budget = connection?.freshness_budget_seconds;
@@ -1287,16 +1287,19 @@ export function BioXpCockpit() {
                         </article>
                     ))}
                 </div>
-                <BioXpPipetteControlPanel
-                    generation={generation}
-                    connected={robotControlReady && operatorCatalog.data !== undefined}
-                    pipettes={operatorCatalog.data?.dashboard.pipettes}
-                    freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                    actions={catalog?.actions}
-                    catalogLoading={operatorCatalog.isLoading}
-                    invokePending={invokeOperatorAction.isPending}
-                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
-                />
+                <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
+                    <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
+                    {pipettesOpen && <BioXpPipetteControlPanel
+                        generation={generation}
+                        connected={robotControlReady && operatorCatalog.data !== undefined}
+                        pipettes={operatorCatalog.data?.dashboard.pipettes}
+                        freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
+                        actions={catalog?.actions}
+                        catalogLoading={operatorCatalog.isLoading}
+                        invokePending={invokeOperatorAction.isPending}
+                        invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
+                    />}
+                </details>
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
                 )}
