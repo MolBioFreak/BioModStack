@@ -876,6 +876,75 @@ describe('ProjectManager', () => {
         }]);
     });
 
+    it('fails closed when Protein entity-map display rows use unsupported data', async () => {
+        const sourceDigest = 'd'.repeat(64);
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1');
+            value.selection.available_actions = ['edit'];
+            const domainNode = value.tree.nodes.find((node) => node.node_key === 'domain_experiment:domain-1');
+            if (domainNode) domainNode.allowed_actions = ['edit'];
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        managerApi.getDomainExperiment.mockResolvedValue({
+            id: 'domain-1',
+            parent_id: 'global-1',
+            current_revision_id: 'revision-domain-1',
+            head_generation: 2,
+            name: 'Protein In Silico',
+            payload: {
+                domain_kind: 'protein_in_silico',
+                objective: 'Design stable variants',
+                domain_payload: {
+                    schema: 'bms.protein-in-silico-experiment.v3',
+                    experiment_mode: 'redesign',
+                    scientific_objective: 'Design stable variants',
+                    targets: [{
+                        target_id: 'PLM-07',
+                        label: 'PLM-07',
+                        role: 'target',
+                        source_receipt_ids: ['receipt-9'],
+                        dataset_member_refs: [],
+                        entity_map_reference: {
+                            schema: 'bms.protein-entity-map-reference.v1',
+                            authority_kind: 'governed_artifact_receipt',
+                            receipt_id: 'map-receipt-1',
+                            receipt_sha256: 'a'.repeat(64),
+                            content_sha256: 'b'.repeat(64),
+                            canonical_size_bytes: 200,
+                            entity_count: 1,
+                            residue_mapping_count: 540,
+                            display_entities: [{
+                                entity_instance_id: 'A',
+                                source_entity_id: '1',
+                                entity_type: 'future-polymer',
+                                label_asym_id: 'A',
+                                auth_asym_id: 'A',
+                            }],
+                        },
+                        expected_content_sha256: sourceDigest,
+                    }],
+                    planned_capability_ids: [],
+                    validation_capability_ids: [],
+                    comparison_groups: [],
+                    acceptance_criteria: [],
+                    evidence_plan: [],
+                },
+            },
+        });
+
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.textContent).toContain('Edit revision'));
+        const edit = Array.from(container.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Edit revision',
+        );
+        await act(async () => edit?.click());
+        await waitUntil(() => expect(container.textContent).toContain('Entity rows use unsupported data'));
+        const save = Array.from(container.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Save immutable revision',
+        );
+        expect(save?.hasAttribute('disabled')).toBe(true);
+    });
+
     it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {
         const first = structuredClone(baseSummary);
         first.map.nodes = first.map.nodes.slice(0, 3);

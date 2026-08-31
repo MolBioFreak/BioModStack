@@ -78,6 +78,7 @@ interface ProteinTargetDraft {
     mapAuthorityKind: 'native_receipt' | 'governed_artifact_receipt'; mapReceiptId: string;
     mapReceiptSha256: string; mapContentSha256: string; mapSizeBytes: string;
     mapEntityCount: string; mapResidueCount: string; mapDisplayEntities: ProteinDisplayEntityDraft[];
+    mapDisplayEntitiesValid: boolean;
 }
 interface ComparisonMemberDraft { targetId: string; role: ComparisonRole }
 interface ComparisonGroupDraft { groupId: string; label: string; compatibilityContractId: string; members: ComparisonMemberDraft[] }
@@ -90,7 +91,7 @@ const OPERATOR_OBSERVATION_SCHEMA_SHA256 = '4122ba416790375dc99abbf028a1d494e1f0
 const blankProteinTarget = (): ProteinTargetDraft => ({
     targetId: '', label: '', role: 'target', sourceReceiptIds: [], datasetMembers: [], expectedContentSha256: '',
     mapAuthorityKind: 'native_receipt', mapReceiptId: '', mapReceiptSha256: '', mapContentSha256: '',
-    mapSizeBytes: '', mapEntityCount: '', mapResidueCount: '0', mapDisplayEntities: [],
+    mapSizeBytes: '', mapEntityCount: '', mapResidueCount: '0', mapDisplayEntities: [], mapDisplayEntitiesValid: true,
 });
 const blankProteinDisplayEntity = (): ProteinDisplayEntityDraft => ({
     entityInstanceId: '', sourceEntityId: '', entityType: 'protein', labelAsymId: '', authAsymId: '',
@@ -98,9 +99,10 @@ const blankProteinDisplayEntity = (): ProteinDisplayEntityDraft => ({
 const nonEmptyStrings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())) : [];
 const jsonRecord = (value: unknown): JsonObject | null => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : null;
 const PROTEIN_ENTITY_TYPES = new Set<ProteinEntityType>(['protein', 'dna', 'rna', 'ligand', 'ion', 'other']);
-function proteinDisplayEntities(value: unknown): ProteinDisplayEntityDraft[] {
-    if (!Array.isArray(value)) return [];
-    return value.flatMap((item) => {
+function proteinDisplayEntities(value: unknown): { entities: ProteinDisplayEntityDraft[]; valid: boolean } {
+    if (!Array.isArray(value)) return { entities: [], valid: false };
+    const entities: ProteinDisplayEntityDraft[] = [];
+    for (const item of value) {
         const row = jsonRecord(item);
         if (
             !row
@@ -110,26 +112,35 @@ function proteinDisplayEntities(value: unknown): ProteinDisplayEntityDraft[] {
             || !PROTEIN_ENTITY_TYPES.has(row.entity_type as ProteinEntityType)
             || typeof row.label_asym_id !== 'string'
             || typeof row.auth_asym_id !== 'string'
-        ) return [];
-        return [{
+        ) return { entities: [], valid: false };
+        entities.push({
             entityInstanceId: row.entity_instance_id,
             sourceEntityId: row.source_entity_id,
             entityType: row.entity_type as ProteinEntityType,
             labelAsymId: row.label_asym_id,
             authAsymId: row.auth_asym_id,
-        }];
-    });
+        });
+    }
+    return { entities, valid: true };
 }
 
 function ProteinDisplayEntityEditor({
     targetIndex,
     entities,
+    valid,
     onChange,
 }: {
     targetIndex: number;
     entities: ProteinDisplayEntityDraft[];
+    valid: boolean;
     onChange: (entities: ProteinDisplayEntityDraft[]) => void;
 }) {
+    if (!valid) {
+        return <fieldset className="space-y-2 rounded border border-error p-2">
+            <legend className="px-1 text-xs font-semibold text-error">Entity rows</legend>
+            <p className="text-xs text-error">Entity rows use unsupported data. Resolve the stored entity-map contract before saving a new immutable revision.</p>
+        </fieldset>;
+    }
     const update = (index: number, patch: Partial<ProteinDisplayEntityDraft>) => {
         onChange(entities.map((entity, entityIndex) => entityIndex === index ? { ...entity, ...patch } : entity));
     };
@@ -397,6 +408,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                         ? [{ datasetRevisionId: member.dataset_revision_id, memberId: member.member_id }]
                         : [];
                 }) : [];
+                const displayEntities = proteinDisplayEntities(map.display_entities);
                 return [{
                     targetId: typeof target.target_id === 'string' ? target.target_id : '',
                     label: typeof target.label === 'string' ? target.label : '', role,
@@ -409,7 +421,8 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                     mapSizeBytes: typeof map.canonical_size_bytes === 'number' ? String(map.canonical_size_bytes) : '',
                     mapEntityCount: typeof map.entity_count === 'number' ? String(map.entity_count) : '',
                     mapResidueCount: typeof map.residue_mapping_count === 'number' ? String(map.residue_mapping_count) : '0',
-                    mapDisplayEntities: proteinDisplayEntities(map.display_entities),
+                    mapDisplayEntities: displayEntities.entities,
+                    mapDisplayEntitiesValid: displayEntities.valid,
                 }];
             }) : [];
             setProteinTargets(parsedTargets.length ? parsedTargets : [blankProteinTarget()]);
@@ -679,6 +692,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
         && /^[0-9a-f]{64}$/i.test(target.mapReceiptSha256.trim())
         && /^[0-9a-f]{64}$/i.test(target.mapContentSha256.trim())
         && Number(target.mapSizeBytes) >= 2 && Number(target.mapEntityCount) >= 1 && Number(target.mapResidueCount) >= 0
+        && target.mapDisplayEntitiesValid
         && target.mapDisplayEntities.length <= 32
         && target.mapDisplayEntities.every((entity) => (
             entity.entityInstanceId.trim().length > 0
@@ -819,7 +833,7 @@ export function ManagerDialog({ mode, projectId, summary, onClose, onComplete }:
                                                 <label className="block text-xs font-semibold text-content-secondary">Verified source receipt IDs<input aria-label={`Protein source receipt IDs ${targetIndex + 1}`} value={target.sourceReceiptIds.join(', ')} onChange={(event) => updateTarget({ sourceReceiptIds: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} placeholder="comma-separated receipt IDs" className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 text-sm" /></label>
                                                 <div className="space-y-2"><div className="flex justify-between"><span className="text-xs font-semibold text-content-secondary">Dataset members</span><button type="button" onClick={() => updateTarget({ datasetMembers: [...target.datasetMembers, { datasetRevisionId: '', memberId: '' }] })} className="text-xs text-accent">Add dataset member</button></div>{target.datasetMembers.map((member, memberIndex) => <div key={memberIndex} className="grid grid-cols-[1fr_1fr_auto] gap-2"><input aria-label="Dataset revision ID" value={member.datasetRevisionId} onChange={(event) => updateTarget({ datasetMembers: target.datasetMembers.map((item, index) => index === memberIndex ? { ...item, datasetRevisionId: event.target.value } : item) })} placeholder="Dataset revision ID" className="rounded border border-border-primary bg-surface px-2 py-1.5 text-xs" /><input aria-label="Dataset member ID" value={member.memberId} onChange={(event) => updateTarget({ datasetMembers: target.datasetMembers.map((item, index) => index === memberIndex ? { ...item, memberId: event.target.value } : item) })} placeholder="Member ID" className="rounded border border-border-primary bg-surface px-2 py-1.5 text-xs" /><button type="button" onClick={() => updateTarget({ datasetMembers: target.datasetMembers.filter((_, index) => index !== memberIndex) })} className="text-xs text-error">Remove</button></div>)}</div>
                                                 <fieldset className="space-y-2 rounded border border-border-primary p-2"><legend className="px-1 text-xs font-semibold text-content-secondary">Entity-map reference</legend><div className="grid gap-2 sm:grid-cols-2"><label className="text-xs">Authority<select value={target.mapAuthorityKind} onChange={(event) => updateTarget({ mapAuthorityKind: event.target.value as ProteinTargetDraft['mapAuthorityKind'] })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5"><option value="native_receipt">Native receipt</option><option value="governed_artifact_receipt">Governed artifact receipt</option></select></label><label className="text-xs">Receipt ID<input value={target.mapReceiptId} onChange={(event) => updateTarget({ mapReceiptId: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Receipt SHA-256<input value={target.mapReceiptSha256} onChange={(event) => updateTarget({ mapReceiptSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-[10px]" /></label><label className="text-xs">Map content SHA-256<input value={target.mapContentSha256} onChange={(event) => updateTarget({ mapContentSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-[10px]" /></label><label className="text-xs">Canonical size (bytes)<input type="number" min="2" value={target.mapSizeBytes} onChange={(event) => updateTarget({ mapSizeBytes: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Entity count<input type="number" min="1" value={target.mapEntityCount} onChange={(event) => updateTarget({ mapEntityCount: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label><label className="text-xs">Residue mappings<input type="number" min="0" value={target.mapResidueCount} onChange={(event) => updateTarget({ mapResidueCount: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5" /></label></div></fieldset>
-                                                <ProteinDisplayEntityEditor targetIndex={targetIndex} entities={target.mapDisplayEntities} onChange={(mapDisplayEntities) => updateTarget({ mapDisplayEntities })} />
+                                                <ProteinDisplayEntityEditor targetIndex={targetIndex} entities={target.mapDisplayEntities} valid={target.mapDisplayEntitiesValid} onChange={(mapDisplayEntities) => updateTarget({ mapDisplayEntities })} />
                                                 <label className="block text-xs font-semibold text-content-secondary">Expected source content SHA-256<input aria-label={`Protein expected content SHA-256 ${targetIndex + 1}`} value={target.expectedContentSha256} onChange={(event) => updateTarget({ expectedContentSha256: event.target.value })} className="mt-1 w-full rounded border border-border-primary bg-surface px-2 py-1.5 font-mono text-xs" /></label>
                                             </div>;
                                         })}

@@ -157,10 +157,71 @@ async def _hierarchy(session):
     return project, global_experiment, domain
 
 
+async def _add_reverification_receipt(
+    session,
+    *,
+    project_id: str,
+    global_experiment_id: str,
+    domain_id: str,
+    source_receipt_id: str,
+    digest: str,
+    reverified_at: datetime,
+    receipt_token: str,
+    payload_overrides: dict | None = None,
+) -> None:
+    valid_until = reverified_at + timedelta(hours=24)
+    normalized_request = {
+        "operation": "reverify_source",
+        "project_id": project_id,
+        "global_experiment_id": global_experiment_id,
+        "domain_experiment_id": domain_id,
+        "source_receipt_id": source_receipt_id,
+    }
+    normalized_request_sha256 = sha256_text(canonical_json(normalized_request))
+    resource_id = f"resource-reverify-{receipt_token}"
+    body = {
+        "schema": "bms.global.source-reverification-receipt.v1",
+        "reverification_receipt_id": resource_id,
+        "project_id": project_id,
+        "global_experiment_id": global_experiment_id,
+        "domain_experiment_id": domain_id,
+        "adapter_id": "test.adapter.v1",
+        "adapter_version": "1",
+        "source_receipt_id": source_receipt_id,
+        "source_digest": digest,
+        "verified_at": reverified_at.isoformat(),
+        "valid_until": valid_until.isoformat(),
+        "normalized_request_sha256": normalized_request_sha256,
+    }
+    if payload_overrides:
+        body.update(payload_overrides)
+    session.add(ExperimentResource(
+        id=resource_id,
+        kind="domain_adapter_receipt",
+        workspace_id=project_id,
+        lifecycle_owner_id=domain_id,
+        created_at=reverified_at.isoformat(),
+    ))
+    await session.flush()
+    session.add(ExperimentDomainAdapterReceipt(
+        resource_id=resource_id,
+        workspace_id=project_id,
+        domain_experiment_id=domain_id,
+        adapter_id="test.adapter.v1",
+        adapter_version="1",
+        operation_kind="reverify_source",
+        normalized_request_sha256=normalized_request_sha256,
+        receipt_json=canonical_json(body),
+        created_at=reverified_at.isoformat(),
+    ))
+    await session.flush()
+
+
 async def _add_source_receipt(
     session,
     *,
     project_id: str,
+    global_experiment_id: str,
     domain_id: str,
     receipt_id: str,
     digest: str,
@@ -219,43 +280,16 @@ async def _add_source_receipt(
     await session.flush()
     if reverified_at is None:
         return
-    reverify_resource_id = f"resource-reverify-{receipt_id}"
-    reverify_receipt_id = f"reverify-{receipt_id}"
-    valid_until = reverified_at + timedelta(hours=24)
-    reverify_body = {
-        "schema": "bms.global.source-reverification-receipt.v1",
-        "reverification_receipt_id": reverify_receipt_id,
-        "source_receipt_id": receipt_id,
-        "project_id": project_id,
-        "global_experiment_id": "global-fixture",
-        "domain_experiment_id": domain_id,
-        "adapter_id": "test.adapter.v1",
-        "adapter_version": 1,
-        "source_digest": digest,
-        "source_build_revision": "test-build",
-        "verified_at": reverified_at.isoformat(),
-        "valid_until": valid_until.isoformat(),
-    }
-    session.add(ExperimentResource(
-        id=reverify_resource_id,
-        kind="domain_adapter_receipt",
-        workspace_id=project_id,
-        lifecycle_owner_id=domain_id,
-        created_at=reverified_at.isoformat(),
-    ))
-    await session.flush()
-    session.add(ExperimentDomainAdapterReceipt(
-        resource_id=reverify_resource_id,
-        workspace_id=project_id,
-        domain_experiment_id=domain_id,
-        adapter_id="test.adapter.v1",
-        adapter_version="1",
-        operation_kind="reverify_source",
-        normalized_request_sha256=sha256_text("{}"),
-        receipt_json=canonical_json(reverify_body),
-        created_at=reverified_at.isoformat(),
-    ))
-    await session.flush()
+    await _add_reverification_receipt(
+        session,
+        project_id=project_id,
+        global_experiment_id=global_experiment_id,
+        domain_id=domain_id,
+        source_receipt_id=receipt_id,
+        digest=digest,
+        reverified_at=reverified_at,
+        receipt_token=receipt_id,
+    )
 
 
 def _acknowledgement(index: int) -> dict:
@@ -407,12 +441,11 @@ async def test_protein_domain_tree_exposes_revision_edit_action(read_model_store
 @pytest.mark.asyncio
 async def test_source_reverification_receipt_renews_project_reconciliation(read_model_store):
     verified_at = datetime.now(timezone.utc)
-    valid_until = verified_at + timedelta(hours=24)
     source_digest = "a" * 64
     async with read_model_store() as session:
         project, global_experiment, domain = await _hierarchy(session)
         source_receipt_id = "receipt-reverified"
-        reverification_receipt_id = "adapter-receipt-reverified"
+
         acknowledgement = {
             "schema": "bms.global.external-entity-receipt.v1",
             "store_id": "core",
@@ -463,32 +496,16 @@ async def test_source_reverification_receipt_renews_project_reconciliation(read_
             ),
         ])
         await session.flush()
-        session.add(ExperimentResource(
-            id=reverification_receipt_id,
-            kind="domain_adapter_receipt",
-            workspace_id=project.id,
-            lifecycle_owner_id=domain.id,
-            created_at=verified_at.isoformat(),
-        ))
-        await session.flush()
-        session.add(ExperimentDomainAdapterReceipt(
-            resource_id=reverification_receipt_id,
-            workspace_id=project.id,
-            domain_experiment_id=domain.id,
-            adapter_id="test.adapter.v1",
-            adapter_version="1",
-            operation_kind="reverify_source",
-            normalized_request_sha256="b" * 64,
-            receipt_json=canonical_json({
-                "schema": "bms.global.source-reverification-receipt.v1",
-                "source_receipt_id": source_receipt_id,
-                "source_digest": source_digest,
-                "verified_at": verified_at.isoformat(),
-                "valid_until": valid_until.isoformat(),
-            }),
-            created_at=verified_at.isoformat(),
-        ))
-        await session.flush()
+        await _add_reverification_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            source_receipt_id=source_receipt_id,
+            digest=source_digest,
+            reverified_at=verified_at,
+            receipt_token="positive",
+        )
 
         read_model = await build_project_manager_read_model(
             session,
@@ -521,6 +538,7 @@ async def test_project_reconciliation_reads_every_attached_source_beyond_page_li
         await _add_source_receipt(
             session,
             project_id=project.id,
+            global_experiment_id=global_experiment.id,
             domain_id=domain.id,
             receipt_id="receipt-stale-beyond-page",
             digest="d" * 64,
@@ -529,6 +547,7 @@ async def test_project_reconciliation_reads_every_attached_source_beyond_page_li
         await _add_source_receipt(
             session,
             project_id=project.id,
+            global_experiment_id=global_experiment.id,
             domain_id=domain.id,
             receipt_id="receipt-current-first-page",
             digest="e" * 64,
@@ -575,6 +594,7 @@ async def test_selected_domain_reconciliation_excludes_other_domain_receipts(
         await _add_source_receipt(
             session,
             project_id=project.id,
+            global_experiment_id=global_experiment.id,
             domain_id=selected_domain.id,
             receipt_id="receipt-selected-domain",
             digest="f" * 64,
@@ -584,6 +604,7 @@ async def test_selected_domain_reconciliation_excludes_other_domain_receipts(
         await _add_source_receipt(
             session,
             project_id=project.id,
+            global_experiment_id=global_experiment.id,
             domain_id=other_domain.id,
             receipt_id="receipt-other-domain",
             digest="1" * 64,
@@ -606,6 +627,234 @@ async def test_selected_domain_reconciliation_excludes_other_domain_receipts(
         )
 
     assert read_model["source_receipt_ids"] == ["receipt-selected-domain"]
+    assert read_model["reconciliation"]["state"] == "current"
+
+
+@pytest.mark.asyncio
+async def test_reverification_from_another_domain_cannot_renew_shared_source(
+    read_model_store,
+):
+    verified_at = datetime.now(timezone.utc)
+    async with read_model_store() as session:
+        project, global_experiment, verifying_domain = await _hierarchy(session)
+        selected_domain = await create_domain_experiment(
+            session,
+            project.id,
+            global_experiment.id,
+            {**_domain_payload(), "name": "Selected domain"},
+        )
+        await _add_source_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=verifying_domain.id,
+            receipt_id="receipt-shared-domains",
+            digest="2" * 64,
+            created_at="2026-08-02T00:00:00+00:00",
+            reverified_at=verified_at,
+        )
+        session.add(ExperimentLineageEdge(
+            id="lineage-shared-selected-domain",
+            workspace_id=project.id,
+            source_resource_id=selected_domain.id,
+            target_resource_id="receipt-shared-domains",
+            edge_mode="references",
+            edge_key="attachment:test.adapter.v1:receipt-shared-domains:selected-domain",
+            metadata_json="{}",
+            created_at="2026-08-03T00:00:00+00:00",
+        ))
+        await session.commit()
+
+        read_model = await build_project_manager_read_model(
+            session,
+            project_id=project.id,
+            focus_id=global_experiment.id,
+            selected_node_key=f"domain_experiment:{selected_domain.id}",
+            map_limit=PAGE_LIMIT,
+            lineage_limit=PAGE_LIMIT,
+            result_limit=PAGE_LIMIT,
+            note_limit=PAGE_LIMIT,
+            decision_limit=PAGE_LIMIT,
+            dataset_limit=PAGE_LIMIT,
+            activity_limit=PAGE_LIMIT,
+        )
+
+    assert read_model["source_receipt_ids"] == ["receipt-shared-domains"]
+    assert read_model["reconciliation"]["state"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_mismatched_reverification_envelope_cannot_renew_source(
+    read_model_store,
+):
+    verified_at = datetime.now(timezone.utc)
+    async with read_model_store() as session:
+        project, global_experiment, domain = await _hierarchy(session)
+        other_domain = await create_domain_experiment(
+            session,
+            project.id,
+            global_experiment.id,
+            {**_domain_payload(), "name": "Other domain"},
+        )
+        await _add_source_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            receipt_id="receipt-envelope-mismatch",
+            digest="3" * 64,
+            created_at="2026-08-02T00:00:00+00:00",
+        )
+        await _add_reverification_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            source_receipt_id="receipt-envelope-mismatch",
+            digest="3" * 64,
+            reverified_at=verified_at,
+            receipt_token="envelope-mismatch",
+            payload_overrides={"domain_experiment_id": other_domain.id},
+        )
+        await session.commit()
+
+        read_model = await build_project_manager_read_model(
+            session,
+            project_id=project.id,
+            focus_id=global_experiment.id,
+            selected_node_key=f"domain_experiment:{domain.id}",
+        )
+
+    assert read_model["reconciliation"]["state"] == "stale"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timestamp_mode", ["future", "timezone-less"])
+async def test_untrustworthy_reverification_timestamps_cannot_renew_source(
+    read_model_store,
+    timestamp_mode: str,
+):
+    now = datetime.now(timezone.utc)
+    reverified_at = now + timedelta(hours=1) if timestamp_mode == "future" else now
+    overrides = None
+    if timestamp_mode == "timezone-less":
+        overrides = {
+            "verified_at": reverified_at.replace(tzinfo=None).isoformat(),
+            "valid_until": (reverified_at + timedelta(hours=24)).replace(tzinfo=None).isoformat(),
+        }
+    async with read_model_store() as session:
+        project, global_experiment, domain = await _hierarchy(session)
+        await _add_source_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            receipt_id=f"receipt-time-{timestamp_mode}",
+            digest="4" * 64,
+            created_at="2026-08-02T00:00:00+00:00",
+        )
+        await _add_reverification_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            source_receipt_id=f"receipt-time-{timestamp_mode}",
+            digest="4" * 64,
+            reverified_at=reverified_at,
+            receipt_token=f"time-{timestamp_mode}",
+            payload_overrides=overrides,
+        )
+        await session.commit()
+
+        read_model = await build_project_manager_read_model(
+            session,
+            project_id=project.id,
+            focus_id=global_experiment.id,
+            selected_node_key=f"domain_experiment:{domain.id}",
+        )
+
+    assert read_model["reconciliation"]["state"] != "current"
+
+
+@pytest.mark.asyncio
+async def test_latest_reverification_selection_cannot_starve_other_sources(
+    read_model_store,
+):
+    now = datetime.now(timezone.utc)
+    repeated_at = now - timedelta(minutes=10)
+    other_at = now - timedelta(minutes=20)
+    async with read_model_store() as session:
+        project, global_experiment, domain = await _hierarchy(session)
+        await _add_source_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            receipt_id="receipt-repeated",
+            digest="5" * 64,
+            created_at="2026-08-02T00:00:00+00:00",
+            reverified_at=repeated_at,
+        )
+        await _add_source_receipt(
+            session,
+            project_id=project.id,
+            global_experiment_id=global_experiment.id,
+            domain_id=domain.id,
+            receipt_id="receipt-other-latest",
+            digest="6" * 64,
+            created_at="2026-08-01T00:00:00+00:00",
+            reverified_at=other_at,
+        )
+        normalized_sha256 = sha256_text("latest-selection")
+        resources = []
+        receipts = []
+        for index in range(1000):
+            verified_at = repeated_at + timedelta(microseconds=index + 1)
+            resource_id = f"resource-reverify-repeated-{index:04d}"
+            body = {
+                "schema": "bms.global.source-reverification-receipt.v1",
+                "reverification_receipt_id": resource_id,
+                "project_id": project.id,
+                "global_experiment_id": global_experiment.id,
+                "domain_experiment_id": domain.id,
+                "adapter_id": "test.adapter.v1",
+                "adapter_version": "1",
+                "source_receipt_id": "receipt-repeated",
+                "source_digest": "5" * 64,
+                "verified_at": verified_at.isoformat(),
+                "valid_until": (verified_at + timedelta(hours=24)).isoformat(),
+                "normalized_request_sha256": normalized_sha256,
+            }
+            resources.append(ExperimentResource(
+                id=resource_id,
+                kind="domain_adapter_receipt",
+                workspace_id=project.id,
+                lifecycle_owner_id=domain.id,
+                created_at=verified_at.isoformat(),
+            ))
+            receipts.append(ExperimentDomainAdapterReceipt(
+                resource_id=resource_id,
+                workspace_id=project.id,
+                domain_experiment_id=domain.id,
+                adapter_id="test.adapter.v1",
+                adapter_version="1",
+                operation_kind="reverify_source",
+                normalized_request_sha256=normalized_sha256,
+                receipt_json=canonical_json(body),
+                created_at=verified_at.isoformat(),
+            ))
+        session.add_all(resources)
+        await session.flush()
+        session.add_all(receipts)
+        await session.commit()
+
+        read_model = await build_project_manager_read_model(
+            session,
+            project_id=project.id,
+            focus_id=global_experiment.id,
+            selected_node_key=f"domain_experiment:{domain.id}",
+        )
+
     assert read_model["reconciliation"]["state"] == "current"
 
 

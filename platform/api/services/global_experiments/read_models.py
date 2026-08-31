@@ -43,6 +43,22 @@ VIRTUAL_FOLDERS = ("plans", "runs", "results", "datasets", "notes", "decisions",
 ATTACHMENT_MODES = ("references", "uses_input", "produced", "validated_by")
 RESULT_ATTACHMENT_MODES = ("produced",)
 SOURCE_REVERIFICATION_TTL = timedelta(hours=24)
+SOURCE_REVERIFICATION_FUTURE_SKEW = timedelta(minutes=5)
+MAX_REVERIFICATION_SCAN_ROWS = 10_000
+SOURCE_REVERIFICATION_RECEIPT_KEYS = frozenset({
+    "schema",
+    "reverification_receipt_id",
+    "project_id",
+    "global_experiment_id",
+    "domain_experiment_id",
+    "adapter_id",
+    "adapter_version",
+    "source_receipt_id",
+    "source_digest",
+    "verified_at",
+    "valid_until",
+    "normalized_request_sha256",
+})
 
 
 def _utc_now() -> str:
@@ -276,8 +292,41 @@ def _parse_utc_timestamp(value: object) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        return None
     return parsed.astimezone(timezone.utc)
+
+
+def _validated_reverification_payload(
+    row: ExperimentDomainAdapterReceipt,
+    payload: Any,
+    *,
+    source_receipt: ExperimentExternalEntityReceipt,
+    project_id: str,
+    global_experiment_id: str,
+    domain_experiment_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(payload, dict) or set(payload) != SOURCE_REVERIFICATION_RECEIPT_KEYS:
+        return None
+    expected = {
+        "schema": "bms.global.source-reverification-receipt.v1",
+        "reverification_receipt_id": row.resource_id,
+        "project_id": project_id,
+        "global_experiment_id": global_experiment_id,
+        "domain_experiment_id": domain_experiment_id,
+        "adapter_id": row.adapter_id,
+        "adapter_version": row.adapter_version,
+        "source_receipt_id": source_receipt.id,
+        "source_digest": source_receipt.content_digest,
+        "verified_at": row.created_at,
+        "normalized_request_sha256": row.normalized_request_sha256,
+    }
+    if any(payload.get(field) != value for field, value in expected.items()):
+        return None
+    if row.workspace_id != project_id or row.domain_experiment_id != domain_experiment_id:
+        return None
+    if row.adapter_id != source_receipt.verification_authority:
+        return None
+    return payload
 
 
 def _receipt_reconciliation(
@@ -364,11 +413,13 @@ def _receipt_reconciliation(
                 "last_verified_at": reverification.get("verified_at"),
                 "reason": "source re-verification digest disagrees with the persisted receipt",
             }
+        now = current_time or datetime.now(timezone.utc)
         if (
             reverification.get("schema") != "bms.global.source-reverification-receipt.v1"
             or reverification.get("source_receipt_id") != receipt.id
             or reverified_at is None
             or valid_until is None
+            or reverified_at > now + SOURCE_REVERIFICATION_FUTURE_SKEW
             or valid_until <= reverified_at
             or valid_until - reverified_at > SOURCE_REVERIFICATION_TTL
         ):
@@ -377,7 +428,7 @@ def _receipt_reconciliation(
                 "last_verified_at": reverification.get("verified_at"),
                 "reason": "source re-verification receipt is malformed or unbounded",
             }
-        if valid_until >= (current_time or datetime.now(timezone.utc)):
+        if valid_until > now:
             return {
                 "state": "current",
                 "last_verified_at": str(reverification["verified_at"]),
@@ -397,7 +448,7 @@ def _receipt_reconciliation(
 
 def _source_reconciliation(
     receipts: list[ExperimentExternalEntityReceipt],
-    reverifications: dict[str, dict[str, Any]] | None = None,
+    reverifications: dict[str, dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     if not receipts:
         return {"state": "current", "last_verified_at": None, "reason": None}
@@ -1723,7 +1774,7 @@ async def build_project_manager_read_model(
         focused_domain_ids=receipt_domain_ids,
     )
     source_receipts_by_id = {receipt.id: receipt for receipt in source_receipts}
-    reverifications_by_receipt: dict[str, dict[str, Any]] = {}
+    reverifications_by_receipt: dict[str, dict[str, Any] | None] = {}
     if source_receipts:
         reverification_rows = list(
             (
@@ -1731,32 +1782,51 @@ async def build_project_manager_read_model(
                     select(ExperimentDomainAdapterReceipt)
                     .where(
                         ExperimentDomainAdapterReceipt.workspace_id == project_id,
+                        ExperimentDomainAdapterReceipt.domain_experiment_id.in_(receipt_domain_ids),
                         ExperimentDomainAdapterReceipt.operation_kind == "reverify_source",
-                        func.json_extract(
-                            ExperimentDomainAdapterReceipt.receipt_json,
-                            "$.source_receipt_id",
-                        ).in_(source_receipts_by_id),
                     )
                     .order_by(
                         ExperimentDomainAdapterReceipt.created_at.desc(),
                         ExperimentDomainAdapterReceipt.resource_id.desc(),
                     )
-                    .limit(MAX_TREE_NODES)
+                    .limit(MAX_REVERIFICATION_SCAN_ROWS + 1)
                 )
             ).all()
         )
+        target_receipt_ids = set(source_receipts_by_id)
+        domain_global_ids = {
+            head.aggregate_id: str(head.parent_id or "")
+            for head in domain_heads
+            if head.aggregate_id in receipt_domain_ids
+        }
         for row in reverification_rows:
             try:
                 payload = json.loads(row.receipt_json)
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                raise ValidationFailure("Stored source re-verification receipt is malformed") from exc
             source_receipt_id = payload.get("source_receipt_id") if isinstance(payload, dict) else None
-            if (
-                isinstance(source_receipt_id, str)
-                and source_receipt_id in source_receipts_by_id
-                and source_receipt_id not in reverifications_by_receipt
-            ):
-                reverifications_by_receipt[source_receipt_id] = payload
+            if not isinstance(source_receipt_id, str):
+                raise ValidationFailure("Stored source re-verification receipt has no source identity")
+            if source_receipt_id not in target_receipt_ids or source_receipt_id in reverifications_by_receipt:
+                continue
+            expected_global_id = domain_global_ids.get(row.domain_experiment_id)
+            if expected_global_id is None:
+                continue
+            reverifications_by_receipt[source_receipt_id] = _validated_reverification_payload(
+                row,
+                payload,
+                source_receipt=source_receipts_by_id[source_receipt_id],
+                project_id=project_id,
+                global_experiment_id=expected_global_id,
+                domain_experiment_id=row.domain_experiment_id,
+            )
+            if len(reverifications_by_receipt) == len(target_receipt_ids):
+                break
+        if (
+            len(reverification_rows) > MAX_REVERIFICATION_SCAN_ROWS
+            and len(reverifications_by_receipt) < len(target_receipt_ids)
+        ):
+            raise ValidationFailure("Source re-verification history exceeds the supported scan bound")
     source_reconciliation = _source_reconciliation(
         source_receipts,
         reverifications_by_receipt,
