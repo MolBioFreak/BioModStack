@@ -43,14 +43,23 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
         'a transient live-status refetch error must retain the last successful payload',
     );
     assert.match(telemetrySource, /const latestTimestampMs = historyQuery\.data\?\.next_cursor_ms \?\? latestPoint\?\.timestamp_ms \?\? null;/);
-    assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?liveStatusQuery\.data\?\.data\.timestamp/);
-    assert.match(telemetrySource, /resolveTelemetryFreshnessObservedAtMs\([\s\S]*?historyQuery\.errorUpdatedAt[\s\S]*?liveStatusQuery\.errorUpdatedAt/);
-    assert.doesNotMatch(
+    assert.match(
         telemetrySource,
-        /isTelemetryHistoryFresh\([\s\S]*?historyQuery\.isError \|\| liveStatusQuery\.isError[\s\S]*?\)/,
-        'transport errors must not be reported as stale collection when persisted samples remain fresh',
+        /const collectionFreshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs\(\s*historyQuery\.data\?\.generated_at_ms \?\? historyQuery\.dataUpdatedAt,?\s*\);/,
     );
-    assert.match(telemetrySource, /resolveTelemetryNominalDomain\([\s\S]*?freshnessObservedAtMs,[\s\S]*?historyQuery\.isError \|\| historyIsStale/);
+    assert.match(
+        telemetrySource,
+        /const domainObservedAtMs = resolveTelemetryFreshnessObservedAtMs\([\s\S]*?liveStatusQuery\.data\?\.data\.timestamp[\s\S]*?historyQuery\.errorUpdatedAt[\s\S]*?liveStatusQuery\.errorUpdatedAt/,
+    );
+    assert.match(
+        telemetrySource,
+        /isTelemetryHistoryFresh\([\s\S]*?collectionFreshnessObservedAtMs,[\s\S]*?staleAfterMs/,
+        'collection freshness must use the successful history response clock',
+    );
+    assert.match(
+        telemetrySource,
+        /resolveTelemetryNominalDomain\([\s\S]*?domainObservedAtMs,[\s\S]*?historyQuery\.isError \|\| historyIsStale/,
+    );
     assert.match(telemetrySource, /refetchOnWindowFocus: false/);
     assert.match(telemetrySource, /buildChartSample\(point, 1000\)/);
     assert.match(telemetrySource, /function HistoricalTelemetryFallback\(/);
@@ -152,7 +161,7 @@ test('chart geometry rejects timestamps outside the selected wall-clock domain',
     assert.equal(xResolver(120_000, 60_000, 120_000), 1000);
 });
 
-test('live status ages telemetry freshness between slow history fetches', () => {
+test('transport timing advances the chart domain without inventing collection staleness', () => {
     const observedAtResolver = (
         telemetryHistory as typeof telemetryHistory & {
             resolveTelemetryFreshnessObservedAtMs?: (...observedAtMs: number[]) => number;
@@ -162,23 +171,30 @@ test('live status ages telemetry freshness between slow history fetches', () => 
     const liveStatusObservedAtMs = 140_000;
     const latestSampleAtMs = 119_000;
 
-    assert.equal(typeof observedAtResolver, 'function', 'freshness needs an advancing observation clock');
+    assert.equal(typeof observedAtResolver, 'function', 'freshness needs an evidence clock');
     if (!observedAtResolver) return;
-    const observedAtMs = observedAtResolver(
+    const collectionFreshnessObservedAtMs = observedAtResolver(historyGeneratedAtMs);
+    const domainObservedAtMs = observedAtResolver(
         historyGeneratedAtMs,
         liveStatusObservedAtMs,
     );
 
-    assert.equal(observedAtMs, liveStatusObservedAtMs);
+    assert.equal(collectionFreshnessObservedAtMs, historyGeneratedAtMs);
+    assert.equal(domainObservedAtMs, liveStatusObservedAtMs);
     assert.equal(
-        isTelemetryHistoryFresh(latestSampleAtMs, observedAtMs, 15_000),
+        isTelemetryHistoryFresh(latestSampleAtMs, collectionFreshnessObservedAtMs, 15_000),
+        true,
+        'a newer live-status response must not relabel a still-fresh successful history response as stale collection',
+    );
+    assert.equal(
+        isTelemetryHistoryFresh(latestSampleAtMs, domainObservedAtMs, 15_000),
         false,
-        'a live-status poll must reveal staleness before a 30-second history refetch',
+        'the advancing display clock would create the reported false stale warning if reused as collection evidence',
     );
     assert.equal(
         observedAtResolver(historyGeneratedAtMs, 110_000),
         historyGeneratedAtMs,
-        'an older live-status response must not move the observation clock backward',
+        'an older live-status response must not move the display clock backward',
     );
     assert.equal(
         observedAtResolver(historyGeneratedAtMs, Number.NaN),
@@ -194,7 +210,7 @@ test('live status ages telemetry freshness between slow history fetches', () => 
     assert.equal(
         failureObservedAtMs,
         simultaneousFailureAtMs,
-        'request failure timestamps must keep the stale observation clock moving',
+        'request failure timestamps must keep the chart domain clock moving',
     );
     assert.deepEqual(
         resolveTelemetryNominalDomain(60_000, 120_000, failureObservedAtMs, 1, 10_000, true),

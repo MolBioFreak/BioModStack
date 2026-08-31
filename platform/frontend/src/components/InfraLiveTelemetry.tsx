@@ -1564,7 +1564,10 @@ export function InfraLiveTelemetry({
     const payload = liveStatusQuery.data?.data;
     const latestTimestampMs = historyQuery.data?.next_cursor_ms ?? latestPoint?.timestamp_ms ?? null;
     const staleAfterMs = resolveTelemetryStaleAfterMs(pollIntervalMs);
-    const freshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
+    const collectionFreshnessObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
+        historyQuery.data?.generated_at_ms ?? historyQuery.dataUpdatedAt,
+    );
+    const domainObservedAtMs = resolveTelemetryFreshnessObservedAtMs(
         historyQuery.data?.generated_at_ms ?? historyQuery.dataUpdatedAt,
         liveStatusQuery.data?.data.timestamp
             ? parseTelemetryTimestampMs(liveStatusQuery.data.data.timestamp)
@@ -1574,14 +1577,14 @@ export function InfraLiveTelemetry({
     );
     const historyIsFresh = isTelemetryHistoryFresh(
         latestTimestampMs ?? undefined,
-        freshnessObservedAtMs,
+        collectionFreshnessObservedAtMs,
         staleAfterMs,
     );
     const historyIsStale = Boolean(latestPoint) && !historyIsFresh;
     const nominalXDomain = resolveTelemetryNominalDomain(
         historyQuery.data?.start_ms,
         historyQuery.data?.end_ms,
-        freshnessObservedAtMs,
+        domainObservedAtMs,
         windowMinutes,
         displayIntervalMs,
         historyQuery.isError || historyIsStale,
