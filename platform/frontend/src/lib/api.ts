@@ -151,6 +151,39 @@ export interface RFD3LocalRedesignReadModel {
         metadata: Record<string, UntypedApiValue>;
     }>;
 }
+
+export interface RFD3GenerationRange {
+    min: number | null;
+    mean: number | null;
+    max: number | null;
+}
+
+export interface RFD3GenerationReadModel {
+    schema: 'bms.rfd3.generation.read-model.v1';
+    job_id: string;
+    request: Record<string, UntypedApiValue>;
+    result_manifest_sha256: string;
+    counts: {
+        requested: number;
+        generated: number;
+        accepted: number;
+    };
+    aggregates: {
+        length: RFD3GenerationRange;
+        radius: RFD3GenerationRange;
+        helix: RFD3GenerationRange;
+        strand: RFD3GenerationRange;
+    };
+    candidates: Array<{
+        candidate_id: string;
+        status: string;
+        length: number;
+        radius: number;
+        helix_count: number | null;
+        strand_count: number | null;
+        structure_url: string;
+    }>;
+}
 export interface ProteinLocalRedesignResultSurface {
     schema: 'bms.workflow.protein-local-redesign.results.v1';
     job: {
@@ -529,6 +562,7 @@ export const fetchTelemetryChartHistory = (
 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
+export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {

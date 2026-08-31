@@ -1062,15 +1062,15 @@ export function JobSubmission() {
         {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
-            description: 'Generate new proteins or modify selected regions of an existing structure.',
+            description: 'Generate new proteins with native RFD3, iterate an existing structure, or generate into a shape blueprint.',
             icon: 'cube',
             color: '#22C55E',
             experimental: true,
             stages: [
-                { tool: 'DISCO / La-Proteina' },
-                { tool: 'RFdiffusion3' },
-                { tool: 'FAMPNN / ProteinMPNN' },
-                { tool: 'Boltz-2 (Opt.)' },
+                { tool: 'RFD3 (Preferred)' },
+                { tool: 'RFD3 Iteration' },
+                { tool: 'Shape Blueprint' },
+                { tool: 'DISCO / La-Proteina (Backup)' },
             ],
         },
 

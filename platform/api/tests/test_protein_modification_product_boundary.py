@@ -19,6 +19,7 @@ from services.nextflow import (  # noqa: E402
     MODEL_MODE_WORKFLOW_ENTRYPOINTS,
     build_nextflow_command,
 )
+from services.rfd3_generation import materialize_generation_request, normalize_generation_params  # noqa: E402
 from services.result_ingester import _trusted_producer_review_fields  # noqa: E402
 from services.stage_review import _is_protein_local_redesign_job  # noqa: E402
 
@@ -34,30 +35,43 @@ def test_registry_exposes_one_protein_modification_product_with_three_truthful_m
     assert {mode.id for mode in model.modes} == {"de_novo_design", "shape_blueprint", "region_redesign"}
 
 
-def test_canonical_de_novo_mode_reuses_internal_protein_cad_entrypoint() -> None:
+def test_canonical_de_novo_mode_uses_native_rfd3_generation_entrypoint(tmp_path: Path) -> None:
     assert MODEL_MODE_WORKFLOW_ENTRYPOINTS[(CANONICAL_MODEL_ID, "de_novo_design")] == (
-        "workflows/protein_cad_experimental.nf"
+        "workflows/protein_design.nf"
     )
-
+    output = tmp_path / "rfd3-general"
+    output.mkdir()
+    params, _request, _digest = normalize_generation_params(
+        {
+            "generator": "rfd3",
+            "generation_mode": "unconditional_monomer",
+            "min_length": 100,
+            "max_length": 150,
+            "num_designs": 4,
+            "seed": 0,
+            "dump_trajectories": False,
+        },
+        job_name="protein-modification-de-novo",
+    )
+    params, _request_path = materialize_generation_request(
+        params,
+        output_dir=output,
+        job_id="protein-modification-de-novo",
+    )
     cmd = build_nextflow_command(
         CANONICAL_MODEL_ID,
         "de_novo_design",
-        {
-            "backend": "disco",
-            "design_task": "unconditional",
-            "num_designs": 4,
-            "target_lengths": "100,150",
-        },
-        "/tmp/protein-modification-de-novo",
+        params,
+        str(output),
         job_id="protein-modification-de-novo",
     )
     joined = " ".join(cmd)
 
     assert cmd[1] == "run"
-    assert cmd[2] == "workflows/protein_cad_experimental.nf"
-    assert "protein_cad_experimental,workstation_ryzen7960x" in cmd
-    assert "--pcad_backend disco" in joined
-    assert "--pcad_num_designs 4" in joined
+    assert cmd[2] == "workflows/protein_design.nf"
+    assert "rfd3_generation,workstation_ryzen7960x" in cmd
+    assert "--diffusion_method rfd3" in joined
+    assert "--rfd3_generation_num_designs 4" in joined
     assert "--modification_mode de_novo_design" in joined
 
 

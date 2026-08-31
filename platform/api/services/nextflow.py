@@ -526,7 +526,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
     ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
-    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
     ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
@@ -571,6 +571,14 @@ def resolve_nextflow_entrypoint(
         raise ValueError(
             "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
         )
+
+    if (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "de_novo_design"
+        and str((params or {}).get("generator") or "rfd3").strip().lower()
+        in {"disco", "laproteina"}
+    ):
+        return "workflows/protein_cad_experimental.nf"
 
     if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
         return COMPLEX_PREDICTION_ENTRYPOINT
@@ -3387,7 +3395,7 @@ def build_nextflow_command(
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
-        ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'de_novo_design'): 'rfd3_generation',
         ('protein_modification_experimental', 'shape_blueprint'): 'shape_blueprint',
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
@@ -3451,6 +3459,14 @@ def build_nextflow_command(
         effective_profile = mode_to_profile[mode]
     else:
         effective_profile = mode
+
+    if (
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or 'rfd3').strip().lower()
+        in {'disco', 'laproteina'}
+    ):
+        effective_profile = 'protein_cad_experimental'
 
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
@@ -4011,8 +4027,26 @@ def build_nextflow_command(
             params['rfd_mode'] = 'protein_local_redesign'
         if model_id == 'protein_modification_experimental':
             params['modification_mode'] = 'region_redesign'
+    elif (
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or 'rfd3').strip().lower() == 'rfd3'
+    ):
+        params.setdefault('diffusion_method', 'rfd3')
+        params.setdefault('rfd_mode', 'monomer_denovo')
+        params.setdefault('rfd_num_designs', params.get('num_designs', 8))
+        params.setdefault('rfd3_batches_per_design', params.get('num_designs', 8))
+        params.setdefault('run_rfd_only', True)
+        params.setdefault('skip_rfd', False)
+        params.setdefault('skip_rfd_seq', False)
+        params.setdefault('skip_rfd_seq_pred', False)
+        params.setdefault('run_frustrampnn', False)
+        params['modification_mode'] = 'de_novo_design'
     elif model_id == 'protein_cad_experimental' or (
-        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or '').strip().lower()
+        in {'disco', 'laproteina'}
     ):
         protein_cad_mappings = {
             'backend': 'pcad_backend',

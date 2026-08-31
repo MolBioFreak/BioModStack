@@ -11,10 +11,10 @@ export interface DeNovoModificationModeCard {
 export const DE_NOVO_MODIFICATION_MODE_CARDS: DeNovoModificationModeCard[] = [
     {
         id: 'de_novo_design',
-        label: 'De Novo Design',
-        description: 'Generate new candidates with DISCO or La-Proteina.',
-        cardClassName: 'border-cyan-500/40 bg-cyan-500/10 hover:border-cyan-300',
-        labelClassName: 'text-cyan-100',
+        label: 'Native RFD3 De Novo Design',
+        description: 'Preferred unconditional monomer generation with typed native RFD3 controls.',
+        cardClassName: 'border-emerald-500/40 bg-emerald-500/10 hover:border-emerald-300',
+        labelClassName: 'text-emerald-100',
     },
     {
         id: 'rfd3_iteration',

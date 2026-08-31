@@ -23,6 +23,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
@@ -85,6 +86,12 @@ from services.rfd3_local_redesign import (
     normalize_local_redesign_params,
     materialize_local_redesign_request,
     prepare_local_redesign_scheduler_params,
+)
+from services.rfd3_generation import (
+    GenerationContractError,
+    file_sha256,
+    materialize_generation_request,
+    normalize_generation_params,
 )
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
@@ -5605,6 +5612,23 @@ async def _create_job(
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
             job_data.params = normalized_local_params
 
+        if (
+            normalized_model_id == "protein_modification_experimental"
+            and normalized_mode == "de_novo_design"
+            and str(job_data.params.get("generator") or "rfd3").strip().lower() == "rfd3"
+        ):
+            try:
+                normalized_generation_params, _generation_request, _generation_digest = normalize_generation_params(
+                    job_data.params,
+                    job_name=job_data.name,
+                )
+            except GenerationContractError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"rfd3_generation_contract_error": str(exc)},
+                ) from exc
+            job_data.params = normalized_generation_params
+
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
                 # Validate the caller-owned request without replacing it with the
@@ -6058,6 +6082,23 @@ async def _create_job(
                     created=md_output_dir_created,
                 )
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+
+        if (
+            normalized_model_id == "protein_modification_experimental"
+            and normalized_mode == "de_novo_design"
+            and str(job_params.get("generator") or "rfd3").strip().lower() == "rfd3"
+        ):
+            try:
+                job_params, _generation_request_path = materialize_generation_request(
+                    job_params,
+                    output_dir=output_dir,
+                    job_id=job_id,
+                )
+            except GenerationContractError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"rfd3_generation_contract_error": str(exc)},
+                ) from exc
 
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(
@@ -7156,6 +7197,139 @@ def _public_job_params(job: Any) -> dict[str, Any]:
     if _is_native_rfd3_job(job):
         return _rfd3_public_json(params)
     return params
+
+
+def _rfd3_generation_range(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"min": None, "mean": None, "max": None}
+    return {"min": min(values), "mean": round(sum(values) / len(values), 6), "max": max(values)}
+
+
+@router.get("/{job_id}/rfd3-generation")
+async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depends(get_session)):
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_modification_experimental"
+        or str(job.mode or "").strip().lower() != "de_novo_design"
+    ):
+        raise HTTPException(status_code=404, detail="RFD3 generation job not found")
+    params = job.params if isinstance(job.params, dict) else {}
+    request = params.get("rfd3_generation_request")
+    manifest_sha256 = params.get("rfd3_generation_result_manifest_sha256")
+    if not isinstance(request, dict) or not isinstance(manifest_sha256, str):
+        raise HTTPException(status_code=404, detail="RFD3 generation typed result is not available")
+    designs = list(
+        (await session.execute(select(Design).where(Design.job_id == job_id).order_by(Design.name.asc())))
+        .scalars()
+        .all()
+    )
+    if not designs:
+        raise HTTPException(status_code=404, detail="RFD3 generation candidates are not available")
+    candidates: list[dict[str, Any]] = []
+    lengths: list[float] = []
+    radii: list[float] = []
+    helices: list[float] = []
+    strands: list[float] = []
+    accepted = 0
+    for design in designs:
+        provenance = design.provenance if isinstance(design.provenance, dict) else {}
+        metrics = provenance.get("metrics")
+        if not isinstance(metrics, dict):
+            raise HTTPException(status_code=409, detail="RFD3 generation candidate metrics are unavailable")
+        length = float(metrics["residue_count"])
+        radius = float(metrics["radius_of_gyration"])
+        helix_count = metrics.get("helix_count")
+        strand_count = metrics.get("strand_count")
+        is_accepted = bool(provenance.get("accepted"))
+        accepted += int(is_accepted)
+        lengths.append(length)
+        radii.append(radius)
+        if helix_count is not None:
+            helices.append(float(helix_count))
+        if strand_count is not None:
+            strands.append(float(strand_count))
+        candidates.append(
+            {
+                "candidate_id": design.name,
+                "status": "accepted" if is_accepted else "generated",
+                "length": int(length),
+                "radius": radius,
+                "helix_count": None if helix_count is None else int(helix_count),
+                "strand_count": None if strand_count is None else int(strand_count),
+                "structure_url": (
+                    f"/api/jobs/{quote(job_id, safe='')}/rfd3-generation/artifacts/"
+                    f"{quote(design.name, safe='')}/candidate_structure"
+                ),
+            }
+        )
+    aggregate = params.get("rfd3_generation_aggregate")
+    if not isinstance(aggregate, dict):
+        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract is unavailable")
+    if (
+        aggregate.get("length") != _rfd3_generation_range(lengths)
+        or aggregate.get("radius_of_gyration") != _rfd3_generation_range(radii)
+    ):
+        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract does not match persisted candidates")
+    return {
+        "schema": "bms.rfd3.generation.read-model.v1",
+        "job_id": job_id,
+        "request": _rfd3_public_json(request),
+        "result_manifest_sha256": manifest_sha256,
+        "counts": {
+            "requested": int(aggregate["requested"]),
+            "generated": len(candidates),
+            "accepted": accepted,
+        },
+        "aggregates": {
+            "length": _rfd3_generation_range(lengths),
+            "radius": _rfd3_generation_range(radii),
+            "helix": _rfd3_generation_range(helices),
+            "strand": _rfd3_generation_range(strands),
+        },
+        "candidates": candidates,
+    }
+
+
+@router.get("/{job_id}/rfd3-generation/artifacts/{candidate_id}/{role}")
+async def get_rfd3_generation_artifact(
+    job_id: str,
+    candidate_id: str,
+    role: str,
+    session: AsyncSession = Depends(get_session),
+):
+    if role not in {"candidate_structure", "candidate_metadata"}:
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact role not found")
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    design = (
+        await session.execute(select(Design).where(Design.job_id == job_id, Design.name == candidate_id))
+    ).scalar_one_or_none()
+    if job is None or design is None or not isinstance(design.provenance, dict):
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
+    artifacts = design.provenance.get("artifacts")
+    descriptor = next(
+        (item for item in artifacts if isinstance(item, dict) and item.get("role") == role),
+        None,
+    ) if isinstance(artifacts, list) else None
+    if not isinstance(descriptor, dict):
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
+    root = resolve_runtime_data_path(str(job.output_dir or ""))
+    relative = Path(str(descriptor.get("relative_path") or ""))
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise HTTPException(status_code=409, detail="RFD3 generation artifact path is unsafe")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise HTTPException(status_code=409, detail="RFD3 generation artifact path contains a symlink")
+    path = current.resolve()
+    if not path.is_relative_to(root.resolve()) or not path.is_file() or path.stat().st_size != descriptor.get("bytes"):
+        raise HTTPException(status_code=410, detail="RFD3 generation artifact is unavailable")
+    if file_sha256(path) != descriptor.get("sha256"):
+        raise HTTPException(status_code=409, detail="RFD3 generation artifact hash mismatch")
+    headers = {"Content-Encoding": "gzip"} if path.name.endswith(".gz") else None
+    media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else str(descriptor.get("media_type"))
+    return FileResponse(str(path), media_type=media_type, filename=path.name, headers=headers)
 
 
 @router.get("/{job_id}/rfd3-local-redesign")

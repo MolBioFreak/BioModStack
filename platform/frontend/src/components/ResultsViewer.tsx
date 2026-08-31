@@ -62,6 +62,7 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
+import RFD3GenerationResultsPane, { isRFD3GenerationResultJob } from './RFD3GenerationResultsPane';
 import {
     getRFD3LocalRedesignCandidateLabel,
     isRFD3LocalRedesignResultJob,
@@ -2491,6 +2492,7 @@ export function ResultsViewer() {
         queryFn: () => fetchDesigns(designQueryFilters),
         enabled: !!activeJob
             && activeJob.model_id !== 'molecular_dynamics'
+            && !isRFD3GenerationResultJob(activeJob)
             && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
@@ -5403,7 +5405,9 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    isRFD3LocalRedesignResultJob(activeJob) ? (
+                    isRFD3GenerationResultJob(activeJob) ? (
+                        <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : isProteinLocalRedesignResultJob(activeJob) ? (
                         <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
