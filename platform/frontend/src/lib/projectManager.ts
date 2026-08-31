@@ -625,6 +625,21 @@ export interface AdapterReceiptIssueResult {
     receipt: JsonObject;
 }
 
+export interface SourceReverificationReceipt {
+    schema: 'bms.global.source-reverification-receipt.v1';
+    reverification_receipt_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    adapter_id: string;
+    adapter_version: string;
+    source_receipt_id: string;
+    source_digest: string;
+    verified_at: string;
+    valid_until: string;
+    normalized_request_sha256: string;
+}
+
 export interface AttachExistingRequest {
     adapter_id: string;
     entity_id: string;
@@ -1722,6 +1737,49 @@ export async function issueAdapterReceipt(adapterId: string, entityId: string, p
     return {
         receipt_id: requireString(record.receipt_id, 'adapter receipt issue result.receipt_id'),
         receipt: requireJsonObject(record.receipt, 'adapter receipt issue result.receipt'),
+    };
+}
+
+export async function reverifySourceReceipt(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    sourceReceiptId: string,
+): Promise<SourceReverificationReceipt> {
+    const response = await api.post<unknown>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/source-receipts/${segment(sourceReceiptId)}/reverify`,
+    );
+    const record = exactRecord(response.data, 'source re-verification receipt', [
+        'schema',
+        'reverification_receipt_id',
+        'project_id',
+        'global_experiment_id',
+        'domain_experiment_id',
+        'adapter_id',
+        'adapter_version',
+        'source_receipt_id',
+        'source_digest',
+        'verified_at',
+        'valid_until',
+        'normalized_request_sha256',
+    ]);
+    const schema = requireString(record.schema, 'source re-verification receipt.schema');
+    if (schema !== 'bms.global.source-reverification-receipt.v1') {
+        throw new Error('source re-verification receipt.schema is unsupported');
+    }
+    return {
+        schema,
+        reverification_receipt_id: requireString(record.reverification_receipt_id, 'source re-verification receipt.reverification_receipt_id'),
+        project_id: requireString(record.project_id, 'source re-verification receipt.project_id'),
+        global_experiment_id: requireString(record.global_experiment_id, 'source re-verification receipt.global_experiment_id'),
+        domain_experiment_id: requireString(record.domain_experiment_id, 'source re-verification receipt.domain_experiment_id'),
+        adapter_id: requireString(record.adapter_id, 'source re-verification receipt.adapter_id'),
+        adapter_version: requireString(record.adapter_version, 'source re-verification receipt.adapter_version'),
+        source_receipt_id: requireString(record.source_receipt_id, 'source re-verification receipt.source_receipt_id'),
+        source_digest: requireString(record.source_digest, 'source re-verification receipt.source_digest'),
+        verified_at: requireString(record.verified_at, 'source re-verification receipt.verified_at'),
+        valid_until: requireString(record.valid_until, 'source re-verification receipt.valid_until'),
+        normalized_request_sha256: requireString(record.normalized_request_sha256, 'source re-verification receipt.normalized_request_sha256'),
     };
 }
 

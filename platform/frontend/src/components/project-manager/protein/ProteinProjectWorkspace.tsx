@@ -10,6 +10,7 @@ import {
     projectManagerErrorMessage,
     proteinDomainAuthority,
     proteinWorkspaceHref,
+    reverifySourceReceipt,
     reopenDomainResult,
     type JsonObject,
     type JsonValue,
@@ -96,6 +97,19 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
     const globalExperiment = useQuery({ queryKey: ['protein-project', ...scopeKey, 'global'], queryFn: ({ signal }) => getGlobalExperiment(projectId, globalExperimentId, signal), retry: false });
     const domain = useQuery({ queryKey: ['protein-project', ...scopeKey, 'domain'], queryFn: ({ signal }) => getDomainExperiment(projectId, globalExperimentId, domainExperimentId, signal), retry: false });
     const summary = useQuery({ queryKey: ['protein-project', ...scopeKey, 'summary'], queryFn: ({ signal }) => getProjectSummary(projectId, { focusId: globalExperimentId, selectedNodeKey: `domain_experiment:${domainExperimentId}`, mapLimit: 50, runLimit: 100, resultLimit: 100, lineageLimit: 100, noteLimit: 100, decisionLimit: 100, datasetLimit: 100, activityLimit: 100, signal }), retry: false });
+    const reverify = useMutation({
+        mutationFn: async () => Promise.all(
+            (summary.data?.source_receipt_ids ?? []).map((sourceReceiptId) => reverifySourceReceipt(
+                projectId,
+                globalExperimentId,
+                domainExperimentId,
+                sourceReceiptId,
+            )),
+        ),
+        onSuccess: async () => {
+            await summary.refetch();
+        },
+    });
 
     const projectData = project.data;
     const globalExperimentData = globalExperiment.data;
@@ -137,6 +151,8 @@ export function ProteinProjectWorkspace({ projectId, globalExperimentId, domainE
         <nav aria-label="Protein workspace sections" className="overflow-x-auto border-b border-border-primary bg-surface-secondary px-4"><div className="flex min-w-max gap-1 py-2">{SECTIONS.map((item) => <button key={item.id} type="button" onClick={() => selectSection(item.id)} aria-current={section === item.id ? 'page' : undefined} className={`rounded-lg px-3 py-2 text-xs font-semibold ${section === item.id ? 'bg-accent text-white' : 'text-content-secondary hover:bg-surface'}`}>{item.label}</button>)}</div></nav>
         <main className="p-4 lg:p-6">
             {reopen.error && <p role="alert" className="mb-4 rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(reopen.error)}</p>}
+            {reverify.error && <p role="alert" className="mb-4 rounded-lg border border-error/50 bg-error/10 p-3 text-xs text-error">{projectManagerErrorMessage(reverify.error)}</p>}
+            {section === 'overview' && summary.data.source_receipt_ids.length > 0 && summary.data.reconciliation.state !== 'current' && <section className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4"><div><h2 className="text-sm font-semibold text-warning">Source freshness requires verification</h2><p className="mt-1 text-xs text-content-secondary">Verify the attached immutable source identity and digest again.</p></div><button type="button" className={BUTTON} disabled={reverify.isPending} onClick={() => reverify.mutate()}>{reverify.isPending ? 'Reverifying…' : 'Reverify sources'}</button></section>}
             {section === 'overview' && <Overview summary={summary.data} authority={authority} />}
             {section === 'targets' && <div className="space-y-3">{authority.targets.length ? authority.targets.map((target) => <article key={target.target_id} className="rounded-xl border border-border-primary bg-surface-secondary p-4"><div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-semibold text-content">{target.label}</h2><p className="mt-1 font-mono text-xs text-content-muted">{target.target_id}</p></div><span className="rounded-full border border-border-primary px-2 py-1 text-xs text-content-secondary">{target.role}</span></div><p className="mt-3 text-xs text-content-secondary">Source receipts: {target.source_receipt_ids.length ? target.source_receipt_ids.join(', ') : 'none recorded'}</p><p className="mt-1 text-xs text-content-secondary">Dataset members: {target.dataset_member_refs.length ? target.dataset_member_refs.map((member) => `${member.dataset_revision_id}:${member.member_id}`).join(', ') : 'none recorded'}</p></article>) : <EmptyState>No targets are recorded in the current Protein Domain revision.</EmptyState>}<p className="rounded-lg border border-border-primary bg-surface-secondary p-3 text-xs text-content-muted">Target changes are disabled here because Project Manager owns the Protein Domain revision. Use “Back to Project Manager” and edit the exact Domain revision.</p></div>}
             {section === 'datasets' && <DomainDatasetOperator projectId={projectId} globalExperimentId={globalExperimentId} domainExperimentId={domainExperimentId} canMutate mutationBlocker={null} currentStateRevisionId={null} selectedRevisionIds={selectedDatasetRevisionIds} onSelectedRevisionIdsChange={setSelectedDatasetRevisionIds} />}

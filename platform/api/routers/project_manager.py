@@ -85,7 +85,7 @@ from services.global_experiments.launch_contexts import (
     workflow_pinned_gpu,
 )
 from services.global_experiments.read_models import build_project_manager_read_model
-from services.global_experiments.receipts import attach_verified_entity
+from services.global_experiments.receipts import attach_verified_entity, reverify_source_receipt
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 from services.ngs_molbio_connector import exact_local_launch_authority
 from services.ngs_molbio_capabilities import NgsMolBioCapabilityError, capability_inventory
@@ -696,6 +696,38 @@ async def attach_domain_entity(
             role=payload.role,
             note=payload.note,
             expected_head_generation=payload.expected_head_generation,
+        )
+        await experiment_session.commit()
+        return receipt
+    except AdapterError as exc:
+        await experiment_session.rollback()
+        raise _adapter_error(exc) from exc
+    except ExperimentServiceError as exc:
+        await experiment_session.rollback()
+        raise _service_error(exc) from exc
+
+
+@router.post(
+    "/api/projects/{project_id}/experiments/{experiment_id}/domains/{domain_id}/source-receipts/{source_receipt_id}/reverify"
+)
+async def reverify_domain_source_receipt(
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+    source_receipt_id: str,
+    request: Request,
+    experiment_session: AsyncSession = Depends(get_experiment_session),
+    core_session: AsyncSession = Depends(get_core_session),
+) -> dict:
+    try:
+        await _require_mutation_owner(request, experiment_session, resource_id=project_id)
+        receipt = await reverify_source_receipt(
+            experiment_session,
+            core_session,
+            project_id=project_id,
+            global_experiment_id=experiment_id,
+            domain_experiment_id=domain_id,
+            source_receipt_id=source_receipt_id,
         )
         await experiment_session.commit()
         return receipt

@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
@@ -14,6 +14,7 @@ from experiment_models import (
     ExperimentAggregateHead,
     ExperimentAuditEvent,
     ExperimentDatasetRevisionMember,
+    ExperimentDomainAdapterReceipt,
     ExperimentExternalEntityReceipt,
     ExperimentLineageEdge,
     ExperimentResearchRecord,
@@ -41,6 +42,7 @@ DEFAULT_PAGE_ITEMS = 25
 VIRTUAL_FOLDERS = ("plans", "runs", "results", "datasets", "notes", "decisions", "activity")
 ATTACHMENT_MODES = ("references", "uses_input", "produced", "validated_by")
 RESULT_ATTACHMENT_MODES = ("produced",)
+SOURCE_REVERIFICATION_TTL = timedelta(hours=24)
 
 
 def _utc_now() -> str:
@@ -237,7 +239,24 @@ def _verified_at(acknowledgement: dict[str, Any] | None) -> str | None:
     return value if parsed.tzinfo is not None else None
 
 
-def _receipt_reconciliation(receipt: ExperimentExternalEntityReceipt) -> dict[str, Any]:
+def _parse_utc_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _receipt_reconciliation(
+    receipt: ExperimentExternalEntityReceipt,
+    reverification: dict[str, Any] | None = None,
+    *,
+    current_time: datetime | None = None,
+) -> dict[str, Any]:
     acknowledgement = _receipt_acknowledgement(receipt)
     last_verified_at = _verified_at(acknowledgement)
     authority = str(receipt.verification_authority or "").strip()
@@ -306,6 +325,40 @@ def _receipt_reconciliation(receipt: ExperimentExternalEntityReceipt) -> dict[st
             "last_verified_at": last_verified_at,
             "reason": "source receipt availability has not been verified",
         }
+    if reverification is not None:
+        reverified_at = _parse_utc_timestamp(reverification.get("verified_at"))
+        valid_until = _parse_utc_timestamp(reverification.get("valid_until"))
+        reverified_digest = reverification.get("source_digest")
+        if reverified_digest != receipt.content_digest:
+            return {
+                "state": "digest_mismatch",
+                "last_verified_at": reverification.get("verified_at"),
+                "reason": "source re-verification digest disagrees with the persisted receipt",
+            }
+        if (
+            reverification.get("schema") != "bms.global.source-reverification-receipt.v1"
+            or reverification.get("source_receipt_id") != receipt.id
+            or reverified_at is None
+            or valid_until is None
+            or valid_until <= reverified_at
+            or valid_until - reverified_at > SOURCE_REVERIFICATION_TTL
+        ):
+            return {
+                "state": "pending",
+                "last_verified_at": reverification.get("verified_at"),
+                "reason": "source re-verification receipt is malformed or unbounded",
+            }
+        if valid_until >= (current_time or datetime.now(timezone.utc)):
+            return {
+                "state": "current",
+                "last_verified_at": str(reverification["verified_at"]),
+                "reason": None,
+            }
+        return {
+            "state": "stale",
+            "last_verified_at": str(reverification["verified_at"]),
+            "reason": "source re-verification receipt has expired",
+        }
     return {
         "state": "stale",
         "last_verified_at": last_verified_at,
@@ -315,10 +368,15 @@ def _receipt_reconciliation(receipt: ExperimentExternalEntityReceipt) -> dict[st
 
 def _source_reconciliation(
     receipts: list[ExperimentExternalEntityReceipt],
+    reverifications: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not receipts:
         return {"state": "current", "last_verified_at": None, "reason": None}
-    reconciliations = [_receipt_reconciliation(receipt) for receipt in receipts]
+    current_reverifications = reverifications or {}
+    reconciliations = [
+        _receipt_reconciliation(receipt, current_reverifications.get(receipt.id))
+        for receipt in receipts
+    ]
     priority = {
         "current": 0,
         "stale": 1,
@@ -1625,7 +1683,44 @@ async def build_project_manager_read_model(
         if receipt is not None:
             source_receipts_by_id[receipt.id] = receipt
     source_receipts = list(source_receipts_by_id.values())
-    source_reconciliation = _source_reconciliation(source_receipts)
+    reverifications_by_receipt: dict[str, dict[str, Any]] = {}
+    if source_receipts:
+        reverification_rows = list(
+            (
+                await session.scalars(
+                    select(ExperimentDomainAdapterReceipt)
+                    .where(
+                        ExperimentDomainAdapterReceipt.workspace_id == project_id,
+                        ExperimentDomainAdapterReceipt.operation_kind == "reverify_source",
+                        func.json_extract(
+                            ExperimentDomainAdapterReceipt.receipt_json,
+                            "$.source_receipt_id",
+                        ).in_(source_receipts_by_id),
+                    )
+                    .order_by(
+                        ExperimentDomainAdapterReceipt.created_at.desc(),
+                        ExperimentDomainAdapterReceipt.resource_id.desc(),
+                    )
+                    .limit(MAX_TREE_NODES)
+                )
+            ).all()
+        )
+        for row in reverification_rows:
+            try:
+                payload = json.loads(row.receipt_json)
+            except json.JSONDecodeError:
+                continue
+            source_receipt_id = payload.get("source_receipt_id") if isinstance(payload, dict) else None
+            if (
+                isinstance(source_receipt_id, str)
+                and source_receipt_id in source_receipts_by_id
+                and source_receipt_id not in reverifications_by_receipt
+            ):
+                reverifications_by_receipt[source_receipt_id] = payload
+    source_reconciliation = _source_reconciliation(
+        source_receipts,
+        reverifications_by_receipt,
+    )
     digest_set = sorted({receipt.content_digest for receipt in source_receipts})
     source_digest_set_sha256 = hashlib.sha256(canonical_json(digest_set).encode("utf-8")).hexdigest()
     adapter_versions = sorted(

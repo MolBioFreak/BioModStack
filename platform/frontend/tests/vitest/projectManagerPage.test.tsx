@@ -12,11 +12,15 @@ const nativeApi = vi.hoisted(() => ({
 const managerApi = vi.hoisted(() => ({
     listProjects: vi.fn(),
     searchProjects: vi.fn(),
+    getProject: vi.fn(),
+    getGlobalExperiment: vi.fn(),
+    getDomainExperiment: vi.fn(),
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
     listProteinProjectCapabilities: vi.fn(),
     searchAdapterEntities: vi.fn(),
     issueAdapterReceipt: vi.fn(),
+    reverifySourceReceipt: vi.fn(),
     attachExistingEntity: vi.fn(),
     getResultSurface: vi.fn(),
     createLaunchContext: vi.fn(),
@@ -248,6 +252,38 @@ beforeEach(() => {
     managerApi.isPermissionError.mockReturnValue(false);
     managerApi.listProjects.mockResolvedValue({ items: [project], next_cursor: null });
     managerApi.searchProjects.mockResolvedValue({ items: [project], next_cursor: null });
+    managerApi.getProject.mockResolvedValue(project);
+    managerApi.getGlobalExperiment.mockResolvedValue({
+        id: 'global-1',
+        parent_id: 'project-1',
+        current_revision_id: 'revision-global-1',
+        name: 'Catalytic-loop redesign',
+        payload: {},
+    });
+    managerApi.getDomainExperiment.mockResolvedValue({
+        id: 'domain-1',
+        parent_id: 'global-1',
+        current_revision_id: 'revision-domain-1',
+        name: 'Protein In Silico',
+        payload: {
+            domain_kind: 'protein_in_silico',
+            domain_payload: {
+                schema: 'bms.protein-in-silico-experiment.v3',
+                experiment_mode: 'redesign',
+                scientific_objective: 'Design stable variants',
+                targets: [{
+                    target_id: 'PLM-07',
+                    label: 'PLM-07',
+                    role: 'target',
+                    source_receipt_ids: ['receipt-9'],
+                    dataset_member_refs: [],
+                }],
+                planned_capability_ids: [],
+                validation_capability_ids: [],
+                comparison_groups: [],
+            },
+        },
+    });
     managerApi.listGlobalExperiments.mockResolvedValue([{ id: 'global-1', name: 'Validation experiment' }]);
     managerApi.listNgsMolBioShareableResults.mockResolvedValue([]);
     managerApi.linkNgsMolBioProject.mockResolvedValue({});
@@ -270,6 +306,13 @@ beforeEach(() => {
     });
     managerApi.searchAdapterEntities.mockResolvedValue({ schema: 'bms.global.adapter-search.v1', adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', adapter_version: '1', items: [{ adapter_id: 'bms.rfd3.local-redesign-reference.adapter.v1', entity_kind: 'rfd3_local_redesign_request', entity_id: 'request-10', label: 'PLM-07 redesign', canonical_state: 'completed', attachable: true, reason: null, reopen_uri: '/designs/job-9', metadata: { created_at: '2026-08-09' } }], next_cursor: null });
     managerApi.attachExistingEntity.mockResolvedValue({ source_receipt_id: 'receipt-9' });
+    managerApi.reverifySourceReceipt.mockResolvedValue({
+        schema: 'bms.global.source-reverification-receipt.v1',
+        source_receipt_id: 'receipt-9',
+        source_digest: 'b'.repeat(64),
+        verified_at: '2026-08-30T23:00:00Z',
+        valid_until: '2026-08-31T23:00:00Z',
+    });
     managerApi.getResultSurface.mockResolvedValue(summaryFor('external_entity_receipt:receipt-9').selection.canonical_surface);
     managerApi.createLaunchContext.mockResolvedValue({
         schema: 'bms.launch-context.v1', launch_context_id: 'launch-1', project_id: 'project-1',
@@ -726,6 +769,111 @@ describe('ProjectManager', () => {
         ));
         await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Protein source receipt IDs 1"]')?.value).toBe('receipt-1ubq'));
         expect(container.querySelector<HTMLInputElement>('[aria-label="Protein expected content SHA-256 1"]')?.value).toBe('d'.repeat(64));
+    });
+
+    it('reverifies stale Protein source receipts from the Overview', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1');
+            value.reconciliation = {
+                state: 'stale',
+                last_verified_at: '2026-08-01T00:00:00Z',
+                reason: 'source verification expired',
+            };
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        await renderAt('/projects/project-1/experiments/global-1/domains/domain-1?workspace=protein&section=overview');
+        await waitUntil(() => expect(container.textContent).toContain('Reverify sources'));
+        const reverify = Array.from(container.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Reverify sources',
+        );
+        await act(async () => reverify?.click());
+        await waitUntil(() => expect(managerApi.reverifySourceReceipt).toHaveBeenCalledWith(
+            'project-1', 'global-1', 'domain-1', 'receipt-9',
+        ));
+    });
+
+    it('edits typed Protein entity-map display rows in the browser', async () => {
+        const sourceDigest = 'd'.repeat(64);
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1');
+            value.selection.available_actions = ['edit'];
+            const domainNode = value.tree.nodes.find((node) => node.node_key === 'domain_experiment:domain-1');
+            if (domainNode) domainNode.allowed_actions = ['edit'];
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        managerApi.getDomainExperiment.mockResolvedValue({
+            id: 'domain-1',
+            parent_id: 'global-1',
+            current_revision_id: 'revision-domain-1',
+            head_generation: 2,
+            name: 'Protein In Silico',
+            payload: {
+                domain_kind: 'protein_in_silico',
+                objective: 'Design stable variants',
+                domain_payload: {
+                    schema: 'bms.protein-in-silico-experiment.v3',
+                    experiment_mode: 'redesign',
+                    scientific_objective: 'Design stable variants',
+                    targets: [{
+                        target_id: 'PLM-07',
+                        label: 'PLM-07',
+                        role: 'target',
+                        source_receipt_ids: ['receipt-9'],
+                        dataset_member_refs: [],
+                        entity_map_reference: {
+                            schema: 'bms.protein-entity-map-reference.v1',
+                            authority_kind: 'governed_artifact_receipt',
+                            receipt_id: 'map-receipt-1',
+                            receipt_sha256: 'a'.repeat(64),
+                            content_sha256: 'b'.repeat(64),
+                            canonical_size_bytes: 200,
+                            entity_count: 1,
+                            residue_mapping_count: 540,
+                            display_entities: [{
+                                entity_instance_id: 'A',
+                                source_entity_id: '1',
+                                entity_type: 'protein',
+                                label_asym_id: 'A',
+                                auth_asym_id: 'A',
+                            }],
+                        },
+                        expected_content_sha256: sourceDigest,
+                    }],
+                    planned_capability_ids: [],
+                    validation_capability_ids: [],
+                    comparison_groups: [],
+                    acceptance_criteria: [],
+                    evidence_plan: [],
+                },
+            },
+        });
+        managerApi.updateDomainExperiment.mockResolvedValue({ id: 'domain-1' });
+
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.textContent).toContain('Edit revision'));
+        const edit = Array.from(container.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Edit revision',
+        );
+        await act(async () => edit?.click());
+        await waitUntil(() => expect(container.querySelector<HTMLInputElement>('[aria-label="Protein entity auth chain 1.1"]')?.value).toBe('A'));
+        const authChain = container.querySelector<HTMLInputElement>('[aria-label="Protein entity auth chain 1.1"]');
+        await act(async () => {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            setter?.call(authChain, 'B');
+            authChain?.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        const save = Array.from(container.querySelectorAll('button')).find(
+            (button) => button.textContent?.trim() === 'Save immutable revision',
+        );
+        await act(async () => save?.click());
+        await waitUntil(() => expect(managerApi.updateDomainExperiment).toHaveBeenCalled());
+        expect(managerApi.updateDomainExperiment.mock.calls[0][3].domain_payload.targets[0].entity_map_reference.display_entities).toEqual([{
+            entity_instance_id: 'A',
+            source_entity_id: '1',
+            entity_type: 'protein',
+            label_asym_id: 'A',
+            auth_asym_id: 'B',
+        }]);
     });
 
     it('accumulates and deduplicates map pages while preserving stable root and focus context', async () => {
