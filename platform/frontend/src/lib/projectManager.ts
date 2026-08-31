@@ -227,7 +227,8 @@ export interface DomainCapabilityDescriptor {
 }
 
 export interface DomainCapabilityList {
-    schema: 'bms.ngs-molbio.domain-capability-list.v1';
+    schema: 'bms.ngs-molbio.domain-capability-list.v1' | 'bms.protein.domain-capability-list.v1';
+    domain_kind?: 'ngs_molbio' | 'protein_in_silico';
     domain_id: string;
     domain_revision_id: string | null;
     experiment_mode: string | null;
@@ -624,6 +625,21 @@ export interface AdapterReceiptIssueResult {
     receipt: JsonObject;
 }
 
+export interface SourceReverificationReceipt {
+    schema: 'bms.global.source-reverification-receipt.v1';
+    reverification_receipt_id: string;
+    project_id: string;
+    global_experiment_id: string;
+    domain_experiment_id: string;
+    adapter_id: string;
+    adapter_version: string;
+    source_receipt_id: string;
+    source_digest: string;
+    verified_at: string;
+    valid_until: string;
+    normalized_request_sha256: string;
+}
+
 export interface AttachExistingRequest {
     adapter_id: string;
     entity_id: string;
@@ -853,6 +869,88 @@ export interface HierarchyMutationResult {
     domain_kind?: string;
 }
 
+export interface ProteinTargetAuthority {
+    target_id: string;
+    label: string;
+    role: string;
+    source_receipt_ids: string[];
+    dataset_member_refs: Array<{ dataset_revision_id: string; member_id: string }>;
+}
+
+export interface ProteinDomainAuthority {
+    domain_kind: 'protein_in_silico';
+    domain_revision_id: string;
+    experiment_mode: string;
+    scientific_objective: string;
+    targets: ProteinTargetAuthority[];
+    planned_capabilities: string[];
+    comparison_groups: JsonObject[];
+    validation_strategy: string[];
+}
+
+export type ProteinWorkspaceSection = 'overview' | 'targets' | 'datasets' | 'plans' | 'runs' | 'results' | 'comparisons' | 'evidence' | 'history';
+
+export function proteinWorkspaceHref(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    section: ProteinWorkspaceSection = 'overview',
+): string {
+    const query = new URLSearchParams({ workspace: 'protein', section });
+    return `/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}?${query.toString()}`;
+}
+
+export function proteinDomainAuthority(domain: HierarchyMutationResult): ProteinDomainAuthority | null {
+    const payload = domain.payload;
+    if (!payload || payload.domain_kind !== 'protein_in_silico' || typeof domain.current_revision_id !== 'string') return null;
+    const nested = payload.domain_payload;
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return null;
+    const raw = nested as JsonObject;
+    if (raw.schema !== 'bms.protein-in-silico-experiment.v3' || typeof raw.experiment_mode !== 'string' || !Array.isArray(raw.targets)) return null;
+    const targets: ProteinTargetAuthority[] = [];
+    for (const value of raw.targets) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+        const target = value as JsonObject;
+        if (
+            typeof target.target_id !== 'string'
+            || typeof target.label !== 'string'
+            || typeof target.role !== 'string'
+            || !Array.isArray(target.source_receipt_ids)
+            || target.source_receipt_ids.some((receiptId) => typeof receiptId !== 'string')
+            || !Array.isArray(target.dataset_member_refs)
+        ) return null;
+        const datasetMemberRefs = target.dataset_member_refs.flatMap((value) => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+            const reference = value as JsonObject;
+            return typeof reference.dataset_revision_id === 'string' && typeof reference.member_id === 'string'
+                ? [{ dataset_revision_id: reference.dataset_revision_id, member_id: reference.member_id }]
+                : [];
+        });
+        if (datasetMemberRefs.length !== target.dataset_member_refs.length) return null;
+        targets.push({
+            target_id: target.target_id,
+            label: target.label,
+            role: target.role,
+            source_receipt_ids: target.source_receipt_ids as string[],
+            dataset_member_refs: datasetMemberRefs,
+        });
+    }
+    const strings = (value: JsonValue | undefined): string[] => Array.isArray(value) && value.every((item) => typeof item === 'string') ? value as string[] : [];
+    const comparisons = Array.isArray(raw.comparison_groups)
+        ? raw.comparison_groups.filter((value): value is JsonObject => Boolean(value) && typeof value === 'object' && !Array.isArray(value))
+        : [];
+    return {
+        domain_kind: 'protein_in_silico',
+        domain_revision_id: domain.current_revision_id,
+        experiment_mode: raw.experiment_mode,
+        scientific_objective: typeof raw.scientific_objective === 'string' ? raw.scientific_objective : '',
+        targets,
+        planned_capabilities: strings(raw.planned_capability_ids),
+        comparison_groups: comparisons,
+        validation_strategy: strings(raw.validation_capability_ids),
+    };
+}
+
 export type HierarchyPatch = Record<string, JsonValue> & { expected_head_generation: number };
 
 export interface ResearchRecordSubject {
@@ -867,6 +965,18 @@ export interface ResearchRecordRequest {
     author?: string | null;
     source_receipt_ids?: string[];
     supersedes_record_id?: string | null;
+}
+
+export interface ResearchRecordItem {
+    id: string;
+    workspace_id: string;
+    subject_resource_id: string;
+    record_kind: RecordKind;
+    body: string;
+    author: string | null;
+    source_receipt_ids: string[];
+    supersedes_record_id: string | null;
+    created_at: string;
 }
 
 export interface FrustraMpnnExperimentScopeItem {
@@ -1605,6 +1715,11 @@ export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAd
     return parseDomainAdapterRegistry(response.data);
 }
 
+export async function listProteinProjectCapabilities(signal?: AbortSignal): Promise<unknown> {
+    const response = await api.get<unknown>('/api/protein-project-capabilities', { signal });
+    return response.data;
+}
+
 export async function searchAdapterEntities(adapterId: string, query: string, limit = 25, signal?: AbortSignal): Promise<AdapterSearchResult> {
     const response = await api.get<unknown>(`/api/domain-adapters/${segment(adapterId)}/entities/search`, {
         params: { q: query, limit },
@@ -1622,6 +1737,49 @@ export async function issueAdapterReceipt(adapterId: string, entityId: string, p
     return {
         receipt_id: requireString(record.receipt_id, 'adapter receipt issue result.receipt_id'),
         receipt: requireJsonObject(record.receipt, 'adapter receipt issue result.receipt'),
+    };
+}
+
+export async function reverifySourceReceipt(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    sourceReceiptId: string,
+): Promise<SourceReverificationReceipt> {
+    const response = await api.post<unknown>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/source-receipts/${segment(sourceReceiptId)}/reverify`,
+    );
+    const record = exactRecord(response.data, 'source re-verification receipt', [
+        'schema',
+        'reverification_receipt_id',
+        'project_id',
+        'global_experiment_id',
+        'domain_experiment_id',
+        'adapter_id',
+        'adapter_version',
+        'source_receipt_id',
+        'source_digest',
+        'verified_at',
+        'valid_until',
+        'normalized_request_sha256',
+    ]);
+    const schema = requireString(record.schema, 'source re-verification receipt.schema');
+    if (schema !== 'bms.global.source-reverification-receipt.v1') {
+        throw new Error('source re-verification receipt.schema is unsupported');
+    }
+    return {
+        schema,
+        reverification_receipt_id: requireString(record.reverification_receipt_id, 'source re-verification receipt.reverification_receipt_id'),
+        project_id: requireString(record.project_id, 'source re-verification receipt.project_id'),
+        global_experiment_id: requireString(record.global_experiment_id, 'source re-verification receipt.global_experiment_id'),
+        domain_experiment_id: requireString(record.domain_experiment_id, 'source re-verification receipt.domain_experiment_id'),
+        adapter_id: requireString(record.adapter_id, 'source re-verification receipt.adapter_id'),
+        adapter_version: requireString(record.adapter_version, 'source re-verification receipt.adapter_version'),
+        source_receipt_id: requireString(record.source_receipt_id, 'source re-verification receipt.source_receipt_id'),
+        source_digest: requireString(record.source_digest, 'source re-verification receipt.source_digest'),
+        verified_at: requireString(record.verified_at, 'source re-verification receipt.verified_at'),
+        valid_until: requireString(record.valid_until, 'source re-verification receipt.valid_until'),
+        normalized_request_sha256: requireString(record.normalized_request_sha256, 'source re-verification receipt.normalized_request_sha256'),
     };
 }
 
@@ -1671,10 +1829,10 @@ export async function createProject(request: ProjectCreateRequest): Promise<Hier
     return (await api.post<HierarchyMutationResult>('/api/projects', request)).data;
 }
 
-export async function listNgsMolBioProjectLinks(projectId: string, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
+export async function listNgsMolBioProjectLinks(projectId: string, limit = 100, signal?: AbortSignal): Promise<NgsMolBioProjectLink[]> {
     const response = await api.get<{ items: NgsMolBioProjectLink[] }>(
         `/api/projects/${segment(projectId)}/ngs-molbio-links`,
-        { signal },
+        { params: { limit }, signal },
     );
     return response.data.items;
 }
@@ -1754,6 +1912,18 @@ export async function createResearchRecord(subject: ResearchRecordSubject, reque
     if (subject.globalExperimentId) path += `/experiments/${segment(subject.globalExperimentId)}`;
     if (subject.domainExperimentId) path += `/domains/${segment(subject.domainExperimentId)}`;
     return (await api.post<JsonObject>(`${path}/records`, request)).data;
+}
+
+export async function listDomainResearchRecords(
+    projectId: string,
+    globalExperimentId: string,
+    domainExperimentId: string,
+    signal?: AbortSignal,
+): Promise<{ items: ResearchRecordItem[]; next_cursor: string | null }> {
+    return (await api.get<{ items: ResearchRecordItem[]; next_cursor: string | null }>(
+        `/api/projects/${segment(projectId)}/experiments/${segment(globalExperimentId)}/domains/${segment(domainExperimentId)}/records`,
+        { params: { limit: 100 }, signal },
+    )).data;
 }
 
 export async function getNgsMolBioBinding(

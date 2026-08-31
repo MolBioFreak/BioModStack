@@ -36,6 +36,12 @@ class JobCreate(BaseModel):
     mode: str = Field(..., description="Mode ID for the selected model")
     params: dict = Field(default_factory=dict)
     pinned_gpu: Optional[int] = Field(None, description="Optional: Pin job to specific GPU (0-3)")
+    execution_target_id: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=160,
+        description="Explicit execution target. Omit for local execution.",
+    )
     # Child job tracking (spawn-wait-collect pattern)
     parent_job_id: Optional[str] = Field(None, description="Parent job ID for child jobs")
     child_stage: Optional[str] = Field(None, description="Stage identifier (rfantibody, fampnn, boltz2)")
@@ -121,6 +127,12 @@ class JobResponse(BaseModel):
     pinned_gpu: Optional[int] = None
     assigned_gpu: Optional[int] = None
     vram_estimate_mb: Optional[int] = None
+    execution_target_id: Optional[str] = None
+    execution_source_revision: Optional[str] = None
+    execution_source_tree: Optional[str] = None
+    execution_bundle_sha256: Optional[str] = None
+    remote_attempt_id: Optional[str] = None
+    remote_state: Optional[str] = None
     # Stage tracking for multi-stage pipelines
     current_stage: Optional[str] = None
     completed_stages: Optional[List[str]] = None

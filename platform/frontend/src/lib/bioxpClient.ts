@@ -279,7 +279,10 @@ export type BioXpOperatorReceiptV2Status =
     | 'cleared'
     | 'interrupted'
     | 'ambiguous'
-    | 'rejected';
+    | 'rejected'
+    | 'stopped'
+    | 'aborted'
+    | 'cancelled';
 
 export interface BioXpOperatorReceiptV2 {
     schema_version: 'bioxp.operator_action_receipt.v2';
@@ -321,6 +324,14 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
         at: number;
         reason: string | null;
     }>;
+    deck_movement?: {
+        target: string;
+        target_label: string | null;
+        source_branch: string | null;
+        controller_completion_verified: boolean | null;
+        semantic_state_committed: boolean | null;
+        physical_observation_verified: boolean | null;
+    } | null;
 }
 
 export interface BioXpYAxisV2 {
@@ -390,6 +401,24 @@ export interface BioXpOperatorDashboardV2 {
     active_commands: BioXpOperatorReceiptV2[];
     command_queue: BioXpOperatorCommandQueueV2;
     latest_receipts: BioXpOperatorReceiptV2[];
+    deck?: {
+        current_location: string | null;
+        current_well: string | null;
+        position_table_revision: string;
+        destination_catalog_revision: string;
+        semantic_state_revision: number;
+        ownership_generation: number;
+        expected_board_epoch_by_board: Record<string, number>;
+        destinations: BioXpDeckDestinationV1[];
+    } | null;
+}
+
+export interface BioXpDeckDestinationV1 {
+    key: string;
+    label: string;
+    aliases: string[];
+    branch_kind: 'ordinary' | 'barcode' | 'park';
+    camera_offset_supported: boolean;
 }
 
 export interface BioXpOperatorControlCatalogV2 {
@@ -402,6 +431,11 @@ export interface BioXpOperatorControlCatalogV2 {
         interrupt: boolean;
         enabled: boolean;
         disabled_reason: string | null;
+        destination_catalog_revision?: string | null;
+        position_table_revision?: string | null;
+        required_board_ids?: Array<4 | 5> | null;
+        expected_board_epoch_by_board?: Record<string, number> | null;
+        destinations?: BioXpDeckDestinationV1[] | null;
     }>;
 }
 
@@ -727,9 +761,58 @@ export interface BioXpOperatorActionReceipt {
     stage_receipts: Record<string, unknown>[];
 }
 
+export interface BioXpOperatorLegacyReconciliationReceipt {
+    action_id: string;
+    automatic_retry: false;
+    callback_session_id: string | null;
+    caller_class: string;
+    command_id: string;
+    connection_generation: number | null;
+    control_class: string;
+    duration_ms: number;
+    entrypoint_id: string;
+    finished_at: string;
+    idempotency_key: string;
+    idempotency_replay_enabled: boolean;
+    lifecycle_stage_id: string | null;
+    operation: string;
+    ownership_generation: number;
+    physical_outcome: 'ambiguous';
+    protocol_action_id: string | null;
+    protocol_job_id: string | null;
+    requested_inputs: Record<string, unknown>;
+    response: Record<string, unknown>;
+    stage_receipts: Record<string, unknown>[];
+    status: 'reconciliation_required';
+}
+
+export interface BioXpOperatorLegacyUnindexedPipetteReceipt {
+    error: string;
+    failure_code: string;
+    ok: false;
+    outcome: string;
+    response: Record<string, unknown>;
+    runtime_binding: {
+        callback_session_id: string;
+        caller_class: string;
+        control_class: string;
+        entrypoint_id: string;
+        lifecycle_stage_id: string;
+        owner: string;
+        transport_owner_bound: true;
+    };
+    stage_receipts: Record<string, unknown>[];
+}
+
+export type BioXpOperatorHistoryReceipt =
+    | BioXpOperatorActionReceipt
+    | BioXpPipetteReceipt
+    | BioXpOperatorLegacyReconciliationReceipt
+    | BioXpOperatorLegacyUnindexedPipetteReceipt;
+
 export interface BioXpOperatorActionHistory {
     schema_version: 'bioxp.operator_action_history.v1';
-    receipts: BioXpOperatorActionReceipt[];
+    receipts: BioXpOperatorHistoryReceipt[];
 }
 
 export function bioXpOperatorGenerationPayload(
@@ -928,7 +1011,7 @@ export interface BioXpOperatorReportReleaseIdentity { schema?: string | null; st
 export interface BioXpOperatorReportUnavailableReleaseIdentity { status: string; verified: false; reason_code: string }
 export interface BioXpOperatorReportSourceHighWaters { operator_commands: number; operator_transitions: number; pipette_operations: number; pipette_channel_observations: number; pipette_transport_exchanges: number; runtime_events: number; pipette_pressure_streams: number; pipette_pressure_chunks: number; runtime_evidence_objects: number; runtime_evidence_links: number | null; runtime_evidence_events: number; operator_plane_command_versions: number; operator_plane_pipette_versions: number; operator_plane_pressure_stream_versions: number; operator_plane_evidence_versions: number }
 export interface BioXpOperatorReportSchemaIdentity { database_identity: 'robot_authoritative_sqlite'; schema_version: 5; identity_version: number | null; release_identity: BioXpOperatorReportReleaseIdentity }
-export interface BioXpOperatorReportSnapshot {
+export interface BioXpOperatorReportCurrentSnapshot {
     database_incarnation_id: string;
     schema_identity: BioXpOperatorReportSchemaIdentity;
     release_identity: BioXpOperatorReportReleaseIdentity;
@@ -937,6 +1020,18 @@ export interface BioXpOperatorReportSnapshot {
     high_water_rowid?: number;
     high_water_event_id?: number;
 }
+
+export interface BioXpOperatorReportLegacySnapshot {
+    database_identity: 'robot_authoritative_sqlite';
+    schema_version: 2;
+    database_path_exposed: false;
+    identity_version: 2;
+    high_water_sequence?: number;
+    high_water_rowid?: number;
+    high_water_event_id?: number;
+}
+
+export type BioXpOperatorReportSnapshot = BioXpOperatorReportCurrentSnapshot | BioXpOperatorReportLegacySnapshot;
 
 export interface BioXpOperatorReportSummary {
     scope?: string;
@@ -1063,6 +1158,8 @@ export interface BioXpOperatorReportExportList {
     }>;
     returned_count: number;
     limit: number;
+    available: boolean;
+    unavailable_reason: string | null;
 }
 
 const operatorReportSummaryKey = ['bioxp', 'operator-reports', 'summary'] as const;
@@ -1215,9 +1312,9 @@ export const useBioXpOperatorDashboardV2 = (connectionGeneration: number, enable
     queryFn: async () => (await api.get<BioXpOperatorDashboardV2>('/api/bioxp/operator-controls/v2/dashboard')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
-    staleTime: 2_000,
+    staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1230,9 +1327,9 @@ export const useBioXpOperatorControlCatalogV2 = (
     queryFn: async () => (await api.get<BioXpOperatorControlCatalogV2>('/api/bioxp/operator-controls/v2/catalog')).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
-    staleTime: 2_000,
+    staleTime: 15_000,
     retry: false,
-    refetchInterval: enabled && connectionGeneration > 0 ? 1_000 : false,
+    refetchInterval: enabled && connectionGeneration > 0 ? 5_000 : false,
     refetchIntervalInBackground: false,
 });
 
@@ -1249,8 +1346,19 @@ function assertCanonicalBoardEpochMap(value: Record<string, number>): void {
     }
 }
 
-function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
+export function assertBioXpOperatorActionV2Request(request: BioXpOperatorActionV2Request): void {
     assertCanonicalBoardEpochMap(request.expected_board_epoch_by_board);
+    if (request.action_id === 'oem.deck.move_to_location') {
+        if (Object.keys(request.expected_board_epoch_by_board).sort().join(',') !== '4,5') {
+            throw new Error('Deck movement requires exact board epochs for boards 4 and 5');
+        }
+        const keys = Object.keys(request.inputs).sort().join(',');
+        if (keys !== 'camera_offset,target'
+            || !/^[A-Z0-9][A-Z0-9_]*$/.test(request.inputs.target)
+            || typeof request.inputs.camera_offset !== 'boolean') {
+            throw new Error('Deck movement inputs must contain target and camera_offset only');
+        }
+    }
     if ((request.action_id === 'oem.x.move_steps' || request.action_id === 'oem.y.move_steps' || request.action_id === 'oem.z.move_steps')
         && (!Number.isSafeInteger(request.inputs.steps)
             || request.inputs.steps < BIOXP_Y_RELATIVE_MIN_STEPS
@@ -1295,7 +1403,8 @@ export type BioXpOperatorActionV2Request =
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.xy.move_absolute'; inputs: { x: number; y: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.move_absolute'; inputs: { target_steps: number } })
-    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> });
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.y.manual_panel_home'; inputs: Record<string, never> })
+    | (BioXpOperatorActionV2Envelope & { action_id: 'oem.deck.move_to_location'; inputs: { target: string; camera_offset: boolean } });
 
 export interface BioXpOperatorInterruptV1Request {
     expected_connection_generation: number;
@@ -1344,7 +1453,7 @@ export interface BioXpOperatorInterruptReceiptV1 {
     idempotent_replay?: boolean;
 }
 
-export const useInvokeBioXpOperatorActionV2 = () => {
+const useInvokeBioXpOperatorActionV2Mutation = () => {
     const queryClient = useQueryClient();
     return useMutation({
         mutationFn: async ({ request }: { request: BioXpOperatorActionV2Request }) => {
@@ -1357,10 +1466,43 @@ export const useInvokeBioXpOperatorActionV2 = () => {
                 )
             ).data;
         },
-        onSuccess: () => {
+        onSettled: () => {
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
+            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
     });
+};
+
+export const useInvokeBioXpOperatorActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
+
+// Deck and generic axis actions intentionally own separate mutation state.
+export const useInvokeBioXpDeckActionV2 = () => useInvokeBioXpOperatorActionV2Mutation();
+
+export interface BioXpPostDispatchCommandIdentity {
+    commandId: string;
+    statusPath: string;
+    retryGuidance: 'do_not_resubmit_reconcile_by_command_id';
+}
+
+export const bioXpPostDispatchCommandIdentity = (error: unknown): BioXpPostDispatchCommandIdentity | null => {
+    const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+    if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) return null;
+    const candidate = detail as Record<string, unknown>;
+    if (candidate.error !== 'post_dispatch_receipt_validation_failed'
+        || typeof candidate.command_id !== 'string'
+        || candidate.command_id.length < 1
+        || candidate.command_id.length > 160
+        || typeof candidate.status_path !== 'string'
+        || candidate.status_path.length < 1
+        || candidate.status_path.length > 500
+        || candidate.retry_guidance !== 'do_not_resubmit_reconcile_by_command_id') {
+        return null;
+    }
+    return {
+        commandId: candidate.command_id,
+        statusPath: candidate.status_path,
+        retryGuidance: candidate.retry_guidance,
+    };
 };
 
 export const useInterruptBioXpOperatorActionV1 = () => {
@@ -1512,13 +1654,16 @@ export const useBioXpOperatorActionAdmission = (
     retry: false,
 });
 
-export const bioXpReceiptIsNonTerminal = (receipt: { status?: unknown } | null | undefined): boolean =>
-    typeof receipt?.status === 'string'
-    && receipt.status !== 'completed'
-    && receipt.status !== 'failed'
-    && receipt.status !== 'rejected'
-    && receipt.status !== 'blocked'
-    && receipt.status !== 'cleared';
+export const bioXpReceiptIsNonTerminal = (receipt: unknown): boolean => {
+    if (!receipt || typeof receipt !== 'object' || !('status' in receipt)) return false;
+    const status = receipt.status;
+    return typeof status === 'string'
+        && status !== 'completed'
+        && status !== 'failed'
+        && status !== 'rejected'
+        && status !== 'blocked'
+        && status !== 'cleared';
+};
 
 export const useBioXpOperatorActionHistory = (
     connectionGeneration: number,
@@ -1922,7 +2067,7 @@ export const useInvokeBioXpOperatorAction = () => {
                     schema_version: 'bioxp.operator_action_history.v1',
                     receipts: [
                         receipt,
-                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
                     ].slice(0, 100),
                 }),
             );
@@ -1965,7 +2110,7 @@ export const useAssessBioXpOperatorAction = () => {
                     schema_version: 'bioxp.operator_action_history.v1',
                     receipts: [
                         receipt,
-                        ...(current?.receipts ?? []).filter((row) => row.command_id !== receipt.command_id),
+                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
                     ].slice(0, 100),
                 }),
             );

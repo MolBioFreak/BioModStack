@@ -27,10 +27,12 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'structure_prediction',
         label: 'Structure Prediction',
-        modelTopics: ['boltz2', 'rf3', 'protenix', 'esmfold2', 'frustrampnn'],
+        modelTopics: ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn'],
         sourceFiles: [
             'platform/api/config/templates/structure_prediction.yaml',
+            'platform/api/config/models/boltz_cp_experimental.yaml',
             'platform/frontend/src/components/StructurePredictionTemplate.tsx',
+            'workflows/boltz_cp_experimental.nf',
             'main.nf',
             'nextflow.config',
         ],
@@ -61,31 +63,21 @@ export const WORKFLOW_MODEL_INVENTORY: WorkflowModelInventoryEntry[] = [
     {
         workflowId: 'protein_modification_experimental',
         label: 'De Novo Design',
-        modelTopics: ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'],
+        modelTopics: ['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'],
         sourceFiles: [
             'platform/api/config/models/protein_modification_experimental.yaml',
             'platform/api/config/models/protein_local_redesign.yaml',
             'platform/frontend/src/components/ProteinModificationTemplate.tsx',
             'platform/frontend/src/components/ProteinLocalRedesignTemplate.tsx',
             'platform/frontend/src/components/RFD3LocalRedesignResultsPane.tsx',
+            'platform/frontend/src/components/RFD3GenerationResultsPane.tsx',
             'workflows/protein_cad_experimental.nf',
             'workflows/protein_local_redesign.nf',
             'modules/rfd3.nf',
             'nextflow.config',
         ],
     },
-    {
-        workflowId: 'boltz_cp_experimental',
-        label: 'Fold-CP Experimental',
-        modelTopics: ['fold_cp', 'boltz2'],
-        sourceFiles: [
-            'platform/api/config/models/boltz_cp_experimental.yaml',
-            'platform/api/config/templates/boltz_cp_experimental.yaml',
-            'platform/frontend/src/components/StructurePredictionTemplate.tsx',
-            'main.nf',
-            'nextflow.config',
-        ],
-    },
+
     {
         workflowId: 'conformational_mapping',
         label: 'Conformational Mapping',

@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
     buildStructureReorchestrateOverrides,
     deriveStructureReorchestrateSettings,
+    isLegacyRf3StructureJob,
     isStructureReorchestrateJob,
 } from '../src/components/dashboard/reorchestrateStructureSettings.js';
 
@@ -120,7 +121,7 @@ test('builds focused overrides for re-orchestrating a boltz structure run', () =
     });
 });
 
-test('marks multi-predictor structure jobs as relevant and exposes only the active model families', () => {
+test('recognizes legacy RF3 ensemble jobs without reopening their retry surface', () => {
     const job = {
         model_id: 'boltz2',
         mode: 'predict',
@@ -133,13 +134,11 @@ test('marks multi-predictor structure jobs as relevant and exposes only the acti
         },
     };
 
-    const settings = deriveStructureReorchestrateSettings(job);
-    assert.equal(isStructureReorchestrateJob(job), true);
-    assert.deepEqual(settings.predictors, ['boltz', 'rf3', 'protenix']);
-    assert.equal(settings.skipMsa, false);
+    assert.equal(isLegacyRf3StructureJob(job), true);
+    assert.equal(isStructureReorchestrateJob(job), false);
 });
 
-test('normalizes legacy complex all runs to boltz plus protenix for re-orchestration', () => {
+test('preserves historical complex all semantics as Boltz plus Protenix', () => {
     const job = {
         model_id: 'boltz2',
         mode: 'complex',
@@ -151,8 +150,9 @@ test('normalizes legacy complex all runs to boltz plus protenix for re-orchestra
     };
 
     const settings = deriveStructureReorchestrateSettings(job);
+    assert.equal(isLegacyRf3StructureJob(job), false);
+    assert.equal(isStructureReorchestrateJob(job), true);
     assert.deepEqual(settings.predictors, ['boltz', 'protenix']);
-    assert.equal(settings.msaProvider, 'colabfold_api');
 });
 
 test('uses the 200-step Boltz default when retry metadata omitted sampling steps', () => {
@@ -191,13 +191,13 @@ test('derives Boltz-CP re-orchestrate settings from a prior CP launch', () => {
     assert.equal(settings.boltzCp.enabled, true);
     assert.deepEqual(settings.boltzCp.pinnedGpus, [2, 3]);
     assert.equal(settings.boltzCp.lockGpus, true);
-    assert.equal(settings.boltzCp.shardPlanId, '4x4');
+    assert.equal(settings.boltzCp.sizeCp, 1);
     assert.equal(settings.boltzCp.outputFormat, 'pdb');
     assert.equal(settings.boltzCp.writeFullPae, true);
     assert.equal(settings.boltzCp.seed, '17');
 });
 
-test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing without surfacing bcp_size_cp', () => {
+test('builds Boltz-CP overrides using OEM square-divisor sizing', () => {
     const job = {
         model_id: 'boltz_cp_experimental',
         mode: 'design',
@@ -219,17 +219,17 @@ test('builds Boltz-CP overrides using launcher-consistent square-divisor sizing 
         boltzCp: {
             ...settings.boltzCp,
             pinnedGpus: [2, 3],
-            shardPlanId: '4x4',
+            sizeCp: 16,
         },
     });
 
     assert.deepEqual(overrides.pinned_gpus, [2, 3]);
-    assert.equal(overrides.bcp_shard_plan_id, '4x4');
     assert.equal(overrides.bcp_gpu_ids, '2,3');
-    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_size_cp'), false);
+    assert.equal(overrides.bcp_size_cp, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_shard_plan_id'), false);
 });
 
-test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU mode without surfacing bcp_size_cp', () => {
+test('clears Boltz-CP pinning and seed overrides without reviving shard plans', () => {
     const job = {
         model_id: 'boltz_cp_experimental',
         mode: 'design',
@@ -253,7 +253,7 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
             ...settings.boltzCp,
             pinnedGpus: [],
             lockGpus: false,
-            shardPlanId: '2x2',
+            sizeCp: 4,
             outputFormat: 'mmcif',
             writeFullPae: false,
             seed: '',
@@ -262,9 +262,8 @@ test('clears Boltz-CP pinning and seed overrides when switching back to auto GPU
 
     assert.equal(overrides.pinned_gpus, null);
     assert.equal(overrides.lock_gpus, false);
-    assert.equal(overrides.bcp_shard_plan_id, '2x2');
     assert.equal(overrides.bcp_gpu_ids, null);
-    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_size_cp'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(overrides, 'bcp_shard_plan_id'), false);
     assert.equal(overrides.bcp_output_format, 'mmcif');
     assert.equal(overrides.bcp_write_full_pae, false);
     assert.equal(overrides.bcp_seed, null);

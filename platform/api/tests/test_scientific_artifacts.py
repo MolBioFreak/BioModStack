@@ -4,6 +4,7 @@ import importlib
 import hashlib
 import json
 import multiprocessing
+import os
 import sqlite3
 
 import pyarrow as pa
@@ -272,6 +273,60 @@ def test_parquet_artifact_round_trips_exact_envelope_and_duckdb_page(tmp_path):
         root=str(tmp_path),
     )
     assert reconstruct_envelope(rows) == payload
+
+
+@pytest.mark.parametrize("symlink_kind", ["parent", "final"])
+def test_parquet_queries_reject_symlink_components(tmp_path, symlink_kind):
+    schema = pa.schema([("value", pa.int64())])
+    installed = install_parquet_rows(
+        root=tmp_path, owner_kind="symlink-test", owner_id="one", role="rows",
+        schema_id="bms.test.v1", schema_version=1, source_sha256="1" * 64,
+        rows=[{"value": 1}], schema=schema,
+    )
+    if symlink_kind == "parent":
+        parent = installed.storage_path.parent
+        real_parent = tmp_path / "real-by-id"
+        parent.rename(real_parent)
+        parent.symlink_to(real_parent, target_is_directory=True)
+    else:
+        real_file = tmp_path / "real.parquet"
+        installed.storage_path.rename(real_file)
+        installed.storage_path.symlink_to(real_file)
+
+    with pytest.raises(ScientificArtifactError, match="symlink|regular|unsafe"):
+        query_rows(installed.reference(), columns=["value"], limit=10, root=str(tmp_path))
+
+
+def test_parquet_query_keeps_verified_descriptor_after_original_path_replacement(
+    tmp_path, monkeypatch,
+):
+    import services.scientific_artifacts.query as query_service
+
+    schema = pa.schema([("value", pa.int64())])
+    installed = install_parquet_rows(
+        root=tmp_path, owner_kind="race-test", owner_id="verified", role="rows",
+        schema_id="bms.test.v1", schema_version=1, source_sha256="2" * 64,
+        rows=[{"value": 1}], schema=schema,
+    )
+    replacement = install_parquet_rows(
+        root=tmp_path, owner_kind="race-test", owner_id="replacement", role="rows",
+        schema_id="bms.test.v1", schema_version=1, source_sha256="3" * 64,
+        rows=[{"value": 999}], schema=schema,
+    )
+    original_read_schema = query_service.pq.read_schema
+    replaced = False
+
+    def replace_after_verification(path):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            os.replace(replacement.storage_path, installed.storage_path)
+        return original_read_schema(path)
+
+    monkeypatch.setattr(query_service.pq, "read_schema", replace_after_verification)
+
+    rows = query_rows(installed.reference(), columns=["value"], limit=10, root=str(tmp_path))
+    assert rows == [{"value": 1}]
 
 
 def test_artifact_fingerprint_matches_persisted_parquet_schema(tmp_path):
@@ -633,4 +688,61 @@ def test_scientific_receipt_migration_is_idempotent_and_foreign_key_bound(tmp_pa
     )
     connection.commit()
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    connection.close()
+
+
+def test_migration_44_seals_only_literature_backed_ont_metric_receipts(tmp_path):
+    from migrations.runner import MIGRATIONS
+
+    db_path = tmp_path / "metric-receipts.sqlite3"
+    migrate(db_path)
+    migration = next((item for item in MIGRATIONS if item.version == 44), None)
+    assert migration is not None
+    assert migration.name == "seal_ont_read_metric_receipt_immutability"
+    migration.fn(db_path)
+
+    connection = sqlite3.connect(db_path)
+    insert_sql = (
+        "INSERT INTO scientific_artifact_receipts "
+        "(artifact_id, owner_kind, owner_id, role, schema_id, artifact_schema_version, "
+        "content_sha256, size_bytes, row_count, column_schema_sha256, storage_root, "
+        "relative_path, media_type, availability, source_receipts_json, created_at) "
+        "VALUES (?, ?, ?, ?, 'bms.test.v1', 1, ?, 1, 1, ?, 'test-root', ?, "
+        "'application/vnd.apache.parquet', 'available', '{}', datetime('now'))"
+    )
+    protected = (
+        "protected", "ont_raw_signal_representation", "rep-1",
+        "literature_backed_read_metrics", "a" * 64, "b" * 64, "protected.parquet",
+    )
+    ordinary = (
+        "ordinary", "other-owner", "owner-1", "other-role",
+        "c" * 64, "d" * 64, "ordinary.parquet",
+    )
+    connection.execute(insert_sql, protected)
+    connection.execute(insert_sql, ordinary)
+    connection.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        connection.execute(
+            "UPDATE scientific_artifact_receipts SET availability='missing' WHERE artifact_id='protected'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        connection.execute("DELETE FROM scientific_artifact_receipts WHERE artifact_id='protected'")
+
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        connection.execute(
+            "UPDATE scientific_artifact_receipts "
+            "SET owner_kind='ont_raw_signal_representation', "
+            "role='literature_backed_read_metrics' "
+            "WHERE artifact_id='ordinary'"
+        )
+
+    connection.execute(
+        "UPDATE scientific_artifact_receipts SET availability='unavailable' WHERE artifact_id='ordinary'"
+    )
+    connection.execute("DELETE FROM scientific_artifact_receipts WHERE artifact_id='ordinary'")
+    connection.commit()
+    assert connection.execute(
+        "SELECT availability FROM scientific_artifact_receipts WHERE artifact_id='protected'"
+    ).fetchone() == ("available",)
     connection.close()

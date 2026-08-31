@@ -37,6 +37,7 @@ from molbio_models import (
     MolecularDocument,
     MolecularOperation,
     MolecularOperationInput,
+    MolecularOperationOutput,
     MolecularRevision,
     NucleotideSequence,
     ProjectPlasmidMetadata,
@@ -60,6 +61,14 @@ from services.ngs_molbio_runtime_status import (
 from services.molbio_ngs_member_receipts import persist_member_receipt, resolve_molecular_revision_receipt
 from services.molbio_persistence import begin_immediate_molbio_write, record_sequence_revision
 from molbio_ngs_services import RevisionConflict as NativeRevisionConflict, StateMember, save_state_revision
+from services.global_experiments.project_datasets import (
+    InvalidProteinDatasetLifecycle,
+    create_protein_dataset,
+    protein_dataset_kind_records,
+    require_protein_domain_hierarchy,
+    revise_protein_dataset,
+    set_protein_dataset_lifecycle,
+)
 from services.ngs_molbio_n5 import (
     InvalidLifecycleTransition,
     create_project_dataset,
@@ -145,7 +154,7 @@ def _error(exc: ExperimentServiceError) -> HTTPException:
         return HTTPException(404, detail={"code": "not_found", "message": message})
     if isinstance(exc, IdempotencyConflict):
         return HTTPException(409, detail={"code": "idempotency_conflict", "message": message})
-    if isinstance(exc, InvalidLifecycleTransition):
+    if isinstance(exc, (InvalidLifecycleTransition, InvalidProteinDatasetLifecycle)):
         return HTTPException(409, detail={"code": "invalid_lifecycle_transition", "message": message})
     if isinstance(exc, RevisionConflict):
         return HTTPException(409, detail={"code": "stale_generation", "message": message})
@@ -202,6 +211,28 @@ def _member_doc(row: ExperimentDatasetRevisionMember) -> dict[str, Any]:
     return {**value, "canonical_member_sha256": row.content_sha256, "size_bytes": row.size_bytes}
 
 
+async def _dataset_domain_kind(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    experiment_id: str,
+    domain_id: str,
+) -> str:
+    try:
+        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        return "ngs_molbio"
+    except ValidationFailure as exc:
+        if str(exc) != "unsupported_dataset_kind":
+            raise
+    await require_protein_domain_hierarchy(
+        session,
+        project_id=project_id,
+        experiment_id=experiment_id,
+        domain_id=domain_id,
+    )
+    return "protein_in_silico"
+
+
 @router.get(D + "/dataset-kinds")
 async def list_dataset_kinds(
     project_id: str,
@@ -210,8 +241,14 @@ async def list_dataset_kinds(
     session: AsyncSession = Depends(get_experiment_session),
 ) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
-        registry_document, enabled_records = enabled_dataset_kind_records()
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        registry_document, enabled_records = (
+            protein_dataset_kind_records()
+            if domain_kind == "protein_in_silico"
+            else enabled_dataset_kind_records()
+        )
         items = [
             {
                 "dataset_kind": row["dataset_kind"],
@@ -239,7 +276,9 @@ async def list_dataset_kinds(
 @router.get(D + "/datasets")
 async def list_datasets(project_id: str, experiment_id: str, domain_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         scope = f"datasets:{project_id}:{experiment_id}:{domain_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
         statement = select(ExperimentAggregateHead).where(ExperimentAggregateHead.aggregate_kind == "dataset", ExperimentAggregateHead.workspace_id == project_id, ExperimentAggregateHead.parent_id == domain_id).order_by(ExperimentAggregateHead.created_at.desc(), ExperimentAggregateHead.aggregate_id.desc()).limit(limit + 1)
@@ -258,7 +297,11 @@ async def create_dataset_route(project_id: str, experiment_id: str, domain_id: s
     payload = await _body(request, DatasetCreate, 64 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await create_project_dataset(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, actor=actor, idempotency_key=_key(request), **payload.model_dump())
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        create_dataset = create_protein_dataset if domain_kind == "protein_in_silico" else create_project_dataset
+        result = await create_dataset(session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, actor=actor, idempotency_key=_key(request), **payload.model_dump())
         await session.commit()
         return _bounded_response(result)
     except ExperimentServiceError as exc:
@@ -269,7 +312,9 @@ async def create_dataset_route(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}")
 async def get_dataset_route(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         head = await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
         return _bounded_response({"schema": "bms.dataset-head.v1", "project_id": project_id, "global_experiment_id": experiment_id, "domain_id": domain_id, "dataset_id": dataset_id, "name": head.display_name, "dataset_kind": head.dataset_kind, "current_revision_id": head.current_revision_id, "head_generation": head.head_generation, "lifecycle_state": head.lifecycle_state, "created_at": head.created_at, "updated_at": head.updated_at})
     except ExperimentServiceError as exc:
@@ -288,7 +333,11 @@ async def archive_dataset_route(
     payload = await _body(request, DatasetLifecycleRequest, 16 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await set_project_dataset_lifecycle(
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        set_lifecycle = set_protein_dataset_lifecycle if domain_kind == "protein_in_silico" else set_project_dataset_lifecycle
+        result = await set_lifecycle(
             session,
             project_id=project_id,
             experiment_id=experiment_id,
@@ -319,7 +368,11 @@ async def restore_dataset_route(
     payload = await _body(request, DatasetLifecycleRequest, 16 * 1024)
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
-        result = await set_project_dataset_lifecycle(
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        set_lifecycle = set_protein_dataset_lifecycle if domain_kind == "protein_in_silico" else set_project_dataset_lifecycle
+        result = await set_lifecycle(
             session,
             project_id=project_id,
             experiment_id=experiment_id,
@@ -344,7 +397,11 @@ async def revise_dataset_route(project_id: str, experiment_id: str, domain_id: s
     try:
         actor = await _require_mutation_owner(request, session, resource_id=project_id)
         body = payload.model_dump(mode="json")
-        result = await revise_project_dataset(session, core_session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, dataset_id=dataset_id, actor=actor, idempotency_key=_key(request), **body)
+        domain_kind = await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
+        revise_dataset = revise_protein_dataset if domain_kind == "protein_in_silico" else revise_project_dataset
+        result = await revise_dataset(session, core_session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id, dataset_id=dataset_id, actor=actor, idempotency_key=_key(request), **body)
         await session.commit()
         return _bounded_response(result)
     except ExperimentServiceError as exc:
@@ -355,7 +412,9 @@ async def revise_dataset_route(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}/revisions")
 async def list_dataset_revisions(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=50, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         await require_dataset_read(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id)
         scope = f"dataset-revisions:{project_id}:{domain_id}:{dataset_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
@@ -381,7 +440,9 @@ async def _exact_revision(session: AsyncSession, *, project_id: str, domain_id: 
 @router.get(D + "/datasets/{dataset_id}/revisions/{revision_id}")
 async def get_dataset_revision(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, revision_id: str, session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         revision = await _exact_revision(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id, revision_id=revision_id)
         rows = list((await session.scalars(select(ExperimentDatasetRevisionMember).where(ExperimentDatasetRevisionMember.revision_id == revision_id).order_by(ExperimentDatasetRevisionMember.ordinal).limit(101))).all())
         result = {"schema": "bms.dataset-revision.v1", "dataset_id": dataset_id, "revision_id": revision_id, "revision_number": revision.revision_number, "parent_revision_id": revision.parent_revision_id, "revision_sha256": revision.payload_sha256, "member_count": len(json.loads(revision.canonical_payload).get("members", [])), "created_at": revision.created_at}
@@ -397,7 +458,9 @@ async def get_dataset_revision(project_id: str, experiment_id: str, domain_id: s
 @router.get(D + "/datasets/{dataset_id}/revisions/{revision_id}/members")
 async def list_dataset_members(project_id: str, experiment_id: str, domain_id: str, dataset_id: str, revision_id: str, cursor: str | None = Query(default=None, max_length=1024), limit: int = Query(default=100, ge=1, le=100), session: AsyncSession = Depends(get_experiment_session)) -> dict[str, Any]:
     try:
-        await require_domain_hierarchy(session, project_id, experiment_id, domain_id)
+        await _dataset_domain_kind(
+            session, project_id=project_id, experiment_id=experiment_id, domain_id=domain_id
+        )
         await _exact_revision(session, project_id=project_id, domain_id=domain_id, dataset_id=dataset_id, revision_id=revision_id)
         scope = f"dataset-members:{project_id}:{domain_id}:{revision_id}"
         anchor = decode_cursor(cursor, scope=scope, limit=limit)
@@ -474,8 +537,8 @@ def _project_hub_molecular_href(
     domain_id: str,
     state_revision_id: str,
     sequence_id: str,
-    revision_id: str,
 ) -> str:
+    """Open the stable sequence at its latest editable server head."""
     return "/designer?" + urlencode({
         "workspace_id": project_id,
         "global_experiment_id": experiment_id,
@@ -483,7 +546,6 @@ def _project_hub_molecular_href(
         "state_revision_id": state_revision_id,
         "section": "plasmids",
         "molbio_sequence_id": sequence_id,
-        "molbio_revision_id": revision_id,
     })
 
 
@@ -517,12 +579,26 @@ async def project_hub(
     if len(member_rows) > 100:
         raise HTTPException(413, detail={"code": "project_hub_member_limit"})
     molecular_receipts = [receipt for _member, receipt in member_rows if receipt.entity_kind == "molecular_revision"]
-    revision_ids = [receipt.entity_id for receipt in molecular_receipts]
-    revisions = {
+    attached_revision_ids = [receipt.entity_id for receipt in molecular_receipts]
+    attached_revisions = {
         row.id: row for row in (await molbio.scalars(
-            select(MolecularRevision).where(MolecularRevision.id.in_(revision_ids))
+            select(MolecularRevision).where(MolecularRevision.id.in_(attached_revision_ids))
         )).all()
-    } if revision_ids else {}
+    } if attached_revision_ids else {}
+    attached_sequence_ids = sorted({row.document_id for row in attached_revisions.values()})
+    molecular_documents = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularDocument).where(MolecularDocument.id.in_(attached_sequence_ids))
+        )).all()
+    } if attached_sequence_ids else {}
+    current_revision_ids = [
+        row.current_revision_id for row in molecular_documents.values() if row.current_revision_id
+    ]
+    current_revisions = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularRevision).where(MolecularRevision.id.in_(current_revision_ids))
+        )).all()
+    } if current_revision_ids else {}
     metadata_rows = list((await molbio.scalars(
         select(ProjectPlasmidMetadata).where(
             ProjectPlasmidMetadata.project_id == project_id,
@@ -545,17 +621,25 @@ async def project_hub(
     input_rows = list((await molbio.scalars(
         select(MolecularOperationInput).where(MolecularOperationInput.operation_id.in_(operation_ids))
     )).all()) if operation_ids else []
+    output_rows = list((await molbio.scalars(
+        select(MolecularOperationOutput).where(MolecularOperationOutput.operation_id.in_(operation_ids))
+    )).all()) if operation_ids else []
     operation_sequence_ids: dict[str, set[str]] = {}
-    if input_rows:
-        input_revisions = {
-            row.id: row for row in (await molbio.scalars(
-                select(MolecularRevision).where(MolecularRevision.id.in_([item.revision_id for item in input_rows]))
-            )).all()
-        }
-        for item in input_rows:
-            revision = input_revisions.get(item.revision_id)
-            if revision is not None:
-                operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+    operation_output_sequence_ids: dict[str, set[str]] = {}
+    edge_revision_ids = [item.revision_id for item in [*input_rows, *output_rows]]
+    edge_revisions = {
+        row.id: row for row in (await molbio.scalars(
+            select(MolecularRevision).where(MolecularRevision.id.in_(edge_revision_ids))
+        )).all()
+    } if edge_revision_ids else {}
+    for item in input_rows:
+        revision = edge_revisions.get(item.revision_id)
+        if revision is not None:
+            operation_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
+    for item in output_rows:
+        revision = edge_revisions.get(item.revision_id)
+        if revision is not None:
+            operation_output_sequence_ids.setdefault(item.operation_id, set()).add(revision.document_id)
     receipt_sequence_ids: dict[str, set[str]] = {}
     for row in operation_receipts:
         linked = set(operation_sequence_ids.get(row.entity_id, set()))
@@ -575,7 +659,13 @@ async def project_hub(
     plasmids: list[dict[str, Any]] = []
     names_by_sequence: dict[str, str] = {}
     for receipt in molecular_receipts:
-        revision = revisions.get(receipt.entity_id)
+        attached_revision = attached_revisions.get(receipt.entity_id)
+        document = molecular_documents.get(attached_revision.document_id) if attached_revision is not None else None
+        revision = (
+            current_revisions.get(document.current_revision_id)
+            if document is not None and document.current_revision_id
+            else None
+        ) or attached_revision
         if revision is None or not isinstance(revision.snapshot, dict):
             try:
                 destination = json.loads(receipt.reopen_destination)
@@ -586,7 +676,8 @@ async def project_hub(
             plasmids.append({
                 "sequence_id": sequence_id, "revision_id": receipt.entity_id,
                 "receipt_id": receipt.receipt_id, "receipt_sha256": receipt.receipt_sha256,
-                "content_digest": receipt.content_digest, "source_store_id": receipt.source_store_id,
+                "content_digest": receipt.content_digest, "current_content_sha256": None,
+                "source_store_id": receipt.source_store_id,
                 "schema_name": receipt.schema_name, "revision_number": 0,
                 "name": sequence_id, "description": "Molecular member unavailable",
                 "availability": "unavailable", "unavailable_reason": "Molecular member unavailable",
@@ -596,7 +687,7 @@ async def project_hub(
                 "organism_host_context": None, "project_tags": [], "project_notes": "",
                 "reopen_href": _project_hub_molecular_href(
                     project_id=project_id, experiment_id=experiment_id, domain_id=domain_id,
-                    state_revision_id=selected.id, sequence_id=sequence_id, revision_id=receipt.entity_id,
+                    state_revision_id=selected.id, sequence_id=sequence_id,
                 ),
                 "map_segments": [],
             })
@@ -608,7 +699,11 @@ async def project_hub(
         sequence_id = revision.document_id
         name = str(snapshot.get("name") or sequence_id)
         names_by_sequence[sequence_id] = name
-        saved_count = sum(sequence_id in receipt_sequence_ids.get(row.id, set()) for row in operation_receipts)
+        saved_count = sum(
+            sequence_id in receipt_sequence_ids.get(row.id, set())
+            or sequence_id in operation_output_sequence_ids.get(row.entity_id, set())
+            for row in operation_receipts
+        )
         map_segments = [
             {
                 "start": int(item.get("start", 0)),
@@ -627,6 +722,7 @@ async def project_hub(
             "receipt_id": receipt.receipt_id,
             "receipt_sha256": receipt.receipt_sha256,
             "content_digest": receipt.content_digest,
+            "current_content_sha256": revision.content_sha256,
             "source_store_id": receipt.source_store_id,
             "schema_name": receipt.schema_name,
             "revision_number": revision.revision_number,
@@ -653,30 +749,44 @@ async def project_hub(
                 domain_id=domain_id,
                 state_revision_id=selected.id,
                 sequence_id=sequence_id,
-                revision_id=revision.id,
             ),
             "map_segments": map_segments,
         })
 
     experiments: list[dict[str, Any]] = []
-    kind_map = {"digest": "restriction_digest", "alignment": "alignment", "pcr": "pcr"}
+    kind_map = {
+        "digest": "restriction_digest",
+        "alignment": "alignment",
+        "pcr": "pcr",
+        "ligation": "ligation",
+        "gibson": "gibson",
+        "golden_gate": "golden_gate",
+    }
     for row in operation_receipts:
         ack = _hub_acknowledgement(row)
         metadata = ack.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
         operation = operations.get(row.entity_id)
-        sequence_ids = sorted(sequence_id for sequence_id in receipt_sequence_ids.get(row.id, set()) if sequence_id in names_by_sequence)
-        if not sequence_ids:
-            continue
-        sequence_id = sequence_ids[0]
+        input_sequence_ids = sorted(
+            sequence_id for sequence_id in receipt_sequence_ids.get(row.id, set())
+            if sequence_id in names_by_sequence
+        )
+        output_sequence_ids = sorted(
+            sequence_id for sequence_id in operation_output_sequence_ids.get(row.entity_id, set())
+            if sequence_id in names_by_sequence
+        )
+        sequence_ids = sorted(set(input_sequence_ids) | set(output_sequence_ids))
+        sequence_id = input_sequence_ids[0] if input_sequence_ids else sequence_ids[0] if sequence_ids else ""
         operation_kind = operation.operation_kind if operation is not None else "pcr"
         summary = dict(operation.parameters or {}).get("summary") if operation is not None else None
         title = metadata.get("title") or (summary.get("title") if isinstance(summary, dict) else None) or operation_kind.replace("_", " ").title()
         experiments.append({
             "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
-            "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, sequence_id),
+            "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, "Unassigned DNA sequence"),
             "plasmid_sequence_ids": sequence_ids,
+            "input_sequence_ids": input_sequence_ids,
+            "output_sequence_ids": output_sequence_ids,
             "title": str(title), "status": operation.status if operation is not None else "saved",
             "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
         })
@@ -705,7 +815,7 @@ async def project_hub(
             })
         if row.entity_kind in result_kinds:
             result_items.append({
-                "id": row.entity_id, "plasmid_name": plasmid_name,
+                "id": row.entity_id, "plasmid_sequence_id": sequence_id, "plasmid_name": plasmid_name,
                 "type": str(metadata.get("title") or row.entity_kind.replace("_", " ").title()),
                 "status": str(metadata.get("status") or row.availability), "owner": str(metadata.get("owner") or row.entity_id),
                 "created_at": row.created_at, "summary": metadata.get("summary"), "reopen_href": ack.get("reopen_uri"),

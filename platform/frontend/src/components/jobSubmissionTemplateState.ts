@@ -2,7 +2,6 @@ export const DEDICATED_LAUNCHER_TEMPLATE_IDS = [
     'mutagenesis',
     'antibody_denovo',
     'structure_prediction',
-    'boltz_cp_experimental',
     'oligo_design',
     'protein_modification_experimental',
 
@@ -15,11 +14,6 @@ export type DedicatedLauncherTemplateId = typeof DEDICATED_LAUNCHER_TEMPLATE_IDS
 type DedicatedTemplateInitialValues = Record<string, unknown>;
 
 const DEDICATED_TEMPLATE_INITIAL_VALUES: Partial<Record<DedicatedLauncherTemplateId, DedicatedTemplateInitialValues>> = {
-    boltz_cp_experimental: {
-        template_model_id: 'boltz_cp_experimental',
-        template_mode_id: 'design',
-        structure_launch_variant: 'boltz_cp_experimental',
-    },
     conformational_mapping: {
         name: 'Conformational mapping',
         backend: 'protenix_v2_ensemble',

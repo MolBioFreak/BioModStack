@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, update
@@ -40,6 +40,7 @@ ATTACHMENT_OPERATIONS = {
     "link_output": "produced",
     "attach_evidence": "validated_by",
 }
+SOURCE_REVERIFICATION_TTL = timedelta(hours=24)
 DOMAIN_OWNED_ENTITY_KINDS = frozenset({
     "molecular_operation",
     "molecular_revision",
@@ -464,6 +465,125 @@ async def attach_verified_entity(
             "operation": operation,
             "role": role,
             "note": normalized_note,
+        },
+    )
+    await experiment_session.flush()
+    return receipt
+
+
+async def reverify_source_receipt(
+    experiment_session: AsyncSession,
+    core_session: AsyncSession,
+    *,
+    project_id: str,
+    global_experiment_id: str,
+    domain_experiment_id: str,
+    source_receipt_id: str,
+) -> dict[str, Any]:
+    project, _domain, payload = await _domain_payload(
+        experiment_session,
+        project_id=project_id,
+        global_experiment_id=global_experiment_id,
+        domain_experiment_id=domain_experiment_id,
+    )
+    persisted = await experiment_session.get(
+        ExperimentExternalEntityReceipt,
+        source_receipt_id,
+    )
+    if persisted is None or persisted.workspace_id != project_id:
+        raise NotFound("source receipt not found in Project")
+    attachment = (
+        await experiment_session.execute(
+            select(ExperimentLineageEdge).where(
+                ExperimentLineageEdge.workspace_id == project_id,
+                ExperimentLineageEdge.source_resource_id == domain_experiment_id,
+                ExperimentLineageEdge.target_resource_id == source_receipt_id,
+                ExperimentLineageEdge.edge_mode.in_(ATTACHMENT_ROLES),
+            )
+        )
+    ).scalars().first()
+    if attachment is None:
+        raise ValidationFailure("source receipt is not attached to the selected Domain Experiment")
+
+    adapter = registry.get(str(persisted.verification_authority or ""))
+    if adapter.domain_kind != payload.get("domain_kind"):
+        raise ValidationFailure("source receipt adapter does not match the Domain Experiment")
+    verified = await adapter.verify(core_session, persisted.entity_id)
+    verified_digest = verified.get("content_digest") or verified.get("contract_digest")
+    expected_identity = {
+        "store_id": persisted.store_id,
+        "entity_kind": persisted.entity_kind,
+        "entity_id": persisted.entity_id,
+        "entity_revision_id": persisted.generation_or_revision,
+    }
+    if any(str(verified.get(field) or "") != str(value) for field, value in expected_identity.items()):
+        raise ValidationFailure("source identity changed since the attached receipt was issued")
+    if verified_digest != persisted.content_digest:
+        raise ValidationFailure("source digest changed since the attached receipt was issued")
+    if verified.get("availability") != "available":
+        raise ValidationFailure("source is not currently available for re-verification")
+
+    verified_at = datetime.now(timezone.utc)
+    valid_until = verified_at + SOURCE_REVERIFICATION_TTL
+    normalized_request = {
+        "schema": "bms.global.source-reverification-request.v1",
+        "project_id": project_id,
+        "global_experiment_id": global_experiment_id,
+        "domain_experiment_id": domain_experiment_id,
+        "source_receipt_id": source_receipt_id,
+        "source_digest": persisted.content_digest,
+        "verified_at": verified_at.isoformat(),
+    }
+    request_sha256 = sha256_text(canonical_json(normalized_request))
+    receipt_resource_id = new_id("adapter-receipt")
+    experiment_session.add(
+        ExperimentResource(
+            id=receipt_resource_id,
+            kind="domain_adapter_receipt",
+            workspace_id=project_id,
+            lifecycle_owner_id=domain_experiment_id,
+            created_at=verified_at.isoformat(),
+        )
+    )
+    await experiment_session.flush()
+    receipt = {
+        "schema": "bms.global.source-reverification-receipt.v1",
+        "reverification_receipt_id": receipt_resource_id,
+        "project_id": project_id,
+        "global_experiment_id": global_experiment_id,
+        "domain_experiment_id": domain_experiment_id,
+        "adapter_id": adapter.adapter_id,
+        "adapter_version": str(adapter.adapter_version),
+        "source_receipt_id": source_receipt_id,
+        "source_digest": persisted.content_digest,
+        "verified_at": verified_at.isoformat(),
+        "valid_until": valid_until.isoformat(),
+        "normalized_request_sha256": request_sha256,
+    }
+    experiment_session.add(
+        ExperimentDomainAdapterReceipt(
+            resource_id=receipt_resource_id,
+            workspace_id=project_id,
+            domain_experiment_id=domain_experiment_id,
+            adapter_id=adapter.adapter_id,
+            adapter_version=str(adapter.adapter_version),
+            operation_kind="reverify_source",
+            normalized_request_sha256=request_sha256,
+            receipt_json=canonical_json(receipt),
+            created_at=verified_at.isoformat(),
+        )
+    )
+    add_audit_event(
+        experiment_session,
+        workspace_id=project_id,
+        resource_id=domain_experiment_id,
+        event_type="source_receipt_reverified",
+        generation=project.head_generation,
+        payload={
+            "reverification_receipt_id": receipt_resource_id,
+            "source_receipt_id": source_receipt_id,
+            "source_digest": persisted.content_digest,
+            "valid_until": valid_until.isoformat(),
         },
     )
     await experiment_session.flush()

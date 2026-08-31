@@ -8,14 +8,58 @@ import {
     describeNgsError,
     disposeAlignmentAccess,
     fetchAlignmentRead,
+    fetchSortableAlignmentReads,
+    filterAlignmentReads,
+    formatAlignmentReadSummary,
+    alignmentReadIgvLocus,
     isAlignmentAccessDenied,
     isAlignmentReadScanTruncatedError,
     normalizeAlignmentSessions,
     normalizeAlignmentAccessRotation,
+    normalizeSortableAlignmentReadPage,
     withAlignmentAccessRecovery,
+    type AlignmentRead,
     type AlignmentSessionArtifact,
     type AlignmentSessionResponse,
 } from '../src/lib/ngsAlignmentSession.js';
+
+function completeSortableRead(overrides: Record<string, unknown> = {}) {
+    return {
+        read_id: 'read-1', length: 100, mean_quality: 14, contig: 'ref', start_1based: 2,
+        alignment_end_1based: 221, strand: '+', mapq: 60, cigar: '50M120N50M', flags: 0,
+        unmapped: false, aligned_query_bases: 100, aligned_reference_bases: 100,
+        inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 120, clipped_bases: 0,
+        edit_distance: null, reference_substitution_count: null, reference_substitution_rate: null,
+        aligned_fraction: null, clipped_fraction: null, reference_disagreement_rate: null,
+        sample_count: null, sampling_rate_hz: null, duration_seconds: 1.25, channel_number: null,
+        start_mux: null, start_time_samples: null, acquisition_start_seconds: null,
+        time_since_mux_change_seconds: null, num_reads_since_mux_change: null,
+        num_minknow_events: null, minknow_event_rate_per_second: null, median_before_pa: null,
+        open_pore_level_pa: null, tracked_scaling_shift: null, tracked_scaling_scale: null,
+        predicted_scaling_shift: null, predicted_scaling_scale: null, current_mean_pa: null,
+        current_median_pa: null, current_stddev_pa: null, current_mad_pa: null,
+        current_min_pa: null, current_max_pa: null, dorado_move_stride_samples: null,
+        dorado_emitted_bases: null, mapped_signal_start_sample: null, mapped_signal_end_sample: null,
+        mapped_signal_span_samples: null, dorado_emission_rate_bases_per_second: null,
+        samples_per_aligned_reference_base: null, signal_to_reference_dwell_mean_samples: null,
+        signal_to_reference_dwell_median_samples: null, signal_to_reference_dwell_stddev_samples: null,
+        signal_to_reference_dwell_mad_samples: null,
+        ...overrides,
+    };
+}
+
+function sortablePage(overrides: Record<string, unknown> = {}) {
+    return {
+        schema: 'bms.ngs.sortable-read-page.v1', job_id: 'job-a', session_id: 'session-a', slice_id: 'slice-a',
+        authority_sha256: 'a'.repeat(64), selected_read_count: 1, overlapping_read_count: 1,
+        capped: false, filtered_read_count: 1, sort_by: 'duration_seconds', sort_direction: 'desc',
+        null_order: 'last', tie_breaker: ['read_id', 'start_1based', 'flags'], signal_metrics_state: 'ready',
+        signal_metrics_artifact_sha256: 'b'.repeat(64), raw_representation_id: 'rep-a',
+        mapping_metrics_state: 'not_bound', metric_contract: 'bms.ont.literature-backed-read-metrics.v1',
+        reads: [completeSortableRead()], next_cursor: null, limit: 50,
+        ...overrides,
+    };
+}
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -38,6 +82,23 @@ function ngsError(code: string, jobId = 'job-recovery-race', status = 403) {
         },
     };
 }
+
+const filteredReads: AlignmentRead[] = [
+    { read_id: 'clean', length: 1000, mean_quality: 18, contig: 'ref', start_1based: 1, strand: '+', mapq: 60, cigar: '1000M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 4, reference_substitution_count: 4, reference_substitution_rate: 0.004, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.004 },
+    { read_id: 'substitution-rich', length: 1000, mean_quality: 12, contig: 'ref', start_1based: 1, strand: '+', mapq: 50, cigar: '1000M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 80, reference_substitution_count: 80, reference_substitution_rate: 0.08, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.08 },
+    { read_id: 'large-gap', length: 1000, mean_quality: 16, contig: 'ref', start_1based: 1, strand: '+', mapq: 40, cigar: '400M120N600M', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 120, clipped_bases: 0, edit_distance: 2, reference_substitution_count: 2, reference_substitution_rate: 0.002, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.002 },
+    { read_id: 'clipped', length: 1000, mean_quality: 17, contig: 'ref', start_1based: 1, strand: '+', mapq: 35, cigar: '150S850M', flags: 0, unmapped: false, aligned_query_bases: 850, inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 150, edit_distance: 3, reference_substitution_count: 3, reference_substitution_rate: 3 / 850, aligned_fraction: 0.85, clipped_fraction: 0.15, reference_disagreement_rate: 3 / 850 },
+    { read_id: 'indel-only', length: 1000, mean_quality: 17, contig: 'ref', start_1based: 1, strand: '+', mapq: 45, cigar: '900M100I', flags: 0, unmapped: false, aligned_query_bases: 1000, inserted_bases: 100, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, edit_distance: 100, reference_substitution_count: 0, reference_substitution_rate: 0, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.1 },
+];
+
+test('read presets filter bounded alignment evidence and format operator summaries', () => {
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'clean', '').map((read) => read.read_id), ['clean']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'substitution_rich', '').map((read) => read.read_id), ['substitution-rich']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'indels_gaps', '').map((read) => read.read_id), ['large-gap', 'indel-only']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'clipped', '').map((read) => read.read_id), ['clipped']);
+    assert.deepEqual(filterAlignmentReads(filteredReads, 'all', 'GAP').map((read) => read.read_id), ['large-gap']);
+    assert.equal(formatAlignmentReadSummary(filteredReads[2]), 'Q16.0 · MAPQ 40 · 2 reference substitutions · 120 bp gap · 100% aligned');
+});
 
 test('alignment access recovery is offered only for the exact capability-denial code', () => {
     assert.equal(isAlignmentAccessDenied(ngsError('NGS_CAPABILITY_DENIED'), 'job-recovery-race'), true);
@@ -400,4 +461,77 @@ test('FASTQ export refuses missing quality instead of fabricating bases', async 
     assert.equal(typeof buildFastq, 'function');
     assert.equal(buildFastq!({ read_id: 'r1', sequence: 'ACGT', quality: null }), null);
     assert.equal(buildFastq!({ read_id: 'r1', sequence: 'ACGT', quality: '##II' }), '@r1\nACGT\n+\n##II\n');
+});
+
+test('sortable locus reads use the exact slice and raw-signal authority contract', async () => {
+    const originalGet = api.get;
+    let observedUrl = '';
+    let observedParams: Record<string, unknown> = {};
+    api.get = (async (url: string, options?: { params?: Record<string, unknown> }) => {
+        observedUrl = url;
+        observedParams = options?.params || {};
+        return { data: sortablePage() };
+    }) as typeof api.get;
+    try {
+        const page = await fetchSortableAlignmentReads('job-a', 'session-a', 'slice-a', {
+            sortBy: 'duration_seconds', sortDirection: 'desc', q: 'read', metricMin: 1, metricMax: 3,
+            rawSignalBinding: { runId: 'run-a', observedGeneration: 2, representationId: 'rep-a' },
+        });
+        assert.equal(observedUrl, '/api/jobs/job-a/alignment-sessions/session-a/locus-slices/slice-a/reads');
+        assert.deepEqual(observedParams, {
+            sort_by: 'duration_seconds', sort_direction: 'desc', q: 'read',
+            metric_min: 1, metric_max: 3, cursor: undefined, limit: 50,
+            raw_run_id: 'run-a', raw_observed_generation: 2, raw_representation_id: 'rep-a',
+        });
+        assert.equal(page.reads[0].duration_seconds, 1.25);
+        assert.equal(page.signal_metrics_state, 'ready');
+    } finally {
+        api.get = originalGet;
+    }
+});
+
+test('sortable page parsing is bound to requested order and raw representation authority', () => {
+    for (const changed of [
+        { sort_by: 'mean_quality' },
+        { sort_direction: 'asc' },
+        { raw_representation_id: 'rep-other' },
+    ]) {
+        assert.throws(
+            () => normalizeSortableAlignmentReadPage(
+                sortablePage(changed), 'job-a', 'session-a', 'slice-a',
+                'duration_seconds', 'desc', 'rep-a',
+            ),
+            /authority/i,
+        );
+    }
+});
+
+test('sortable page parsing rejects absent and wrongly typed nullable row fields', () => {
+    const missing = completeSortableRead();
+    delete (missing as Record<string, unknown>).current_median_pa;
+    assert.throws(
+        () => normalizeSortableAlignmentReadPage(
+            sortablePage({ reads: [missing] }), 'job-a', 'session-a', 'slice-a',
+            'duration_seconds', 'desc', 'rep-a',
+        ),
+        /Missing field in sortable read row/i,
+    );
+    for (const row of [
+        completeSortableRead({ current_median_pa: '78.2' }),
+        completeSortableRead({ contig: 42 }),
+    ]) {
+        assert.throws(
+            () => normalizeSortableAlignmentReadPage(
+                sortablePage({ reads: [row] }), 'job-a', 'session-a', 'slice-a',
+                'duration_seconds', 'desc', 'rep-a',
+            ),
+            /Invalid sortable read row/i,
+        );
+    }
+});
+
+test('IGV navigation uses the backend spliced-alignment end coordinate', () => {
+    assert.deepEqual(alignmentReadIgvLocus(completeSortableRead() as AlignmentRead), {
+        contig: 'ref', start: 2, end: 221,
+    });
 });

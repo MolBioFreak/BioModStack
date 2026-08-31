@@ -76,6 +76,98 @@ export interface AlignmentSessionResponse {
     sessions: AlignmentSession[];
 }
 
+export interface AlignmentPresentationArtifact {
+    kind:
+        | 'alignment_preview'
+        | 'alignment_preview_index'
+        | 'full_source_primary_coverage'
+        | 'alignment_presentation_manifest'
+        | 'alignment_locus_slice'
+        | 'alignment_locus_slice_index'
+        | 'alignment_locus_slice_manifest';
+    url: string;
+    sha256: string;
+    size_bytes: number;
+    mime_type: string;
+    range_capable: true;
+}
+
+export interface AlignmentPresentation {
+    schema: 'bms.ngs.alignment-presentation.v1';
+    job_id: string;
+    session_id: string;
+    mode: AlignmentSessionMode;
+    state: 'ready';
+    source: {
+        package_manifest_sha256: string;
+        alignment_sha256: string;
+        alignment_size_bytes: number;
+        alignment_index_sha256: string;
+        alignment_index_size_bytes: number;
+        primary_read_count: number;
+        alignment_record_count: number;
+    };
+    policy: {
+        id: 'primary-read-presentation-v3';
+        version: 3;
+        target_reads: number;
+        max_preview_bytes: number;
+        max_coverage_bins: number;
+        max_seconds: number;
+    };
+    preview: {
+        kind: 'primary_read_preview';
+        selected_read_count: number;
+        selected_record_count: number;
+        selected_read_set_sha256: string;
+        forward_count: number;
+        reverse_count: number;
+        bam: AlignmentPresentationArtifact;
+        index: AlignmentPresentationArtifact;
+    };
+    coverage: {
+        kind: 'full_source_primary_coverage';
+        bin_width_bp: number;
+        primary_read_count: number;
+        artifact: AlignmentPresentationArtifact;
+    };
+    manifest: AlignmentPresentationArtifact;
+}
+
+export interface AlignmentLocusSliceRequest {
+    contig: string;
+    start_1based: number;
+    end_1based: number;
+    max_reads: number;
+}
+
+export interface AlignmentLocusSlice {
+    schema: 'bms.ngs.alignment-locus-slice.v1';
+    job_id: string;
+    session_id: string;
+    slice_id: string;
+    state: 'ready';
+    contig: string;
+    start_1based: number;
+    end_1based: number;
+    overlapping_read_count: number;
+    selected_read_count: number;
+    selected_record_count: number;
+    capped: boolean;
+    policy: {
+        id: 'bounded-full-source-locus-slice';
+        version: 1;
+        max_reads: number;
+        max_records: number;
+        max_bytes: number;
+        max_span_bp: number;
+        max_seconds: number;
+    };
+    bam: AlignmentPresentationArtifact;
+    index: AlignmentPresentationArtifact;
+    manifest: AlignmentPresentationArtifact;
+}
+
 export interface AlignmentAccessRotationResponse {
     schema: 'bms.ngs.rotation-success.v1';
     job_id: string;
@@ -155,13 +247,129 @@ export interface AlignmentRead {
     mean_quality: number | null;
     contig: string | null;
     start_1based: number | null;
+    alignment_end_1based?: number | null;
     strand: '+' | '-';
     mapq: number | null;
     cigar: string | null;
     flags: number;
     unmapped: boolean;
+    aligned_query_bases?: number;
+    aligned_reference_bases?: number;
+    inserted_bases?: number;
+    deleted_bases?: number;
+    skipped_reference_bases?: number;
+    clipped_bases?: number;
+    edit_distance?: number | null;
+    reference_substitution_count?: number | null;
+    reference_substitution_rate?: number | null;
+    aligned_fraction?: number | null;
+    clipped_fraction?: number | null;
+    reference_disagreement_rate?: number | null;
     sequence?: string | null;
     quality?: string | null;
+    sample_count?: number | null;
+    sampling_rate_hz?: number | null;
+    duration_seconds?: number | null;
+    channel_number?: number | null;
+    start_mux?: number | null;
+    acquisition_start_seconds?: number | null;
+    time_since_mux_change_seconds?: number | null;
+    median_before_pa?: number | null;
+    open_pore_level_pa?: number | null;
+    current_mean_pa?: number | null;
+    current_median_pa?: number | null;
+    current_stddev_pa?: number | null;
+    current_mad_pa?: number | null;
+    current_min_pa?: number | null;
+    current_max_pa?: number | null;
+    minknow_event_rate_per_second?: number | null;
+    dorado_emission_rate_bases_per_second?: number | null;
+    mapped_signal_span_samples?: number | null;
+    samples_per_aligned_reference_base?: number | null;
+}
+
+export type SortableReadField =
+    | 'read_id' | 'length' | 'mean_quality' | 'mapq' | 'aligned_query_bases'
+    | 'aligned_reference_bases' | 'inserted_bases' | 'deleted_bases' | 'clipped_bases'
+    | 'edit_distance' | 'reference_substitution_count' | 'reference_disagreement_rate'
+    | 'sample_count' | 'duration_seconds' | 'current_mean_pa' | 'current_median_pa'
+    | 'current_stddev_pa' | 'current_mad_pa' | 'current_min_pa' | 'current_max_pa'
+    | 'channel_number' | 'start_mux' | 'acquisition_start_seconds'
+    | 'time_since_mux_change_seconds' | 'median_before_pa' | 'open_pore_level_pa'
+    | 'minknow_event_rate_per_second' | 'dorado_emission_rate_bases_per_second'
+    | 'mapped_signal_span_samples' | 'samples_per_aligned_reference_base';
+
+export interface SortableAlignmentReadPage {
+    schema: 'bms.ngs.sortable-read-page.v1';
+    job_id: string;
+    session_id: string;
+    slice_id: string;
+    authority_sha256: string;
+    selected_read_count: number;
+    overlapping_read_count: number;
+    capped: boolean;
+    filtered_read_count: number;
+    sort_by: SortableReadField;
+    sort_direction: 'asc' | 'desc';
+    null_order: 'last';
+    tie_breaker: ['read_id', 'start_1based', 'flags'];
+    signal_metrics_state: 'ready' | 'unavailable' | 'not_bound';
+    signal_metrics_artifact_sha256: string | null;
+    raw_representation_id: string | null;
+    mapping_metrics_state: 'not_bound';
+    metric_contract: 'bms.ont.literature-backed-read-metrics.v1';
+    reads: AlignmentRead[];
+    next_cursor: string | null;
+    limit: number;
+}
+
+export interface SortableAlignmentReadOptions {
+    sortBy?: SortableReadField;
+    sortDirection?: 'asc' | 'desc';
+    q?: string;
+    metricMin?: number;
+    metricMax?: number;
+    cursor?: string;
+    limit?: number;
+    rawSignalBinding?: { runId: string; observedGeneration: number; representationId: string } | null;
+    signal?: AbortSignal;
+}
+
+export type AlignmentReadFilterPreset = 'all' | 'clean' | 'substitution_rich' | 'indels_gaps' | 'clipped';
+
+export function filterAlignmentReads(
+    reads: AlignmentRead[], preset: AlignmentReadFilterPreset, query: string,
+): AlignmentRead[] {
+    const needle = query.trim().toLowerCase();
+    return reads.filter((read) => {
+        if (needle && !read.read_id.toLowerCase().includes(needle)) return false;
+        if (preset === 'clean') return (read.mean_quality ?? 0) >= 15
+            && (read.mapq ?? 0) >= 30
+            && (read.inserted_bases ?? 0) === 0
+            && (read.deleted_bases ?? 0) === 0
+            && (read.skipped_reference_bases ?? 0) === 0
+            && (read.clipped_fraction ?? 1) <= 0.05
+            && (read.reference_disagreement_rate ?? 1) <= 0.02;
+        if (preset === 'substitution_rich') return (read.reference_substitution_rate ?? 0) >= 0.05;
+        if (preset === 'indels_gaps') return (read.inserted_bases ?? 0) > 0
+            || (read.deleted_bases ?? 0) > 0 || (read.skipped_reference_bases ?? 0) > 0;
+        if (preset === 'clipped') return (read.clipped_fraction ?? 0) >= 0.10;
+        return true;
+    });
+}
+
+export function formatAlignmentReadSummary(read: AlignmentRead): string {
+    const pieces = [
+        `Q${read.mean_quality == null ? 'n/a' : read.mean_quality.toFixed(1)}`,
+        `MAPQ ${read.mapq ?? 'n/a'}`,
+    ];
+    if (read.reference_substitution_count != null) pieces.push(`${read.reference_substitution_count} reference substitutions`);
+    if ((read.inserted_bases ?? 0) > 0) pieces.push(`${read.inserted_bases} bp insertion`);
+    if ((read.deleted_bases ?? 0) > 0) pieces.push(`${read.deleted_bases} bp deletion`);
+    if ((read.skipped_reference_bases ?? 0) > 0) pieces.push(`${read.skipped_reference_bases} bp gap`);
+    if ((read.clipped_bases ?? 0) > 0) pieces.push(`${read.clipped_bases} bp clipped`);
+    if (read.aligned_fraction != null) pieces.push(`${Math.round(read.aligned_fraction * 100)}% aligned`);
+    return pieces.join(' · ');
 }
 
 export interface AlignmentReadPage {
@@ -225,6 +433,109 @@ export function normalizeAlignmentReadPage(page: AlignmentReadPage): AlignmentRe
     return { ...page, scan_truncated: page.scan_truncated === true };
 }
 
+const sortableReadWireFields = [
+    'read_id', 'length', 'mean_quality', 'contig', 'start_1based', 'alignment_end_1based', 'strand', 'mapq', 'cigar',
+    'flags', 'unmapped', 'aligned_query_bases', 'aligned_reference_bases', 'inserted_bases',
+    'deleted_bases', 'skipped_reference_bases', 'clipped_bases', 'edit_distance',
+    'reference_substitution_count', 'reference_substitution_rate', 'aligned_fraction',
+    'clipped_fraction', 'reference_disagreement_rate', 'sample_count', 'sampling_rate_hz',
+    'duration_seconds', 'channel_number', 'start_mux', 'start_time_samples',
+    'acquisition_start_seconds', 'time_since_mux_change_seconds', 'num_reads_since_mux_change',
+    'num_minknow_events', 'minknow_event_rate_per_second', 'median_before_pa',
+    'open_pore_level_pa', 'tracked_scaling_shift', 'tracked_scaling_scale',
+    'predicted_scaling_shift', 'predicted_scaling_scale', 'current_mean_pa', 'current_median_pa',
+    'current_stddev_pa', 'current_mad_pa', 'current_min_pa', 'current_max_pa',
+    'dorado_move_stride_samples', 'dorado_emitted_bases', 'mapped_signal_start_sample',
+    'mapped_signal_end_sample', 'mapped_signal_span_samples',
+    'dorado_emission_rate_bases_per_second', 'samples_per_aligned_reference_base',
+    'signal_to_reference_dwell_mean_samples', 'signal_to_reference_dwell_median_samples',
+    'signal_to_reference_dwell_stddev_samples', 'signal_to_reference_dwell_mad_samples',
+] as const;
+
+export function normalizeSortableAlignmentReadPage(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedSliceId: string,
+    expectedSortBy: SortableReadField,
+    expectedSortDirection: 'asc' | 'desc',
+    expectedRawRepresentationId: string | null,
+): SortableAlignmentReadPage {
+    const topFields = [
+        'schema', 'job_id', 'session_id', 'slice_id', 'authority_sha256', 'selected_read_count',
+        'overlapping_read_count', 'capped', 'filtered_read_count', 'sort_by', 'sort_direction',
+        'null_order', 'tie_breaker', 'signal_metrics_state', 'signal_metrics_artifact_sha256',
+        'raw_representation_id', 'mapping_metrics_state', 'metric_contract', 'reads',
+        'next_cursor', 'limit',
+    ] as const;
+    requireClosedKeys(value, topFields, 'sortable read page');
+    const page = value as unknown as SortableAlignmentReadPage;
+    if (
+        page.schema !== 'bms.ngs.sortable-read-page.v1'
+        || page.job_id !== expectedJobId
+        || page.session_id !== expectedSessionId
+        || page.slice_id !== expectedSliceId
+        || !isSha256(page.authority_sha256)
+        || !isNonNegativeInteger(page.selected_read_count)
+        || !isNonNegativeInteger(page.overlapping_read_count)
+        || page.overlapping_read_count < page.selected_read_count
+        || typeof page.capped !== 'boolean'
+        || !isNonNegativeInteger(page.filtered_read_count)
+        || page.filtered_read_count > page.selected_read_count
+        || page.sort_by !== expectedSortBy
+        || page.sort_direction !== expectedSortDirection
+        || page.null_order !== 'last'
+        || JSON.stringify(page.tie_breaker) !== JSON.stringify(['read_id', 'start_1based', 'flags'])
+        || !['ready', 'unavailable', 'not_bound'].includes(page.signal_metrics_state)
+        || page.mapping_metrics_state !== 'not_bound'
+        || page.metric_contract !== 'bms.ont.literature-backed-read-metrics.v1'
+        || !Array.isArray(page.reads)
+        || !isPositiveInteger(page.limit)
+        || page.reads.length > page.limit
+        || (page.next_cursor !== null && (typeof page.next_cursor !== 'string' || page.next_cursor.length > 1024))
+    ) throw new Error('Invalid sortable read page authority.');
+    if (
+        (page.signal_metrics_state === 'ready') !== isSha256(page.signal_metrics_artifact_sha256)
+        || (page.signal_metrics_state === 'not_bound') !== (page.raw_representation_id === null)
+        || (page.raw_representation_id !== null && (typeof page.raw_representation_id !== 'string' || !page.raw_representation_id))
+        || page.raw_representation_id !== expectedRawRepresentationId
+    ) throw new Error('Invalid sortable raw-signal metric authority.');
+    const nullableIntegerFields = new Set([
+        'length', 'start_1based', 'alignment_end_1based', 'mapq', 'aligned_query_bases',
+        'aligned_reference_bases', 'inserted_bases', 'deleted_bases', 'skipped_reference_bases',
+        'clipped_bases', 'edit_distance', 'reference_substitution_count', 'sample_count',
+        'sampling_rate_hz', 'channel_number', 'start_mux', 'start_time_samples',
+        'num_reads_since_mux_change', 'num_minknow_events', 'dorado_move_stride_samples',
+        'dorado_emitted_bases', 'mapped_signal_start_sample', 'mapped_signal_end_sample',
+        'mapped_signal_span_samples',
+    ]);
+    for (const read of page.reads) {
+        requireClosedKeys(read, sortableReadWireFields, 'sortable read row');
+        const row = read as unknown as Record<string, unknown>;
+        if (
+            typeof read.read_id !== 'string' || !read.read_id || read.read_id.length > 255
+            || !isNonNegativeInteger(read.flags) || typeof read.unmapped !== 'boolean'
+            || !['+', '-'].includes(read.strand)
+            || (read.contig !== null && typeof read.contig !== 'string')
+            || (read.cigar !== null && typeof read.cigar !== 'string')
+            || sortableReadWireFields.some((field) => {
+                if (['read_id', 'contig', 'strand', 'cigar', 'flags', 'unmapped'].includes(field)) return false;
+                const fieldValue = row[field];
+                if (fieldValue === null) return false;
+                return nullableIntegerFields.has(field)
+                    ? !isNonNegativeInteger(fieldValue)
+                    : typeof fieldValue !== 'number' || !Number.isFinite(fieldValue);
+            })
+        ) throw new Error('Invalid sortable read row.');
+    }
+    return page;
+}
+
+export function alignmentReadIgvLocus(read: AlignmentRead): { contig: string; start: number; end: number } | null {
+    if (!read.contig || read.start_1based == null || read.alignment_end_1based == null) return null;
+    return { contig: read.contig, start: read.start_1based, end: read.alignment_end_1based };
+}
+
 export function buildFastqDownload(read: Pick<AlignmentRead, 'read_id' | 'sequence' | 'quality'>): string | null {
     if (!read.sequence || !read.quality || read.quality.length !== read.sequence.length) return null;
     return `@${read.read_id}\n${read.sequence}\n+\n${read.quality}\n`;
@@ -254,6 +565,153 @@ function requireExactKeys(value: unknown, allowed: readonly string[], label: str
     if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
         throw new Error(`Unknown field in ${label}.`);
     }
+}
+
+function requireClosedKeys(value: unknown, expected: readonly string[], label: string): asserts value is Record<string, unknown> {
+    requireExactKeys(value, expected, label);
+    if (Object.keys(value).length !== expected.length || expected.some((key) => !Object.prototype.hasOwnProperty.call(value, key))) {
+        throw new Error(`Missing field in ${label}.`);
+    }
+}
+
+const isSha256 = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+const isNonNegativeInteger = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const isPositiveInteger = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
+
+export interface AlignmentPresentationExpectedAuthority {
+    mode: AlignmentSessionMode;
+    packageManifestSha256: string;
+    alignmentSha256: string;
+    alignmentSizeBytes: number;
+    alignmentIndexSha256: string;
+    alignmentIndexSizeBytes: number;
+}
+
+function validatePresentationArtifact(
+    value: unknown,
+    label: string,
+    expected: { kind: AlignmentPresentationArtifact['kind']; url: string; mimeType: string; allowEmpty?: boolean },
+): asserts value is AlignmentPresentationArtifact {
+    requireClosedKeys(value, ['kind', 'url', 'sha256', 'size_bytes', 'mime_type', 'range_capable'], label);
+    if (value.kind !== expected.kind || value.url !== expected.url
+        || !isSha256(value.sha256)
+        || !(expected.allowEmpty ? isNonNegativeInteger(value.size_bytes) : isPositiveInteger(value.size_bytes))
+        || value.mime_type !== expected.mimeType || value.range_capable !== true) {
+        throw new Error(`Invalid ${label}.`);
+    }
+}
+
+export function normalizeAlignmentPresentation(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedAuthority: AlignmentPresentationExpectedAuthority,
+): AlignmentPresentation {
+    requireClosedKeys(value, ['schema', 'job_id', 'session_id', 'mode', 'state', 'source', 'policy', 'preview', 'coverage', 'manifest'], 'alignment presentation');
+    const receipt = value as unknown as AlignmentPresentation;
+    if (receipt.schema !== 'bms.ngs.alignment-presentation.v1' || receipt.job_id !== expectedJobId
+        || receipt.session_id !== expectedSessionId || receipt.mode !== expectedAuthority.mode
+        || receipt.state !== 'ready') throw new Error('Invalid alignment presentation identity.');
+    requireClosedKeys(receipt.source, ['package_manifest_sha256', 'alignment_sha256', 'alignment_size_bytes', 'alignment_index_sha256', 'alignment_index_size_bytes', 'primary_read_count', 'alignment_record_count'], 'alignment presentation source');
+    if (!isSha256(receipt.source.package_manifest_sha256) || !isSha256(receipt.source.alignment_sha256)
+        || !isPositiveInteger(receipt.source.alignment_size_bytes) || !isSha256(receipt.source.alignment_index_sha256)
+        || !isPositiveInteger(receipt.source.alignment_index_size_bytes) || !isNonNegativeInteger(receipt.source.primary_read_count)
+        || !isNonNegativeInteger(receipt.source.alignment_record_count) || receipt.source.alignment_record_count < receipt.source.primary_read_count) {
+        throw new Error('Invalid alignment presentation source.');
+    }
+    if (receipt.source.package_manifest_sha256 !== expectedAuthority.packageManifestSha256
+        || receipt.source.alignment_sha256 !== expectedAuthority.alignmentSha256
+        || receipt.source.alignment_size_bytes !== expectedAuthority.alignmentSizeBytes
+        || receipt.source.alignment_index_sha256 !== expectedAuthority.alignmentIndexSha256
+        || receipt.source.alignment_index_size_bytes !== expectedAuthority.alignmentIndexSizeBytes) {
+        throw new Error('Invalid alignment presentation authority binding.');
+    }
+    requireClosedKeys(receipt.policy, ['id', 'version', 'target_reads', 'max_preview_bytes', 'max_coverage_bins', 'max_seconds'], 'alignment presentation policy');
+    if (receipt.policy.id !== 'primary-read-presentation-v3' || receipt.policy.version !== 3
+        || !isPositiveInteger(receipt.policy.target_reads) || !isPositiveInteger(receipt.policy.max_preview_bytes)
+        || !isPositiveInteger(receipt.policy.max_coverage_bins)
+        || typeof receipt.policy.max_seconds !== 'number' || !Number.isFinite(receipt.policy.max_seconds)
+        || receipt.policy.max_seconds <= 0) throw new Error('Invalid alignment presentation policy.');
+    requireClosedKeys(receipt.preview, ['kind', 'selected_read_count', 'selected_record_count', 'selected_read_set_sha256', 'forward_count', 'reverse_count', 'bam', 'index'], 'alignment preview');
+    if (receipt.preview.kind !== 'primary_read_preview' || !isNonNegativeInteger(receipt.preview.selected_read_count)
+        || !isNonNegativeInteger(receipt.preview.selected_record_count) || !isSha256(receipt.preview.selected_read_set_sha256)
+        || !isNonNegativeInteger(receipt.preview.forward_count) || !isNonNegativeInteger(receipt.preview.reverse_count)
+        || receipt.preview.selected_read_count > receipt.source.primary_read_count
+        || receipt.preview.selected_record_count > receipt.source.alignment_record_count
+        || receipt.preview.forward_count + receipt.preview.reverse_count !== receipt.preview.selected_record_count) throw new Error('Invalid alignment preview.');
+    const prefix = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-sessions/${encodeURIComponent(expectedSessionId)}/presentation/`;
+    const bamUrl = receipt.preview.bam?.url;
+    const presentationId = typeof bamUrl === 'string' && bamUrl.startsWith(prefix) && bamUrl.endsWith('/bam')
+        ? bamUrl.slice(prefix.length, -'/bam'.length)
+        : '';
+    if (!isSha256(presentationId)) throw new Error('Invalid alignment presentation artifact identity.');
+    const base = `${prefix}${presentationId}`;
+    validatePresentationArtifact(receipt.preview.bam, 'alignment preview BAM', {
+        kind: 'alignment_preview', url: `${base}/bam`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(receipt.preview.index, 'alignment preview index', {
+        kind: 'alignment_preview_index', url: `${base}/bai`, mimeType: 'application/octet-stream',
+    });
+    requireClosedKeys(receipt.coverage, ['kind', 'bin_width_bp', 'primary_read_count', 'artifact'], 'alignment coverage');
+    if (receipt.coverage.kind !== 'full_source_primary_coverage' || !isPositiveInteger(receipt.coverage.bin_width_bp)
+        || receipt.coverage.primary_read_count !== receipt.source.primary_read_count) throw new Error('Invalid alignment coverage.');
+    validatePresentationArtifact(receipt.coverage.artifact, 'alignment coverage artifact', {
+        kind: 'full_source_primary_coverage', url: `${base}/coverage`, mimeType: 'text/plain', allowEmpty: true,
+    });
+    validatePresentationArtifact(receipt.manifest, 'alignment presentation manifest', {
+        kind: 'alignment_presentation_manifest', url: `${base}/manifest`, mimeType: 'application/json',
+    });
+    return receipt;
+}
+
+export function buildAlignmentLocusSliceRequest(
+    locus: { contig: string; start: number; end: number },
+    maxReads = 5000,
+): AlignmentLocusSliceRequest {
+    const contig = locus.contig.trim();
+    if (!contig || !isPositiveInteger(locus.start) || !isPositiveInteger(locus.end) || locus.end < locus.start
+        || locus.end - locus.start + 1 > 1_000_000
+        || !isPositiveInteger(maxReads) || maxReads > 5000) throw new Error('Invalid alignment locus slice request.');
+    return { contig, start_1based: locus.start, end_1based: locus.end, max_reads: maxReads };
+}
+
+export function normalizeAlignmentLocusSlice(
+    value: unknown,
+    expectedJobId: string,
+    expectedSessionId: string,
+    expectedRequest: AlignmentLocusSliceRequest,
+): AlignmentLocusSlice {
+    requireClosedKeys(value, ['schema', 'job_id', 'session_id', 'slice_id', 'state', 'contig', 'start_1based', 'end_1based', 'overlapping_read_count', 'selected_read_count', 'selected_record_count', 'capped', 'policy', 'bam', 'index', 'manifest'], 'alignment locus slice');
+    const slice = value as unknown as AlignmentLocusSlice;
+    if (slice.schema !== 'bms.ngs.alignment-locus-slice.v1' || slice.job_id !== expectedJobId
+        || slice.session_id !== expectedSessionId || !isSha256(slice.slice_id) || slice.state !== 'ready'
+        || typeof slice.contig !== 'string' || !slice.contig || !isPositiveInteger(slice.start_1based)
+        || !isPositiveInteger(slice.end_1based) || slice.end_1based < slice.start_1based
+        || !isNonNegativeInteger(slice.overlapping_read_count) || !isNonNegativeInteger(slice.selected_read_count)
+        || !isNonNegativeInteger(slice.selected_record_count) || typeof slice.capped !== 'boolean'
+        || slice.selected_read_count > slice.overlapping_read_count) throw new Error('Invalid alignment locus slice.');
+    if (slice.contig !== expectedRequest.contig || slice.start_1based !== expectedRequest.start_1based
+        || slice.end_1based !== expectedRequest.end_1based) throw new Error('Invalid alignment locus binding.');
+    requireClosedKeys(slice.policy, ['id', 'version', 'max_reads', 'max_records', 'max_bytes', 'max_span_bp', 'max_seconds'], 'alignment locus policy');
+    if (slice.policy.id !== 'bounded-full-source-locus-slice' || slice.policy.version !== 1
+        || slice.policy.max_reads !== expectedRequest.max_reads || slice.policy.max_records !== 20_000
+        || slice.policy.max_bytes !== 67_108_864 || slice.policy.max_span_bp !== 1_000_000
+        || slice.policy.max_seconds !== 30 || slice.selected_read_count > slice.policy.max_reads
+        || slice.selected_record_count > slice.policy.max_records || slice.bam.size_bytes > slice.policy.max_bytes
+        || (!slice.capped && slice.overlapping_read_count !== slice.selected_read_count)) {
+        throw new Error('Invalid alignment locus policy.');
+    }
+    const base = `/api/jobs/${encodeURIComponent(expectedJobId)}/alignment-sessions/${encodeURIComponent(expectedSessionId)}/locus-slices/${slice.slice_id}`;
+    validatePresentationArtifact(slice.bam, 'alignment locus BAM', {
+        kind: 'alignment_locus_slice', url: `${base}/${slice.bam.sha256}/bam`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(slice.index, 'alignment locus index', {
+        kind: 'alignment_locus_slice_index', url: `${base}/${slice.index.sha256}/bai`, mimeType: 'application/octet-stream',
+    });
+    validatePresentationArtifact(slice.manifest, 'alignment locus manifest', {
+        kind: 'alignment_locus_slice_manifest', url: `${base}/${slice.manifest.sha256}/manifest`, mimeType: 'application/json',
+    });
+    return slice;
 }
 
 export async function normalizeAlignmentSessions(payload: AlignmentSessionResponse, expectedJobId: string): Promise<AlignmentSession[]> {
@@ -516,6 +974,34 @@ export async function fetchAlignmentSessions(jobId: string): Promise<AlignmentSe
     });
 }
 
+export async function fetchAlignmentPresentation(
+    jobId: string,
+    sessionId: string,
+    expectedAuthority: AlignmentPresentationExpectedAuthority,
+): Promise<AlignmentPresentation> {
+    return withAlignmentAccessRecovery(jobId, async () => {
+        const response = await api.get<unknown>(
+            `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/presentation`,
+        );
+        return normalizeAlignmentPresentation(response.data, jobId, sessionId, expectedAuthority);
+    });
+}
+
+export async function createAlignmentLocusSlice(
+    jobId: string,
+    sessionId: string,
+    locus: { contig: string; start: number; end: number },
+    signal?: AbortSignal,
+): Promise<AlignmentLocusSlice> {
+    const request = buildAlignmentLocusSliceRequest(locus, 5000);
+    const response = await api.post<unknown>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/locus-slices`,
+        request,
+        { signal },
+    );
+    return normalizeAlignmentLocusSlice(response.data, jobId, sessionId, request);
+}
+
 export async function fetchAlignmentReads(
     jobId: string,
     sessionId: string,
@@ -526,6 +1012,37 @@ export async function fetchAlignmentReads(
         signal: options.signal,
     });
     return normalizeAlignmentReadPage(response.data);
+}
+
+export async function fetchSortableAlignmentReads(
+    jobId: string,
+    sessionId: string,
+    sliceId: string,
+    options: SortableAlignmentReadOptions = {},
+): Promise<SortableAlignmentReadPage> {
+    const binding = options.rawSignalBinding;
+    const response = await api.get<SortableAlignmentReadPage>(
+        `/api/jobs/${encodeURIComponent(jobId)}/alignment-sessions/${encodeURIComponent(sessionId)}/locus-slices/${encodeURIComponent(sliceId)}/reads`,
+        {
+            params: {
+                sort_by: options.sortBy ?? 'mean_quality',
+                sort_direction: options.sortDirection ?? 'desc',
+                q: options.q?.trim() || undefined,
+                metric_min: options.metricMin,
+                metric_max: options.metricMax,
+                cursor: options.cursor,
+                limit: options.limit ?? 50,
+                raw_run_id: binding?.runId,
+                raw_observed_generation: binding?.observedGeneration,
+                raw_representation_id: binding?.representationId,
+            },
+            signal: options.signal,
+        },
+    );
+    return normalizeSortableAlignmentReadPage(
+        response.data, jobId, sessionId, sliceId,
+        options.sortBy ?? 'mean_quality', options.sortDirection ?? 'desc', binding?.representationId ?? null,
+    );
 }
 
 export async function fetchAlignmentRead(

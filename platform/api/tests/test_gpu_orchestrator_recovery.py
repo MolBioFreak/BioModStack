@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from datetime import datetime
@@ -18,17 +19,70 @@ API_ROOT = Path(__file__).resolve().parents[1]
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 
-from database import Base, Job, MdRun
+from database import Base, ExecutionTarget, Job, MdRun
 import services.gpu_orchestrator as gpu_module
 from services.gpu_orchestrator import (
     GPUOrchestrator,
     _claim_job_for_gpu,
+    _claim_remote_job,
     _commit_reconciled_job_mutations,
     _has_terminal_nextflow_history,
     _job_requires_result_output_for_terminal_history,
     _recover_rfantibody_parent_after_child_wait,
     _reconcile_terminal_history_without_process,
 )
+
+
+@pytest.mark.asyncio
+async def test_remote_target_lease_allows_exactly_one_concurrent_claim(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'remote-claim.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    target_id = "vast:123"
+    async with factory() as seed:
+        seed.add(ExecutionTarget(
+            id=target_id,
+            provider="vast",
+            provider_instance_id="123",
+            state="ready",
+            active=True,
+        ))
+        for job_id in ("remote-a", "remote-b"):
+            seed.add(Job(
+                id=job_id,
+                name=job_id,
+                status="queued",
+                queue_status="queued",
+                paused=False,
+                model_id="boltz2",
+                mode="predict",
+                params={},
+                output_dir=str(tmp_path / job_id),
+                execution_target_id=target_id,
+            ))
+        await seed.commit()
+
+    async def claim(job_id: str) -> dict[str, Any] | None:
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job is not None
+            return await _claim_remote_job(
+                session,
+                job,
+                gpu_id=0,
+                gpu_ids=[0],
+                vram_estimate_mb=4096,
+            )
+
+    claims = await asyncio.gather(claim("remote-a"), claim("remote-b"))
+    assert sum(result is not None for result in claims) == 1
+    async with factory() as verify:
+        target = await verify.get(ExecutionTarget, target_id)
+        jobs = [await verify.get(Job, job_id) for job_id in ("remote-a", "remote-b")]
+        assert target is not None and target.leased_job_id in {"remote-a", "remote-b"}
+        assert sum(job is not None and job.queue_status == "running" for job in jobs) == 1
+    await engine.dispose()
 
 
 @pytest.mark.asyncio

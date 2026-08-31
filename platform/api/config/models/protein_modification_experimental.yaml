@@ -22,11 +22,17 @@ outputs:
 modes:
   - id: de_novo_design
     name: De Novo Design
-    description: Generate new protein candidates with DISCO or La-Proteina
+    description: Generate new protein candidates with native RFD3; deferred experimental backups remain available
     params:
+      - generator
+      - generation_mode
+      - min_length
+      - max_length
       - backend
       - design_task
       - num_designs
+      - seed
+      - dump_trajectories
       - target_lengths
       - laproteina_preset
       - laproteina_samples_per_length
@@ -71,6 +77,56 @@ modes:
       - structure_validators
 
 params:
+  - name: generator
+    type: string
+    description: General-generation authority; RFD3 is preferred
+    required: false
+    default: rfd3
+    enum: [rfd3, disco, laproteina]
+    ui_group: De Novo Design
+    ui_order: 1
+  - name: generation_mode
+    type: string
+    description: Native RFD3 generation mode
+    required: false
+    default: unconditional_monomer
+    enum: [unconditional_monomer]
+    ui_group: De Novo Design
+    ui_order: 2
+  - name: min_length
+    type: integer
+    description: Minimum generated chain length
+    required: false
+    default: 100
+    minimum: 40
+    maximum: 600
+    ui_group: De Novo Design
+    ui_order: 3
+  - name: max_length
+    type: integer
+    description: Maximum generated chain length
+    required: false
+    default: 200
+    minimum: 40
+    maximum: 600
+    ui_group: De Novo Design
+    ui_order: 4
+  - name: seed
+    type: integer
+    description: Native RFD3 random seed
+    required: false
+    default: 0
+    minimum: 0
+    maximum: 2147483647
+    ui_group: De Novo Design
+    ui_order: 6
+  - name: dump_trajectories
+    type: boolean
+    description: Retain native RFD3 trajectories
+    required: false
+    default: false
+    ui_group: De Novo Design
+    ui_order: 7
   - name: backend
     type: string
     description: De novo generator backend

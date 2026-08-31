@@ -12,8 +12,16 @@ describe('De Novo Design product boundary', () => {
         const template = src('components/ProteinModificationTemplate.tsx');
 
         assert.equal(template.includes("import { DE_NOVO_MODIFICATION_MODE_CARDS"), true);
-        assert.equal(template.includes("model_id: 'protein_modification_experimental'"), true);
-        assert.equal(template.includes("mode: 'de_novo_design'"), true);
+        assert.match(template, /model_id: 'protein_modification_experimental'/);
+        assert.match(template, /mode: 'de_novo_design'/);
+        assert.match(template, /generator: 'rfd3'/);
+        assert.match(template, /generation_mode: 'unconditional_monomer'/);
+        assert.match(template, /min_length: minLength/);
+        assert.match(template, /max_length: maxLength/);
+        assert.match(template, /num_designs: numDesigns/);
+        assert.match(template, /seed/);
+        assert.match(template, /dump_trajectories: dumpTrajectories/);
+        assert.match(template, /<details[\s\S]*Experimental backup methods[\s\S]*DISCO[\s\S]*La-Proteina[\s\S]*<\/details>/);
         assert.equal(template.includes("mode === 'rfd3_iteration'"), true);
         assert.equal(template.includes("initialMode === 'rfd3_local_redesign' || initialMode === 'region_redesign'"), true);
         assert.equal(template.includes("submissionModelId={reopenValidatedPipeline ? 'protein_modification_experimental' : 'protein_local_redesign'}"), true);
@@ -30,6 +38,10 @@ describe('De Novo Design product boundary', () => {
         assert.equal(submission.includes("\n            id: 'protein_local_redesign'"), false);
         assert.equal(submission.includes("selectedTemplateId === 'protein_local_redesign'"), false);
         assert.equal(submission.includes('!LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id)'), true);
+        assert.match(
+            submission,
+            /name: 'De Novo Design'[\s\S]*RFD3 \(Preferred\)[\s\S]*RFD3 Iteration[\s\S]*Shape Blueprint[\s\S]*DISCO \/ La-Proteina \(Backup\)/,
+        );
     });
 
     it('documents all engines on the parent rather than separate product inventory entries', () => {
@@ -37,7 +49,7 @@ describe('De Novo Design product boundary', () => {
 
         assert.match(
             inventory,
-            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
+            /workflowId: 'protein_modification_experimental'[\s\S]*label: 'De Novo Design'[\s\S]*modelTopics: \['rfdiffusion', 'laproteina', 'disco', 'fampnn', 'proteinmpnn', 'boltz2'\]/,
         );
         assert.equal(inventory.includes("workflowId: 'protein_local_redesign'"), false);
         assert.equal(inventory.includes("workflowId: 'protein_cad_experimental'"), false);

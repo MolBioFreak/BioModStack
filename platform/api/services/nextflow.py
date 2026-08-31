@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 CPU_RESERVED_THREADS = 4
 MIN_DYNAMIC_GPU_CPUS = 2
-DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "boltz2-pre-community-20260417-211613.sif"
+DEFAULT_BOLTZ_CP_COMPAT_CONTAINER = "fold-cp.sif"
 DEFAULT_NEXTFLOW_JAVA_HOME = Path("/home/dalab/.local/jdks/temurin-17")
 DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_BYTES = 8 * 1024 * 1024
 DEFAULT_NEXTFLOW_RETAINED_LOG_MAX_LINES = 4_000
@@ -414,13 +414,6 @@ from antibody_pipeline_contract import (
 )
 
 from .boltzgen_scaffolding import prepare_boltzgen_params_for_launch
-from .boltz_cp_shard_plans import (
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    coerce_boltz_cp_shard_plan_id,
-    get_boltz_cp_logical_size_cp,
-    infer_boltz_cp_shard_plan_id,
-    largest_square_divisor as boltz_cp_largest_square_divisor,
-)
 from .gpu_config import read_scheduler_config
 
 from .ont_ngs_contract import normalize_ont_launch_params, resolve_ont_workflow_alias
@@ -533,7 +526,7 @@ MODEL_MODE_WORKFLOW_ENTRYPOINTS: Dict[Tuple[str, str], str] = {
     ("fampnn_child", "sequence_design"): "workflows/fampnn_child.nf",
     ("frustrampnn", "analyze"): "workflows/frustrampnn_analysis.nf",
     ("protein_local_redesign", "local_redesign"): "workflows/protein_local_redesign.nf",
-    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_cad_experimental.nf",
+    ("protein_modification_experimental", "de_novo_design"): "workflows/protein_design.nf",
     ("protein_modification_experimental", "shape_blueprint"): "workflows/shape_blueprint_design.nf",
     ("protein_modification_experimental", "region_redesign"): "workflows/protein_local_redesign.nf",
     ("molecular_dynamics", "simulate"): "workflows/experimental/molecular_dynamics/orchestrator.nf",
@@ -578,6 +571,14 @@ def resolve_nextflow_entrypoint(
         raise ValueError(
             "BoltzGen is an internal de-novo engine; launch the antibody_denovo workflow"
         )
+
+    if (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "de_novo_design"
+        and str((params or {}).get("generator") or "rfd3").strip().lower()
+        in {"disco", "laproteina"}
+    ):
+        return "workflows/protein_cad_experimental.nf"
 
     if normalized_model_id in {"boltz2", "protenix"} and _params_request_complex_prediction(params):
         return COMPLEX_PREDICTION_ENTRYPOINT
@@ -1020,7 +1021,20 @@ def _parse_boltz_cp_gpu_ids(value: object) -> List[int]:
 
 
 def _largest_square_divisor(gpu_count: int, requested_size_cp: object) -> int:
-    return boltz_cp_largest_square_divisor(gpu_count, requested_size_cp)
+    if gpu_count < 1:
+        return 1
+    requested = _coerce_int(requested_size_cp, gpu_count)
+    if requested < 1:
+        requested = gpu_count
+    best = 1
+    for candidate in range(1, gpu_count + 1):
+        if gpu_count % candidate != 0:
+            continue
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
+            continue
+        best = candidate
+    return best
 
 
 def _derive_boltz_cp_gpu_launch_settings(
@@ -1809,10 +1823,16 @@ async def launch_msa_batch_job(
             job = result.scalar_one_or_none()
             
             if exit_code == 0:
+                manifest_path = str(Path(output_dir) / "msa_manifest.json")
+                unlocked = await apply_msa_manifest_to_child_jobs(
+                    session,
+                    job_id,
+                    manifest_path,
+                )
                 job.status = JobStatus.COMPLETED.value
                 job.queue_status = 'completed'
                 job.completed_at = datetime.utcnow()
-                job.msa_manifest_path = str(Path(output_dir) / "msa_manifest.json")
+                job.msa_manifest_path = manifest_path
                 logger.info(f"[MSA BATCH] Job {job_id} completed successfully")
                 touch_query_activity(
                     {
@@ -1823,9 +1843,8 @@ async def launch_msa_batch_job(
                     }
                 )
                 
-                # Unlock child inference jobs
                 await session.commit()
-                await unlock_child_inference_jobs(job_id, job.msa_manifest_path)
+                logger.info("[MSA COMPLETE] Unlocked %s inference jobs", unlocked)
             else:
                 job.status = JobStatus.FAILED.value
                 job.queue_status = 'failed'
@@ -1867,60 +1886,90 @@ async def launch_msa_batch_job(
                 await session.commit()
 
 
-async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> None:
-    """
-    Unlock child inference jobs after MSA batch completes.
-    
-    Updates child jobs from 'pending_msa' to 'queued' status.
-    """
-    from database import async_session, Job
+async def apply_msa_manifest_to_child_jobs(
+    session: Any,
+    msa_job_id: str,
+    manifest_path: str,
+) -> int:
+    """Validate one MSA manifest and atomically prepare every waiting child."""
+
+    from database import Job
     from sqlalchemy import select
-    import json
-    
-    logger.info(f"[MSA COMPLETE] Unlocking child jobs for MSA job {msa_job_id}")
-    
-    async with async_session() as session:
-        # Get child jobs waiting for this MSA job
-        result = await session.execute(
-            select(Job).where(
-                Job.parent_job_id == msa_job_id,
-                Job.queue_status == "pending_msa"
-            )
+
+    path = Path(manifest_path).expanduser()
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("MSA manifest is missing or is a symlink")
+    if path.stat().st_size > 16 * 1024 * 1024:
+        raise RuntimeError("MSA manifest exceeds the 16 MiB validation limit")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    sequences = manifest.get("sequences") if isinstance(manifest, dict) else None
+    if not isinstance(sequences, list):
+        raise RuntimeError("MSA manifest has no sequences array")
+
+    output_root = path.parent.resolve()
+    msa_paths: dict[str, str] = {}
+    for entry in sequences:
+        if not isinstance(entry, dict) or not entry.get("success"):
+            continue
+        sequence_hash = entry.get("sequence_hash")
+        msa_path_value = entry.get("msa_path")
+        if (
+            not isinstance(sequence_hash, str)
+            or len(sequence_hash) != 64
+            or any(char not in "0123456789abcdef" for char in sequence_hash)
+            or not isinstance(msa_path_value, str)
+            or not msa_path_value
+        ):
+            raise RuntimeError("MSA manifest contains an invalid successful sequence record")
+        msa_path = Path(msa_path_value).expanduser()
+        resolved_msa = msa_path.resolve()
+        if (
+            msa_path.is_symlink()
+            or not resolved_msa.is_file()
+            or (resolved_msa != output_root and output_root not in resolved_msa.parents)
+        ):
+            raise RuntimeError("MSA manifest references an invalid or external MSA artifact")
+        prior = msa_paths.get(sequence_hash)
+        if prior is not None and prior != str(resolved_msa):
+            raise RuntimeError("MSA manifest has conflicting paths for one sequence")
+        msa_paths[sequence_hash] = str(resolved_msa)
+
+    result = await session.execute(
+        select(Job).where(
+            Job.parent_job_id == msa_job_id,
+            Job.queue_status == "pending_msa",
         )
-        child_jobs = result.scalars().all()
-        
-        if not child_jobs:
-            logger.info(f"[MSA COMPLETE] No child jobs found for {msa_job_id}")
-            return
-        
-        # Parse manifest for MSA paths
-        msa_paths = {}
-        try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            for seq_info in manifest.get("sequences", []):
-                if seq_info.get("success"):
-                    msa_paths[seq_info.get("sequence_hash", "")] = seq_info.get("msa_path")
-        except Exception as e:
-            logger.warning(f"[MSA COMPLETE] Could not parse manifest: {e}")
-        
-        # Update each child job
-        import hashlib
-        for job in child_jobs:
-            seq_hash = job.params.get("msa_sequence_hash")
-            if not isinstance(seq_hash, str) or not seq_hash:
-                sequence = job.params.get("sequence") or job.params.get("sequence_input") or ""
-                ref_sequence = job.params.get("msa_reference_sequence") or ""
-                hash_source = str(ref_sequence or sequence)
-                seq_hash = hashlib.sha256(hash_source.encode()).hexdigest() if hash_source else ""
-            msa_path = msa_paths.get(seq_hash)
-            if msa_path:
-                job.params = {**job.params, "msa_path": msa_path}
-            job.queue_status = 'queued'  # Now ready for inference!
-            logger.info(f"[MSA COMPLETE] Unlocked {job.name} for inference (MSA: {msa_path or 'not found'})")
-        
+    )
+    child_jobs = list(result.scalars().all())
+    updates: list[tuple[Any, str]] = []
+    for child in child_jobs:
+        params = dict(child.params or {})
+        sequence_hash = params.get("msa_sequence_hash")
+        if not isinstance(sequence_hash, str) or not sequence_hash:
+            sequence = params.get("sequence") or params.get("sequence_input") or ""
+            reference = params.get("msa_reference_sequence") or ""
+            hash_source = str(reference or sequence)
+            sequence_hash = hashlib.sha256(hash_source.encode()).hexdigest() if hash_source else ""
+        msa_path = msa_paths.get(sequence_hash)
+        if not msa_path:
+            raise RuntimeError(f"MSA manifest has no successful artifact for child {child.id}")
+        updates.append((child, msa_path))
+
+    for child, msa_path in updates:
+        child.params = {**dict(child.params or {}), "msa_path": msa_path}
+        child.queue_status = "queued"
+    return len(updates)
+
+
+async def unlock_child_inference_jobs(msa_job_id: str, manifest_path: str) -> None:
+    """Validate the MSA manifest and unlock all waiting children atomically."""
+
+    from database import async_session
+
+    async with async_session() as session:
+        unlocked = await apply_msa_manifest_to_child_jobs(session, msa_job_id, manifest_path)
         await session.commit()
-        logger.info(f"[MSA COMPLETE] Unlocked {len(child_jobs)} inference jobs")
+    logger.info("[MSA COMPLETE] Unlocked %s inference jobs", unlocked)
 
 
 
@@ -2040,11 +2089,7 @@ async def launch_nextflow_job(
     # ═══════════════════════════════════════════════════════════════════════════
     # MSA BATCH JOBS: Run batch_msa.py directly (not Nextflow)
     # ═══════════════════════════════════════════════════════════════════════════
-    if model_id == 'msa_batch':
-        if not transient_runner:
-            raise ExecutionOwnershipError(
-                "msa_batch execution is only permitted inside the transient workflow runner"
-            )
+    if model_id == 'msa_batch' and transient_runner:
         await launch_msa_batch_job(job_id, params, output_dir)
         return
 
@@ -2148,6 +2193,56 @@ async def launch_nextflow_job(
             )
 
         try:
+            if job.execution_target_id:
+                if transient_runner:
+                    raise ExecutionOwnershipError(
+                        "A remote Job cannot enter the host transient-runner lane"
+                    )
+                ont_submission_trust.verify_launch_input_snapshots(launch_params)
+                gpu_id = _resolve_launch_gpu_id(job, launch_params, model_id)
+                if gpu_id is not None:
+                    launch_params["gpu_id"] = gpu_id
+                remote_command = (
+                    _build_msa_batch_command(launch_params, output_dir)
+                    if model_id == "msa_batch"
+                    else build_nextflow_command(
+                        model_id,
+                        mode,
+                        launch_params,
+                        output_dir,
+                        job_id=job_id,
+                    )
+                )
+                remote_environment = {"NXF_ANSI_LOG": "false"}
+                if is_protenix:
+                    remote_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+                stage_report_token, stage_report_digest = stage_reporting.issue_stage_report_token()
+                provenance = dict(job.provenance or {})
+                provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = stage_report_digest
+                job.provenance = provenance
+                await session.commit()
+                from services.remote_execution.executor import launch_remote_job
+
+                remote_run_id = await launch_remote_job(
+                    session,
+                    job,
+                    command=remote_command,
+                    environment=remote_environment,
+                    secret_environment={stage_reporting.ENV_TOKEN_KEY: stage_report_token},
+                )
+                logger.info(
+                    "[REMOTE-EXECUTION] Job %s delegated to %s as %s",
+                    job_id,
+                    job.execution_target_id,
+                    remote_run_id,
+                )
+                return
+
+            if model_id == "msa_batch":
+                raise ExecutionOwnershipError(
+                    "msa_batch execution requires a transient local runner or remote execution target"
+                )
+
             if workflow_adapter_enabled() and not transient_runner:
                 prior_run_id = str(job.nextflow_run_id or "").strip()
                 # Revalidate every immutable input at the literal adapter call
@@ -3381,7 +3476,7 @@ def build_nextflow_command(
         # Protein local redesign with constrained RFD3 remodeling
         ('protein_local_redesign', 'local_redesign'): 'protein_local_redesign',
         ('protein_cad_experimental', 'design'): 'protein_cad_experimental',
-        ('protein_modification_experimental', 'de_novo_design'): 'protein_cad_experimental',
+        ('protein_modification_experimental', 'de_novo_design'): 'rfd3_generation',
         ('protein_modification_experimental', 'shape_blueprint'): 'shape_blueprint',
         ('protein_modification_experimental', 'region_redesign'): 'protein_local_redesign',
 
@@ -3445,6 +3540,14 @@ def build_nextflow_command(
         effective_profile = mode_to_profile[mode]
     else:
         effective_profile = mode
+
+    if (
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or 'rfd3').strip().lower()
+        in {'disco', 'laproteina'}
+    ):
+        effective_profile = 'protein_cad_experimental'
 
     effective_profile = resolve_antibody_validation_profile(effective_profile)
 
@@ -4005,8 +4108,26 @@ def build_nextflow_command(
             params['rfd_mode'] = 'protein_local_redesign'
         if model_id == 'protein_modification_experimental':
             params['modification_mode'] = 'region_redesign'
+    elif (
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or 'rfd3').strip().lower() == 'rfd3'
+    ):
+        params.setdefault('diffusion_method', 'rfd3')
+        params.setdefault('rfd_mode', 'monomer_denovo')
+        params.setdefault('rfd_num_designs', params.get('num_designs', 8))
+        params.setdefault('rfd3_batches_per_design', params.get('num_designs', 8))
+        params.setdefault('run_rfd_only', True)
+        params.setdefault('skip_rfd', False)
+        params.setdefault('skip_rfd_seq', False)
+        params.setdefault('skip_rfd_seq_pred', False)
+        params.setdefault('run_frustrampnn', False)
+        params['modification_mode'] = 'de_novo_design'
     elif model_id == 'protein_cad_experimental' or (
-        model_id == 'protein_modification_experimental' and mode == 'de_novo_design'
+        model_id == 'protein_modification_experimental'
+        and mode == 'de_novo_design'
+        and str(params.get('generator') or '').strip().lower()
+        in {'disco', 'laproteina'}
     ):
         protein_cad_mappings = {
             'backend': 'pcad_backend',
@@ -4120,29 +4241,15 @@ def build_nextflow_command(
     elif model_id == 'boltz_cp_experimental':
         boltz_cp_mappings = {
             'input_path': 'bcp_input_path',
-            'shard_plan_id': 'bcp_shard_plan_id',
             'gpu_ids': 'bcp_gpu_ids',
+            'size_cp': 'bcp_size_cp',
             'input_format': 'bcp_input_format',
             'output_format': 'bcp_output_format',
             'write_full_pae': 'bcp_write_full_pae',
-            'confidence_prediction': 'bcp_confidence_prediction',
             'recycling_steps': 'bcp_recycling_steps',
             'sampling_steps': 'bcp_sampling_steps',
             'diffusion_samples': 'bcp_diffusion_samples',
-            'max_msa_seqs': 'bcp_max_msa_seqs',
-            'max_parallel_samples': 'bcp_max_parallel_samples',
-            'precision': 'bcp_precision',
             'seed': 'bcp_seed',
-            'backend': 'bcp_backend',
-            'triattn_backend': 'bcp_triattn_backend',
-            'context_store_mode': 'bcp_context_store_mode',
-            'context_store_root': 'bcp_context_store_root',
-            'context_query_tile_tokens': 'bcp_context_query_tile_tokens',
-            'context_store_logical_size_cp': 'bcp_context_store_logical_size_cp',
-            'context_store_pair_tile_tokens': 'bcp_context_store_pair_tile_tokens',
-            'context_store_key_tile_tokens': 'bcp_context_store_key_tile_tokens',
-            'context_store_projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
-            'projection_cache_byte_budget': 'bcp_context_store_projection_cache_byte_budget',
             'repo_path': 'bcp_repo_path',
         }
         for src_key, dest_key in boltz_cp_mappings.items():
@@ -4163,22 +4270,9 @@ def build_nextflow_command(
             elif params.get('boltz_diffusion_samples') not in (None, ''):
                 params['bcp_diffusion_samples'] = params['boltz_diffusion_samples']
 
-        legacy_size_cp = params.pop('size_cp', None)
-        shard_plan_id = coerce_boltz_cp_shard_plan_id(params.get('bcp_shard_plan_id'))
-        if shard_plan_id is None:
-            shard_plan_id = infer_boltz_cp_shard_plan_id(
-                params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
-                default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-            )
-        params['bcp_shard_plan_id'] = shard_plan_id
-
-        requested_size_cp = get_boltz_cp_logical_size_cp(
-            shard_plan_id,
-            params.get('bcp_size_cp') if params.get('bcp_size_cp') not in (None, '') else legacy_size_cp,
-        )
         derived_gpu_ids, derived_size_cp = _derive_boltz_cp_gpu_launch_settings(
             pinned_gpus=params.get('pinned_gpus'),
-            requested_size_cp=requested_size_cp,
+            requested_size_cp=params.get('bcp_size_cp'),
             fallback_gpu_ids=params.get('bcp_gpu_ids'),
             scheduler_gpu_id=params.get('gpu_id'),
         )
@@ -4189,14 +4283,33 @@ def build_nextflow_command(
         params.setdefault('bcp_input_format', 'config_files')
         params.setdefault('bcp_output_format', 'mmcif')
         params.setdefault('bcp_write_full_pae', False)
-        params.setdefault('bcp_confidence_prediction', False)
-        params.setdefault('bcp_max_msa_seqs', 128)
-        params.setdefault('bcp_max_parallel_samples', 1)
-        params.setdefault('bcp_precision', 'BF16')
-        params.setdefault('bcp_backend', 'true-distributed-context-parallel')
-        params.setdefault('bcp_triattn_backend', 'reference')
-        params.setdefault('bcp_context_store_mode', 'evidence-only')
-        params.setdefault('bcp_context_query_tile_tokens', 512)
+        for retired_key in tuple(params):
+            if retired_key in {
+                'backend',
+                'shard_plan_id',
+                'confidence_prediction',
+                'max_msa_seqs',
+                'max_parallel_samples',
+                'precision',
+                'triattn_backend',
+                'context_store_mode',
+                'context_store_root',
+                'context_query_tile_tokens',
+                'context_store_logical_size_cp',
+                'context_store_pair_tile_tokens',
+                'context_store_key_tile_tokens',
+                'context_store_projection_cache_byte_budget',
+                'projection_cache_byte_budget',
+            } or retired_key.startswith('bcp_context_') or retired_key in {
+                'bcp_backend',
+                'bcp_shard_plan_id',
+                'bcp_confidence_prediction',
+                'bcp_max_msa_seqs',
+                'bcp_max_parallel_samples',
+                'bcp_precision',
+                'bcp_triattn_backend',
+            }:
+                params.pop(retired_key, None)
         params.setdefault(
             'bcp_container_path',
             str(Path(explicit_container_dir) / DEFAULT_BOLTZ_CP_COMPAT_CONTAINER),
@@ -4518,6 +4631,15 @@ def _discover_managed_nextflow_processes() -> Dict[str, int]:
 
 async def cancel_nextflow_job(nextflow_run_id: str, graceful_timeout_seconds: float = 5.0) -> bool:
     """Cancel a running Nextflow job, escalating to SIGKILL if it ignores SIGTERM."""
+    from services.remote_execution.executor import is_remote_run_id
+
+    if is_remote_run_id(nextflow_run_id):
+        from services.remote_execution.executor import cancel_remote_run_id
+
+        return await cancel_remote_run_id(
+            str(nextflow_run_id),
+            graceful_timeout_seconds=max(30.0, graceful_timeout_seconds),
+        )
     if workflow_adapter_enabled():
         try:
             return cancel_via_workflow_adapter(

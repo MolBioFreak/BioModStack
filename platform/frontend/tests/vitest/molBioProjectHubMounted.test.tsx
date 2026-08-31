@@ -66,7 +66,7 @@ vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
 }));
 
 import DomainExperimentWorkspace from '../../src/components/molbio-ngs/DomainExperimentWorkspace';
-import { projectHubPlasmidsToConstructShelf } from '../../src/components/MolBioToolkit/utils/projectConstructShelf';
+import { projectHubDNASequencesToConstructShelf } from '../../src/components/MolBioToolkit/utils/projectConstructShelf';
 
 const plasmids = [
     {
@@ -78,7 +78,7 @@ const plasmids = [
         feature_labels: ['NeoR/KanR', 'CMV promoter', 'f1 ori', 'SV40 ori'],
         cmv_promoter: true, neor_kanr: true, replication_origin_count: 3,
         saved_experiment_count: 0, organism_host_context: null, project_tags: ['new plasmid'], project_notes: '',
-        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl1480&molbio_revision_id=revision-pl1480',
+        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl1480',
         map_segments: [{ start: 5300, end: 120, tone: 'accent', label: 'NeoR/KanR', feature_type: 'CDS', strand: 'reverse' }],
     },
     {
@@ -90,7 +90,7 @@ const plasmids = [
         feature_labels: ['CMV promoter', 'ori', 'NeoR/KanR'],
         cmv_promoter: true, neor_kanr: true, replication_origin_count: 1,
         saved_experiment_count: 1, organism_host_context: null, project_tags: [], project_notes: '',
-        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl2190&molbio_revision_id=revision-pl2190',
+        reopen_href: '/designer?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&molbio_sequence_id=sequence-pl2190',
         map_segments: [{ start: 700, end: 1400, tone: 'success' }],
     },
 ];
@@ -114,10 +114,13 @@ const readModel = {
         import_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data&action=import-ont',
         launcher_href: '/ngs?workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=sequence-data',
     },
-    experiments: [
-        { id: 'pcr-1', persistence: 'saved', kind: 'pcr', plasmid_sequence_id: 'sequence-pl2190', plasmid_sequence_ids: ['sequence-pl2190'], plasmid_name: 'PL2190', title: 'Validation PCR', status: 'saved', created_at: '2026-08-25T12:00:00Z', reopen_href: '/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1' },
-        { id: 'alignment-draft', persistence: 'unsaved', kind: 'alignment', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], plasmid_name: 'PL1480 / PL2190', title: 'Transient alignment', status: 'draft', created_at: '2026-08-25T12:00:00Z', reopen_href: null },
-    ],
+            experiments: [{
+                id: 'pcr-1', persistence: 'saved', kind: 'pcr', plasmid_sequence_id: 'sequence-pl2190', plasmid_sequence_ids: ['sequence-pl2190'], input_sequence_ids: ['sequence-pl2190'], output_sequence_ids: [], plasmid_name: 'PL2190', title: 'Validation PCR', status: 'saved', created_at: '2026-08-25T12:00:00Z', reopen_href: '/designer?pcr_experiment_id=pcr-1&pcr_revision_id=pcr-revision-1',
+            }, {
+                id: 'gibson-1', persistence: 'saved', kind: 'gibson', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], input_sequence_ids: ['sequence-pl1480'], output_sequence_ids: ['sequence-pl2190'], plasmid_name: 'PL1480', title: 'Saved Gibson assembly', status: 'saved', created_at: '2026-08-25T13:00:00Z', reopen_href: '/designer?molbio_operation_id=gibson-1',
+            }, {
+                id: 'alignment-draft', persistence: 'unsaved', kind: 'alignment', plasmid_sequence_id: 'sequence-pl1480', plasmid_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], input_sequence_ids: ['sequence-pl1480', 'sequence-pl2190'], output_sequence_ids: [], plasmid_name: 'PL1480 / PL2190', title: 'Transient alignment', status: 'draft', created_at: '2026-08-25T12:00:00Z', reopen_href: null,
+            }],
     results: [],
     activity: [
         { id: 'activity-1', summary: 'PL1480 added to the project', occurred_at: '2026-08-24T12:00:00Z', technical_event_type: 'molecular_member_attached', receipt_id: 'receipt-1', envelope_sha256: 'event-digest' },
@@ -176,18 +179,19 @@ function buttonNamed(name: string) {
 
 describe('mounted MolBio project hub', () => {
     it('builds the default Construct Shelf only from exact Project membership', () => {
-        const shelf = projectHubPlasmidsToConstructShelf(readModel);
+        const shelf = projectHubDNASequencesToConstructShelf(readModel);
         expect(shelf.map((item) => item.name)).toEqual(['PL1480', 'PL2190']);
         expect(shelf.map((item) => item.name)).not.toContain('pGM12_pEb-HS2-fluc');
         expect(shelf[0]?.revision_id).toBe('revision-pl1480');
-        expect(shelf[0]?.reopen_href).toContain('molbio_revision_id=revision-pl1480');
+        expect(shelf[0]?.reopen_href).toContain('molbio_sequence_id=sequence-pl1480');
+        expect(shelf[0]?.reopen_href).not.toContain('molbio_revision_id');
     });
-    it('leads with the approved project header, tab order, extended plasmid cards, and collapsed technical details', async () => {
+    it('leads with the approved Project header, tab order, extended DNA sequence cards, and collapsed technical details', async () => {
         await renderWorkspace();
 
         expect(container.querySelector('h1')?.textContent).toBe('Syenex New Plasmids');
         expect(Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => tab.textContent?.trim())).toEqual([
-            'Overview', 'Plasmids', 'Sequence Data', 'Experiments', 'Results', 'Activity',
+            'Overview', 'DNA sequences', 'Sequence Data', 'Experiments', 'Results', 'Activity',
         ]);
         expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Overview');
         expect(container.textContent).toContain('Routine new plasmid onboarding.');
@@ -215,9 +219,9 @@ describe('mounted MolBio project hub', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: null });
         await act(async () => buttonNamed('Compare')?.click());
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: 'sequence-pl1480' });
-        expect(Array.from(container.querySelectorAll('a[href*="molbio_sequence_id=sequence-pl1480"][href*="molbio_revision_id=revision-pl1480"]')).some((link) => link.textContent?.includes('Open plasmid'))).toBe(true);
+        expect(Array.from(container.querySelectorAll('a[href*="molbio_sequence_id=sequence-pl1480"]:not([href*="molbio_revision_id"])')).some((link) => link.textContent?.includes('Open DNA sequence'))).toBe(true);
         const miniMap = container.querySelector<HTMLAnchorElement>('a[data-testid="plasmid-mini-map"][href*="molbio_sequence_id=sequence-pl1480"]');
-        expect(miniMap?.getAttribute('aria-label')).toBe('Open full plasmid map for PL1480, 5,512 bp');
+        expect(miniMap?.getAttribute('aria-label')).toBe('Open full DNA sequence map for PL1480, 5,512 bp');
         expect(miniMap?.querySelector('title')?.textContent).toContain('NeoR/KanR');
         expect(miniMap?.querySelector('[data-feature-direction="reverse"]')).not.toBeNull();
         expect(miniMap?.querySelector('[data-feature-label="NeoR/KanR"][tabindex="0"]')).not.toBeNull();
@@ -230,10 +234,10 @@ describe('mounted MolBio project hub', () => {
         expect(container.textContent).not.toContain('Canonical source adapter');
     });
 
-    it('renders an explicit responsive comparison surface and stacked plasmid records', async () => {
+    it('renders an explicit responsive comparison surface and stacked DNA sequence records', async () => {
         await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=plasmids&plasmid=sequence-pl1480');
         const comparison = container.querySelector('[data-testid="project-plasmid-comparison"]');
-        expect(comparison?.textContent).toContain('Compare PL1480 with project plasmids');
+        expect(comparison?.textContent).toContain('Compare PL1480 with Project DNA sequences');
         expect(comparison?.textContent).toContain('PL2190');
         expect(container.querySelector('[data-testid="project-plasmid-stacked-records"]')?.className.split(/\s+/)).toContain('lg:hidden');
         expect(container.querySelector('[data-testid="project-plasmid-desktop-table"]')?.className.split(/\s+/)).toContain('hidden');
@@ -273,8 +277,15 @@ describe('mounted MolBio project hub', () => {
         await renderWorkspace('workspace_id=project-1&global_experiment_id=experiment-1&domain_experiment_id=domain-1&state_revision_id=state-current&section=experiments&plasmid=sequence-pl2190');
 
         expect(container.textContent).toContain('Validation PCR');
+        expect(container.textContent).toContain('Saved Gibson assembly');
+        expect(container.textContent).toContain('Inputs: PL1480');
+        expect(container.textContent).toContain('Outputs: PL2190');
         expect(container.textContent).not.toContain('Transient alignment');
         expect(container.querySelector('[aria-pressed="true"]')?.textContent).toBe('PL2190');
+        expect(container.textContent).toContain('Syenex New Plasmids');
+        expect(container.textContent).toContain('2 DNA sequences');
+        expect(container.textContent).toContain('+ Add DNA sequence');
+        expect(container.textContent).toContain('DNA sequences');
         expect(container.textContent).toContain('1 saved');
         expect(container.textContent).toContain('0 saved');
 
@@ -292,9 +303,9 @@ describe('mounted MolBio project hub', () => {
         expect(dialog?.getAttribute('aria-labelledby')).toBe('project-plasmid-edit-title');
         expect(dialog?.getAttribute('aria-describedby')).toBe('project-plasmid-edit-description');
         expect(dialog?.querySelector('#project-plasmid-edit-description')?.textContent).toContain('Project metadata');
-        expect(dialog?.textContent).toContain('Edit plasmid information');
+        expect(dialog?.textContent).toContain('Edit DNA sequence information');
         expect(dialog?.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe('PL1480');
-        expect(dialog?.textContent).toContain('Molecule type');
+        expect(dialog?.textContent).toContain('Sequence classification');
         expect(dialog?.textContent).toContain('Organism / host context');
         expect(dialog?.textContent).toContain('Project tags');
         expect(dialog?.textContent).toContain('Project notes');
@@ -316,7 +327,7 @@ describe('mounted MolBio project hub', () => {
         expect(contextMocks.updateQueryParams).toHaveBeenCalledWith({ section: 'plasmids', plasmid: null });
     });
 
-    it('keeps historical project states visibly read-only while preserving exact reopen links', async () => {
+    it('keeps historical Project states visibly read-only while normal DNA sequence links still open latest', async () => {
         apiMocks.fetchProjectHub.mockResolvedValue({
             ...readModel,
             identity: { ...readModel.identity, selected_state_revision_id: 'state-historical' },
@@ -325,7 +336,7 @@ describe('mounted MolBio project hub', () => {
 
         expect(container.textContent).toContain('Historical project state — read-only');
         expect(buttonNamed('Edit info')?.disabled).toBe(true);
-        expect(container.querySelector<HTMLAnchorElement>('a[href*="molbio_revision_id=revision-pl1480"]')).not.toBeNull();
+        expect(container.querySelector<HTMLAnchorElement>('a[href*="molbio_sequence_id=sequence-pl1480"]:not([href*="molbio_revision_id"])')).not.toBeNull();
         expect(container.querySelector('a[href*="action=add-plasmid"]')).toBeNull();
     });
 

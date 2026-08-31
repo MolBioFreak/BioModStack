@@ -5,6 +5,7 @@ interface BioXpQuickDashboardProps {
     data: BioXpOperatorDashboard | undefined;
     isLoading: boolean;
     error: unknown;
+    motionControlsAvailable: boolean | undefined;
 }
 
 const panelStyle = {
@@ -22,7 +23,7 @@ const yesNoUnknown = (candidate: boolean | null | undefined) => (
     candidate === true ? 'Yes' : candidate === false ? 'No' : 'Not reported'
 );
 
-export function BioXpQuickDashboard({ connected, data, isLoading, error }: BioXpQuickDashboardProps) {
+export function BioXpQuickDashboard({ connected, data, isLoading, error, motionControlsAvailable }: BioXpQuickDashboardProps) {
     return (
         <section aria-label="Live Robot Dashboard" style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12 }}>
@@ -44,11 +45,11 @@ export function BioXpQuickDashboard({ connected, data, isLoading, error }: BioXp
                             <div>{data.connection.live ? 'Live / owned' : 'Not live'}</div>
                         </div>
                         <div style={panelStyle}>
-                            <strong>Motion</strong>
-                            <div style={{ color: data.motion.enabled ? '#86efac' : '#fca5a5' }}>
-                                {data.motion.enabled ? 'Enabled' : 'Inactive'}
+                            <strong>Motion controls</strong>
+                            <div style={{ color: motionControlsAvailable === true ? '#86efac' : motionControlsAvailable === false ? '#fca5a5' : '#cbd5e1' }}>
+                                {motionControlsAvailable === true ? 'Available' : motionControlsAvailable === false ? 'Unavailable' : 'Updating'}
                             </div>
-                            {!data.motion.enabled && <small>{value(data.motion.reason, 'Motion is inactive.')}</small>}
+                            {motionControlsAvailable === false && <small>{value(data.motion.reason, 'Robot control admission is unavailable.')}</small>}
                         </div>
                         <div style={panelStyle}>
                             <strong>Door / latch</strong>

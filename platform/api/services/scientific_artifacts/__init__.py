@@ -13,7 +13,7 @@ from .contracts import (
     require_row_reference,
 )
 from .persistence import publish_json_payload, publish_table_rows
-from .query import count_rows, query_rows
+from .query import count_rows, query_rows, query_rows_by_values
 from .resolve import query_json_envelope_page, resolve_json_envelope_fields, resolve_json_value
 from .writer import (
     InstalledArtifact,
@@ -41,6 +41,7 @@ __all__ = [
     "publish_json_payload",
     "publish_table_rows",
     "query_rows",
+    "query_rows_by_values",
     "query_json_envelope_page",
     "read_rows",
     "require_row_reference",

@@ -20,7 +20,7 @@ from services.ngs_molbio_capabilities import (
     validate_domain_experiment,
 )
 from services.protein_project_capabilities import (
-    CAPABILITY_ID as PROTEIN_ESMFOLD2_CAPABILITY_ID,
+    ProteinProjectCapabilityError,
     protein_capability_record,
     protein_parameter_schema,
 )
@@ -252,14 +252,14 @@ def _validate_input_receipt_contract_authority(
 def workflow_plan_capability_contract(capability_id: str) -> dict[str, Any]:
     """Build the exact server-owned capability contract pinned by a new Plan."""
     try:
-        if capability_id == PROTEIN_ESMFOLD2_CAPABILITY_ID:
-            capability = protein_capability_record(capability_id)
-            parameter_schema = protein_parameter_schema(capability_id)
-        else:
+        capability = protein_capability_record(capability_id)
+        parameter_schema = protein_parameter_schema(capability_id)
+    except ProteinProjectCapabilityError:
+        try:
             capability = capability_record(capability_id)
             parameter_schema = capability_parameter_schema(capability_id)
-    except (NgsMolBioCapabilityError, ValueError) as exc:
-        raise ValidationFailure(str(exc)) from exc
+        except NgsMolBioCapabilityError as exc:
+            raise ValidationFailure(str(exc)) from exc
     if capability.get("plannable") is not True or capability.get("exposure_state") != "accepted":
         raise ValidationFailure("capability is not accepted for Workflow Plan launch")
     family = capability.get("workflow_family")
@@ -317,12 +317,25 @@ def initial_workflow_plan_payload(
         elif "default" in raw_schema:
             parameters[name] = copy.deepcopy(raw_schema["default"])
     raw_domain = domain_payload.get("domain_payload")
-    target = raw_domain.get("target") if isinstance(raw_domain, dict) else None
-    source_receipt_ids = target.get("source_receipt_ids") if isinstance(target, dict) else []
+    if not isinstance(raw_domain, dict):
+        raise ValidationFailure("Protein Domain payload authority is unavailable")
+    raw_targets = raw_domain.get("targets")
+    if raw_targets is None:
+        legacy_target = raw_domain.get("target")
+        raw_targets = [legacy_target] if isinstance(legacy_target, dict) else []
+    if not isinstance(raw_targets, list) or any(not isinstance(target, dict) for target in raw_targets):
+        raise ValidationFailure("Protein Domain target authority is malformed")
+    source_receipt_ids = [
+        receipt_id
+        for target in raw_targets
+        for receipt_id in (target.get("source_receipt_ids") or [])
+    ]
     if not isinstance(source_receipt_ids, list) or any(
         not isinstance(receipt_id, str) or not receipt_id for receipt_id in source_receipt_ids
     ):
         raise ValidationFailure("Protein Domain target source receipt authority is malformed")
+    if len(source_receipt_ids) != len(set(source_receipt_ids)):
+        raise ValidationFailure("Protein Domain target source receipt authority must be unique")
     allowed = capability_contract["allowed_model_modes"]
     if not isinstance(allowed, list) or len(allowed) != 1:
         raise ValidationFailure("initial Plan requires one exact model/mode authority")

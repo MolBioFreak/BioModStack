@@ -68,7 +68,7 @@ pipeline above.
 
 ### Generic structure prediction and validation
 
-BioModStack exposes standalone prediction/validation surfaces through
+BioModStack exposes one Structure Prediction surface through
 [main.nf](../main.nf), the model registry under
 [platform/api/config/models](../platform/api/config/models), and the structure
 prediction modules.
@@ -78,7 +78,7 @@ Current registry-backed predictor families:
 - [Boltz-2](../platform/api/config/models/boltz2.yaml)
 - [AlphaFold2](../platform/api/config/models/af2.yaml)
 - [RF3](../platform/api/config/models/rf3.yaml)
-- [Fold-CP Experimental](../platform/api/config/models/boltz_cp_experimental.yaml)
+- [NVIDIA Fold-CP](../platform/api/config/models/boltz_cp_experimental.yaml)
 
 Workflow-level predictor/validator modules also include [Protenix](../modules/protenix.nf),
 but there is no tracked `platform/api/config/models/protenix.yaml` in the current
@@ -87,9 +87,9 @@ or an equivalent API registry entry exists again.
 
 Important distinction:
 
-- Boltz-2 / AF2 / RF3 are the normal registry-backed structure-prediction family
-- Fold-CP Experimental is a specialized multi-GPU Boltz-2 context-parallel path,
-  not a generic replacement for the standard launcher/runtime
+- Boltz-2 / AF2 / RF3 remain registry-backed structure predictors
+- NVIDIA Fold-CP is selected inside Structure Prediction when OEM context
+  parallelism is appropriate for the target and compute placement
 
 ### Protein local redesign
 
@@ -163,7 +163,7 @@ Purpose:
 See [Caliby Experimental Workflow](Caliby_Experimental_Workflow.md) for the
 current integration state and gaps.
 
-### Fold-CP Experimental
+### NVIDIA Fold-CP
 
 Registry model:
 
@@ -173,23 +173,20 @@ Workflow:
 
 - [workflows/boltz_cp_experimental.nf](../workflows/boltz_cp_experimental.nf)
 
-Purpose:
+Product placement:
 
-- experimental single-example Boltz-2 inference using DTensor context
-  parallelism across multiple GPUs
-- accepts prepared Boltz YAML / FASTA inputs or preprocessed Boltz directories
-- launches the checked-out Fold-CP fork through `torch.distributed`
+- selected as `NVIDIA Fold-CP` inside the normal Structure Prediction workflow
+- reuses Structure sequence, complex, MSA, GPU, launch, result, and template controls
+- can send its terminal structures into the same required FrustraMPNN parent fanout
+- retains a dedicated workflow entrypoint only as the BioModStack adapter to the
+  pinned OEM runtime
 
-Current launcher/runtime constraints expressed in the workflow and model config:
+OEM runtime constraints:
 
-- `gpu_ids` is an explicit host GPU selection string
-- `size_cp` must be a perfect square
+- physical GPU assignment remains scheduler-owned
+- `size_cp` is the OEM square context-parallel mesh size
 - `input_format` is `config_files` or `preprocessed`
-- the surface is experimental and optimized for one large inference rather than
-  broad batch semantics
-
-See the active Fold-CP plan in [plans/README.md](plans/README.md) for current
-runtime strategy notes.
+- one Fold-CP inference owns the selected context-parallel GPU set
 
 ### RFdiffusion and backbone generation
 
@@ -274,7 +271,7 @@ Docking support includes:
 - Protenix
 - AlphaFold2
 - RF3
-- Fold-CP Experimental
+- NVIDIA Fold-CP
 
 ### Post-processing and scoring
 

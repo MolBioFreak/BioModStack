@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
-import { api, completeCurrentLaunchContext, submitJob } from '../lib/api';
+import { api, assertLocalOnlySubmission, completeCurrentLaunchContext, submitJob } from '../lib/api';
 import { ModelDocumentationLinks } from './ModelDocumentationLinks';
 import { Gen2StartingStructure } from './Gen2StartingStructure';
 import { Gen2StructureSourceSelector, type Gen2StructureSourceTab } from './Gen2StructureSourceSelector';
@@ -664,6 +664,7 @@ export function MolecularDynamicsTemplate({
         setSubmitError('');
         setIsSubmitting(true);
         try {
+            assertLocalOnlySubmission('Molecular Dynamics');
             const result = await api.post('/api/molecular-dynamics/launch', {
                 schema_version: 'bms.md.launch-request.v1',
                 intent: intent(),

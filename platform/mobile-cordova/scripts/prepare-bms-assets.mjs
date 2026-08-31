@@ -2345,6 +2345,10 @@ export function buildPreflightScript() {
     }
   }
 
+  function remountShellRoot() {
+    window.location.replace('/');
+  }
+
   async function installUiUpdate(panel, apiBaseUrl, uiUpdateChannel) {
     try {
       const manifest = await fetchManifest(panel, apiBaseUrl, uiUpdateChannel);
@@ -2365,7 +2369,7 @@ export function buildPreflightScript() {
       setActiveUiLabel(panel, { source: 'downloaded', descriptor: manifest.descriptor });
       setStatus(panel, 'Installed UI ' + manifest.descriptor.version + '. Reloading…', 'success');
       setTimeout(() => {
-        window.location.reload();
+        remountShellRoot();
       }, 150);
     } catch (error) {
       const detail = error && error.message ? error.message : String(error);
@@ -2381,7 +2385,7 @@ export function buildPreflightScript() {
       setActiveUiLabel(panel, { source: 'bundled', descriptor: bundledDescriptor });
       setStatus(panel, 'Reverted to bundled UI. Reloading…', 'success');
       setTimeout(() => {
-        window.location.reload();
+        remountShellRoot();
       }, 150);
     } catch (error) {
       const detail = error && error.message ? error.message : String(error);

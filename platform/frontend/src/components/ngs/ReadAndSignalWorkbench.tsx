@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 
 import {
     DEFAULT_ONT_SIGNAL_RENDER_PARAMS,
@@ -37,7 +37,10 @@ import {
 import {
     fetchAlignmentRead,
     fetchAlignmentReads,
+    filterAlignmentReads,
+    formatAlignmentReadSummary,
     type AlignmentRead,
+    type AlignmentReadFilterPreset,
     type AlignmentSession,
 } from '../../lib/ngsAlignmentSession';
 import type { AlignmentReadLocus } from '../../lib/ngsAlignmentViewer';
@@ -45,7 +48,18 @@ import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
 const TERMINAL_STATES = new Set(['ready', 'failed', 'cancelled']);
+const MIN_SIGNAL_WORKBENCH_WIDTH = 320;
+const MIN_IGV_WORKSPACE_WIDTH = 320;
 type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
+
+function clampSignalWorkbenchWidth(width: number, viewportWidth = window.innerWidth): number {
+    const maximum = Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH);
+    return Math.min(maximum, Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, width));
+}
+
+function initialSignalWorkbenchWidth(): number {
+    return clampSignalWorkbenchWidth(Math.min(760, window.innerWidth * 0.56));
+}
 
 interface ReadAndSignalWorkbenchProps {
     datasetId: string;
@@ -158,6 +172,8 @@ export function ReadAndSignalWorkbench({
     const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
     const [selectedRead, setSelectedRead] = useState<AlignmentRead | null>(null);
     const [eligibleReads, setEligibleReads] = useState<AlignmentRead[]>([]);
+    const [readFilterPreset, setReadFilterPreset] = useState<AlignmentReadFilterPreset>('all');
+    const [readSearch, setReadSearch] = useState('');
     const [readId, setReadId] = useState('');
     const [contig, setContig] = useState('');
     const [start, setStart] = useState('');
@@ -169,6 +185,50 @@ export function ReadAndSignalWorkbench({
     const [provenanceOpen, setProvenanceOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [panelWidth, setPanelWidth] = useState(initialSignalWorkbenchWidth);
+    const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+    const panelWidthRef = useRef(panelWidth);
+    const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+    const updatePanelWidth = useCallback((nextWidth: number) => {
+        const bounded = clampSignalWorkbenchWidth(nextWidth);
+        panelWidthRef.current = bounded;
+        setPanelWidth(bounded);
+    }, []);
+
+    const beginPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        resizeCleanupRef.current?.();
+        const startX = event.clientX;
+        const startWidth = panelWidthRef.current;
+        const move = (moveEvent: PointerEvent) => updatePanelWidth(startWidth + startX - moveEvent.clientX);
+        const stop = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', stop);
+            resizeCleanupRef.current = null;
+        };
+        resizeCleanupRef.current = stop;
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', stop);
+    }, [updatePanelWidth]);
+
+    const resizePanelByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        updatePanelWidth(panelWidthRef.current + (event.key === 'ArrowLeft' ? 32 : -32));
+    }, [updatePanelWidth]);
+
+    useEffect(() => {
+        const handleViewportResize = () => {
+            setViewportWidth(window.innerWidth);
+            updatePanelWidth(panelWidthRef.current);
+        };
+        window.addEventListener('resize', handleViewportResize);
+        return () => {
+            window.removeEventListener('resize', handleViewportResize);
+            resizeCleanupRef.current?.();
+        };
+    }, [updatePanelWidth]);
 
     const persistedReadMappingJobId = typeof viewerSession?.signal_state.read_mapping_job_id === 'string'
         ? viewerSession.signal_state.read_mapping_job_id
@@ -781,6 +841,10 @@ export function ReadAndSignalWorkbench({
     const mappingArtifact = mappingForMode?.artifacts.find((item) => (
         mode === 'read' ? item.kind === 'reform_paf' : item.kind === 'realign_paf'
     )) || null;
+    const filteredEligibleReads = useMemo(
+        () => filterAlignmentReads(eligibleReads, readFilterPreset, readSearch),
+        [eligibleReads, readFilterPreset, readSearch],
+    );
 
     const inspectExactRead = async () => {
         const exact = readId.trim();
@@ -819,7 +883,7 @@ export function ReadAndSignalWorkbench({
         setError(null);
         try {
             const page = await fetchAlignmentReads(alignmentJobId, alignmentSession.session_id, {
-                contig: contig.trim(), start: locusStart, end: locusEnd, limit: 50,
+                contig: contig.trim(), start: locusStart, end: locusEnd, limit: 200,
             });
             if (generation !== identityRef.current) return;
             setEligibleReads(page.reads);
@@ -838,10 +902,10 @@ export function ReadAndSignalWorkbench({
     };
 
     const moveRead = (delta: number) => {
-        if (eligibleReads.length === 0) return;
-        const currentIndex = eligibleReads.findIndex((item) => item.read_id === readId.trim());
-        const nextIndex = Math.min(eligibleReads.length - 1, Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta));
-        const next = eligibleReads[nextIndex];
+        if (filteredEligibleReads.length === 0) return;
+        const currentIndex = filteredEligibleReads.findIndex((item) => item.read_id === readId.trim());
+        const nextIndex = Math.min(filteredEligibleReads.length - 1, Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta));
+        const next = filteredEligibleReads[nextIndex];
         setReadId(next.read_id);
         setSelectedRead(next);
     };
@@ -971,7 +1035,25 @@ export function ReadAndSignalWorkbench({
     };
 
     return (
-        <aside className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[48%] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col">
+        <aside
+            data-signal-workbench-panel
+            style={{ '--signal-workbench-width': `${panelWidth}px` } as CSSProperties}
+            className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[var(--signal-workbench-width)] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col"
+        >
+            <div
+                role="separator"
+                aria-label="Resize Read and Signal Workbench"
+                aria-orientation="vertical"
+                aria-valuemin={MIN_SIGNAL_WORKBENCH_WIDTH}
+                aria-valuemax={Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH)}
+                aria-valuenow={Math.round(panelWidth)}
+                tabIndex={0}
+                onPointerDown={beginPanelResize}
+                onKeyDown={resizePanelByKeyboard}
+                className="absolute inset-y-0 -left-1 z-30 hidden w-2 cursor-col-resize touch-none items-center justify-center lg:flex focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
+            >
+                <span className="h-12 w-0.5 rounded bg-[var(--border-primary)] hover:bg-[var(--accent-primary)]" />
+            </div>
             <header className="border-b border-[var(--border-primary)] px-3 py-2 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                     <div>
@@ -996,15 +1078,21 @@ export function ReadAndSignalWorkbench({
                 {error && <div role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">{error}</div>}
             </header>
 
-            <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3">
+            <div data-signal-workbench-scroll onWheel={(event) => event.stopPropagation()} className="flex-1 min-h-0 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3">
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
                         <h3 className="text-xs font-semibold">Shared read and locus</h3>
                         <button type="button" onClick={() => void loadLocusReads()} disabled={busy || !alignmentSession?.ready} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Reads in locus</button>
                     </div>
-                    <div className="grid grid-cols-[1fr_auto] gap-1">
-                        <input value={readId} onChange={(event) => setReadId(event.target.value)} placeholder="Exact read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs font-mono" />
-                        <button type="button" onClick={() => void inspectExactRead()} disabled={busy || !alignmentSession?.ready || !readId.trim()} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Resolve</button>
+                    <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_1fr]">
+                        <select aria-label="Read filter preset" value={readFilterPreset} onChange={(event) => setReadFilterPreset(event.target.value as AlignmentReadFilterPreset)} className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs">
+                            <option value="all">All eligible reads</option>
+                            <option value="clean">Clean reads</option>
+                            <option value="substitution_rich">Reference-substitution-rich reads</option>
+                            <option value="indels_gaps">Indels and gaps</option>
+                            <option value="clipped">Clipped reads</option>
+                        </select>
+                        <input aria-label="Search eligible reads" value={readSearch} onChange={(event) => setReadSearch(event.target.value)} placeholder="Search loaded reads" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
                     </div>
                     <div className="grid grid-cols-[1fr_76px_76px] gap-1">
                         <input value={contig} onChange={(event) => setContig(event.target.value)} placeholder="Reference contig" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
@@ -1012,14 +1100,31 @@ export function ReadAndSignalWorkbench({
                         <input value={end} onChange={(event) => setEnd(event.target.value)} inputMode="numeric" placeholder="End" className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs" />
                     </div>
                     <div className="flex flex-wrap gap-1">
-                        <button type="button" onClick={() => moveRead(-1)} disabled={eligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Previous eligible read</button>
-                        <button type="button" onClick={() => moveRead(1)} disabled={eligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Next eligible read</button>
+                        <button type="button" onClick={() => moveRead(-1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Previous eligible read</button>
+                        <button type="button" onClick={() => moveRead(1)} disabled={filteredEligibleReads.length === 0} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Next eligible read</button>
                         <button type="button" onClick={locateRead} disabled={!selectedRead} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Locate read in IGV</button>
                         <button type="button" onClick={openMappedLocus} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px]">Open mapped locus in IGV</button>
                     </div>
+                    <div role="listbox" aria-label="Eligible reads" className="max-h-48 space-y-1 overflow-y-auto rounded border border-[var(--border-primary)] p-1">
+                        {filteredEligibleReads.map((read) => (
+                            <button key={read.read_id} type="button" role="option" aria-selected={read.read_id === readId.trim()} onClick={() => { setReadId(read.read_id); setSelectedRead(read); }} className={`block w-full rounded px-2 py-1 text-left text-[10px] ${read.read_id === readId.trim() ? 'bg-sky-500/20 text-sky-100' : 'hover:bg-[var(--bg-secondary)]'}`}>
+                                <span className="block font-medium">{formatAlignmentReadSummary(read)}</span>
+                                <span className="block truncate text-[var(--text-muted)]">{read.contig}:{read.start_1based} · {read.strand}</span>
+                            </button>
+                        ))}
+                        {eligibleReads.length > 0 && filteredEligibleReads.length === 0 && <div className="px-2 py-3 text-center text-[10px] text-[var(--text-muted)]">No loaded reads match this filter.</div>}
+                        {eligibleReads.length === 0 && <div className="px-2 py-3 text-center text-[10px] text-[var(--text-muted)]">Click a read in IGV or load reads in the current locus.</div>}
+                    </div>
+                    <details>
+                        <summary className="cursor-pointer text-[10px] text-[var(--text-secondary)]">Exact read ID recovery</summary>
+                        <div className="mt-1 grid grid-cols-[1fr_auto] gap-1">
+                            <input value={readId} onChange={(event) => setReadId(event.target.value)} placeholder="Exact read ID" className="min-w-0 rounded border border-[var(--border-primary)] bg-[var(--bg-primary)] px-2 py-1 text-xs font-mono" />
+                            <button type="button" onClick={() => void inspectExactRead()} disabled={busy || !alignmentSession?.ready || !readId.trim()} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Resolve</button>
+                        </div>
+                    </details>
                     {selectedRead && (
                         <div className="rounded bg-[var(--bg-secondary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
-                            <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'} · {selectedRead.cigar || 'no CIGAR'} · model {compatibleSource?.basecall_model_id || 'unresolved'} · raw signal {capabilities?.modes.raw_waveform.state || 'loading'}
+                            <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'} · {selectedRead.cigar || 'no CIGAR'} · {formatAlignmentReadSummary(selectedRead)} · model {compatibleSource?.basecall_model_id || 'unresolved'} · raw signal {capabilities?.modes.raw_waveform.state || 'loading'}
                         </div>
                     )}
                 </section>

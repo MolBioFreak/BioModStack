@@ -33,6 +33,9 @@ const apiMocks = vi.hoisted(() => ({
     fetchRawSignalCapabilities: vi.fn(),
     fetchViewerSession: vi.fn(),
     fetchPooledAssignment: vi.fn(),
+    fetchComparison: vi.fn(),
+    fetchComparisonArtifact: vi.fn(),
+    fetchComparisonReviews: vi.fn(),
     apiGet: vi.fn(),
     requestRawWaveform: vi.fn(),
     registerExternalMoveBamCandidate: vi.fn(),
@@ -97,21 +100,28 @@ vi.mock('../../src/lib/api', () => ({
     fetchOntRawSignalCapabilities: apiMocks.fetchRawSignalCapabilities,
     fetchOntSignalViewerSession: apiMocks.fetchViewerSession,
     fetchPooledAssignmentManifest: apiMocks.fetchPooledAssignment,
+    fetchOntSignalIdealComparison: apiMocks.fetchComparison,
+    fetchOntSignalComparisonArtifact: apiMocks.fetchComparisonArtifact,
+    fetchOntSignalComparisonReviews: apiMocks.fetchComparisonReviews,
     requestOntRawSignalWaveform: apiMocks.requestRawWaveform,
     registerOntExternalMoveBamCandidate: apiMocks.registerExternalMoveBamCandidate,
     updateOntSignalViewerSession: apiMocks.updateViewerSession,
 }));
 
-vi.mock('../../src/lib/ngsAlignmentSession', () => ({
-    bindAlignmentSessionsToResultAuthority: (sessions: unknown[]) => sessions,
-    describeNgsError: (_reason: unknown, fallback: string) => fallback,
-    disposeAlignmentAccess: alignmentMocks.disposeAccess,
-    fetchAlignmentRead: alignmentMocks.fetchRead,
-    fetchAlignmentReads: alignmentMocks.fetchReads,
-    fetchAlignmentSessions: alignmentMocks.fetchSessions,
-    isAlignmentAccessDenied: alignmentMocks.isAccessDenied,
-    rotateAlignmentAccess: alignmentMocks.rotateAccess,
-}));
+vi.mock('../../src/lib/ngsAlignmentSession', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../src/lib/ngsAlignmentSession')>();
+    return {
+        ...actual,
+        bindAlignmentSessionsToResultAuthority: (sessions: unknown[]) => sessions,
+        describeNgsError: (_reason: unknown, fallback: string) => fallback,
+        disposeAlignmentAccess: alignmentMocks.disposeAccess,
+        fetchAlignmentRead: alignmentMocks.fetchRead,
+        fetchAlignmentReads: alignmentMocks.fetchReads,
+        fetchAlignmentSessions: alignmentMocks.fetchSessions,
+        isAlignmentAccessDenied: alignmentMocks.isAccessDenied,
+        rotateAlignmentAccess: alignmentMocks.rotateAccess,
+    };
+});
 
 vi.mock('../../src/components/experiments/GlobalExperimentContext', () => ({
     useGlobalExperimentContext: () => ({
@@ -511,6 +521,7 @@ let root: Root;
 let onViewerSessionChange: ComponentProps<typeof ReadAndSignalWorkbench>['onViewerSessionChange'];
 let onNavigateIgv: ComponentProps<typeof ReadAndSignalWorkbench>['onNavigateIgv'];
 const originalFetch = globalThis.fetch;
+const originalInnerWidth = window.innerWidth;
 
 function baseProps(): ComponentProps<typeof ReadAndSignalWorkbench> {
     return {
@@ -664,9 +675,125 @@ afterEach(async () => {
     await act(async () => root.unmount());
     document.body.replaceChildren();
     globalThis.fetch = originalFetch;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth });
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
+    it('provides a draggable and keyboard-accessible vertical resize separator', async () => {
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
+        await renderWorkbench({ viewerSession: null });
+        await settlePromises();
+
+        const panel = container.querySelector('[data-signal-workbench-panel]') as HTMLElement | null;
+        const separator = container.querySelector('[role="separator"][aria-orientation="vertical"]') as HTMLElement | null;
+        expect(panel).not.toBeNull();
+        expect(separator).not.toBeNull();
+        const initialWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+
+        await act(async () => {
+            separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 600 }));
+            window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 520 }));
+            window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 520 }));
+        });
+        const draggedWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(draggedWidth).toBeGreaterThan(initialWidth);
+
+        await act(async () => {
+            separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
+        });
+        const keyboardWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(keyboardWidth).toBeLessThan(draggedWidth);
+
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+        await act(async () => { window.dispatchEvent(new Event('resize')); });
+        const viewportBoundWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
+        expect(viewportBoundWidth).toBe(704);
+        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
+        expect(separator?.getAttribute('aria-valuemax')).toBe('704');
+
+        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
+        await act(async () => { window.dispatchEvent(new Event('resize')); });
+        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
+        expect(separator?.getAttribute('aria-valuemax')).toBe('1046');
+    });
+
+    it('loads a bounded searchable read list with provenance-labelled filter presets inside its own scroll owner', async () => {
+        alignmentMocks.fetchReads.mockResolvedValue({
+            reads: [
+                { ...selectedRead, read_id: 'clean-read', mean_quality: 19.4, mapq: 60, cigar: '100M', inserted_bases: 0, deleted_bases: 0, skipped_reference_bases: 0, clipped_bases: 0, reference_substitution_count: 1, reference_substitution_rate: 0.01, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.01 },
+                { ...selectedRead, read_id: 'gap-read', mean_quality: 18.1, mapq: 60, cigar: '45M20D55M', inserted_bases: 0, deleted_bases: 20, skipped_reference_bases: 0, clipped_bases: 0, reference_substitution_count: 2, reference_substitution_rate: 0.02, aligned_fraction: 1, clipped_fraction: 0, reference_disagreement_rate: 0.18 },
+            ],
+            next_cursor: null, limit: 200, sequence_included: false, scan_truncated: false,
+        });
+        await renderWorkbench({ currentLocus: { contig: 'chr7', start: 401, end: 460 } });
+        const scrollOwner = container.querySelector<HTMLElement>('[data-signal-workbench-scroll]');
+        expect(scrollOwner?.className).toContain('overflow-y-scroll');
+
+        await act(async () => { button('Reads in locus').click(); await Promise.resolve(); });
+        expect(alignmentMocks.fetchReads).toHaveBeenLastCalledWith('alignment-job-1', 'alignment-session-1', {
+            contig: 'chr7', start: 401, end: 460, limit: 200,
+        });
+        await waitUntil(() => expect(container.textContent).toContain('20 bp deletion'));
+
+        const preset = container.querySelector<HTMLSelectElement>('[aria-label="Read filter preset"]');
+        expect(preset).not.toBeNull();
+        expect(preset?.textContent).toContain('Reference-substitution-rich reads');
+        await act(async () => {
+            if (preset) {
+                preset.value = 'indels_gaps';
+                preset.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+        expect(container.querySelector('[role="listbox"]')?.textContent).toContain('20 bp deletion');
+        expect(container.querySelector('[role="listbox"]')?.textContent).not.toContain('clean-read');
+    });
+
+    it('gives the ready comparison artifact its own fullscreen presentation', async () => {
+        let fullscreenElement: Element | null = null;
+        Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true });
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullscreenElement });
+        Object.defineProperty(document, 'exitFullscreen', { configurable: true, value: vi.fn(async () => {
+            fullscreenElement = null;
+            document.dispatchEvent(new Event('fullscreenchange'));
+        }) });
+        apiMocks.fetchComparison.mockResolvedValue({
+            comparison_job_id: 'comparison-ready-1', state: 'ready', reason_code: 'ideal_comparison_ready',
+            simulation_settings: { profile_id: 'dna-r10-prom', operator_owned: {
+                seed: 1, scale: 'none', point_size: 0.5, fixed_width: false, base_width: 10,
+                base_limit: 200, signal_sample_limit: 100000, show_samples: true,
+                show_base_colours: true, remove_signal_outliers: false,
+            } },
+            render_params: { scale: 'none', point_size: 0.5, fixed_width: false, base_width: 10,
+                base_limit: 200, signal_sample_limit: 100000, show_samples: true,
+                show_base_colours: true, remove_signal_outliers: false },
+            artifacts: [{ artifact_id: 'comparison-html-1', kind: 'comparison_html' }],
+        });
+        apiMocks.fetchComparisonReviews.mockResolvedValue([]);
+        apiMocks.fetchComparisonArtifact.mockResolvedValue(new Blob([
+            '<html><body>REAL · INSTRUMENT ACQUIRED · trace SIMULATED IDEAL · SQUIGULATOR 0.5.0 · trace</body></html>',
+        ], { type: 'text/html' }));
+        const persisted = viewerSession({
+            selected_read_id: 'read-42',
+            signal_state: { comparison_job_id: 'comparison-ready-1' },
+        });
+
+        await renderWorkbench({ viewerSession: persisted });
+        await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));
+        await act(async () => { button('Ideal comparison').click(); await Promise.resolve(); });
+        await waitUntil(() => expect(container.querySelector('iframe[title="Real acquired signal and ideal simulated reference"]')).not.toBeNull());
+
+        const comparison = container.querySelector('[data-comparison-fullscreen-owner]') as HTMLElement | null;
+        expect(comparison).not.toBeNull();
+        Object.defineProperty(comparison, 'requestFullscreen', { configurable: true, value: vi.fn(async () => {
+            fullscreenElement = comparison;
+            document.dispatchEvent(new Event('fullscreenchange'));
+        }) });
+        await act(async () => { button('View comparison fullscreen').click(); await Promise.resolve(); });
+        expect(fullscreenElement).toBe(comparison);
+        expect(button('Exit comparison fullscreen')).toBeDefined();
+        expect(comparison?.querySelector('iframe')?.className).toContain('h-full');
+    });
+
     it('discovers and mounts ideal comparison inside the existing workbench', async () => {
         await renderWorkbench({ viewerSession: viewerSession({ selected_read_id: 'read-42' }) });
         await waitUntil(() => expect(container.textContent).toContain('Ideal comparison'));

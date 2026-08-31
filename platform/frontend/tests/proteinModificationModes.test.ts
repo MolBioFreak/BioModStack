@@ -3,11 +3,16 @@ import test from 'node:test';
 
 import { DE_NOVO_MODIFICATION_MODE_CARDS } from '../src/components/proteinModificationModes';
 
-test('De Novo Design owns one RFD3 iteration workbench', () => {
+test('De Novo Design prefers native RFD3 while preserving iteration and shape blueprint', () => {
     assert.deepEqual(
         DE_NOVO_MODIFICATION_MODE_CARDS.map((card) => card.id),
         ['de_novo_design', 'rfd3_iteration', 'shape_blueprint'],
     );
+
+    const deNovo = DE_NOVO_MODIFICATION_MODE_CARDS[0];
+    assert.equal(deNovo?.id, 'de_novo_design');
+    assert.match(deNovo?.label ?? '', /RFD3/i);
+    assert.match(deNovo?.description ?? '', /unconditional monomer/i);
 
     const workbench = DE_NOVO_MODIFICATION_MODE_CARDS.find((card) => card.id === 'rfd3_iteration');
     assert.equal(workbench?.label, 'RFD3 Iteration Workbench');

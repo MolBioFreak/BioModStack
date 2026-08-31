@@ -31,6 +31,7 @@ _IMAGE_FORMAT_MEDIA_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "
 
 class DevIssueCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
+    lane: Literal["general", "mobile"] = "general"
     scope_kind: str = Field(min_length=1, max_length=40)
     scope_key: str = Field(min_length=1, max_length=256)
     page_label: str = Field(min_length=1, max_length=160)
@@ -57,6 +58,7 @@ class DevIssue(BaseModel):
     issue_key: str
     body: str
     status: Literal["open", "in_progress", "cleared"]
+    lane: Literal["general", "mobile"]
     scope_kind: str
     scope_key: str
     page_label: str
@@ -99,6 +101,7 @@ def _table_sql() -> str:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 4000),
             status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'cleared')),
+            lane TEXT NOT NULL DEFAULT 'general' CHECK(lane IN ('general', 'mobile')),
             scope_kind TEXT NOT NULL,
             scope_key TEXT NOT NULL,
             page_label TEXT NOT NULL,
@@ -135,23 +138,27 @@ def _connect() -> sqlite3.Connection:
         connection.execute(
             """
             INSERT INTO dev_issues (
-                id, body, status, scope_kind, scope_key, page_label, route,
+                id, body, status, lane, scope_kind, scope_key, page_label, route,
                 component_hint, author_kind, frontend_revision, api_revision,
                 created_at, cleared_at, resolution_note
             )
             SELECT id, body,
                    CASE status WHEN 'resolved' THEN 'cleared' ELSE status END,
-                   scope_kind, scope_key, page_label, route, component_hint,
+                   'general', scope_kind, scope_key, page_label, route, component_hint,
                    author_kind, frontend_revision, api_revision, created_at,
                    resolved_at, resolution_note
               FROM dev_issues_legacy
             """
         )
         connection.execute("DROP TABLE dev_issues_legacy")
-
     columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(dev_issues)").fetchall()
+        str(row[1]) for row in connection.execute("PRAGMA table_info(dev_issues)").fetchall()
     }
+    if "lane" not in columns:
+        connection.execute(
+            "ALTER TABLE dev_issues ADD COLUMN lane TEXT NOT NULL DEFAULT 'general' "
+            "CHECK(lane IN ('general', 'mobile'))"
+        )
     additive_columns = {
         "screenshot_sha256": "TEXT",
         "screenshot_media_type": "TEXT",
@@ -161,12 +168,14 @@ def _connect() -> sqlite3.Connection:
     for name, sql_type in additive_columns.items():
         if name not in columns:
             connection.execute(f"ALTER TABLE dev_issues ADD COLUMN {name} {sql_type}")
-
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_issues_scope_status ON dev_issues(scope_key, status, id DESC)"
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_dev_issues_status_id ON dev_issues(status, id DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dev_issues_lane_status_id ON dev_issues(lane, status, id DESC)"
     )
     connection.commit()
     try:
@@ -215,6 +224,7 @@ def _to_issue(row: sqlite3.Row) -> DevIssue:
 def _create_values(payload: DevIssueCreate) -> tuple[object, ...]:
     return (
         _clean_required(payload.body),
+        payload.lane,
         _clean_required(payload.scope_kind),
         _clean_required(payload.scope_key),
         _clean_required(payload.page_label),
@@ -231,9 +241,9 @@ def _insert_issue(connection: sqlite3.Connection, payload: DevIssueCreate) -> in
     cursor = connection.execute(
         """
         INSERT INTO dev_issues (
-            body, status, scope_kind, scope_key, page_label, route,
+            body, status, lane, scope_kind, scope_key, page_label, route,
             component_hint, author_kind, frontend_revision, api_revision, created_at
-        ) VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         _create_values(payload),
     )
@@ -407,6 +417,7 @@ def _write_screenshot(content: bytes, media_type: str, digest: str) -> str:
 @router.get("", response_model=DevIssueList)
 def list_dev_issues(
     status: Literal["open", "in_progress", "cleared", "active", "all"] = "active",
+    lane: Literal["general", "mobile"] | None = Query(default=None),
     scope_key: str | None = Query(default=None, max_length=256),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> DevIssueList:
@@ -420,7 +431,20 @@ def list_dev_issues(
     if scope_key:
         filters.append("scope_key = ?")
         values.append(scope_key)
+    if lane:
+        filters.append("lane = ?")
+        values.append(lane)
     where = f" WHERE {' AND '.join(filters)}" if filters else ""
+
+    active_filters = ["status IN ('open', 'in_progress')"]
+    active_values: list[object] = []
+    if scope_key:
+        active_filters.append("scope_key = ?")
+        active_values.append(scope_key)
+    if lane:
+        active_filters.append("lane = ?")
+        active_values.append(lane)
+    active_where = f" WHERE {' AND '.join(active_filters)}"
 
     with closing(_connect()) as connection:
         rows = connection.execute(
@@ -428,9 +452,8 @@ def list_dev_issues(
             (*values, limit),
         ).fetchall()
         active_count = connection.execute(
-            "SELECT COUNT(*) FROM dev_issues WHERE status IN ('open', 'in_progress')"
-            + (" AND scope_key = ?" if scope_key else ""),
-            (scope_key,) if scope_key else (),
+            f"SELECT COUNT(*) FROM dev_issues{active_where}",
+            active_values,
         ).fetchone()[0]
     return DevIssueList(items=[_to_issue(row) for row in rows], active_count=int(active_count))
 
@@ -530,6 +553,7 @@ async def create_dev_issue_with_screenshot(
     page_label: Annotated[str, Form(min_length=1, max_length=160)],
     route: Annotated[str, Form(min_length=1, max_length=2048)],
     screenshot: Annotated[UploadFile, File()],
+    lane: Annotated[Literal["general", "mobile"], Form()] = "general",
     component_hint: Annotated[str | None, Form(max_length=240)] = None,
     author_kind: Annotated[Literal["operator", "ai"], Form()] = "operator",
     frontend_revision: Annotated[str | None, Form(max_length=64)] = None,
@@ -537,6 +561,7 @@ async def create_dev_issue_with_screenshot(
     content, media_type, digest = await _validated_screenshot(screenshot)
     payload = DevIssueCreate(
         body=body,
+        lane=lane,
         scope_kind=scope_kind,
         scope_key=scope_key,
         page_label=page_label,
@@ -563,6 +588,7 @@ async def create_dev_issue_with_screenshot(
         except Exception:
             connection.rollback()
             raise
+
     if row is None:
         raise HTTPException(status_code=500, detail="development issue was not persisted")
     return _to_issue(row)

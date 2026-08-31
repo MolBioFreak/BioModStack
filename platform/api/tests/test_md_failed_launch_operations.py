@@ -85,6 +85,60 @@ async def test_md_logs_are_job_owned_and_never_fall_back_to_global(session, tmp_
 
 
 @pytest.mark.asyncio
+async def test_remote_logs_never_fall_back_to_local_nextflow_diagnostics(session, tmp_path: Path, monkeypatch) -> None:
+    code_root = tmp_path / "code"
+    code_root.mkdir()
+    (code_root / ".nextflow.log").write_text("host-global-sentinel", encoding="utf-8")
+    local_work = tmp_path / "work"
+    local_task = local_work / "aa" / "bbbbbb"
+    local_task.mkdir(parents=True)
+    (local_task / ".command.log").write_text("host-task-sentinel", encoding="utf-8")
+    monkeypatch.setattr(jobs, "CODE_ROOT", code_root)
+    monkeypatch.setattr(jobs, "get_work_dir", lambda: local_work)
+
+    output = tmp_path / "remote-output"
+    returned = output / "_remote"
+    returned.mkdir(parents=True)
+    (returned / "nextflow.log").write_text("remote-nextflow-log", encoding="utf-8")
+    (returned / "supervisor.log").write_text("remote-supervisor-log", encoding="utf-8")
+    remote = Job(
+        id="remote-log-job",
+        name="remote",
+        status="failed",
+        queue_status="failed",
+        model_id="boltz2",
+        mode="predict",
+        params={},
+        output_dir=str(output),
+        execution_target_id="vast:123",
+    )
+    pending = Job(
+        id="remote-pending-log-job",
+        name="remote pending",
+        status="running",
+        queue_status="running",
+        model_id="boltz2",
+        mode="predict",
+        params={},
+        output_dir=str(tmp_path / "pending-output"),
+        execution_target_id="vast:123",
+    )
+    session.add_all([remote, pending])
+    await session.commit()
+
+    payload = await jobs.get_job_logs(remote.id, session=session)
+    assert payload["nextflow_log_source"] == "remote_returned"
+    assert payload["nextflow_log"] == "remote-nextflow-log"
+    assert payload["command_log"] == "remote-supervisor-log"
+    assert "host-global-sentinel" not in str(payload)
+    assert "host-task-sentinel" not in str(payload)
+    pending_payload = await jobs.get_job_logs(pending.id, session=session)
+    assert pending_payload["nextflow_log_source"] == "remote_pending"
+    assert pending_payload["nextflow_log"] is None
+    assert pending_payload["command_log"] is None
+
+
+@pytest.mark.asyncio
 async def test_failed_parent_snapshot_only_offers_relaunch_before_any_replica(session) -> None:
     parent, _ = await _failed_parent(session, "failed-empty")
     snapshot = await md_run_snapshot(session, parent.id)

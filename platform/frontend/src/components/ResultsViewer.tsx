@@ -38,7 +38,11 @@ import {
     type ResultSetFilter,
 } from './designOutputSource';
 import { isAntibodyRefinementMode } from '../lib/antibodyRefinementMode';
-import { getClientDerivedResultsPolicy } from '../lib/clientDerivedResultsPolicy';
+import {
+    applyAuthoritativeDesignSummary,
+    getClientDerivedResultsPolicy,
+    shouldFetchBackboneSummary,
+} from '../lib/clientDerivedResultsPolicy';
 import { jobPollingInterval } from '../lib/queryPolling';
 import {
     getReviewColumnCapabilities,
@@ -58,6 +62,7 @@ import { AnalyticsDashboard } from './AnalyticsDashboard';
 import StructureViewerPane from './StructureViewerPane';
 import MDResultsPane from './MDResultsPane';
 import RFD3LocalRedesignResultsPane from './RFD3LocalRedesignResultsPane';
+import RFD3GenerationResultsPane, { isRFD3GenerationResultJob } from './RFD3GenerationResultsPane';
 import {
     getRFD3LocalRedesignCandidateLabel,
     isRFD3LocalRedesignResultJob,
@@ -1697,6 +1702,7 @@ export function ResultsViewer() {
     const [selectedJobId, setSelectedJobId] = useState<string>(jobId || '');
     const [showJobSelectorMenu, setShowJobSelectorMenu] = useState(false);
     const [jobSelectorSearch, setJobSelectorSearch] = useState('');
+    const [debouncedJobSelectorSearch, setDebouncedJobSelectorSearch] = useState('');
     const [showOverviewAnalysisMenu, setShowOverviewAnalysisMenu] = useState(false);
     const [expandedLineageGroups, setExpandedLineageGroups] = useState<Set<string>>(new Set());
     const [activeTab, setActiveTab] = useState<TabId>('overview');
@@ -1822,12 +1828,37 @@ export function ResultsViewer() {
     const jobSelectorRef = useRef<HTMLDivElement | null>(null);
     const overviewAnalysisMenuRef = useRef<HTMLDivElement | null>(null);
 
-    // Fetch jobs list (include children for aggregation)
-    const { data: jobsData, isLoading: jobsLoading } = useQuery({
-        queryKey: ['jobs', 'include_children', 'summary'],
-        queryFn: () => fetchJobs({ include_children: true, limit: 500, summary: true }),
+    useEffect(() => {
+        const timer = window.setTimeout(
+            () => setDebouncedJobSelectorSearch(jobSelectorSearch.trim()),
+            250,
+        );
+        return () => window.clearTimeout(timer);
+    }, [jobSelectorSearch]);
+
+    // Fetch a recent working set, then ask the server when the operator searches.
+    const {
+        data: jobsData,
+        isLoading: jobsLoading,
+        isError: jobsError,
+        error: jobsQueryError,
+        refetch: refetchJobs,
+    } = useQuery({
+        queryKey: ['jobs', 'include_children', 'summary', debouncedJobSelectorSearch],
+        queryFn: () => fetchJobs({
+            include_children: true,
+            limit: 100,
+            summary: true,
+            q: debouncedJobSelectorSearch || undefined,
+        }),
     });
-    const { data: routedJobData, isLoading: routedJobLoading } = useQuery({
+    const {
+        data: routedJobData,
+        isLoading: routedJobLoading,
+        isError: routedJobError,
+        error: routedJobQueryError,
+        refetch: refetchRoutedJob,
+    } = useQuery({
         queryKey: ['job', jobId, 'direct'],
         queryFn: () => fetchJobById(jobId!),
         enabled: Boolean(jobId),
@@ -2213,7 +2244,7 @@ export function ResultsViewer() {
             return;
         }
         if (nonNgsJobs.length === 0) {
-            if (jobsLoading || (jobId && routedJobLoading)) {
+            if (jobsLoading || jobsError || (jobId && (routedJobLoading || routedJobError))) {
                 return;
             }
             if (selectedJobId) {
@@ -2236,7 +2267,7 @@ export function ResultsViewer() {
                 return;
             }
 
-            if (jobsLoading || routedJobLoading) {
+            if (jobsLoading || jobsError || routedJobLoading || routedJobError) {
                 return;
             }
 
@@ -2260,7 +2291,9 @@ export function ResultsViewer() {
         activeJob,
         navigate,
         jobsLoading,
+        jobsError,
         routedJobLoading,
+        routedJobError,
         location.search,
     ]);
 
@@ -2400,7 +2433,12 @@ export function ResultsViewer() {
         return '';
     }, [appliedSavedReviewFilterSet?.id, isPostRFantibodyReview, rfReviewSet]);
     const backboneFilterApplies = outputSourceFilter === 'all' || outputSourceFilter === 'rfantibody' || outputSourceFilter === 'boltzgen';
-    const useClientSourcePagination = outputSourceFilter !== 'all' || resultSetFilter !== 'all';
+    const requiresClientModelFiltering = resultSurface !== 'workflow'
+        && resultSurface !== 'frustrampnn'
+        && resultSurface !== activeJob?.model_id;
+    const useClientSourcePagination = outputSourceFilter !== 'all'
+        || resultSetFilter !== 'all'
+        || requiresClientModelFiltering;
     const requiresClientOnlySort = useClientRenderedValueSort
         || (!SERVER_SORT_FIELDS.has(sortField as DesignSortField) && isTableColumnSortable(sortField));
     const forceBulkLoadForSorting = useClientSourcePagination || requiresClientOnlySort;
@@ -2435,6 +2473,7 @@ export function ResultsViewer() {
         rfd_rog_min: rfdRogMinValue,
         rfd_rog_max: rfdRogMaxValue,
         artifact_group: activeRfArtifactGroup,
+        include_summary: true,
     }), [selectedJobId, isReviewStageJob, filterText, pageSize, currentPage, apiSortField, sortDir, selectedBackboneId, plddtMin, iptmMin, ipsaeMin, contactsMin, targetContactsMin, epitopeMaxDistValue, targetMaxDistValue, binderSizeMinValue, binderSizeMaxValue, cdrH1MinValue, cdrH1MaxValue, cdrH2MinValue, cdrH2MaxValue, cdrH3MinValue, cdrH3MaxValue, rogMinValue, rogMaxValue, rfdRogMinValue, rfdRogMaxValue, activeRfArtifactGroup, activeSavedSubsetDesignIds, activeJob?.design_count, activeJobHasDesignBearingChildren, backboneFilterApplies, forceBulkLoadForSorting]);
     const bulkSelectionFilters = useMemo<DesignFilters>(() => ({
         ...designQueryFilters,
@@ -2442,11 +2481,18 @@ export function ResultsViewer() {
         offset: 0,
     }), [designQueryFilters]);
 
-    const { data: designsData, isLoading: designsLoading } = useQuery({
+    const {
+        data: designsData,
+        isLoading: designsLoading,
+        isError: designsError,
+        error: designsQueryError,
+        refetch: refetchDesigns,
+    } = useQuery({
         queryKey: ['designs', designQueryFilters],
         queryFn: () => fetchDesigns(designQueryFilters),
         enabled: !!activeJob
             && activeJob.model_id !== 'molecular_dynamics'
+            && !isRFD3GenerationResultJob(activeJob)
             && !isRFD3LocalRedesignResultJob(activeJob)
             && !reviewSelectionRequired,
     });
@@ -2600,7 +2646,11 @@ export function ResultsViewer() {
     const { data: backboneSummaryData } = useQuery({
         queryKey: ['backboneSummary', selectedJobId, activeRfArtifactGroup],
         queryFn: () => fetchBackboneSummary(selectedJobId, activeRfArtifactGroup),
-        enabled: !!activeJob && !reviewSelectionRequired,
+        enabled: shouldFetchBackboneSummary({
+            active: Boolean(activeJob),
+            showReviewWorkingSetPanel,
+            reviewSelectionRequired,
+        }),
     });
     const backboneSummary = backboneSummaryData?.data;
     const gateCandidateBackboneSummary = useMemo(
@@ -3120,7 +3170,9 @@ export function ResultsViewer() {
         [boltzgenClusterMode, boltzgenScopedDesigns],
     );
     const showBoltzgenClusterPanel = showReviewWorkingSetPanel && boltzgenScopedDesigns.length > 0;
-    const totalDesigns = useClientSourcePagination ? sourceScopedDesigns.length : serverTotalDesigns;
+    const totalDesigns = clientDerivedResultsBlocked
+        ? serverTotalDesigns
+        : (useClientSourcePagination ? sourceScopedDesigns.length : serverTotalDesigns);
     const totalPages = pageSize === 0 ? 1 : Math.ceil(totalDesigns / pageSize);
     const tableDesigns = useMemo(() => {
         if (!useClientSourcePagination || pageSize === 0) return sourceScopedDesigns;
@@ -4148,8 +4200,10 @@ export function ResultsViewer() {
     const isLoading = designsLoading;
 
     // Quick stats for overview
+    const statsDesigns = useClientSourcePagination ? sourceScopedDesigns : designs;
     const stats = useMemo(() => {
-        if (!designs.length) return null;
+        const designs = statsDesigns;
+        if (designs.length === 0) return null;
         const plddts = designs.map(d => d.plddt_overall).filter((v): v is number => v != null);
         const paes = designs.map(d => d.pae_overall).filter((v): v is number => v != null);
         const ptms = designs.map(d => d.ptm).filter((v): v is number => v != null);
@@ -4208,7 +4262,7 @@ export function ResultsViewer() {
             }
         });
 
-        return {
+        const sampleStats = {
             total: totalDesigns, // Use API total, not current page length
             pageSize: designs.length, // Current page count
             favorites: designs.filter(d => d.is_favorite).length,
@@ -4265,7 +4319,10 @@ export function ResultsViewer() {
                 .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
                 .slice(0, 4),
         };
-    }, [designs, totalDesigns]);
+        const serverSummary = designsData?.data.summary;
+        if (!serverSummary || useClientSourcePagination) return sampleStats;
+        return applyAuthoritativeDesignSummary(sampleStats, serverSummary, designs.length);
+    }, [statsDesigns, designsData?.data.summary, totalDesigns, useClientSourcePagination]);
     const rfReviewFallbackStats = useMemo(() => {
         if (!isPostRFantibodyReview || reviewSelectionRequired || reviewBackboneRows.length === 0) return null;
 
@@ -5115,7 +5172,10 @@ export function ResultsViewer() {
         .split('\n')
         .map((entry) => entry.trim())
         .filter(Boolean).length;
-    const showDataHubLanding = !activeJob && !(jobsLoading || (jobId && routedJobLoading));
+    const showDataHubLanding = !activeJob
+        && !jobsError
+        && !routedJobError
+        && !(jobsLoading || (jobId && routedJobLoading));
     const viewerShellClassName = showDataHubLanding
         ? 'mx-auto w-full max-w-[1180px]'
         : 'w-full';
@@ -5253,7 +5313,13 @@ export function ResultsViewer() {
                                         />
                                     </div>
                                     <div className="max-h-[70vh] overflow-y-auto p-2">
-                                        {groupedJobSelectorOptions.length === 0 ? (
+                                        {jobsError ? (
+                                            <DataViewerQueryError
+                                                title="Job search failed"
+                                                error={jobsQueryError}
+                                                onRetry={() => { void refetchJobs(); }}
+                                            />
+                                        ) : groupedJobSelectorOptions.length === 0 ? (
                                             <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-6 text-center text-sm text-slate-400">
                                                 No jobs match this search.
                                             </div>
@@ -5309,6 +5375,22 @@ export function ResultsViewer() {
                     </div>
                 </div>
 
+                {!activeJob && routedJobError && (
+                    <DataViewerQueryError
+                        title="Result unavailable"
+                        error={routedJobQueryError}
+                        onRetry={() => { void refetchRoutedJob(); }}
+                    />
+                )}
+
+                {!activeJob && !routedJobError && jobsError && (
+                    <DataViewerQueryError
+                        title="Jobs could not be loaded"
+                        error={jobsQueryError}
+                        onRetry={() => { void refetchJobs(); }}
+                    />
+                )}
+
                 {showDataHubLanding && (
                     <DataViewerLanding
                         jobs={nonNgsJobs}
@@ -5323,12 +5405,20 @@ export function ResultsViewer() {
                 )}
 
                 {activeJob && (
-                    isRFD3LocalRedesignResultJob(activeJob) ? (
+                    isRFD3GenerationResultJob(activeJob) ? (
+                        <RFD3GenerationResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : isRFD3LocalRedesignResultJob(activeJob) ? (
                         <RFD3LocalRedesignResultsPane key={activeJob.id} jobId={activeJob.id} />
                     ) : isProteinLocalRedesignResultJob(activeJob) ? (
                         <ProteinLocalRedesignResultsPane key={activeJob.id} job={activeJob} />
                     ) : activeJob.model_id === 'molecular_dynamics' ? (
                         <MDResultsPane key={activeJob.id} jobId={activeJob.id} />
+                    ) : designsError ? (
+                        <DataViewerQueryError
+                            title="Results could not be loaded"
+                            error={designsQueryError}
+                            onRetry={() => { void refetchDesigns(); }}
+                        />
                     ) : (
                     <>
                         {activeLineageRootJob && (
@@ -8707,6 +8797,25 @@ export function ResultsViewer() {
                 )}
             </div >
         </div >
+    );
+}
+
+// Shared explicit failure state for job, routed-result, and design queries.
+function DataViewerQueryError({
+    title,
+    error,
+    onRetry,
+}: {
+    title: string;
+    error: unknown;
+    onRetry: () => void;
+}) {
+    return (
+        <div role="alert" data-testid="data-viewer-query-error" className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
+            <div className="text-sm font-semibold text-rose-100">{title}</div>
+            <div className="mt-1 text-xs text-rose-200">{formatApiErrorMessage(error, 'The request failed.')}</div>
+            <button type="button" onClick={onRetry} className="mt-3 rounded-lg border border-rose-400/40 bg-rose-500/15 px-3 py-1.5 text-xs font-medium text-rose-100 hover:bg-rose-500/25">Retry</button>
+        </div>
     );
 }
 

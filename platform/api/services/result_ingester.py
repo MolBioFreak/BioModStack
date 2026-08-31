@@ -51,6 +51,7 @@ from services.cdr_annotator import extract_sequence_from_pdb, identify_binder_ch
 from .aligned_error_utils import detect_aligned_error_artifact, load_aligned_error_artifact
 from .ipsae import compute_ipsae_interface
 from .result_contracts import REVIEW_ARTIFACT_SCHEMA, REVIEW_CONTRACT_VERSION, resolve_result_contract
+from .rfd3_generation import GenerationContractError, file_sha256, validate_result_manifest
 from .conformational_mapping.persistence import (
     ConformationalPersistenceError,
     get_request as get_cm_request,
@@ -4215,6 +4216,122 @@ async def _persist_cm_bundle_atomically(
         raise
 
 
+async def _ingest_rfd3_generation_manifest(
+    job: Job,
+    output_path: Path,
+    session: AsyncSession,
+    *,
+    commit: bool,
+) -> int:
+    manifest_path = output_path / "collected" / "rfd3_generation" / "rfd3_generation_result_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise GenerationContractError("RFD3 generation result manifest is absent or unsafe")
+    if manifest_path.stat().st_size > 8 * 1024 * 1024:
+        raise GenerationContractError("RFD3 generation result manifest exceeds 8 MiB")
+    try:
+        raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GenerationContractError(f"RFD3 generation result manifest is malformed: {exc}") from exc
+    params = _parse_job_params(job.params)
+    request = params.get("rfd3_generation_request")
+    if not isinstance(request, dict):
+        raise GenerationContractError("persisted RFD3 generation request is missing")
+    manifest = validate_result_manifest(
+        raw_manifest,
+        request=request,
+        output_root=output_path,
+        job_id=str(job.id),
+    )
+    manifest_sha256 = file_sha256(manifest_path)
+    existing = list((await session.execute(select(Design).where(Design.job_id == job.id))).scalars().all())
+    expected_ids = {
+        str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}"))
+        for candidate in manifest["candidates"]
+    }
+    if existing:
+        if {str(row.id) for row in existing} != expected_ids or any(
+            not isinstance(row.provenance, dict)
+            or row.provenance.get("result_manifest_sha256") != manifest_sha256
+            for row in existing
+        ):
+            raise GenerationContractError("persisted RFD3 generation candidates conflict with the producer manifest")
+        return len(existing)
+
+    for candidate in manifest["candidates"]:
+        artifacts = {item["role"]: item for item in candidate["artifacts"]}
+        structure = artifacts["candidate_structure"]
+        metadata = artifacts["candidate_metadata"]
+        metrics = candidate["metrics"]
+        session.add(
+            Design(
+                id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:rfd3-generation:{job.id}:{candidate['candidate_id']}")),
+                job_id=job.id,
+                name=candidate["candidate_id"],
+                pdb_path=structure["resolved_path"],
+                json_path=metadata["resolved_path"],
+                lineage_root_job_id=job.lineage_root_job_id or job.id,
+                stage_family="de_novo_design",
+                stage_mode="rfd3_generation",
+                artifact_class="rfd3_general_generation",
+                artifact_schema_version=1,
+                review_profile_id="de_novo_generation_v1",
+                review_contract_version=1,
+                review_contract_source="rfd3_generation_producer",
+                review_role_map={"result_role": "generated_backbone", "generator": "rfd3"},
+                review_artifact_manifest={
+                    "schema": REVIEW_ARTIFACT_SCHEMA,
+                    "artifacts": {
+                        "structure": {
+                            "kind": "structure",
+                            "state": "ready",
+                            "path": structure["resolved_path"],
+                            "relative_path": structure["relative_path"],
+                            "sha256": structure["sha256"],
+                            "bytes": structure["bytes"],
+                        },
+                        "native_metadata": {
+                            "kind": "native_metadata",
+                            "state": "ready",
+                            "path": metadata["resolved_path"],
+                            "relative_path": metadata["relative_path"],
+                            "sha256": metadata["sha256"],
+                            "bytes": metadata["bytes"],
+                        },
+                    },
+                    "roles": {"result_role": "generated_backbone", "generator": "rfd3", "has_binder": False},
+                },
+                num_helices=metrics["helix_count"],
+                num_strands=metrics["strand_count"],
+                rfd_rog=metrics["radius_of_gyration"],
+                chain_metrics={
+                    "residue_count": metrics["residue_count"],
+                    "chain_count": metrics["chain_count"],
+                    "accepted": candidate["accepted"],
+                },
+                provenance={
+                    "schema": "bms.rfd3.generation.candidate-provenance.v1",
+                    "request_id": manifest["request_id"],
+                    "request_sha256": manifest["request_sha256"],
+                    "result_manifest_sha256": manifest_sha256,
+                    "artifact_manifest_sha256": candidate["artifact_manifest_sha256"],
+                    "metrics": metrics,
+                    "accepted": candidate["accepted"],
+                    "artifacts": candidate["artifacts"],
+                },
+            )
+        )
+    persisted_params = dict(params)
+    persisted_params["rfd3_generation_result_manifest_sha256"] = manifest_sha256
+    persisted_params["rfd3_generation_aggregate"] = manifest["aggregate"]
+    job.params = persisted_params
+    flag_modified(job, "params")
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return len(manifest["candidates"])
+
+
 async def ingest_job_results(
     job_id: str, 
     output_dir: str, 
@@ -4269,6 +4386,13 @@ async def ingest_job_results(
         and str(current_job.mode or "").strip().lower() == "shape_blueprint"
     ):
         return await _ingest_shape_result_manifest(current_job, output_path, session, commit=commit)
+    if (
+        current_job
+        and str(current_job.model_id or "").strip().lower() == "protein_modification_experimental"
+        and str(current_job.mode or "").strip().lower() == "de_novo_design"
+        and str(_parse_job_params(current_job.params).get("generator") or "rfd3").strip().lower() == "rfd3"
+    ):
+        return await _ingest_rfd3_generation_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "").strip().lower() == "protein_local_redesign":
         return await _ingest_rfd3_local_redesign_manifest(current_job, output_path, session, commit=commit)
     if current_job and str(current_job.model_id or "") == "conformational_mapping":

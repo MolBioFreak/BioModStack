@@ -54,7 +54,7 @@ export function ProteinModificationTemplate({
         ? 'rfd3_iteration'
         : initialMode === 'de_novo_design' || initialMode === 'rfd3_iteration' || initialMode === 'shape_blueprint'
             ? initialMode
-            : null;
+            : 'de_novo_design';
     const [mode, setMode] = useState<ModificationMode | null>(
         normalizedInitialMode,
     );
@@ -64,6 +64,10 @@ export function ProteinModificationTemplate({
     );
     const [designTask, setDesignTask] = useState(initialString(initialValues, 'design_task', 'unconditional'));
     const [numDesigns, setNumDesigns] = useState(initialNumber(initialValues, 'num_designs', 8));
+    const [minLength, setMinLength] = useState(initialNumber(initialValues, 'min_length', 100));
+    const [maxLength, setMaxLength] = useState(initialNumber(initialValues, 'max_length', 200));
+    const [seed, setSeed] = useState(initialNumber(initialValues, 'seed', 0));
+    const [dumpTrajectories, setDumpTrajectories] = useState(initialValues?.dump_trajectories === true);
     const [targetLengths, setTargetLengths] = useState(initialString(initialValues, 'target_lengths', '100,200'));
     const [laproteinaPreset, setLaproteinaPreset] = useState(initialString(initialValues, 'laproteina_preset', 'ucond_tri'));
     const [laproteinaSamples, setLaproteinaSamples] = useState(initialNumber(initialValues, 'laproteina_samples_per_length', 8));
@@ -149,7 +153,7 @@ export function ProteinModificationTemplate({
         );
     }
 
-    const submitDeNovo = async () => {
+    const submitBackup = async () => {
         setError(null);
         if (!jobName.trim()) {
             setError('Job name is required.');
@@ -186,6 +190,7 @@ export function ProteinModificationTemplate({
             mode: 'de_novo_design',
             params: {
                 modification_mode: 'de_novo_design',
+                generator: backend,
                 backend,
                 design_task: designTask,
                 num_designs: numDesigns,
@@ -215,21 +220,81 @@ export function ProteinModificationTemplate({
         });
     };
 
+    const submitDeNovo = async () => {
+        setError(null);
+        if (!jobName.trim()) {
+            setError('Job name is required.');
+            return;
+        }
+        if (minLength < 40 || minLength > 600 || maxLength < 40 || maxLength > 600 || minLength > maxLength) {
+            setError('Lengths must be between 40 and 600, with minimum no greater than maximum.');
+            return;
+        }
+        if (!Number.isInteger(numDesigns) || numDesigns < 1) {
+            setError('Number of designs must be at least 1.');
+            return;
+        }
+        if (!Number.isInteger(seed) || seed < 0) {
+            setError('Seed must be a non-negative integer.');
+            return;
+        }
+
+        await submitMutation.mutateAsync({
+            name: jobName.trim(),
+            model_id: 'protein_modification_experimental',
+            mode: 'de_novo_design',
+            params: {
+                generator: 'rfd3',
+                generation_mode: 'unconditional_monomer',
+                min_length: minLength,
+                max_length: maxLength,
+                num_designs: numDesigns,
+                seed,
+                dump_trajectories: dumpTrajectories,
+            },
+        });
+    };
+
     return (
         <div className="space-y-6 text-slate-100" data-bms-de-novo-form="complete">
             <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
                     <button onClick={() => setMode(null)} className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300">Modes</button>
                     <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">De Novo Design · Experimental</div>
-                        <h2 className="text-2xl font-semibold">Generate New Protein Candidates</h2>
+                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Native RFD3 · Preferred</div>
+                        <h2 className="text-2xl font-semibold">RFD3 Unconditional Monomer Generation</h2>
                     </div>
                 </div>
                 <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
-                    {backend === 'disco' ? 'DISCO native generation' : 'La-Proteina native generation'} · {designTask.replaceAll('_', ' ')}
+                    Native RFD3 generation · unconditional monomer
                 </div>
             </div>
 
+            <div className="grid gap-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-5 md:grid-cols-2 xl:grid-cols-3">
+                <label className={labelClass}>Job name
+                    <input className={fieldClass} value={jobName} onChange={(event) => setJobName(event.target.value)} />
+                </label>
+                <label className={labelClass}>Minimum length
+                    <input className={fieldClass} type="number" min={40} max={600} value={minLength} onChange={(event) => setMinLength(Number(event.target.value))} />
+                </label>
+                <label className={labelClass}>Maximum length
+                    <input className={fieldClass} type="number" min={40} max={600} value={maxLength} onChange={(event) => setMaxLength(Number(event.target.value))} />
+                </label>
+                <label className={labelClass}>Number of designs
+                    <input className={fieldClass} type="number" min={1} value={numDesigns} onChange={(event) => setNumDesigns(Number(event.target.value))} />
+                </label>
+                <label className={labelClass}>Seed
+                    <input className={fieldClass} type="number" min={0} value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
+                </label>
+                <label className="flex items-center gap-3 text-sm font-medium text-slate-200">
+                    <input type="checkbox" checked={dumpTrajectories} onChange={(event) => setDumpTrajectories(event.target.checked)} />
+                    Dump trajectories
+                </label>
+            </div>
+
+            <details className="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+                <summary className="cursor-pointer font-semibold text-amber-200">Experimental backup methods</summary>
+                <p className="mt-2 text-sm text-slate-400">DISCO and La-Proteina remain available as non-preferred experimental backups.</p>
             <div className="grid gap-4 rounded-xl border border-slate-800 bg-slate-900/50 p-5 md:grid-cols-2 xl:grid-cols-3">
                 <label className={labelClass}>Job name
                     <input className={fieldClass} value={jobName} onChange={(event) => setJobName(event.target.value)} />
@@ -358,14 +423,22 @@ export function ProteinModificationTemplate({
                 summary="The form exposes the supported native request contract for the selected generator."
                 compact
             />
+                <button
+                    onClick={submitBackup}
+                    disabled={submitMutation.isPending}
+                    className="mt-4 rounded-lg border border-amber-500/40 px-5 py-2.5 font-semibold text-amber-100 disabled:opacity-50"
+                >
+                    {submitMutation.isPending ? 'Submitting…' : `Launch ${backend === 'disco' ? 'DISCO' : 'La-Proteina'} Backup`}
+                </button>
+            </details>
 
             {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</div>}
             <button
                 onClick={submitDeNovo}
                 disabled={submitMutation.isPending}
-                className="rounded-lg bg-cyan-500 px-5 py-2.5 font-semibold text-slate-950 disabled:opacity-50"
+                className="rounded-lg bg-emerald-500 px-5 py-2.5 font-semibold text-slate-950 disabled:opacity-50"
             >
-                {submitMutation.isPending ? 'Submitting…' : 'Launch De Novo Design'}
+                {submitMutation.isPending ? 'Submitting…' : 'Launch Native RFD3 Design'}
             </button>
         </div>
     );

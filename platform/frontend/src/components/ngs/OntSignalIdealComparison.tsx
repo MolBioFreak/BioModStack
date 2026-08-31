@@ -20,6 +20,7 @@ import {
     type OntSignalRenderParams,
     type OntSignalViewerSession,
 } from '../../lib/api';
+import { isOwnedFullscreen, toggleOwnedFullscreen } from './ngsFullscreenOwner';
 
 export interface OntSignalIdealComparisonProps {
     datasetId: string;
@@ -99,11 +100,13 @@ export function OntSignalIdealComparison({
     const [comparisonRenderParams, setComparisonRenderParams] = useState<OntSignalComparisonRenderParams>(() => comparisonParams(renderParams));
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [comparisonIsFullscreen, setComparisonIsFullscreen] = useState(false);
     const generationRef = useRef(0);
     const pollSequenceRef = useRef(0);
     const viewerMutationRef = useRef<AbortController | null>(null);
     const urlRef = useRef<string | null>(null);
     const restoringPersistedSettingsRef = useRef(false);
+    const comparisonFullscreenRef = useRef<HTMLDivElement | null>(null);
     const currentProfile = PROFILES.find((item) => item.id === profileId)!;
     const effectiveProfile = preview?.effective_request?.effective_settings?.profile || job?.simulation_settings?.profile;
     const settings = useMemo<OntSignalComparisonSimulationSettings>(() => ({ profile_id: profileId, seed }), [profileId, seed]);
@@ -144,6 +147,25 @@ export function OntSignalIdealComparison({
         generationRef.current += 1; abortViewerMutation();
         if (urlRef.current) URL.revokeObjectURL(urlRef.current); urlRef.current = null;
     }, []);
+    useEffect(() => {
+        const handleFullscreenChange = () => setComparisonIsFullscreen(isOwnedFullscreen(comparisonFullscreenRef.current));
+        const handleFullscreenError = () => setError('Fullscreen request failed: the browser rejected the comparison request.');
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('fullscreenerror', handleFullscreenError);
+        handleFullscreenChange();
+        return () => {
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            document.removeEventListener('fullscreenerror', handleFullscreenError);
+        };
+    }, []);
+
+    const toggleComparisonFullscreen = async () => {
+        try {
+            await toggleOwnedFullscreen(comparisonFullscreenRef.current);
+        } catch (reason) {
+            setError(`Fullscreen request failed: ${errorText(reason)}`);
+        }
+    };
 
     const request = () => {
         if (!selectedReadId || !contig || !start || !end || end < start) throw new Error('Select one exact mapped read and bounded reference interval.');
@@ -322,7 +344,19 @@ export function OntSignalIdealComparison({
         {error && <div role="alert" className="text-rose-200">{error}</div>}
         <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => void runPreview()} className="rounded border px-2 py-1">Preview</button><button type="button" disabled={busy || !preview} onClick={() => void create()} className="rounded border px-2 py-1">Generate and compare</button></div>
         {job && <div className="space-y-1"><div>Comparison {job.comparison_job_id} · attempt {job.attempt_number} · {job.state}: {job.reason_code}</div>{!TERMINAL.has(job.state) && <button type="button" disabled={busy} onClick={() => void applyLifecycle(cancelOntSignalIdealComparison(job.comparison_job_id))} className="rounded border px-2 py-1">Cancel comparison</button>}{(job.state === 'failed' || job.state === 'cancelled') && job.attempt_number < 3 && <button type="button" disabled={busy} onClick={() => void applyLifecycle(createFreshOntSignalIdealComparisonAttempt(job.comparison_job_id))} className="rounded border px-2 py-1">Create fresh attempt</button>}</div>}
-        {artifactUrl ? <div><div className="flex justify-between font-semibold"><span>Real acquired signal</span><span>Ideal simulated reference</span></div><iframe title="Real acquired signal and ideal simulated reference" src={artifactUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" className="h-[360px] w-full rounded border bg-white" /></div> : <div className="flex h-24 items-center justify-center rounded border border-dashed">No ready ideal comparison.</div>}
+        {artifactUrl ? <div
+            ref={comparisonFullscreenRef}
+            data-comparison-fullscreen-owner
+            className={comparisonIsFullscreen ? 'flex h-screen w-screen flex-col bg-[var(--bg-secondary)] p-3' : ''}
+        >
+            <div className="flex items-center justify-between gap-2 pb-1 font-semibold">
+                <div className="flex min-w-0 flex-1 justify-between gap-4"><span>Real acquired signal</span><span>Ideal simulated reference</span></div>
+                <button type="button" onClick={() => void toggleComparisonFullscreen()} className="shrink-0 rounded border px-2 py-1">
+                    {comparisonIsFullscreen ? 'Exit comparison fullscreen' : 'View comparison fullscreen'}
+                </button>
+            </div>
+            <iframe title="Real acquired signal and ideal simulated reference" src={artifactUrl} sandbox="allow-scripts" referrerPolicy="no-referrer" className={`${comparisonIsFullscreen ? 'h-full min-h-0 flex-1' : 'h-[360px]'} w-full rounded border bg-white`} />
+        </div> : <div className="flex h-24 items-center justify-center rounded border border-dashed">No ready ideal comparison.</div>}
         {job?.state === 'ready' && <div className="space-y-1 rounded border p-1"><div className="font-semibold">Manual trace review</div><div>Does the real trace visually agree with the ideal expectation?</div><select aria-label="Review required outcome" disabled={busy} value={outcome} onChange={(event) => setOutcome(event.target.value as OntSignalComparisonReview['required_outcome'])}><option value="approve">Approve</option><option value="reject">Reject</option><option value="record_only">Record only</option></select><textarea aria-label="Review note" disabled={busy} value={note} onChange={(event) => setNote(event.target.value)} /><button type="button" onClick={() => void saveReview()} disabled={busy || !note.trim()}>Record review revision</button>{reviews.map((review) => <div key={review.review_id}>{review.created_at}: {review.required_outcome} · {review.note}</div>)}</div>}
         <details><summary>Complete provenance</summary><pre className="max-h-52 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify({ preview, job }, null, 2)}</pre></details>
     </section>;

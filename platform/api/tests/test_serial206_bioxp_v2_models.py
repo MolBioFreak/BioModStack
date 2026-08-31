@@ -17,6 +17,7 @@ from services.bioxp.operator_models import (
 from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
 
 OperatorInterruptReceiptV1 = getattr(operator_models, "OperatorInterruptReceiptV1", None)
+OperatorDeckMoveInputsV1 = getattr(operator_models, "OperatorDeckMoveInputsV1", None)
 
 
 def compact_payload(**overrides):
@@ -112,6 +113,15 @@ def test_v2_receipt_derives_terminality_and_rejects_mismatch():
         OperatorActionReceiptV2.model_validate(compact_payload(status="completed", terminal=False))
 
 
+@pytest.mark.parametrize("status", ["stopped", "aborted", "cancelled"])
+def test_v2_receipt_accepts_truthful_additional_terminal_lifecycle_statuses(status):
+    receipt = OperatorActionReceiptV2.model_validate(
+        compact_payload(status=status, terminal=True, finished_at=2.0)
+    )
+    assert receipt.status == status
+    assert receipt.terminal is True
+
+
 def test_v2_dashboard_requires_strict_y_axis_and_catalog_embeds_it():
     dashboard = OperatorDashboardV2.model_validate(dashboard_payload())
     assert dashboard.y_axis.board_id == 4
@@ -121,6 +131,228 @@ def test_v2_dashboard_requires_strict_y_axis_and_catalog_embeds_it():
         "actions": [{"action_id": "oem.y.move_steps", "request_schema_version": "bioxp.operator_action_request.v2", "response_schema_version": "bioxp.operator_action_receipt.v2", "interrupt": False, "enabled": True, "disabled_reason": None}],
     })
     assert catalog.actions[0].action_id == "oem.y.move_steps"
+
+
+def test_deck_catalog_and_dashboard_are_closed_semantic_authority_without_coordinates():
+    payload = dashboard_payload()
+    payload["deck"] = {
+        "current_location": "LOC_OC",
+        "current_well": "A1",
+        "position_table_revision": "pt-206-9",
+        "destination_catalog_revision": "deck-206-4",
+        "semantic_state_revision": 17,
+        "ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2, "5": 8},
+        "destinations": [{
+            "key": "LOC_OC",
+            "label": "OC chiller",
+            "aliases": ["OC chiller"],
+            "branch_kind": "ordinary",
+            "camera_offset_supported": True,
+        }],
+    }
+    catalog = OperatorControlCatalogV2.model_validate({
+        "schema_version": "bioxp.operator_control_catalog.v2",
+        "dashboard": payload,
+        "actions": [{
+            "action_id": "oem.deck.move_to_location",
+            "request_schema_version": "bioxp.operator_action_request.v2",
+            "response_schema_version": "bioxp.operator_action_receipt.v2",
+            "interrupt": False,
+            "enabled": True,
+            "disabled_reason": None,
+            "destination_catalog_revision": "deck-206-4",
+            "position_table_revision": "pt-206-9",
+            "required_board_ids": [4, 5],
+            "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "destinations": [{
+                "key": "LOC_OC",
+                "label": "OC chiller",
+                "aliases": ["OC chiller"],
+                "branch_kind": "ordinary",
+                "camera_offset_supported": True,
+            }],
+        }],
+    })
+    action = catalog.actions[0]
+    assert action.destinations[0].key == "LOC_OC"
+    assert action.required_board_ids == [4, 5]
+    assert "x" not in action.model_dump()["destinations"][0]
+    with pytest.raises(ValidationError):
+        OperatorDeckMoveInputsV1.model_validate({"target": "LOC_OC", "camera_offset": False, "x": 1})
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda payload: payload["actions"][0].__setitem__("destination_catalog_revision", "deck-stale"),
+    lambda payload: payload["actions"][0].__setitem__("position_table_revision", "pt-stale"),
+    lambda payload: payload["actions"][0].__setitem__("expected_board_epoch_by_board", {"4": 2, "5": 9}),
+    lambda payload: payload["actions"][0].__setitem__("destinations", [{
+        "key": "LOC_TC", "label": "TC", "aliases": [], "branch_kind": "ordinary", "camera_offset_supported": False,
+    }]),
+    lambda payload: payload["dashboard"]["deck"].__setitem__("ownership_generation", 2),
+])
+def test_deck_catalog_rejects_incoherent_embedded_dashboard_authority(mutate):
+    dashboard = dashboard_payload()
+    destination = {
+        "key": "LOC_OC", "label": "OC chiller", "aliases": ["OC chiller"],
+        "branch_kind": "ordinary", "camera_offset_supported": True,
+    }
+    dashboard["deck"] = {
+        "current_location": "LOC_OC", "current_well": "A1",
+        "position_table_revision": "pt-206-9", "destination_catalog_revision": "deck-206-4",
+        "semantic_state_revision": 17, "ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2, "5": 8}, "destinations": [destination],
+    }
+    payload = {
+        "schema_version": "bioxp.operator_control_catalog.v2", "dashboard": dashboard,
+        "actions": [{
+            "action_id": "oem.deck.move_to_location",
+            "request_schema_version": "bioxp.operator_action_request.v2",
+            "response_schema_version": "bioxp.operator_action_receipt.v2",
+            "interrupt": False, "enabled": True, "disabled_reason": None,
+            "destination_catalog_revision": "deck-206-4", "position_table_revision": "pt-206-9",
+            "required_board_ids": [4, 5], "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "destinations": [destination],
+        }],
+    }
+    mutate(payload)
+    with pytest.raises(ValidationError):
+        OperatorControlCatalogV2.model_validate(payload)
+
+
+def test_deck_move_inputs_are_exact_target_and_camera_offset_only():
+    parsed = OperatorDeckMoveInputsV1.model_validate({"target": "LOC_OC", "camera_offset": False})
+    assert parsed.model_dump() == {"target": "LOC_OC", "camera_offset": False}
+    with pytest.raises(ValidationError):
+        OperatorDeckMoveInputsV1.model_validate({"target": "", "camera_offset": False})
+
+
+def test_deck_detail_receipt_keeps_controller_semantic_and_physical_truth_separate():
+    payload = {
+        **compact_payload(
+            action_id="oem.deck.move_to_location",
+            command_id="deck-command-1",
+            status="completed",
+            terminal=True,
+            finished_at=2.0,
+            terminal_receipt_id="deck-command-1",
+            completion_class="completed",
+        ),
+        "canonical_inputs": {"target": "LOC_OC", "camera_offset": False},
+        "requested_values": {"target": "LOC_OC", "camera_offset": False},
+        "effective_values": {"target": "LOC_OC", "camera_offset": False},
+        "observed_values": {},
+        "raw_return_layers": {},
+        "controller_evidence": {},
+        "transport_artifacts": [],
+        "child_receipts": [],
+        "transitions": [],
+        "deck_movement": {
+            "target": "LOC_OC",
+            "target_label": "OC chiller",
+            "source_branch": "ordinary.scriptmoveTo",
+            "controller_completion_verified": True,
+            "semantic_state_committed": True,
+            "physical_observation_verified": False,
+        },
+    }
+    detail = operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+    assert detail.deck_movement.controller_completion_verified is True
+    assert detail.deck_movement.semantic_state_committed is True
+    assert detail.deck_movement.physical_observation_verified is False
+    malformed = {**payload, "deck_movement": {**payload["deck_movement"], "x": 12}}
+    with pytest.raises(ValidationError):
+        operator_models.OperatorActionReceiptDetailV2.model_validate(malformed)
+
+
+def test_queued_deck_detail_keeps_unestablished_planning_and_effect_evidence_unknown():
+    payload = {
+        **compact_payload(action_id="oem.deck.move_to_location", command_id="deck-queued-1"),
+        "canonical_inputs": {"target": "LOC_OC", "camera_offset": False},
+        "requested_values": {}, "effective_values": {}, "observed_values": {},
+        "raw_return_layers": {}, "controller_evidence": {}, "transport_artifacts": [],
+        "child_receipts": [], "transitions": [],
+        "deck_movement": {
+            "target": "LOC_OC", "target_label": None, "source_branch": None,
+            "controller_completion_verified": None, "semantic_state_committed": None,
+            "physical_observation_verified": None,
+        },
+    }
+    detail = operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+    assert detail.deck_movement.target_label is None
+    assert detail.deck_movement.controller_completion_verified is None
+
+
+@pytest.mark.parametrize("status,terminal,controller,semantic", [
+    ("queued", False, True, False),
+    ("dispatched", False, False, True),
+    ("ambiguous", True, True, True),
+    ("failed", True, True, True),
+    ("rejected", True, True, False),
+])
+def test_deck_detail_rejects_impossible_lifecycle_completion_claims(status, terminal, controller, semantic):
+    payload = {
+        **compact_payload(
+            action_id="oem.deck.move_to_location", command_id="deck-bad-1",
+            status=status, terminal=terminal, finished_at=2.0 if terminal else None,
+        ),
+        "canonical_inputs": {"target": "LOC_OC", "camera_offset": False},
+        "requested_values": {}, "effective_values": {}, "observed_values": {},
+        "raw_return_layers": {}, "controller_evidence": {}, "transport_artifacts": [],
+        "child_receipts": [], "transitions": [],
+        "deck_movement": {
+            "target": "LOC_OC", "target_label": "OC chiller", "source_branch": "ordinary.scriptmoveTo",
+            "controller_completion_verified": controller, "semantic_state_committed": semantic,
+            "physical_observation_verified": False,
+        },
+    }
+    with pytest.raises(ValidationError):
+        operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+
+
+def test_deck_controller_completion_without_semantic_commit_requires_ambiguous_recovery_outcome():
+    base = {
+        **compact_payload(
+            action_id="oem.deck.move_to_location",
+            command_id="deck-recovery-1",
+            terminal=True,
+            finished_at=2.0,
+        ),
+        "canonical_inputs": {"target": "LOC_OC", "camera_offset": False},
+        "requested_values": {}, "effective_values": {}, "observed_values": {},
+        "raw_return_layers": {}, "controller_evidence": {}, "transport_artifacts": [],
+        "child_receipts": [], "transitions": [],
+        "deck_movement": {
+            "target": "LOC_OC", "target_label": "OC chiller", "source_branch": "ordinary.scriptmoveTo",
+            "controller_completion_verified": True, "semantic_state_committed": False,
+            "physical_observation_verified": False,
+        },
+    }
+
+    with pytest.raises(ValidationError):
+        operator_models.OperatorActionReceiptDetailV2.model_validate({
+            **base,
+            "status": "failed",
+            "completion_class": "failed",
+        })
+
+    recovered = operator_models.OperatorActionReceiptDetailV2.model_validate({
+        **base,
+        "status": "ambiguous",
+        "completion_class": "recovery_required",
+    })
+    assert recovered.status == "ambiguous"
+    assert recovered.completion_class == "recovery_required"
+
+
+def test_non_deck_legacy_detail_remains_compatible_without_deck_evidence():
+    payload = {
+        **compact_payload(), "canonical_inputs": {"steps": 1}, "requested_values": {},
+        "effective_values": {}, "observed_values": {}, "raw_return_layers": {},
+        "controller_evidence": {}, "transport_artifacts": [], "child_receipts": [], "transitions": [],
+    }
+    detail = operator_models.OperatorActionReceiptDetailV2.model_validate(payload)
+    assert detail.deck_movement is None
 
 
 def test_v2_dashboard_accepts_robot_unbound_y_runtime_projection():

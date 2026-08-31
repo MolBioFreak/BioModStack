@@ -80,6 +80,10 @@ from migrations.seal_ont_raw_signal_lookup_terminal_immutability import (
     migrate as seal_ont_raw_signal_lookup_terminal_immutability,
 )
 from migrations.add_ont_signal_comparisons import migrate as migrate_ont_signal_comparisons
+from migrations.seal_ont_read_metric_receipt_immutability import (
+    migrate as seal_ont_read_metric_receipt_immutability,
+)
+from migrations.add_remote_execution import migrate as migrate_remote_execution
 from run_migration import migrate as migrate_stage_tracking
 
 
@@ -150,6 +154,12 @@ MIGRATIONS: List[Migration] = [
         migrate_frustrampnn_statistics_claim_leases,
     ),
     Migration(43, "add_ont_signal_comparisons", migrate_ont_signal_comparisons),
+    Migration(
+        44,
+        "seal_ont_read_metric_receipt_immutability",
+        seal_ont_read_metric_receipt_immutability,
+    ),
+    Migration(45, "add_remote_execution", migrate_remote_execution),
 ]
 
 

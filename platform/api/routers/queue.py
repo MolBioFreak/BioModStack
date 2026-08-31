@@ -61,6 +61,9 @@ class QueuedJobResponse(BaseModel):
     pinned_gpu: Optional[int]
     assigned_gpu: Optional[int]
     display_gpu_ids: Optional[List[int]] = None
+    execution_target_id: Optional[str] = None
+    remote_state: Optional[str] = None
+    remote_waiting_reason: Optional[str] = None
     priority: int
     vram_estimate_mb: Optional[int]
     sequence_length: Optional[int]
@@ -344,6 +347,9 @@ def _queue_enrichment_signature(jobs: List[Job]) -> Tuple[Tuple[object, ...], ..
             str(job.current_stage or ""),
             str(job.stage_progress or ""),
             str(job.stage_work_dir or ""),
+            str(job.execution_target_id or ""),
+            str(job.remote_state or ""),
+            str(job.error_message or ""),
             int(job.vram_estimate_mb or 0),
             job.started_at.isoformat() if job.started_at else None,
         ))
@@ -367,8 +373,14 @@ def _get_queue_enrichment(jobs: List[Job]) -> Dict[str, Dict[str, object]]:
     scheduler_diagnostics: Dict[str, Dict[str, object]] = {}
     stage_progress_by_job = _collect_stage_progress_by_job(jobs)
 
-    running_jobs = [job for job in jobs if job.queue_status == "running"]
-    queued_jobs = [job for job in jobs if job.queue_status == "queued"]
+    running_jobs = [
+        job for job in jobs
+        if job.queue_status == "running" and not job.execution_target_id
+    ]
+    queued_jobs = [
+        job for job in jobs
+        if job.queue_status == "queued" and not job.execution_target_id
+    ]
 
     try:
         from routers.gpu import get_gpu_stats_with_error
@@ -497,6 +509,9 @@ async def list_queue(
             pinned_gpu=job.pinned_gpu,
             assigned_gpu=job.assigned_gpu if job_uses_assigned_gpu(job) else None,
             display_gpu_ids=_resolve_display_gpu_ids(job),
+            execution_target_id=job.execution_target_id,
+            remote_state=job.remote_state,
+            remote_waiting_reason=(job.error_message if job.execution_target_id else None),
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,
@@ -555,6 +570,11 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     
     if job.queue_status not in ['queued', 'running']:
         raise HTTPException(status_code=400, detail=f"Cannot pause job with status: {job.queue_status}")
+    if job.execution_target_id and job.queue_status == 'running':
+        raise HTTPException(
+            status_code=409,
+            detail="Running remote Jobs cannot be paused; cancel them or wait for completion",
+        )
     
     job.paused = True
     job.queue_status = 'paused'
@@ -591,6 +611,11 @@ async def release_job_gpu(job_id: str, session: AsyncSession = Depends(get_sessi
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.execution_target_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Remote Jobs release their GPU only through remote terminal reconciliation",
+        )
 
     released_gpu = job.assigned_gpu
     job.assigned_gpu = None
@@ -630,7 +655,12 @@ async def pin_job_to_gpu(
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+    if job.execution_target_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Local GPU pin controls do not apply to remote Jobs",
+        )
+
     if job.queue_status not in ['queued', 'paused']:
         raise HTTPException(status_code=400, detail="Can only pin queued or paused jobs")
     
@@ -678,7 +708,7 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    launch_context_id = (job.provenance or {}).get("launch_context_id")
+    launch_context_id = (getattr(job, "provenance", None) or {}).get("launch_context_id")
     if launch_context_id:
         raise HTTPException(
             status_code=409,
@@ -708,7 +738,23 @@ async def retry_job(job_id: str, session: AsyncSession = Depends(get_session)):
     job.completed_at = None
     job.current_stage = None
     job.stage_progress = None
-    if str(job.model_id or "").strip().lower() == "protein_local_redesign":
+    if getattr(job, "execution_target_id", None):
+        provenance = dict(getattr(job, "provenance", None) or {})
+        prior_receipt = provenance.pop("remote_execution_receipt", None)
+        provenance.pop("remote_execution_assignment", None)
+        if isinstance(prior_receipt, dict):
+            history = list(provenance.get("remote_execution_attempt_history") or [])
+            history.append(prior_receipt)
+            provenance["remote_execution_attempt_history"] = history
+        job.provenance = provenance
+        job.nextflow_run_id = None
+        job.remote_attempt_id = None
+        job.execution_bundle_sha256 = None
+        job.remote_state = "queued"
+        from services.execution_ownership import release_scheduler_gpu_assignment
+
+        job.params = release_scheduler_gpu_assignment(job.params)
+    if str(getattr(job, "model_id", "") or "").strip().lower() == "protein_local_redesign":
         from services.rfd3_local_redesign import requeue_failed_request_for_job
 
         if not await requeue_failed_request_for_job(session, job_id=str(job.id)):
@@ -844,6 +890,14 @@ async def force_launch_job(
     the job; all VRAM, concurrency, and disabled-GPU checks still apply.
     """
     await reject_generic_md_lifecycle_control(job_id, session)
+    target_job = await session.get(Job, job_id)
+    if target_job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if target_job.execution_target_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Local force-launch controls do not apply to remote Jobs",
+        )
     # Validate GPU index against live/proxied GPU status, not only the API
     # container's local nvidia-smi view.
     _validate_queue_gpu_index(request.gpu_id)

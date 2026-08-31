@@ -35,6 +35,7 @@ import { getWorkflowModelTopics } from './workflowModelInventory.js';
 import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
 import {
     hydrateFrustraMpnnSettings,
     mergeFrustraMpnnLaunchParams,
@@ -629,7 +630,7 @@ const getTemplateDocumentationTopics = (
     if (identity.includes('protein_modification_experimental') || identity.includes('protein_local_redesign') || identity.includes('local redesign')) return ['laproteina', 'disco', 'rfdiffusion', 'fampnn', 'proteinmpnn', 'boltz2'];
     if (identity.includes('antibody_denovo') || identity.includes('nanobody') || identity.includes('rfantibody')) return ['rfantibody', 'boltzgen', 'ppiflow', 'fampnn', 'caliby', 'proteinmpnn', 'protenix', 'boltz2', 'esmfold2'];
 
-    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'rf3', 'protenix', 'esmfold2'];
+    if (identity.includes('structure_prediction') || identity.includes('structure prediction')) return ['boltz2', 'fold_cp', 'protenix', 'esmfold2'];
     if (identity.includes('boltz')) return ['boltz2'];
     if (identity.includes('rfdiffusion') || identity.includes('diffusion')) return ['rfdiffusion'];
     return [];
@@ -663,7 +664,7 @@ const getCompactTemplateDescription = (template: UntypedApiValue): string => {
         case 'protein_local_redesign':
             return 'Generate new proteins or remodel selected regions of an existing structure.';
         case 'boltz_cp_experimental':
-            return 'Experimental Fold-CP path for large Boltz-2 folds.';
+            return 'NVIDIA Fold-CP predictor inside Structure Prediction.';
         case 'confornets_experimental':
         case 'conformational_mapping':
             return 'Complete-complex Protenix v2 ensembles, canonical ConforNets/import alternatives, residue mapping, FrustraMPNN landscapes, and support-ranked comparison.';
@@ -684,7 +685,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
         case 'boltz2':
             return 'Structure and complex prediction validator.';
         case 'boltz_cp_experimental':
-            return 'Experimental Fold-CP large-protein path.';
+            return 'NVIDIA Fold-CP Structure predictor.';
         case 'confornets_experimental':
             return 'Canonical conformational mapping workflow.';
         case 'esmfold2':
@@ -885,15 +886,14 @@ export function JobSubmission() {
                     setSelectedTemplateId('mutagenesis');
                     // Mutagenesis logic might need updates for pre-filling too, but focusing on Antibody first
                 }
-                // 3. Boltz-CP experimental reuses the structure-prediction template with a fixed launch variant.
+                // 3. Fold-CP reopens as a predictor inside Structure Prediction.
                 else if (data.model_id === 'boltz_cp_experimental') {
-                    setWizardMode('experimental');
-                    setSelectedTemplateId('boltz_cp_experimental');
+                    setWizardMode('templates');
+                    setSelectedTemplateId('structure_prediction');
                     setClonedValues({
                         ...data.params,
                         name: data.name,
-                        template_model_id: 'boltz_cp_experimental',
-                        structure_launch_variant: data.params?.structure_launch_variant || 'boltz_cp_experimental',
+                        pred_method: 'fold_cp',
                     });
                 }
                 // 4. ESMFold2 compatibility IDs reopen the parent Structure Prediction workflow.
@@ -1011,7 +1011,7 @@ export function JobSubmission() {
         protein_modification_experimental: 'protein_modification_experimental',
         protein_local_redesign: 'protein_modification_experimental',
         protein_cad_experimental: 'protein_modification_experimental',
-        boltz_cp_experimental: 'boltz_cp_experimental',
+        boltz_cp_experimental: 'structure_prediction',
         conformational_mapping: 'conformational_mapping',
         confornets_experimental: 'conformational_mapping',
         esmfold2: 'structure_prediction',
@@ -1032,7 +1032,7 @@ export function JobSubmission() {
             description: 'Predict proteins, nucleic acids, and complexes.',
             icon: 'microscope',
             color: '#F59E0B',
-            stages: [{ tool: 'Boltz-2 / RF3 / Protenix' }],
+            stages: [{ tool: 'Boltz-2 / Fold-CP / Boltz API / Protenix / ESMFold2' }],
         },
 
         {
@@ -1063,15 +1063,15 @@ export function JobSubmission() {
         {
             id: 'protein_modification_experimental',
             name: 'De Novo Design',
-            description: 'Generate new proteins or modify selected regions of an existing structure.',
+            description: 'Generate new proteins with native RFD3, iterate an existing structure, or generate into a shape blueprint.',
             icon: 'cube',
             color: '#22C55E',
             experimental: true,
             stages: [
-                { tool: 'DISCO / La-Proteina' },
-                { tool: 'RFdiffusion3' },
-                { tool: 'FAMPNN / ProteinMPNN' },
-                { tool: 'Boltz-2 (Opt.)' },
+                { tool: 'RFD3 (Preferred)' },
+                { tool: 'RFD3 Iteration' },
+                { tool: 'Shape Blueprint' },
+                { tool: 'DISCO / La-Proteina (Backup)' },
             ],
         },
 
@@ -1079,7 +1079,7 @@ export function JobSubmission() {
     const visibleApiTemplates = useMemo(() => {
         const templates = templatesData?.data ?? [];
         return templates.filter((t: UntypedApiValue) =>
-            !['structure_validation', 'structure_prediction'].includes(t.id) &&
+            !['structure_validation', 'structure_prediction', 'boltz_cp_experimental'].includes(t.id) &&
             t.id !== 'binder_design' &&
             !LEGACY_PROTEIN_MODIFICATION_TEMPLATE_IDS.has(t.id) &&
             !LEGACY_CONFORMATIONAL_MAPPING_TEMPLATE_IDS.has(t.id) &&
@@ -1097,15 +1097,25 @@ export function JobSubmission() {
 
     useEffect(() => {
         if (!routeTemplateId || routeTemplateId === selectedTemplateId) return;
+        if (routeTemplateId === 'boltz_cp_experimental') {
+            setSelectedTemplateIdInternal('structure_prediction');
+            setClonedValues((previous: UntypedApiValue) => ({ ...(previous || {}), pred_method: 'fold_cp' }));
+            setWizardMode('templates');
+            return;
+        }
         const apiTemplate = visibleApiTemplates.find((template: UntypedApiValue) => template.id === routeTemplateId);
         if (!isDedicatedLauncherTemplate(routeTemplateId) && !apiTemplate) return;
         setSelectedTemplateIdInternal(routeTemplateId);
-        setWizardMode(routeTemplateId === 'boltz_cp_experimental' || apiTemplate?.experimental ? 'experimental' : 'templates');
+        setWizardMode(apiTemplate?.experimental ? 'experimental' : 'templates');
     }, [routeTemplateId, selectedTemplateId, visibleApiTemplates]);
 
     const routeUserTemplate = (template: UntypedApiValue) => {
         const rawApiTemplateId = typeof template.base_template_id === 'string' ? template.base_template_id : null;
-        const apiTemplateId = rawApiTemplateId === 'confornets_experimental' ? 'conformational_mapping' : rawApiTemplateId;
+        const apiTemplateId = rawApiTemplateId === 'confornets_experimental'
+            ? 'conformational_mapping'
+            : rawApiTemplateId === 'boltz_cp_experimental'
+                ? 'structure_prediction'
+                : rawApiTemplateId;
         const matchedApiTemplate = apiTemplateId
             ? visibleApiTemplates.find((candidate: UntypedApiValue) => candidate.id === apiTemplateId)
             : null;
@@ -1137,26 +1147,26 @@ export function JobSubmission() {
             const loadedJobName = template.params?.job_name || template.params?.name || template.name || '';
             const templateModelId = template.model_id || template.params?.template_model_id;
             const isLegacyEsmfold2 = templateModelId === 'esmfold2' || templateModelId === 'esmfold2_experimental';
+            const isLegacyFoldCp = templateModelId === 'boltz_cp_experimental' || rawApiTemplateId === 'boltz_cp_experimental';
             const isLegacyBoltzGen = templateModelId === 'boltzgen';
             if (dedicatedTemplateId === 'conformational_mapping') {
                 sessionStorage.removeItem('bms.conformational-mapping.launcher.v1');
             }
-            setWizardMode(dedicatedTemplateId === 'boltz_cp_experimental' ? 'experimental' : 'templates');
+            setWizardMode('templates');
             setSelectedTemplateId(dedicatedTemplateId);
             setDedicatedTemplateVersion((prev) => prev + 1);
             setClonedValues({
                 ...template.params,
                 name: loadedJobName,
                 job_name: loadedJobName,
-                template_model_id: isLegacyEsmfold2 || isLegacyBoltzGen ? undefined : templateModelId,
+                template_model_id: isLegacyEsmfold2 || isLegacyFoldCp || isLegacyBoltzGen ? undefined : templateModelId,
                 modification_mode: templateModelId === 'protein_local_redesign'
                     ? 'rfd3_local_redesign'
                     : template.params?.modification_mode,
                 ...(isLegacyEsmfold2 ? { pred_method: 'esmfold2' } : {}),
+                ...(isLegacyFoldCp ? { pred_method: 'fold_cp' } : {}),
                 ...(isLegacyBoltzGen ? { denovo_generator: 'boltzgen' } : {}),
-                structure_launch_variant: dedicatedTemplateId === 'boltz_cp_experimental'
-                    ? (template.params?.structure_launch_variant || 'boltz_cp_experimental')
-                    : template.params?.structure_launch_variant,
+                structure_launch_variant: template.params?.structure_launch_variant,
             });
             setJobName(loadedJobName);
             setSelectedModelId(null);
@@ -1563,17 +1573,31 @@ export function JobSubmission() {
                 }
             } else if (mergedParams.pred_method) {
                 // Structure prediction templates - map pred_method to model_id and mode
-                const predMethodMap: Record<string, { model_id: string; mode: string }> = {
-                    'boltz': { model_id: 'boltz2', mode: 'predict' },
-                    'rf3': { model_id: 'rf3', mode: 'predict' },
-                    'protenix': { model_id: 'protenix', mode: 'predict' },
-                    'both': { model_id: 'boltz2', mode: 'predict' }, // Primary model for "both" mode
-                    'all': { model_id: 'boltz2', mode: 'predict' },  // Primary model for "all" mode
+                const structurePredictionMethodMap: Record<string, { model_id: string; mode: string }> = {
+                    boltz: { model_id: 'boltz2', mode: 'predict' },
+                    fold_cp: { model_id: 'boltz_cp_experimental', mode: 'design' },
+                    boltz_api: { model_id: 'boltz_api', mode: 'predict' },
+                    protenix: { model_id: 'protenix', mode: 'predict' },
+                    esmfold2: { model_id: 'esmfold2', mode: 'predict' },
+                    boltz_protenix: { model_id: 'boltz2', mode: 'complex' },
                 };
+                const compatibilityMethodMap: Record<string, { model_id: string; mode: string }> = {
+                    boltz: { model_id: 'boltz2', mode: 'predict' },
+                    rf3: { model_id: 'rf3', mode: 'predict' },
+                    protenix: { model_id: 'protenix', mode: 'predict' },
+                    both: { model_id: 'boltz2', mode: 'predict' },
+                    all: { model_id: 'boltz2', mode: 'predict' },
+                };
+                const predMethodMap = selectedTemplateId === 'structure_prediction'
+                    ? structurePredictionMethodMap
+                    : compatibilityMethodMap;
                 const mapping = predMethodMap[mergedParams.pred_method];
                 if (mapping) {
                     effectiveModelId = mapping.model_id;
                     nextflowProfile = mapping.mode;
+                } else if (selectedTemplateId === 'structure_prediction') {
+                    alert(`Unsupported Structure predictor: ${mergedParams.pred_method}`);
+                    return;
                 } else {
                     nextflowProfile = mergedParams.pred_method;
                 }
@@ -1693,11 +1717,110 @@ export function JobSubmission() {
     ) : null;
 
     // Dedicated templates that handle their own header/navigation
-    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'boltz_cp_experimental', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
+    const dedicatedTemplates = ['mutagenesis', 'antibody_denovo', 'structure_prediction', 'oligo_design', 'protein_modification_experimental', 'molecular_dynamics', 'conformational_mapping'];
     const showMainHeader = !selectedTemplateId || !dedicatedTemplates.includes(selectedTemplateId);
+
+    const preparedStructureModelId = launchContextQuery.data?.pinned_scheduler?.model_id;
+    const isPreparedStructureFamily = ['boltz2', 'protenix'].includes(String(preparedStructureModelId));
+    const preparedStructureScheduler = (() => {
+        const context = launchContextQuery.data;
+        const scheduler = context?.pinned_scheduler;
+        if (!scheduler || typeof scheduler !== 'object' || Array.isArray(scheduler)) return null;
+        const modelId = scheduler.model_id;
+        const mode = scheduler.mode;
+        const name = scheduler.name;
+        const pinnedParams = scheduler.params;
+        if (
+            !context?.launch_context_id
+            || context.state !== 'reserved'
+            || !['boltz2', 'protenix'].includes(String(modelId))
+            || mode !== 'predict'
+            || typeof name !== 'string'
+            || !name.trim()
+            || !pinnedParams
+            || typeof pinnedParams !== 'object'
+            || Array.isArray(pinnedParams)
+        ) return null;
+        return {
+            context,
+            name,
+            modelId: String(modelId),
+            mode: String(mode),
+            params: pinnedParams as Record<string, UntypedApiValue>,
+        };
+    })();
+    const submitPreparedStructure = useMutation({
+        mutationFn: async () => {
+            if (!preparedStructureScheduler) {
+                throw new Error('The prepared Project structure-prediction scheduler is unavailable.');
+            }
+            const response = await submitJob({
+                name: preparedStructureScheduler.name,
+                model_id: preparedStructureScheduler.modelId,
+                mode: preparedStructureScheduler.mode,
+                params: preparedStructureScheduler.params,
+                launch_context_id: preparedStructureScheduler.context.launch_context_id,
+                ...(preparedStructureScheduler.context.pinned_gpu === null
+                    ? {}
+                    : { pinned_gpu: preparedStructureScheduler.context.pinned_gpu }),
+            });
+            return {
+                response: response.data,
+                returnUri: await completeCurrentLaunchContext(response.data),
+            };
+        },
+        onSuccess: ({ returnUri }) => {
+            queryClient.invalidateQueries({ queryKey: ['jobs'] });
+            navigate(returnUri ?? '/');
+        },
+    });
+
+    if (preparedStructureScheduler) {
+        return (
+            <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
+                <main className="mx-auto max-w-4xl space-y-5">
+                    <section className="rounded-2xl border border-blue-500/40 bg-blue-950/30 p-5">
+                        <h1 className="text-xl font-semibold">Confirm prepared Project structure prediction</h1>
+                        <p className="mt-2 text-sm text-blue-100/80">
+                            This request is immutable. BioModStack will submit the exact server-pinned scheduler values; the native structure form cannot recompute or edit them.
+                        </p>
+                        <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                            <div><dt className="text-slate-400">Project</dt><dd className="break-all font-mono">{preparedStructureScheduler.context.project_id}</dd></div>
+                            <div><dt className="text-slate-400">Preparation</dt><dd className="break-all font-mono">{preparedStructureScheduler.context.preparation_id}</dd></div>
+                            <div><dt className="text-slate-400">Model / mode</dt><dd className="font-mono">{preparedStructureScheduler.modelId} / {preparedStructureScheduler.mode}</dd></div>
+                            <div><dt className="text-slate-400">Job name</dt><dd>{preparedStructureScheduler.name}</dd></div>
+                        </dl>
+                    </section>
+                    <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+                        <h2 className="text-sm font-semibold">Exact pinned scientific request</h2>
+                        <pre className="mt-3 max-h-[32rem] overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-300">{JSON.stringify(preparedStructureScheduler.params, null, 2)}</pre>
+                    </section>
+                    {submitPreparedStructure.error && <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/40 p-3 text-sm text-red-100">{String(submitPreparedStructure.error instanceof Error ? submitPreparedStructure.error.message : submitPreparedStructure.error)}</p>}
+                    <button
+                        type="button"
+                        disabled={submitPreparedStructure.isPending}
+                        onClick={() => submitPreparedStructure.mutate()}
+                        className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        {submitPreparedStructure.isPending ? 'Submitting exact prepared request…' : 'Submit exact prepared request'}
+                    </button>
+                </main>
+            </div>
+        );
+    }
+    if (launchContextId && launchContextQuery.isLoading) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main className="mx-auto max-w-3xl rounded-2xl border border-blue-500/40 bg-blue-950/30 p-5">Resolving immutable Project launch authority…</main></div>;
+    }
+    if (launchContextId && launchContextQuery.isError) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the launch context is invalid, expired, claimed, or unavailable.</main></div>;
+    }
+    if (isPreparedStructureFamily) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the prepared Boltz-2/Protenix scheduler authority is incomplete or is not reserved by a Project Run Group.</main></div>;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
+            <ExecutionTargetPicker />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}
@@ -1835,18 +1958,12 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                 />
-                            ) : selectedTemplateId === 'structure_prediction' || selectedTemplateId === 'boltz_cp_experimental' ? (
+                            ) : selectedTemplateId === 'structure_prediction' ? (
                                 <StructurePredictionTemplate
                                     key={`${selectedTemplateId}:${dedicatedTemplateVersion}`}
                                     onBack={handleDedicatedTemplateBack}
                                     onOpenTemplateManager={openTemplateManager}
-                                    initialValues={selectedTemplateId === 'boltz_cp_experimental'
-                                        ? {
-                                            ...(getDedicatedTemplateInitialValues('boltz_cp_experimental') || {}),
-                                            ...(templateDetail?.preset_params || {}),
-                                            ...(clonedValues || {}),
-                                        }
-                                        : clonedValues}
+                                    initialValues={clonedValues}
                                     sourceSequenceId={mdHandoff.route?.sourceSequenceId ?? null}
                                     mdDraftId={mdHandoff.route?.draftId ?? null}
                                     returnTemplate={mdHandoff.route?.returnTemplate ?? null}

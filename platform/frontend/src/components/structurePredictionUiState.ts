@@ -4,8 +4,11 @@ import {
 } from './frustrampnn/frustraMpnnSettingsState.js';
 
 export type StructurePredictionMode = 'predict' | 'complex';
-export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2';
-export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'both' | 'all' | 'boltz_protenix';
+export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'protenix' | 'esmfold2';
+export type LegacyStructurePredictorFamily = 'rf3';
+export type LegacyStructurePredictorSelection = LegacyStructurePredictorFamily | 'both' | 'all';
+export type StructurePredictorSelection = StructurePredictorFamily | 'boltz_api' | 'boltz_protenix';
+export type StructurePredictorRequest = StructurePredictorSelection | LegacyStructurePredictorSelection;
 export type BoltzQualityPresetId = 'quick' | 'balanced' | 'max' | 'custom';
 export type StructureLaunchVariant = 'default' | 'boltz_cp_experimental';
 export type StructureMsaProvider = 'local' | 'colabfold_api';
@@ -25,7 +28,7 @@ export interface StructurePredictorOption {
 }
 
 export interface ResolvedStructurePredictorSelection {
-    requestedSelection: StructurePredictorSelection;
+    requestedSelection: StructurePredictorRequest;
     canonicalSelection: StructurePredictorSelection;
     families: StructurePredictorFamily[];
     valid: boolean;
@@ -73,17 +76,8 @@ export interface BoltzCpGpuLaunchInput {
     fallbackGpuIds?: string | null;
 }
 
-export type BoltzCpShardPlanId = '1x1' | '2x2' | '4x4';
-
-export interface BoltzCpShardPlanDefinition {
-    id: BoltzCpShardPlanId;
-    label: string;
-    logicalSizeCp: number;
-    description: string;
-}
-
 export interface StructureSubmitTarget {
-    modelId: 'boltz2' | 'boltz_api' | 'rf3' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
+    modelId: 'boltz2' | 'boltz_api' | 'protenix' | 'esmfold2' | 'boltz_cp_experimental';
     mode: 'predict' | 'complex' | 'design';
 }
 
@@ -94,12 +88,11 @@ export interface ResolveStructureSubmitTargetInput {
 }
 
 export interface BoltzCpSubmitParamsInput {
-    shardPlanId: BoltzCpShardPlanId;
     outputFormat: 'mmcif' | 'pdb';
     writeFullPae: boolean;
-    contextQueryTileTokens?: number | string | null;
     seed?: string | null;
     gpuIds?: string | null;
+    sizeCp: number;
 }
 
 export interface StructureMsaSubmitParamsInput {
@@ -129,7 +122,6 @@ export interface BoltzApiStructureRequestInput {
     };
 }
 
-const COMPLEX_RF3_DISABLED_REASON = 'RF3 is predict-only and cannot be launched in complex mode.';
 const TARGET_PREVIEW_HIGHLIGHT = { r: 59, g: 130, b: 246 };
 type StructureInitialValues = Record<string, unknown>;
 type BoltzCpSubmitParams = Record<string, string | number | boolean>;
@@ -175,55 +167,6 @@ export const buildBoltzApiStructureRequest = ({
     num_samples: Math.max(1, Math.min(10, Math.floor(Number(numSamples) || 1))),
     use_msa: useMsa,
 });
-
-export const BOLTZ_CP_DEFAULT_SHARD_PLAN_ID: BoltzCpShardPlanId = '2x2';
-export const DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS = 512;
-const BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID: Record<BoltzCpShardPlanId, number> = {
-    '1x1': 1,
-    '2x2': 4,
-    '4x4': 16,
-};
-
-export const BOLTZ_CP_SHARD_PLAN_DEFINITIONS: BoltzCpShardPlanDefinition[] = [
-    {
-        id: '1x1',
-        label: '1×1 (single logical shard)',
-        logicalSizeCp: 1,
-        description: 'No logical sharding; useful for fallback/debug runs.',
-    },
-    {
-        id: '2x2',
-        label: '2×2 (4 logical shards)',
-        logicalSizeCp: 4,
-        description: 'Defines a 2×2 logical tile mesh. The selected logical plan does not change with GPU count.',
-    },
-    {
-        id: '4x4',
-        label: '4×4 (16 logical shards)',
-        logicalSizeCp: 16,
-        description: 'Defines a 4×4 logical tile mesh. The selected logical plan does not change with GPU count.',
-    },
-];
-
-export const normalizeBoltzCpShardPlanId = (value: unknown): BoltzCpShardPlanId => {
-    const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === '1x1' || normalized === '2x2' || normalized === '4x4') {
-        return normalized;
-    }
-    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
-};
-
-export const getBoltzCpLogicalSizeCp = (shardPlanId: unknown): number => (
-    BOLTZ_CP_LOGICAL_SIZE_CP_BY_ID[normalizeBoltzCpShardPlanId(shardPlanId)]
-);
-
-export const inferBoltzCpShardPlanId = (sizeCp: unknown): BoltzCpShardPlanId => {
-    const parsed = Number.parseInt(String(sizeCp), 10);
-    if (parsed === 1) return '1x1';
-    if (parsed === 16) return '4x4';
-    if (parsed === 4) return '2x2';
-    return BOLTZ_CP_DEFAULT_SHARD_PLAN_ID;
-};
 
 export const normalizeMsaTargetShardMode = (value: unknown): StructureMsaTargetShardMode => {
     const normalized = String(value || '').trim().toLowerCase();
@@ -304,11 +247,11 @@ export const resolveStructureLaunchConfig = (initialValues?: StructureInitialVal
             variant,
             submitModelId: 'boltz_cp_experimental',
             submitMode: 'design',
-            allowPredictorSelection: false,
+            allowPredictorSelection: true,
             showParallelJobs: false,
             showSequenceBatch: false,
             showMsaControls: true,
-            forcedPredictor: 'boltz',
+            forcedPredictor: 'fold_cp',
         };
     }
 
@@ -339,73 +282,39 @@ export const deriveBoltzCpGpuLaunchSettings = ({
     };
 };
 
-export const getBoltzCpRuntimeBridgeSummary = ({
-    shardPlanId,
-    gpuIds,
-    sizeCp,
-    autoFallbackLabel = 'auto-selected GPU pool',
-}: {
-    shardPlanId: unknown;
-    gpuIds?: string | null;
-    sizeCp: number;
-    autoFallbackLabel?: string;
-}): string => {
-    const normalizedPlanId = normalizeBoltzCpShardPlanId(shardPlanId);
-    const logicalSizeCp = getBoltzCpLogicalSizeCp(normalizedPlanId);
-    const resolvedGpuLabel = String(gpuIds || '').trim() || autoFallbackLabel;
-    const logicalShardLabel = logicalSizeCp === 1 ? 'logical shard' : 'logical shards';
-    const physicalRankLabel = sizeCp === 1 ? 'CP rank' : 'CP ranks';
-    return `The selected logical plan stays ${normalizedPlanId} (${logicalSizeCp} ${logicalShardLabel}); GPU count only affects the current runtime bridge. ${resolvedGpuLabel} → current physical launch = ${sizeCp} ${physicalRankLabel}.`;
-};
-
 export const resolveStructureSubmitTarget = ({
-    launchConfig,
     predictionMode,
     predictorSelection,
 }: ResolveStructureSubmitTargetInput): StructureSubmitTarget => {
-    if (launchConfig.variant !== 'default') {
-        return {
-            modelId: launchConfig.submitModelId,
-            mode: launchConfig.submitMode,
-        };
-    }
-
     const resolvedSelection = resolveStructurePredictorSelection(predictionMode, predictorSelection);
     return {
         modelId: resolvedSelection.canonicalSelection === 'boltz_api'
             ? 'boltz_api'
-            : resolvedSelection.canonicalSelection === 'rf3'
-                ? 'rf3'
+            : resolvedSelection.canonicalSelection === 'fold_cp'
+                ? 'boltz_cp_experimental'
                 : resolvedSelection.canonicalSelection === 'protenix'
                     ? 'protenix'
                     : resolvedSelection.canonicalSelection === 'esmfold2'
                         ? 'esmfold2'
                         : 'boltz2',
-        mode: predictionMode,
+        mode: resolvedSelection.canonicalSelection === 'fold_cp' ? 'design' : predictionMode,
     };
 };
 
 export const buildBoltzCpSubmitParams = ({
-    shardPlanId,
     outputFormat,
     writeFullPae,
-    contextQueryTileTokens,
     seed,
     gpuIds,
+    sizeCp,
 }: BoltzCpSubmitParamsInput): BoltzCpSubmitParams => {
     const params: BoltzCpSubmitParams = {
-        structure_launch_variant: 'boltz_cp_experimental',
         num_parallel_jobs: 1,
         bcp_input_format: 'config_files',
-        bcp_shard_plan_id: normalizeBoltzCpShardPlanId(shardPlanId),
         bcp_output_format: outputFormat,
         bcp_write_full_pae: writeFullPae,
-        bcp_context_query_tile_tokens: DEFAULT_BOLTZ_CP_CONTEXT_QUERY_TILE_TOKENS,
+        bcp_size_cp: sizeCp,
     };
-    const parsedContextQueryTileTokens = Number.parseInt(String(contextQueryTileTokens ?? ''), 10);
-    if (Number.isFinite(parsedContextQueryTileTokens) && parsedContextQueryTileTokens > 0) {
-        params.bcp_context_query_tile_tokens = parsedContextQueryTileTokens;
-    }
     if (gpuIds && gpuIds.trim()) {
         params.bcp_gpu_ids = gpuIds.trim();
     }
@@ -464,26 +373,34 @@ export const BOLTZ_QUALITY_PRESETS = [
 
 const PREDICT_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Fast, SOTA accuracy', color: 'blue' },
+    { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel Boltz', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 queue', color: 'blue' },
-    { id: 'rf3', name: 'RoseTTAFold3', desc: 'Open-source AF3 alt.', color: 'green' },
     { id: 'protenix', name: 'Protenix', desc: 'AF3-level, multi-modal', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast local all-atom folding', color: 'blue' },
-    { id: 'both', name: 'Boltz + RF3', desc: 'Ensemble (2)', color: 'purple' },
-    { id: 'all', name: 'All Three', desc: 'Full ensemble', color: 'amber' },
 ];
 
 const COMPLEX_MODE_OPTIONS: StructurePredictorOption[] = [
     { id: 'boltz', name: 'Boltz-2', desc: 'Complex prediction with target conditioning', color: 'blue' },
+    { id: 'fold_cp', name: 'NVIDIA Fold-CP', desc: 'OEM context-parallel complex prediction', color: 'amber' },
     { id: 'boltz_api', name: 'Boltz API', desc: 'Remote Boltz-2.1 complex prediction', color: 'blue' },
-    { id: 'rf3', name: 'RoseTTAFold3', desc: 'Predict-only; unavailable for complexes', color: 'green', disabled: true, disabledReason: COMPLEX_RF3_DISABLED_REASON },
     { id: 'protenix', name: 'Protenix', desc: 'Template-guided complex prediction', color: 'violet' },
     { id: 'esmfold2', name: 'ESMFold2', desc: 'Fast MSA-free complex co-folding', color: 'blue' },
     { id: 'boltz_protenix', name: 'Boltz + Protenix', desc: 'Truthful complex ensemble', color: 'amber' },
 ];
 
-const toPredictorSelection = (value: string | null | undefined): StructurePredictorSelection => {
+export const isLegacyStructurePredictorSelection = (
+    value: string | null | undefined,
+): value is LegacyStructurePredictorSelection => {
     const normalized = String(value || '').trim().toLowerCase();
-    if (normalized === 'boltz_api' || normalized === 'rf3' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'both' || normalized === 'all' || normalized === 'boltz_protenix') {
+    return normalized === 'rf3' || normalized === 'both' || normalized === 'all';
+};
+
+const toPredictorSelection = (value: string | null | undefined): StructurePredictorRequest => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (isLegacyStructurePredictorSelection(normalized)) {
+        return normalized;
+    }
+    if (normalized === 'boltz_api' || normalized === 'fold_cp' || normalized === 'protenix' || normalized === 'esmfold2' || normalized === 'boltz_protenix') {
         return normalized;
     }
     return 'boltz';
@@ -499,7 +416,25 @@ export const resolveStructurePredictorSelection = (
 ): ResolvedStructurePredictorSelection => {
     const requestedSelection = toPredictorSelection(selection);
 
+    if (isLegacyStructurePredictorSelection(requestedSelection)) {
+        return {
+            requestedSelection,
+            canonicalSelection: 'boltz',
+            families: [],
+            valid: false,
+            error: 'RF3 is retained for historical result review only and cannot be submitted or retried.',
+        };
+    }
+
     if (mode === 'complex') {
+        if (requestedSelection === 'fold_cp') {
+            return {
+                requestedSelection,
+                canonicalSelection: 'fold_cp',
+                families: ['fold_cp'],
+                valid: true,
+            };
+        }
         if (requestedSelection === 'boltz_api') {
             return {
                 requestedSelection,
@@ -508,15 +443,7 @@ export const resolveStructurePredictorSelection = (
                 valid: true,
             };
         }
-        if (requestedSelection === 'rf3') {
-            return {
-                requestedSelection,
-                canonicalSelection: requestedSelection,
-                families: [],
-                valid: false,
-                error: COMPLEX_RF3_DISABLED_REASON,
-            };
-        }
+
         if (requestedSelection === 'esmfold2') {
             return {
                 requestedSelection,
@@ -525,7 +452,7 @@ export const resolveStructurePredictorSelection = (
                 valid: true,
             };
         }
-        if (requestedSelection === 'both' || requestedSelection === 'all' || requestedSelection === 'boltz_protenix') {
+        if (requestedSelection === 'boltz_protenix') {
             return {
                 requestedSelection,
                 canonicalSelection: 'boltz_protenix',
@@ -549,6 +476,14 @@ export const resolveStructurePredictorSelection = (
         };
     }
 
+    if (requestedSelection === 'fold_cp') {
+        return {
+            requestedSelection,
+            canonicalSelection: 'fold_cp',
+            families: ['fold_cp'],
+            valid: true,
+        };
+    }
     if (requestedSelection === 'boltz_api') {
         return {
             requestedSelection,
@@ -557,22 +492,7 @@ export const resolveStructurePredictorSelection = (
             valid: true,
         };
     }
-    if (requestedSelection === 'both') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'both',
-            families: ['boltz', 'rf3'],
-            valid: true,
-        };
-    }
-    if (requestedSelection === 'all') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'all',
-            families: ['boltz', 'rf3', 'protenix'],
-            valid: true,
-        };
-    }
+
     if (requestedSelection === 'protenix') {
         return {
             requestedSelection,
@@ -581,14 +501,7 @@ export const resolveStructurePredictorSelection = (
             valid: true,
         };
     }
-    if (requestedSelection === 'rf3') {
-        return {
-            requestedSelection,
-            canonicalSelection: 'rf3',
-            families: ['rf3'],
-            valid: true,
-        };
-    }
+
     if (requestedSelection === 'esmfold2') {
         return {
             requestedSelection,

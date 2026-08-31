@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-import { api, type JobLogs } from '../../lib/api';
+import { api, assertLocalOnlySubmission, type JobLogs } from '../../lib/api';
 import { parseFrustraMpnnSourceInspection } from '../../lib/frustraMpnnApi';
 import type { FrustraMpnnRequestedSettings } from '../frustrampnn/frustraMpnnSettingsState';
 import type { FrustraMpnnSourceInspection } from '../frustrampnn/frustraMpnnSettingsState';
@@ -705,8 +705,10 @@ export const searchCmRcsb = async (
     };
 };
 
-export const submitCmRequest = async (payload: CmSubmitRequest): Promise<CmSubmitReceipt> =>
-    (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', payload)).data;
+export const submitCmRequest = async (payload: CmSubmitRequest): Promise<CmSubmitReceipt> => {
+    assertLocalOnlySubmission('Conformational Mapping');
+    return (await api.post<CmSubmitReceipt>('/api/conformational-mapping/requests', payload)).data;
+};
 
 export const getCmStatus = async (requestId: string): Promise<CmStatus> =>
     (await api.get<CmStatus>(`/api/conformational-mapping/requests/${encodeURIComponent(requestId)}`)).data;

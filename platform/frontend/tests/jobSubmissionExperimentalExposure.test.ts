@@ -22,6 +22,7 @@ describe('workflow-only capability boundaries', () => {
             'platform/api/config/templates/esmfold2.yaml',
             'platform/api/config/templates/esmfold2_experimental.yaml',
             'platform/api/config/templates/boltzgen_ligand.yaml',
+            'platform/api/config/templates/boltz_cp_experimental.yaml',
             'platform/frontend/src/components/BoltzGenTemplate.tsx',
         ]) {
             assert.equal(fs.existsSync(path.join(repoRoot, relativePath)), false, relativePath);
@@ -50,7 +51,8 @@ describe('workflow-only capability boundaries', () => {
         const mutagenesisTemplate = src('components/MutagenesisTemplate.tsx');
         const jobSubmission = src('components/JobSubmission.tsx');
 
-        assert.equal(structureState.includes("export type StructurePredictorFamily = 'boltz' | 'rf3' | 'protenix' | 'esmfold2'"), true);
+        assert.equal(structureState.includes("export type StructurePredictorFamily = 'boltz' | 'fold_cp' | 'protenix' | 'esmfold2'"), true);
+        assert.equal(structureState.includes("export type LegacyStructurePredictorFamily = 'rf3'"), true);
         assert.equal(structureState.includes("StructureLaunchVariant = 'default' | 'boltz_cp_experimental' | 'esmfold2'"), false);
         assert.equal(structureTemplate.includes("predictorFamilies.includes('esmfold2')"), true);
         assert.equal(mutagenesisTemplate.includes("setPredictor('esmfold2')"), true);
@@ -62,6 +64,19 @@ describe('workflow-only capability boundaries', () => {
         assert.equal(inventory.includes("id: 'boltzgen_design'"), false);
         assert.equal(inventory.includes("id: 'boltzgen_ligand'"), false);
         assert.equal(inventory.includes("id: 'esmfold2'"), false);
-        assert.equal(inventory.includes("modelTopics: ['boltz2', 'rf3', 'protenix', 'esmfold2']"), true);
+        assert.equal(inventory.includes("modelTopics: ['boltz2', 'fold_cp', 'protenix', 'esmfold2', 'frustrampnn']"), true);
+        assert.equal(inventory.includes("workflowId: 'boltz_cp_experimental'"), false);
+    });
+
+    it('routes Fold-CP compatibility IDs into Structure Prediction', () => {
+        const jobSubmission = src('components/JobSubmission.tsx');
+        assert.equal(jobSubmission.includes("boltz_cp_experimental: 'structure_prediction'"), true);
+        assert.equal(jobSubmission.includes("pred_method: 'fold_cp'"), true);
+        assert.equal(jobSubmission.includes("selectedTemplateId === 'boltz_cp_experimental'"), false);
+        const activeMethodMap = jobSubmission
+            .split('const structurePredictionMethodMap', 2)[1]
+            .split('const compatibilityMethodMap', 1)[0];
+        assert.equal(activeMethodMap.includes("fold_cp: { model_id: 'boltz_cp_experimental', mode: 'design' }"), true);
+        assert.equal(activeMethodMap.includes('rf3'), false);
     });
 });

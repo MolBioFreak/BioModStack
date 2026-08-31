@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import math
 import os
 import re
 import stat
@@ -17,14 +19,20 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
+import rfc8785
 
-from database import Job, get_session
+from database import Job, OntRawSignalRepresentation, get_session
 from experiment_database import get_experiment_session
 from molbio_ngs_database import get_molbio_ngs_session
 from routers.experiment_workspaces import _authenticated_principal, _require_mutation_owner
 from ont_ngs_result_response import OntFastqQcResultResponse
 from services import alignment_access
 from services import ngs_alignment_sessions as service
+from services.ont_read_metrics import (
+    OntReadMetricError,
+    RAW_READ_METRICS_CONTRACT,
+    load_read_metrics_for_ids,
+)
 from services.ont_ngs_completion import (
     OntNgsCompletionError,
     canonical_ngs_package_authority,
@@ -235,6 +243,196 @@ class BinaryArtifactResponse(RootModel[bytes]):
     pass
 
 
+class OntDerivedArtifactV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str
+    url: str
+    sha256: str
+    size_bytes: int
+    mime_type: str
+    range_capable: Literal[True]
+
+
+class OntPresentationSourceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    package_manifest_sha256: str
+    alignment_sha256: str
+    alignment_size_bytes: int
+    alignment_index_sha256: str
+    alignment_index_size_bytes: int
+    primary_read_count: int
+    alignment_record_count: int
+
+
+class OntPresentationPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    version: int
+    target_reads: int
+    max_preview_bytes: int
+    max_coverage_bins: int
+    max_seconds: float
+
+
+class OntPresentationPreviewV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["primary_read_preview"]
+    selected_read_count: int
+    selected_record_count: int
+    selected_read_set_sha256: str
+    forward_count: int
+    reverse_count: int
+    bam: OntDerivedArtifactV1
+    index: OntDerivedArtifactV1
+
+
+class OntPresentationCoverageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["full_source_primary_coverage"]
+    bin_width_bp: int
+    primary_read_count: int
+    artifact: OntDerivedArtifactV1
+
+
+class OntAlignmentPresentationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-presentation.v1"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    mode: Literal["primary", "dimer_candidates"]
+    state: Literal["ready"]
+    source: OntPresentationSourceV1
+    policy: OntPresentationPolicyV1
+    preview: OntPresentationPreviewV1
+    coverage: OntPresentationCoverageV1
+    manifest: OntDerivedArtifactV1
+
+
+class OntAlignmentLocusSliceRequestV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contig: str
+    start_1based: int
+    end_1based: int
+    max_reads: int
+
+
+class OntAlignmentLocusPolicyV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: Literal["bounded-full-source-locus-slice"]
+    version: Literal[1]
+    max_reads: int
+    max_records: int
+    max_bytes: int
+    max_span_bp: int
+    max_seconds: float
+
+
+class OntAlignmentLocusSliceV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.alignment-locus-slice.v1"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    slice_id: str
+    state: Literal["ready"]
+    contig: str
+    start_1based: int
+    end_1based: int
+    overlapping_read_count: int
+    selected_read_count: int
+    selected_record_count: int
+    capped: bool
+    policy: OntAlignmentLocusPolicyV1
+    bam: OntDerivedArtifactV1
+    index: OntDerivedArtifactV1
+    manifest: OntDerivedArtifactV1
+
+
+class OntSortableReadV1(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    read_id: str
+    length: int | None = None
+    mean_quality: float | None = None
+    contig: str | None = None
+    start_1based: int | None = None
+    alignment_end_1based: int | None = None
+    strand: Literal["+", "-"]
+    mapq: int | None = None
+    cigar: str | None = None
+    flags: int
+    unmapped: bool
+    aligned_query_bases: int | None = None
+    aligned_reference_bases: int | None = None
+    inserted_bases: int | None = None
+    deleted_bases: int | None = None
+    skipped_reference_bases: int | None = None
+    clipped_bases: int | None = None
+    edit_distance: int | None = None
+    reference_substitution_count: int | None = None
+    reference_substitution_rate: float | None = None
+    aligned_fraction: float | None = None
+    clipped_fraction: float | None = None
+    reference_disagreement_rate: float | None = None
+    sample_count: int | None = None
+    sampling_rate_hz: int | None = None
+    duration_seconds: float | None = None
+    channel_number: int | None = None
+    start_mux: int | None = None
+    start_time_samples: int | None = None
+    acquisition_start_seconds: float | None = None
+    time_since_mux_change_seconds: float | None = None
+    num_reads_since_mux_change: int | None = None
+    num_minknow_events: int | None = None
+    minknow_event_rate_per_second: float | None = None
+    median_before_pa: float | None = None
+    open_pore_level_pa: float | None = None
+    tracked_scaling_shift: float | None = None
+    tracked_scaling_scale: float | None = None
+    predicted_scaling_shift: float | None = None
+    predicted_scaling_scale: float | None = None
+    current_mean_pa: float | None = None
+    current_median_pa: float | None = None
+    current_stddev_pa: float | None = None
+    current_mad_pa: float | None = None
+    current_min_pa: float | None = None
+    current_max_pa: float | None = None
+    dorado_move_stride_samples: int | None = None
+    dorado_emitted_bases: int | None = None
+    mapped_signal_start_sample: int | None = None
+    mapped_signal_end_sample: int | None = None
+    mapped_signal_span_samples: int | None = None
+    dorado_emission_rate_bases_per_second: float | None = None
+    samples_per_aligned_reference_base: float | None = None
+    signal_to_reference_dwell_mean_samples: float | None = None
+    signal_to_reference_dwell_median_samples: float | None = None
+    signal_to_reference_dwell_stddev_samples: float | None = None
+    signal_to_reference_dwell_mad_samples: float | None = None
+
+
+class OntSortableReadPageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    schema_version: Literal["bms.ngs.sortable-read-page.v1"] = Field(alias="schema")
+    job_id: str
+    session_id: str
+    slice_id: str
+    authority_sha256: str
+    selected_read_count: int
+    overlapping_read_count: int
+    capped: bool
+    filtered_read_count: int
+    sort_by: str
+    sort_direction: Literal["asc", "desc"]
+    null_order: Literal["last"]
+    tie_breaker: list[Literal["read_id", "start_1based", "flags"]]
+    signal_metrics_state: Literal["ready", "unavailable", "not_bound"]
+    signal_metrics_artifact_sha256: str | None
+    raw_representation_id: str | None
+    mapping_metrics_state: Literal["not_bound"]
+    metric_contract: Literal["bms.ont.literature-backed-read-metrics.v1"]
+    reads: list[OntSortableReadV1]
+    next_cursor: str | None
+    limit: int
+
+
 def _typed_errors(*statuses: int) -> dict[int | str, dict[str, Any]]:
     return {
         status: {"model": OntNgsErrorV1, "description": "Typed governed NGS failure"}
@@ -268,6 +466,11 @@ _GOVERNED_OPENAPI_SUFFIXES = (
     "/ngs-artifacts",
     "/alignment-artifacts",
     "/alignment-session-artifacts",
+    "/preview/{kind}",
+    "/presentation",
+    "/presentation/{kind}",
+    "/locus-slices",
+    "/locus-slices/{slice_id}/{artifact_sha256}/{kind}",
     "/reads",
     "/sequence-qc-manifest",
     "/manifest",
@@ -654,11 +857,29 @@ def _require_local_development_browser(request: Request, job_id: str) -> None:
         )
     configured = urlsplit(os.environ.get("BMS_FRONTEND_HEALTH_URL", ""))
     supplied = urlsplit(request.headers.get("origin", ""))
+    external = urlsplit(str(request.base_url))
+    supplied_origin = (supplied.scheme, supplied.netloc)
+    configured_origin = (configured.scheme, configured.netloc)
+    external_origin = (external.scheme, external.netloc)
+    tailnet_user = request.headers.get("tailscale-user-login", "").strip()
+    selected_tailnet_origin = (
+        secure_transport
+        and supplied.scheme == "https"
+        and bool(supplied.hostname)
+        and supplied.hostname.rstrip(".").casefold().endswith(".ts.net")
+        and bool(tailnet_user)
+    )
+    allowed_origins = {
+        configured_origin,
+        external_origin if secure_transport else configured_origin,
+    }
+    if selected_tailnet_origin:
+        allowed_origins.add(supplied_origin)
     if (
         request.headers.get("sec-fetch-site", "").lower() != "same-origin"
         or configured.scheme not in {"http", "https"}
         or not configured.netloc
-        or (supplied.scheme, supplied.netloc) != (configured.scheme, configured.netloc)
+        or supplied_origin not in allowed_origins
     ):
         raise OntNgsRouteError(
             status_code=403, code="NGS_ROTATION_ORIGIN_DENIED",
@@ -1247,6 +1468,404 @@ async def get_alignment_session_artifact(
                 pinned_root_descriptor=True,
             )
             return await _serve_artifact(path, metadata, request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+def _presentation_root_for_job(job: Job) -> Path:
+    root = _job_output_dir(job)
+    if not isinstance(root, str) or not root:
+        raise service.AlignmentSessionError("persisted NGS result root is unavailable")
+    return Path(root) / ".alignment-presentations"
+
+
+def _derived_descriptor(metadata: dict[str, Any], url: str) -> dict[str, Any]:
+    return {"kind": metadata["kind"], "url": url, "sha256": metadata["sha256"],
+            "size_bytes": metadata["size_bytes"], "mime_type": metadata["mime_type"], "range_capable": True}
+
+
+def _presentation_authority(job: Job, session_id: str) -> tuple[str, str]:
+    provenance = job.provenance if isinstance(job.provenance, dict) else {}
+    integrity = provenance.get("result_integrity") if isinstance(provenance, dict) else None
+    presentations = integrity.get("alignment_presentations") if isinstance(integrity, dict) else None
+    matches = [
+        item for item in presentations or []
+        if isinstance(item, dict) and item.get("session_id") == session_id
+    ]
+    if len(matches) != 1:
+        raise service.AlignmentSessionError("alignment presentation authority is unavailable")
+    authority_sha256 = matches[0].get("authority_sha256")
+    manifest_sha256 = matches[0].get("manifest_sha256")
+    if (
+        not isinstance(authority_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", authority_sha256) is None
+        or not isinstance(manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+    ):
+        raise service.AlignmentSessionError("alignment presentation authority is invalid")
+    return authority_sha256, manifest_sha256
+
+
+@asynccontextmanager
+async def _prepared_presentation(job_id: str, session_id: str, job: Job):
+    authority_sha256, manifest_sha256 = _presentation_authority(job, session_id)
+    async with _validated_pinned_result_root(job) as pinned_result_root:
+        package = await run_in_threadpool(
+            service.resolve_cached_alignment_presentation,
+            job_id,
+            session_id,
+            cache_root=pinned_result_root / ".alignment-presentations",
+            expected_authority_sha256=authority_sha256,
+            expected_manifest_sha256=manifest_sha256,
+        )
+        yield package, pinned_result_root
+
+
+async def _prepare_presentation(job_id: str, session_id: str, job: Job) -> dict[str, Any]:
+    async with _prepared_presentation(job_id, session_id, job) as (package, _pinned_result_root):
+        return package
+
+
+def _presentation_response(job_id: str, session_id: str, package: dict[str, Any]) -> dict[str, Any]:
+    manifest = package["manifest"]
+    base = (
+        f"/api/jobs/{job_id}/alignment-sessions/{session_id}/presentation/"
+        f"{manifest['authority_sha256']}"
+    )
+    return {
+        "schema": "bms.ngs.alignment-presentation.v1", "job_id": job_id, "session_id": session_id,
+        "mode": manifest["mode"], "state": "ready",
+        "source": {"package_manifest_sha256": manifest["package_manifest_sha256"],
+                   "alignment_sha256": manifest["source_alignment_sha256"],
+                   "alignment_size_bytes": manifest["source_alignment_size_bytes"],
+                   "alignment_index_sha256": manifest["source_index_sha256"],
+                   "alignment_index_size_bytes": manifest["source_index_size_bytes"],
+                   "primary_read_count": manifest["source_primary_mapped_read_count"],
+                   "alignment_record_count": manifest["source_alignment_record_count"]},
+        "policy": manifest["policy"],
+        "preview": {"kind": "primary_read_preview", "selected_read_count": manifest["selected_read_count"],
+                    "selected_record_count": manifest["selected_alignment_record_count"],
+                    "selected_read_set_sha256": manifest["selected_read_set_sha256"],
+                    "forward_count": manifest["selected_strand_counts"]["forward"],
+                    "reverse_count": manifest["selected_strand_counts"]["reverse"],
+                    "bam": _derived_descriptor(package["bam_metadata"], f"{base}/bam"),
+                    "index": _derived_descriptor(package["index_metadata"], f"{base}/bai")},
+        "coverage": {"kind": "full_source_primary_coverage", "bin_width_bp": manifest["coverage_bin_width"],
+                     "primary_read_count": manifest["source_primary_mapped_read_count"],
+                     "artifact": _derived_descriptor(package["coverage_metadata"], f"{base}/coverage")},
+        "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/manifest"),
+    }
+
+
+def _require_current_locus_authority(receipt: dict[str, Any], presentation: dict[str, Any]) -> None:
+    current = presentation["manifest"]
+    current_source_fields = {
+        "source_manifest_sha256": current.get("source_manifest_sha256"),
+        "source_alignment_sha256": current.get("source_alignment_sha256"),
+        "source_alignment_size_bytes": current.get("source_alignment_size_bytes"),
+        "source_index_sha256": current.get("source_index_sha256"),
+        "source_index_size_bytes": current.get("source_index_size_bytes"),
+        "source_identity": current.get("source_identity"),
+        "source_index_identity": current.get("source_index_identity"),
+    }
+    if any(receipt.get(key) != value for key, value in current_source_fields.items()):
+        raise service.AlignmentSessionError("alignment locus slice source authority is stale")
+    if (
+        receipt.get("presentation_authority_sha256") != current.get("authority_sha256")
+        or receipt.get("presentation_manifest_sha256") != presentation["manifest_metadata"].get("sha256")
+    ):
+        raise service.AlignmentSessionError("alignment locus slice presentation authority is stale")
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation",
+            response_model=OntAlignmentPresentationV1, responses=_STANDARD_GOVERNED_ERRORS)
+async def get_alignment_presentation(job_id: str, session_id: str, authorized_job: Job = Depends(require_alignment_job)):
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            return _presentation_response(job_id, session_id, package)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{kind}", responses=_BINARY_RESPONSES)
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/presentation/{presentation_id}/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_presentation_artifact(job_id: str, session_id: str, kind: str, request: Request,
+                                               authorized_job: Job = Depends(require_alignment_job),
+                                               presentation_id: str | None = None):
+    if kind not in {"bam", "bai", "coverage", "manifest"}:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="The governed presentation artifact was not found.",
+                               job_id=job_id, resource="artifact")
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            if presentation_id is not None and presentation_id != package["manifest"].get("authority_sha256"):
+                raise service.AlignmentSessionError("alignment presentation identity does not match")
+            path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                      "coverage": ("coverage_path", "coverage_metadata"),
+                                      "manifest": ("manifest_path", "manifest_metadata")}[kind]
+            return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.post("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices",
+             response_model=OntAlignmentLocusSliceV1, responses=_typed_errors(400, 403, 404, 409))
+async def create_alignment_locus_slice(job_id: str, session_id: str, body: OntAlignmentLocusSliceRequestV1,
+                                       authorized_job: Job = Depends(require_alignment_job)):
+    if (not service.SAFE_CONTIG_RE.fullmatch(body.contig) or body.start_1based < 1
+            or body.end_1based < body.start_1based
+            or body.end_1based - body.start_1based + 1 > service.LOCUS_MAX_SPAN
+            or body.max_reads < 1 or body.max_reads > service.LOCUS_MAX_READS):
+        return _ngs_error_response(status_code=400, code="NGS_RANGE_INVALID",
+                                   message="The locus slice request is invalid.", job_id=job_id, resource="range")
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, pinned_root):
+            manifest = presentation["manifest"]
+            with service.open_presentation_source_bundle(
+                presentation, pinned_root,
+            ) as (bam, index, identity, index_identity):
+                package = await run_in_threadpool(
+                    service.build_alignment_locus_slice, bam,
+                    bam_sha256=manifest["source_alignment_sha256"],
+                    bam_size_bytes=manifest["source_alignment_size_bytes"], index=index,
+                    index_sha256=manifest["source_index_sha256"],
+                    index_size_bytes=manifest["source_index_size_bytes"],
+                    source_identity=identity, source_index_identity=index_identity,
+                    source_manifest_sha256=manifest["package_manifest_sha256"],
+                    presentation_authority_sha256=manifest["authority_sha256"],
+                    presentation_manifest_sha256=presentation["manifest_metadata"]["sha256"],
+                    job_id=job_id, session_id=session_id, contig=body.contig,
+                    start=body.start_1based, end=body.end_1based, max_reads=body.max_reads,
+                )
+        receipt = package["receipt"]
+        base = f"/api/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{package['slice_id']}"
+        return {"schema": "bms.ngs.alignment-locus-slice.v1", "job_id": job_id, "session_id": session_id,
+                "slice_id": package["slice_id"], "state": "ready", "contig": body.contig,
+                "start_1based": body.start_1based, "end_1based": body.end_1based,
+                "overlapping_read_count": receipt["overlapping_read_count"],
+                "selected_read_count": receipt["selected_read_count"],
+                "selected_record_count": receipt["selected_record_count"], "capped": receipt["capped"],
+                "policy": receipt["policy"],
+                "bam": _derived_descriptor(package["bam_metadata"], f"{base}/{package['bam_metadata']['sha256']}/bam"),
+                "index": _derived_descriptor(package["index_metadata"], f"{base}/{package['index_metadata']['sha256']}/bai"),
+                "manifest": _derived_descriptor(package["manifest_metadata"], f"{base}/{package['manifest_metadata']['sha256']}/manifest")}
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/{artifact_sha256}/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_locus_slice_artifact(job_id: str, session_id: str, slice_id: str,
+                                              artifact_sha256: str, kind: str,
+                                              request: Request, authorized_job: Job = Depends(require_alignment_job)):
+    if kind not in {"bam", "bai", "manifest"}:
+        raise OntNgsRouteError(status_code=404, code="NGS_RESOURCE_NOT_FOUND",
+                               message="The governed locus artifact was not found.", job_id=job_id, resource="artifact")
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, _pinned_result_root):
+            package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
+            receipt = package["receipt"]
+            if receipt.get("job_id") != job_id or receipt.get("session_id") != session_id:
+                raise service.AlignmentSessionError("alignment locus slice not found")
+            _require_current_locus_authority(receipt, presentation)
+            path_key, metadata_key = {"bam": ("bam_path", "bam_metadata"), "bai": ("index_path", "index_metadata"),
+                                      "manifest": ("manifest_path", "manifest_metadata")}[kind]
+            if package[metadata_key].get("sha256") != artifact_sha256:
+                raise service.AlignmentSessionError("alignment locus artifact digest does not match")
+            return await _serve_artifact(package[path_key], package[metadata_key], request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
+@router.head("/jobs/{job_id}/alignment-sessions/{session_id}/preview/{kind}", responses=_BINARY_RESPONSES)
+async def get_alignment_preview(
+    job_id: str,
+    session_id: str,
+    kind: str,
+    request: Request,
+    authorized_job: Job = Depends(require_alignment_job),
+):
+    if kind not in {"bam", "bai"}:
+        raise OntNgsRouteError(
+            status_code=404,
+            code="NGS_RESOURCE_NOT_FOUND",
+            message="The governed alignment preview was not found.",
+            job_id=job_id,
+            resource="artifact",
+        )
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (package, _pinned_result_root):
+            if kind == "bam":
+                return await _serve_artifact(package["bam_path"], package["bam_metadata"], request, job_id=job_id)
+            return await _serve_artifact(package["index_path"], package["index_metadata"], request, job_id=job_id)
+    except service.AlignmentSessionError as exc:
+        raise _http_error(exc, job_id=job_id, resource="artifact") from exc
+
+
+@router.get(
+    "/jobs/{job_id}/alignment-sessions/{session_id}/locus-slices/{slice_id}/reads",
+    response_model=OntSortableReadPageV1,
+    responses=_READ_ERRORS,
+)
+async def list_sortable_alignment_reads(
+    job_id: str,
+    session_id: str,
+    slice_id: str,
+    sort_by: str = Query(default="mean_quality"),
+    sort_direction: str = Query(default="desc"),
+    q: str | None = Query(default=None),
+    metric_min: str | None = Query(default=None),
+    metric_max: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: str | None = Query(default=None),
+    raw_run_id: str | None = Query(default=None),
+    raw_observed_generation: str | None = Query(default=None),
+    raw_representation_id: str | None = Query(default=None),
+    authorized_job: Job = Depends(require_alignment_job),
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        parsed_limit = int(limit) if limit is not None else 50
+        parsed_min = float(metric_min) if metric_min is not None else None
+        parsed_max = float(metric_max) if metric_max is not None else None
+        raw_values = (raw_run_id, raw_observed_generation, raw_representation_id)
+        raw_bound = all(value not in (None, "") for value in raw_values)
+        if any(value not in (None, "") for value in raw_values) and not raw_bound:
+            raise ValueError("raw-signal authority is incomplete")
+        parsed_generation = int(str(raw_observed_generation)) if raw_bound else None
+        if (
+            sort_by not in service.SORTABLE_READ_FIELDS
+            or sort_direction not in {"asc", "desc"}
+            or parsed_limit < 1
+            or parsed_limit > service.MAX_READ_PAGE
+            or (q is not None and len(q) > 255)
+            or (cursor is not None and len(cursor) > service.MAX_SORTABLE_READ_CURSOR_BYTES)
+            or (parsed_generation is not None and parsed_generation < 1)
+            or (parsed_min is not None and not math.isfinite(parsed_min))
+            or (parsed_max is not None and not math.isfinite(parsed_max))
+            or (parsed_min is not None and parsed_max is not None and parsed_min > parsed_max)
+        ):
+            raise ValueError("sortable read parameters are invalid")
+    except (TypeError, ValueError, OverflowError):
+        return _ngs_error_response(
+            status_code=400,
+            code="NGS_RANGE_INVALID",
+            message="The sortable read query parameters are invalid.",
+            job_id=job_id,
+            resource="read",
+        )
+
+    if raw_bound:
+        job_params = authorized_job.params if isinstance(authorized_job.params, dict) else {}
+        if (
+            job_params.get("source_instrument_run_id") != raw_run_id
+            or job_params.get("source_instrument_observed_generation") != parsed_generation
+        ):
+            raise _http_error(
+                service.AlignmentSessionError("raw-signal authority does not match persisted job authority"),
+                job_id=job_id,
+                resource="artifact",
+            )
+
+    try:
+        async with _prepared_presentation(job_id, session_id, authorized_job) as (presentation, _pinned_result_root):
+            package = await run_in_threadpool(service.resolve_cached_alignment_locus_slice, slice_id)
+            receipt = package["receipt"]
+            if receipt.get("job_id") != job_id or receipt.get("session_id") != session_id:
+                raise service.AlignmentSessionError("alignment locus slice not found")
+            _require_current_locus_authority(receipt, presentation)
+            reads = await run_in_threadpool(
+                service.read_locus_primary_rows,
+                package["bam_path"],
+                bam_sha256=package["bam_metadata"]["sha256"],
+                bam_size_bytes=package["bam_metadata"]["size_bytes"],
+                index=package["index_path"],
+                index_sha256=package["index_metadata"]["sha256"],
+                index_size_bytes=package["index_metadata"]["size_bytes"],
+            )
+            if len(reads) != int(receipt.get("selected_read_count", -1)):
+                raise service.AlignmentSessionError("sortable read population diverged from locus authority")
+
+            raw_metrics: dict[str, dict[str, Any]] = {}
+            metric_artifact = None
+            representation = None
+            signal_metrics_state = "not_bound"
+            if raw_bound:
+                representation = await db.get(OntRawSignalRepresentation, str(raw_representation_id))
+                if (
+                    representation is None
+                    or representation.run_id != raw_run_id
+                    or representation.observed_generation != parsed_generation
+                    or representation.state != "ready"
+                    or representation.format != "blow5"
+                ):
+                    raise service.AlignmentSessionError("raw-signal representation authority does not match")
+                try:
+                    raw_metrics, metric_artifact = await load_read_metrics_for_ids(
+                        db,
+                        representation=representation,
+                        read_ids=[str(row["read_id"]) for row in reads],
+                    )
+                except OntReadMetricError as exc:
+                    raise service.AlignmentSessionError(str(exc)) from exc
+                signal_metrics_state = "ready" if metric_artifact is not None else "unavailable"
+
+            enriched = await run_in_threadpool(service.enrich_locus_read_metrics, reads, raw_metrics)
+            creation_revision, creation_source_tree = service._creation_authority()
+            authority = {
+                "schema": "bms.ngs.sortable-read-authority.v1",
+                "slice_id": slice_id,
+                "slice_manifest_sha256": package["manifest_metadata"]["sha256"],
+                "slice_bam_sha256": package["bam_metadata"]["sha256"],
+                "slice_index_sha256": package["index_metadata"]["sha256"],
+                "package_authority": presentation.get("source") if isinstance(presentation, dict) else None,
+                "raw_representation_id": representation.id if representation is not None else None,
+                "raw_representation_manifest_sha256": representation.manifest_sha256 if representation is not None else None,
+                "signal_metrics_artifact_sha256": metric_artifact.content_sha256 if metric_artifact is not None else None,
+                "metric_contract": RAW_READ_METRICS_CONTRACT,
+                "mapping_authority": {"state": "not_bound"},
+                "creation_revision": creation_revision,
+                "creation_source_tree": creation_source_tree,
+            }
+            authority_sha256 = hashlib.sha256(rfc8785.dumps(authority)).hexdigest()
+            page = await run_in_threadpool(
+                service.sort_locus_read_metrics_page,
+                enriched,
+                authority_sha256=authority_sha256,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
+                query=q,
+                metric_min=parsed_min,
+                metric_max=parsed_max,
+                cursor=cursor,
+                limit=parsed_limit,
+            )
+            return {
+                "schema": "bms.ngs.sortable-read-page.v1",
+                "job_id": job_id,
+                "session_id": session_id,
+                "slice_id": slice_id,
+                "authority_sha256": authority_sha256,
+                "selected_read_count": len(enriched),
+                "overlapping_read_count": int(receipt["overlapping_read_count"]),
+                "capped": bool(receipt["capped"]),
+                "filtered_read_count": page["filtered_read_count"],
+                "sort_by": sort_by,
+                "sort_direction": sort_direction,
+                "null_order": page["null_order"],
+                "tie_breaker": page["tie_breaker"],
+                "signal_metrics_state": signal_metrics_state,
+                "signal_metrics_artifact_sha256": metric_artifact.content_sha256 if metric_artifact is not None else None,
+                "raw_representation_id": representation.id if representation is not None else None,
+                "mapping_metrics_state": "not_bound",
+                "metric_contract": RAW_READ_METRICS_CONTRACT,
+                "reads": page["reads"],
+                "next_cursor": page["next_cursor"],
+                "limit": parsed_limit,
+            }
     except service.AlignmentSessionError as exc:
         raise _http_error(exc, job_id=job_id, resource="artifact") from exc
 

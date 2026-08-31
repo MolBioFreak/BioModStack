@@ -36,11 +36,12 @@ test('main Z surface keeps pseudo-home authority on the robot', () => {
   assert.doesNotMatch(source, /No tips · 65,000/);
 });
 
-test('main Z normal controls fail closed on missing fresh v2 authority', () => {
+test('main Z normal controls fail closed when current robot control state is unavailable', () => {
   assert.match(source, /const zAbsoluteAction = v2NormalActionById\('oem\.z\.move_absolute'\)/);
   assert.match(source, /const zAbsoluteDisabledReason = !v2AuthorityCoherent/);
   assert.match(source, /zActionId\s*\? v2AuthorityCoherent && action\?\.enabled === true/);
-  assert.match(source, /Fresh v2 catalog or dashboard authority is unavailable/);
+  assert.match(source, /Current robot control state is unavailable/);
+  assert.doesNotMatch(source, /Fresh v2 catalog or dashboard authority is unavailable/);
 });
 
 test('typed Z absolute target keeps local bounds and v2 admission authority distinct', () => {

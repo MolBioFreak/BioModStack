@@ -1,7 +1,7 @@
 {
   "schema": "bms.ont-raw-signal-runtime-policy.v1",
-  "runtime_id": "sha256:2c8694b3c4f523aabdbffd1c0a1ed535c44d32d137e866fcafe64edf117f4408",
-  "oci_digest": "sha256:2c8694b3c4f523aabdbffd1c0a1ed535c44d32d137e866fcafe64edf117f4408",
+  "runtime_id": "sha256:2842b43c6f0a3c9eb656483c0d9e9712cc8ebfe8b34373ba15160a246a7db2e4",
+  "oci_digest": "sha256:2842b43c6f0a3c9eb656483c0d9e9712cc8ebfe8b34373ba15160a246a7db2e4",
   "tools": {
     "blue_crab": "0.5.0",
     "slow5tools": "1.4.0",

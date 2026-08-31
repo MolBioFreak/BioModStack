@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -25,6 +26,7 @@ from services.bioxp.operator_models import (
     OperatorMoveAbsoluteInputsV2,
     OperatorMoveStepsInputsV2,
     OperatorMoveXYInputsV2,
+    OperatorDeckMoveInputsV1,
     OperatorInterruptRequestV1,
     OperatorInterruptReceiptV1,
     OperatorMethodRequestV1,
@@ -138,6 +140,45 @@ def _report_params(
     return {key: value for key, value in values.items() if value is not None}
 
 
+_LEGACY_REPORT_SNAPSHOT_IDENTITY = {
+    "database_identity": "robot_authoritative_sqlite",
+    "schema_version": 2,
+    "database_path_exposed": False,
+    "identity_version": 2,
+}
+
+
+def _is_supported_legacy_report_snapshot(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        value.get(key) == expected
+        for key, expected in _LEGACY_REPORT_SNAPSHOT_IDENTITY.items()
+    )
+
+
+def _normalize_supported_legacy_report_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map only the known schema-2 omissions into explicit false/count values."""
+
+    if not _is_supported_legacy_report_snapshot(payload.get("snapshot")):
+        return payload
+    transformed = dict(payload)
+    for collection_name in ("commands", "pipette"):
+        rows = transformed.get(collection_name)
+        if isinstance(rows, list):
+            transformed[collection_name] = [
+                {**row, "semantic_query_response_verified": False}
+                if isinstance(row, dict) and "semantic_query_response_verified" not in row
+                else row
+                for row in rows
+            ]
+    if (
+        "filtered_total" not in transformed
+        and transformed.get("has_more") is False
+        and isinstance(transformed.get("returned_count"), int)
+    ):
+        transformed["filtered_total"] = transformed["returned_count"]
+    return transformed
+
+
 async def _proxy_operator_report(
     runtime: BioXpRuntime,
     route_name: str,
@@ -169,7 +210,8 @@ async def _proxy_operator_report_model(
     params: dict[str, Any] | None = None,
     path_params: dict[str, str] | None = None,
 ) -> Any:
-    return _validate(model, await _proxy_operator_report(runtime, route_name, params=params, path_params=path_params))
+    payload = await _proxy_operator_report(runtime, route_name, params=params, path_params=path_params)
+    return _validate(model, _normalize_supported_legacy_report_payload(payload))
 
 
 def _bms_export_download(model: Any, export_id: str) -> Any:
@@ -188,9 +230,6 @@ def _quarantine_catalog_payload(payload: Any) -> Any:
             actions.append(raw_row)
             continue
         path = str(raw_row.get("informational_path") or "")
-        action_id = str(raw_row.get("action_id") or "")
-        if action_id.startswith("oem.y.") or action_id.startswith("oem.xy."):
-            continue
         if path == "/oem/startup/status/{session_id}":
             continue
         row = dict(raw_row)
@@ -240,16 +279,6 @@ def _resolve_action_quarantine(action_id: str) -> str | None:
     # admission because the cockpit requests several signed X admissions at
     # once and the catalog itself acquires the robot provider-state lock.
     return OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
-
-
-def _retired_y_xy_detail(action_id: str) -> dict[str, str] | None:
-    if not (action_id.startswith("oem.y.") or action_id.startswith("oem.xy.")):
-        return None
-    return {
-        "error": "legacy_y_xy_operator_surface_retired",
-        "action_id": action_id,
-        "replacement": "Use strict /operator-controls/v2 actions, interrupts, or methods.",
-    }
 
 
 def _translate_robot_error(exc: Exception) -> HTTPException:
@@ -303,6 +332,7 @@ _V2_NORMAL_INPUT_TYPES = {
     "oem.z.move_absolute": OperatorMoveAbsoluteInputsV2,
     "oem.xy.move_absolute": OperatorMoveXYInputsV2,
     "oem.xy.home": OperatorEmptyInputsV2,
+    "oem.deck.move_to_location": OperatorDeckMoveInputsV1,
 }
 
 
@@ -314,6 +344,8 @@ def _validate_v2_action_inputs(action_id: str, request: OperatorActionRequestV2)
         validated = expected_type.model_validate(request.inputs)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="Action inputs do not match the closed action schema") from exc
+    if action_id == "oem.deck.move_to_location" and set(request.expected_board_epoch_by_board) != {"4", "5"}:
+        raise HTTPException(status_code=422, detail="Deck movement requires exact expected board epochs 4 and 5")
     return validated.model_dump(mode="json")
 
 
@@ -326,6 +358,147 @@ def _validate(model: type[Any], payload: Any) -> Any:
         return model.model_validate(payload)
     except ValidationError as exc:
         raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
+
+
+async def _legacy_command_report_context(
+    runtime: BioXpRuntime,
+    command_id: str,
+) -> OperatorReportCommandPageV1:
+    page = await _proxy_operator_report_model(
+        runtime,
+        "operator_report_commands",
+        OperatorReportCommandPageV1,
+        params={"command_id": command_id, "limit": 1},
+    )
+    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+        raise HTTPException(status_code=502, detail="BioXP report detail lacks its current snapshot contract")
+    if len(page.commands) != 1 or page.commands[0].command_id != command_id:
+        raise HTTPException(status_code=502, detail="BioXP legacy report detail does not match its indexed command")
+    return page
+
+
+async def _legacy_pipette_report_context(
+    runtime: BioXpRuntime,
+    pipette_operation_id: str,
+) -> OperatorReportPipettePageV1:
+    page = await _proxy_operator_report_model(
+        runtime,
+        "operator_report_pipette",
+        OperatorReportPipettePageV1,
+        params={"pipette_operation_id": pipette_operation_id, "limit": 1},
+    )
+    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+        raise HTTPException(status_code=502, detail="BioXP pipette detail lacks its current snapshot contract")
+    if len(page.pipette) != 1 or page.pipette[0].pipette_operation_id != pipette_operation_id:
+        raise HTTPException(status_code=502, detail="BioXP legacy pipette detail does not match its indexed operation")
+    return page
+
+
+async def _legacy_pressure_report_context(
+    runtime: BioXpRuntime,
+    stream_session_id: str,
+) -> OperatorReportPressureStreamsV1:
+    page = await _proxy_operator_report_model(
+        runtime,
+        "operator_report_pressure_streams",
+        OperatorReportPressureStreamsV1,
+        params={"pressure_stream_id": stream_session_id, "limit": 1},
+    )
+    if not _is_supported_legacy_report_snapshot(page.snapshot.model_dump(mode="json")):
+        raise HTTPException(status_code=502, detail="BioXP pressure detail lacks its current snapshot contract")
+    if len(page.pressure_streams) != 1 or page.pressure_streams[0].stream_session_id != stream_session_id:
+        raise HTTPException(status_code=502, detail="BioXP legacy pressure detail does not match its indexed stream")
+    return page
+
+
+def _normalize_legacy_evidence(items: Any) -> Any:
+    if not isinstance(items, list):
+        return items
+    return [
+        {**item, "latest_legal_hold_assessment": None}
+        if isinstance(item, dict) and "latest_legal_hold_assessment" not in item
+        else item
+        for item in items
+    ]
+
+
+def _normalize_legacy_pipette_detail_payload(
+    payload: dict[str, Any],
+    context: OperatorReportPipettePageV1,
+) -> dict[str, Any]:
+    if "semantic_query_response_verified" in payload or "snapshot" in payload:
+        return payload
+    transformed = {**payload, "semantic_query_response_verified": False}
+    child_count = max(
+        len(transformed.get("channels") or []),
+        len(transformed.get("exchanges") or []),
+        len(transformed.get("events") or []),
+        len(transformed.get("pressure_streams") or []),
+        1,
+    )
+    transformed["snapshot"] = context.snapshot.model_dump(mode="json")
+    transformed["child_page_limit"] = child_count
+    return transformed
+
+
+def _normalize_legacy_command_detail_payload(
+    payload: dict[str, Any],
+    context: OperatorReportCommandPageV1,
+) -> dict[str, Any]:
+    if "semantic_query_response_verified" in payload or "snapshot" in payload:
+        return payload
+    evidence = _normalize_legacy_evidence(payload.get("evidence"))
+    transitions = payload.get("transitions")
+    if not isinstance(evidence, list) or not isinstance(transitions, list):
+        return payload
+    transformed = {
+        **payload,
+        "semantic_query_response_verified": False,
+        "evidence": evidence,
+        "evidence_preview": evidence,
+        "evidence_continuation": {
+            "returned_count": len(evidence),
+            "filtered_total": len(evidence),
+            "has_more": False,
+            "next_cursor": None,
+        },
+        "snapshot": context.snapshot.model_dump(mode="json"),
+        "child_page_limit": max(len(evidence), len(transitions), 1),
+    }
+    pipette = transformed.get("pipette")
+    if isinstance(pipette, dict):
+        pipette_context = OperatorReportPipettePageV1.model_validate({
+            "filters": context.filters.model_dump(mode="json"),
+            "snapshot": context.snapshot.model_dump(mode="json"),
+            "returned_count": 1,
+            "filtered_total": 1,
+            "has_more": False,
+            "next_cursor": None,
+            "pipette": [{**pipette, "semantic_query_response_verified": False}],
+        })
+        transformed["pipette"] = _normalize_legacy_pipette_detail_payload(pipette, pipette_context)
+    return transformed
+
+
+def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
+    if not isinstance(payload, dict):
+        return None
+    command_id = payload.get("command_id")
+    if not isinstance(command_id, str) or not command_id or len(command_id) > 160:
+        return None
+    status_path = f"/api/bioxp/operator-controls/v2/receipts/{quote(command_id, safe='')}"
+    return HTTPException(
+        status_code=502,
+        detail={
+            "error": "post_dispatch_receipt_validation_failed",
+            "command_id": command_id,
+            "status_path": status_path,
+            "outcome": "uncertain",
+            "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
+            "reconciliation": "Poll the command receipt until terminal; if unavailable, require operator reconciliation.",
+            "robot_evidence": payload,
+        },
+    )
 
 
 @router.get("/operator-controls/v2/catalog", response_model=OperatorControlCatalogV2)
@@ -383,8 +556,17 @@ async def invoke_operator_action_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceiptV2, payload)
-    if receipt.action_id != action_id or receipt.command_id == "":
+    try:
+        receipt = OperatorActionReceiptV2.model_validate(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
+    if receipt.action_id != action_id:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched v2 operator-action receipt")
     return receipt
 
@@ -618,9 +800,6 @@ async def operator_action_admission(
     request: OperatorAdmissionRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorAdmission:
-    retired = _retired_y_xy_detail(action_id)
-    if retired is not None:
-        raise HTTPException(status_code=410, detail=retired)
     quarantine_reason = _resolve_action_quarantine(action_id)
     if quarantine_reason is not None:
         return _quarantined_admission(
@@ -654,9 +833,6 @@ async def invoke_operator_action(
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> OperatorActionReceipt:
-    retired = _retired_y_xy_detail(action_id)
-    if retired is not None:
-        raise HTTPException(status_code=410, detail=retired)
     quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
@@ -794,7 +970,15 @@ async def operator_report_commands(
 
 @router.get("/operator-controls/reports/commands/{command_id}", response_model=OperatorReportCommandDetailV1)
 async def operator_report_command_detail(command_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportCommandDetailV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_command_detail", OperatorReportCommandDetailV1, path_params={"command_id": command_id})
+    payload = await _proxy_operator_report(runtime, "operator_report_command_detail", path_params={"command_id": command_id})
+    try:
+        return OperatorReportCommandDetailV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_command_report_context(runtime, command_id)
+        return _validate(
+            OperatorReportCommandDetailV1,
+            _normalize_legacy_command_detail_payload(payload, context),
+        )
 
 
 @router.get("/operator-controls/reports/commands/{command_id}/transitions", response_model=OperatorReportTransitionsV1)
@@ -804,13 +988,29 @@ async def operator_report_command_transitions(
     limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = None,
 ) -> OperatorReportTransitionsV1:
-    return await _proxy_operator_report_model(
+    payload = await _proxy_operator_report(
         runtime,
         "operator_report_command_transitions",
-        OperatorReportTransitionsV1,
         params={"limit": limit, **({"cursor": cursor} if cursor else {})},
         path_params={"command_id": command_id},
     )
+    try:
+        return OperatorReportTransitionsV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_command_report_context(runtime, command_id)
+        transitions = payload.get("transitions")
+        if payload.get("command_id") != command_id or not isinstance(transitions, list):
+            return _validate(OperatorReportTransitionsV1, payload)
+        return _validate(OperatorReportTransitionsV1, {
+            "command_id": command_id,
+            "filters": {"command_id": command_id, "limit": max(limit, len(transitions), 1)},
+            "snapshot": context.snapshot.model_dump(mode="json"),
+            "returned_count": len(transitions),
+            "filtered_total": len(transitions),
+            "has_more": False,
+            "next_cursor": None,
+            "transitions": transitions,
+        })
 
 
 @router.get("/operator-controls/reports/commands/{command_id}/evidence", response_model=OperatorReportCommandEvidencePageV1)
@@ -820,13 +1020,38 @@ async def operator_report_command_evidence(
     limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = None,
 ) -> OperatorReportCommandEvidencePageV1:
-    return await _proxy_operator_report_model(
+    try:
+        return await _proxy_operator_report_model(
+            runtime,
+            "operator_report_command_evidence",
+            OperatorReportCommandEvidencePageV1,
+            params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+            path_params={"command_id": command_id},
+        )
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+    detail_payload = await _proxy_operator_report(
         runtime,
-        "operator_report_command_evidence",
-        OperatorReportCommandEvidencePageV1,
-        params={"limit": limit, **({"cursor": cursor} if cursor else {})},
+        "operator_report_command_detail",
         path_params={"command_id": command_id},
     )
+    context = await _legacy_command_report_context(runtime, command_id)
+    detail = _validate(
+        OperatorReportCommandDetailV1,
+        _normalize_legacy_command_detail_payload(detail_payload, context),
+    )
+    evidence = [item.model_dump(mode="json") for item in detail.evidence]
+    return _validate(OperatorReportCommandEvidencePageV1, {
+        "command_id": command_id,
+        "filters": {"command_id": command_id, "limit": max(limit, len(evidence), 1)},
+        "snapshot": context.snapshot.model_dump(mode="json"),
+        "returned_count": len(evidence),
+        "filtered_total": len(evidence),
+        "has_more": False,
+        "next_cursor": None,
+        "evidence": evidence,
+    })
 
 
 @router.get("/operator-controls/reports/pipette", response_model=OperatorReportPipettePageV1)
@@ -844,7 +1069,15 @@ async def operator_report_pipette(
 
 @router.get("/operator-controls/reports/pipette/{pipette_operation_id}", response_model=OperatorReportPipetteDetailV1)
 async def operator_report_pipette_detail(pipette_operation_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPipetteDetailV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_pipette_detail", OperatorReportPipetteDetailV1, path_params={"pipette_operation_id": pipette_operation_id})
+    payload = await _proxy_operator_report(runtime, "operator_report_pipette_detail", path_params={"pipette_operation_id": pipette_operation_id})
+    try:
+        return OperatorReportPipetteDetailV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_pipette_report_context(runtime, pipette_operation_id)
+        return _validate(
+            OperatorReportPipetteDetailV1,
+            _normalize_legacy_pipette_detail_payload(payload, context),
+        )
 
 
 @router.get("/operator-controls/reports/pipette/{pipette_operation_id}/channels", response_model=OperatorReportPipetteChannelsV1)
@@ -854,13 +1087,29 @@ async def operator_report_pipette_channels(
     limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = None,
 ) -> OperatorReportPipetteChannelsV1:
-    return await _proxy_operator_report_model(
+    payload = await _proxy_operator_report(
         runtime,
         "operator_report_pipette_channels",
-        OperatorReportPipetteChannelsV1,
         params={"limit": limit, **({"cursor": cursor} if cursor else {})},
         path_params={"pipette_operation_id": pipette_operation_id},
     )
+    try:
+        return OperatorReportPipetteChannelsV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_pipette_report_context(runtime, pipette_operation_id)
+        channels = payload.get("channels")
+        if payload.get("pipette_operation_id") != pipette_operation_id or not isinstance(channels, list):
+            return _validate(OperatorReportPipetteChannelsV1, payload)
+        return _validate(OperatorReportPipetteChannelsV1, {
+            "pipette_operation_id": pipette_operation_id,
+            "filters": {"pipette_operation_id": pipette_operation_id, "limit": max(limit, len(channels), 1)},
+            "snapshot": context.snapshot.model_dump(mode="json"),
+            "returned_count": len(channels),
+            "filtered_total": len(channels),
+            "has_more": False,
+            "next_cursor": None,
+            "channels": channels,
+        })
 
 
 @router.get("/operator-controls/reports/pipette/{pipette_operation_id}/exchanges", response_model=OperatorReportPipetteExchangesV1)
@@ -870,13 +1119,29 @@ async def operator_report_pipette_exchanges(
     limit: int = Query(default=100, ge=1, le=1000),
     cursor: str | None = None,
 ) -> OperatorReportPipetteExchangesV1:
-    return await _proxy_operator_report_model(
+    payload = await _proxy_operator_report(
         runtime,
         "operator_report_pipette_exchanges",
-        OperatorReportPipetteExchangesV1,
         params={"limit": limit, **({"cursor": cursor} if cursor else {})},
         path_params={"pipette_operation_id": pipette_operation_id},
     )
+    try:
+        return OperatorReportPipetteExchangesV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_pipette_report_context(runtime, pipette_operation_id)
+        exchanges = payload.get("exchanges")
+        if payload.get("pipette_operation_id") != pipette_operation_id or not isinstance(exchanges, list):
+            return _validate(OperatorReportPipetteExchangesV1, payload)
+        return _validate(OperatorReportPipetteExchangesV1, {
+            "pipette_operation_id": pipette_operation_id,
+            "filters": {"pipette_operation_id": pipette_operation_id, "limit": max(limit, len(exchanges), 1)},
+            "snapshot": context.snapshot.model_dump(mode="json"),
+            "returned_count": len(exchanges),
+            "filtered_total": len(exchanges),
+            "has_more": False,
+            "next_cursor": None,
+            "exchanges": exchanges,
+        })
 
 
 @router.get("/operator-controls/reports/events", response_model=OperatorReportEventsV1)
@@ -907,7 +1172,19 @@ async def operator_report_pressure_streams(
 
 @router.get("/operator-controls/reports/pressure-streams/{stream_session_id}", response_model=OperatorReportPressureDetailV1)
 async def operator_report_pressure_detail(stream_session_id: str, runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> OperatorReportPressureDetailV1:
-    return await _proxy_operator_report_model(runtime, "operator_report_pressure_detail", OperatorReportPressureDetailV1, path_params={"stream_session_id": stream_session_id})
+    payload = await _proxy_operator_report(runtime, "operator_report_pressure_detail", path_params={"stream_session_id": stream_session_id})
+    try:
+        return OperatorReportPressureDetailV1.model_validate(payload)
+    except ValidationError:
+        context = await _legacy_pressure_report_context(runtime, stream_session_id)
+        chunks = payload.get("chunks")
+        if payload.get("stream_session_id") != stream_session_id or not isinstance(chunks, list):
+            return _validate(OperatorReportPressureDetailV1, payload)
+        return _validate(OperatorReportPressureDetailV1, {
+            **payload,
+            "child_page_limit": max(len(chunks), 1),
+            "snapshot": context.snapshot.model_dump(mode="json"),
+        })
 
 
 @router.get("/operator-controls/reports/pressure-streams/{stream_session_id}/samples", response_model=OperatorReportPressureSamplesV1)
@@ -948,12 +1225,31 @@ async def operator_report_export_list(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> OperatorReportExportListV1:
-    listing = await _proxy_operator_report_model(
-        runtime,
-        "operator_report_export_list",
-        OperatorReportExportListV1,
-        params={"limit": limit},
-    )
+    try:
+        listing = await _proxy_operator_report_model(
+            runtime,
+            "operator_report_export_list",
+            OperatorReportExportListV1,
+            params={"limit": limit},
+        )
+    except HTTPException as exc:
+        if exc.status_code != 405:
+            raise
+        summary = await _proxy_operator_report_model(
+            runtime,
+            "operator_report_summary",
+            OperatorReportSummaryV1,
+            params={"limit": 1},
+        )
+        if not _is_supported_legacy_report_snapshot(summary.snapshot.model_dump(mode="json")):
+            raise
+        return OperatorReportExportListV1(
+            items=[],
+            returned_count=0,
+            limit=limit,
+            available=False,
+            unavailable_reason="legacy_schema_2_export_index_unavailable",
+        )
     return listing.model_copy(
         update={
             "items": [

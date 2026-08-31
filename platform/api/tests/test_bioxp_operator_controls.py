@@ -1043,38 +1043,7 @@ def test_dispatched_timeout_translation_is_explicitly_ambiguous_and_do_not_retry
     }
 
 
-@pytest.mark.parametrize("action_id", ["oem.y.move_steps", "oem.y.stop", "oem.xy.home"])
-def test_legacy_y_and_xy_admission_and_invocation_are_retired_at_bms_boundary(monkeypatch, action_id):
-    client, runtime = make_client(monkeypatch)
-    admission = client.post(
-        f"/api/bioxp/operator-controls/actions/{action_id}/admission",
-        json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "inputs": {},
-        },
-    )
-    invocation = client.post(
-        f"/api/bioxp/operator-controls/actions/{action_id}",
-        json={
-            "expected_connection_generation": 77,
-            "expected_ownership_generation": 7,
-            "idempotency_key": "retired-12345678",
-            "inputs": {},
-        },
-    )
-    for response in (admission, invocation):
-        assert response.status_code == 410
-        assert response.json()["detail"] == {
-            "error": "legacy_y_xy_operator_surface_retired",
-            "action_id": action_id,
-            "replacement": "Use strict /operator-controls/v2 actions, interrupts, or methods.",
-        }
-    assert runtime.connection.client.calls == []
-    assert runtime.connection.safety_interrupt_calls == []
-
-
-def test_legacy_catalog_projection_removes_y_and_xy_action_identities(monkeypatch):
+def test_legacy_catalog_projection_preserves_y_and_xy_action_identities(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
     payload = runtime.connection.client.responses["operator_control_catalog"]
     payload["actions"].extend([
@@ -1083,7 +1052,11 @@ def test_legacy_catalog_projection_removes_y_and_xy_action_identities(monkeypatc
     ])
     response = client.get("/api/bioxp/operator-controls/catalog")
     assert response.status_code == 200
-    assert [row["action_id"] for row in response.json()["actions"]] == ["motion.home_xy"]
+    assert [row["action_id"] for row in response.json()["actions"]] == [
+        "motion.home_xy",
+        "oem.y.move_steps",
+        "oem.xy.home",
+    ]
 
 
 def test_addressed_y_interrupt_returns_exact_typed_receipt_and_rejects_identity_mismatch(monkeypatch):
@@ -1181,6 +1154,140 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
     ]
     assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
     assert "expected_connection_generation" not in runtime.connection.client.calls[6][1]["json_data"]
+
+
+def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
+        action_id="oem.deck.move_to_location",
+        command_id="deck-command-1",
+    )
+    response = client.post(
+        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": "deck-move-12345678",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "inputs": {"target": "LOC_OC", "camera_offset": False},
+        },
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["command_id"] == "deck-command-1"
+    _, kwargs = runtime.connection.client.calls[-1]
+    assert kwargs["json_data"] == {
+        "schema_version": "bioxp.operator_action_request.v2",
+        "idempotency_key": "deck-move-12345678",
+        "expected_ownership_generation": 1,
+        "expected_board_epoch_by_board": {"4": 2, "5": 8},
+        "inputs": {"target": "LOC_OC", "camera_offset": False},
+    }
+
+
+@pytest.mark.parametrize("epochs", [{"4": 2}, {"5": 8}, {"4": 2, "5": 8, "6": 1}])
+def test_deck_move_rejects_missing_or_extra_required_board_epochs(monkeypatch, epochs):
+    client, runtime = make_client(monkeypatch)
+    response = client.post(
+        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": "deck-move-12345678",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": epochs,
+            "inputs": {"target": "LOC_OC", "camera_offset": False},
+        },
+    )
+    assert response.status_code == 422
+    assert runtime.connection.client.calls == []
+
+
+@pytest.mark.parametrize("status", [409, 422, 503])
+def test_deck_move_preserves_robot_rejection_evidence_and_never_retries(monkeypatch, status):
+    client, runtime = make_client(monkeypatch)
+    evidence = {"error": "deck_move_rejected", "command_id": "deck-command-9", "evidence": {"reason": "stale_authority"}}
+
+    async def reject(*args, **kwargs):
+        raise RobotResponseError(status, evidence)
+
+    runtime.connection.request_active_v2_enqueue = reject
+    response = client.post(
+        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": "deck-move-12345678",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "inputs": {"target": "LOC_OC", "camera_offset": False},
+        },
+    )
+    assert response.status_code == status
+    assert response.json()["detail"] == evidence
+
+
+def test_deck_move_preserves_command_identity_when_post_dispatch_receipt_validation_fails(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = {
+        **v2_receipt(action_id="oem.deck.move_to_location", command_id="deck-command-uncertain-1"),
+        "status": "not-a-real-status",
+        "robot_error": {
+            "http_status": 409,
+            "detail": {"error": "board_epoch_conflict", "expected": {"4": 2}, "actual": {"4": 3}},
+        },
+    }
+    response = client.post(
+        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": "deck-move-uncertain-1",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "inputs": {"target": "LOC_OC", "camera_offset": False},
+        },
+    )
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["error"] == "post_dispatch_receipt_validation_failed"
+    assert detail["command_id"] == "deck-command-uncertain-1"
+    assert detail["status_path"].endswith("/deck-command-uncertain-1")
+    assert detail["outcome"] == "uncertain"
+    assert detail["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
+    assert detail["robot_evidence"]["robot_error"]["http_status"] == 409
+    assert detail["robot_evidence"]["robot_error"]["detail"]["actual"] == {"4": 3}
+    assert len(runtime.connection.client.calls) == 1
+
+
+def test_deck_move_preserves_command_identity_when_post_dispatch_action_id_mismatches(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
+        action_id="oem.y.move_steps",
+        command_id="deck-command-action-mismatch-1",
+    )
+
+    response = client.post(
+        "/api/bioxp/operator-controls/v2/actions/oem.deck.move_to_location",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": "deck-move-action-mismatch-1",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": {"4": 2, "5": 8},
+            "inputs": {"target": "LOC_OC", "camera_offset": False},
+        },
+    )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["error"] == "post_dispatch_receipt_validation_failed"
+    assert detail["command_id"] == "deck-command-action-mismatch-1"
+    assert detail["status_path"].endswith("/deck-command-action-mismatch-1")
+    assert detail["outcome"] == "uncertain"
+    assert detail["retry_guidance"] == "do_not_resubmit_reconcile_by_command_id"
+    assert detail["robot_evidence"]["action_id"] == "oem.y.move_steps"
+    assert len(runtime.connection.client.calls) == 1
 
 
 def test_robot_client_uses_fixed_operator_routes_only():

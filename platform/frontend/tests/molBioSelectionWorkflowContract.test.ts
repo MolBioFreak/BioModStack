@@ -16,9 +16,9 @@ test('saved molecular revisions use compact status and collapsed revision detail
     assert.doesNotMatch(toolkitSource, /Exact immutable revision · read-only authority/);
 });
 
-test('the Project Construct Shelf labels the exact Project-owned collection', () => {
-    assert.match(toolkitSource, /Project constructs \(\$\{sequences\.length\}\)/);
-    assert.match(toolkitSource, /Constructs in this Project/);
+test('the Project DNA Sequence Shelf labels the exact Project-owned collection', () => {
+    assert.match(toolkitSource, /Project DNA sequences \(\$\{sequences\.length\}\)/);
+    assert.match(toolkitSource, /DNA sequences in this Project/);
 });
 const viewerSource = readSource('src/components/MolBioToolkit/SequenceViewer.tsx');
 const gcTrackSource = readSource('src/components/MolBioToolkit/GCContentTrack.tsx');

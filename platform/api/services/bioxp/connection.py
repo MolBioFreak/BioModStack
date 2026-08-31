@@ -129,9 +129,11 @@ class BioXpConnectionService:
         self.interrupt_timeout_seconds = interrupt_timeout_seconds
         self.clock = clock or _utcnow
         self._transition_lock = asyncio.Lock()
+        self._probe_lock = asyncio.Lock()
         self._v1_workflow_lock = asyncio.Lock()
         self._v2_enqueue_lock = asyncio.Lock()
         self._v2_query_lock = asyncio.Lock()
+        self._v2_query_cache: dict[str, tuple[int, float, dict[str, Any]]] = {}
         self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
         self._active_target: ValidatedBioXpTarget | None = None
@@ -469,6 +471,7 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
+        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"}
         async with self.active_query_lease(
             expected_generation=expected_generation,
             require_fresh=True,
@@ -476,13 +479,27 @@ class BioXpConnectionService:
             try:
                 async with asyncio.timeout(15.0):
                     async with self._v2_query_lock:
-                        return await self._request_client(
+                        now = asyncio.get_running_loop().time()
+                        if cacheable:
+                            cached = self._v2_query_cache.get(route_name)
+                            if cached is not None:
+                                cached_generation, cached_at, cached_payload = cached
+                                if cached_generation == expected_generation and now - cached_at <= 5.0:
+                                    return cached_payload
+                        payload = await self._request_client(
                             client,
                             route_name,
                             params=params,
                             path_params=path_params,
                             timeout_override=12.0,
                         )
+                        if cacheable:
+                            self._v2_query_cache[route_name] = (
+                                expected_generation,
+                                asyncio.get_running_loop().time(),
+                                payload,
+                            )
+                        return payload
             except TimeoutError as exc:
                 raise RobotTimeoutError(
                     "BioXP v2 query lane timed out before a robot response was received",
@@ -707,6 +724,18 @@ class BioXpConnectionService:
         self._last_error = str(exc) or exc.__class__.__name__
         self._observed_at = self.clock()
 
+    def _record_snapshot_refresh_failure(self, exc: Exception) -> None:
+        """Keep runtime reachability separate from failed hardware refresh."""
+        error = str(exc) or exc.__class__.__name__
+        self._automatic_snapshot_refresh = {
+            "attempted": True,
+            "published": False,
+            "error": error,
+        }
+        self._hardware_observation_fresh = False
+        self._last_hardware_ready = None
+        self._hardware_evidence_error = error
+
     async def _active_status_probe(self) -> None:
         async with self._transition_lock:
             client = self._client
@@ -715,7 +744,8 @@ class BioXpConnectionService:
                 raise ConnectionStateError("BioXP saved profile is not actively connected")
             lease = self._acquire_lease_locked(generation, require_fresh=False)
         try:
-            payload = await client.probe_status_only()
+            async with self._probe_lock:
+                payload = await client.probe_status_only()
         except Exception as exc:
             async with self._transition_lock:
                 if client is self._client and generation == self._generation:
@@ -828,11 +858,15 @@ class BioXpConnectionService:
             # Full probe: robot-owned canonical snapshot is auto-collected by the
             # client when its cached evidence is missing or stale, keeping the
             # operator admission gate (door, axes, gripper) continuously fresh.
-            payload = await client.probe()
+            # Share one probe lane with the status monitor so a long snapshot
+            # cannot make an overlapping status request relabel the runtime as
+            # unreachable.
+            async with self._probe_lock:
+                payload = await client.probe()
         except Exception as exc:
             async with self._transition_lock:
                 if client is self._client and generation == self._generation:
-                    self._record_probe_failure(exc)
+                    self._record_snapshot_refresh_failure(exc)
             return
         finally:
             await self._release_lease(lease)
@@ -849,6 +883,7 @@ class BioXpConnectionService:
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
         self._automatic_snapshot_refresh = None
+        self._v2_query_cache.clear()
         self._capabilities = ()
         self._startup_lifecycle = None
         self._maintenance_state = None

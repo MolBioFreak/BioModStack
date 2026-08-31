@@ -37,10 +37,11 @@ export function resolveTelemetryFreshnessObservedAtMs(
     return latestObservedAtMs;
 }
 
-export function resolveTelemetryBucketIntervalMs(windowMinutes: WindowPreset): number {
-    if (windowMinutes === 1) return 1_000;
-    if (windowMinutes === 3) return 2_000;
-    if (windowMinutes === 5) return 3_000;
+export function resolveTelemetryBucketIntervalMs(
+    windowMinutes: WindowPreset,
+    pollIntervalMs: PollPreset,
+): number {
+    if (windowMinutes <= 5) return pollIntervalMs;
     if (windowMinutes === 10) return 5_000;
     if (windowMinutes === 15) return 10_000;
     if (windowMinutes === 30) return 15_000;
@@ -60,11 +61,9 @@ export function isTelemetryHistoryFresh(
     latestTimestampMs: number | undefined,
     generatedAtMs: number,
     staleAfterMs: number,
-    requestFailed: boolean,
 ): boolean {
     if (
-        requestFailed
-        || latestTimestampMs == null
+        latestTimestampMs == null
         || !Number.isFinite(latestTimestampMs)
         || !Number.isFinite(generatedAtMs)
         || staleAfterMs < 0
@@ -101,19 +100,27 @@ export function resolveTelemetryPlotDomain(
     latestPlottedTimestampMs: number | undefined,
     fresh: boolean,
 ): [number, number] {
-    const [nominalStartMs, nominalEndMs] = nominalDomain;
-    const widthMs = nominalEndMs - nominalStartMs;
+    void latestPlottedTimestampMs;
+    void fresh;
+    return [nominalDomain[0], nominalDomain[1]];
+}
+
+export function resolveTelemetryPlotX(
+    timestampMs: number,
+    xMin: number,
+    xMax: number,
+): number | null {
     if (
-        !fresh
-        || latestPlottedTimestampMs == null
-        || !Number.isFinite(latestPlottedTimestampMs)
-        || widthMs <= 0
-        || latestPlottedTimestampMs < nominalStartMs
-        || latestPlottedTimestampMs > nominalEndMs
+        !Number.isFinite(timestampMs)
+        || !Number.isFinite(xMin)
+        || !Number.isFinite(xMax)
+        || xMax <= xMin
+        || timestampMs < xMin
+        || timestampMs > xMax
     ) {
-        return [nominalStartMs, nominalEndMs];
+        return null;
     }
-    return [latestPlottedTimestampMs - widthMs, latestPlottedTimestampMs];
+    return ((timestampMs - xMin) / (xMax - xMin)) * 1000;
 }
 
 function average(values: readonly number[]): number {

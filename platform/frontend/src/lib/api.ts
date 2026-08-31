@@ -62,6 +62,12 @@ export interface Job {
     // GPU and timing info
     pinned_gpu?: number | null;  // User-specified GPU pin
     assigned_gpu?: number | null;
+    execution_target_id?: string | null;
+    execution_source_revision?: string | null;
+    execution_source_tree?: string | null;
+    execution_bundle_sha256?: string | null;
+    remote_attempt_id?: string | null;
+    remote_state?: string | null;
     started_at?: string | null;
     completed_at?: string | null;
     vram_estimate_mb?: number | null;
@@ -149,6 +155,39 @@ export interface RFD3LocalRedesignReadModel {
         bytes: number;
         media_type: string;
         metadata: Record<string, UntypedApiValue>;
+    }>;
+}
+
+export interface RFD3GenerationRange {
+    min: number | null;
+    mean: number | null;
+    max: number | null;
+}
+
+export interface RFD3GenerationReadModel {
+    schema: 'bms.rfd3.generation.read-model.v1';
+    job_id: string;
+    request: Record<string, UntypedApiValue>;
+    result_manifest_sha256: string;
+    counts: {
+        requested: number;
+        generated: number;
+        accepted: number;
+    };
+    aggregates: {
+        length: RFD3GenerationRange;
+        radius: RFD3GenerationRange;
+        helix: RFD3GenerationRange;
+        strand: RFD3GenerationRange;
+    };
+    candidates: Array<{
+        candidate_id: string;
+        status: string;
+        length: number;
+        radius: number;
+        helix_count: number | null;
+        strand_count: number | null;
+        structure_url: string;
     }>;
 }
 export interface ProteinLocalRedesignResultSurface {
@@ -327,26 +366,7 @@ export interface JobLogs {
     nextflow_log: string | null;
     exit_code: number | null;
     parsed_error: string | null;
-    nextflow_log_source?: 'job_output' | 'legacy_global' | null;
-}
-
-export interface BoltzCpPhysicalGpuResolution {
-    gpu_count: number;
-    launch_size_cp: number;
-}
-
-export interface BoltzCpShardPlan {
-    id: string;
-    label: string;
-    topology: string;
-    logical_size_cp: number;
-    description: string;
-    physical_gpu_resolutions: BoltzCpPhysicalGpuResolution[];
-}
-
-export interface BoltzCpShardPlanCatalog {
-    default_plan_id: string;
-    plans: BoltzCpShardPlan[];
+    nextflow_log_source?: 'job_output' | 'legacy_global' | 'remote_pending' | 'remote_returned' | null;
 }
 
 export interface GPUProcess {
@@ -376,6 +396,97 @@ export interface GPUStatus {
     clock_max_memory_mhz: number;
     processes: GPUProcess[];
 }
+
+export interface ExecutionTarget {
+    id: string;
+    provider: 'vast';
+    provider_instance_id: string;
+    name: string | null;
+    state: 'discovered' | 'probing' | 'ready' | 'inactive' | 'unavailable';
+    active: boolean;
+    host: string | null;
+    port: number | null;
+    username: string | null;
+    remote_root: string;
+    host_key_sha256: string | null;
+    capabilities: Record<string, UntypedApiValue>;
+    pricing: Record<string, UntypedApiValue>;
+    last_error: string | null;
+    last_seen_at: string | null;
+    activated_at: string | null;
+}
+
+export interface DiscoveredExecutionTarget {
+    provider: 'vast';
+    provider_instance_id: string;
+    name: string | null;
+    provider_state: string;
+    host: string | null;
+    port: number | null;
+    username: string | null;
+    gpu_name: string | null;
+    gpu_count: number;
+    gpu_vram_mb: number | null;
+    hourly_rate_usd: number | null;
+    started_at: string | null;
+}
+
+export interface RemoteGpuTelemetry {
+    source: 'active_vast';
+    available: boolean;
+    target: ExecutionTarget | null;
+    gpus: Array<{
+        id: string;
+        execution_target_id: string;
+        index: number;
+        uuid: string;
+        name: string;
+        utilization: number;
+        memory_used_mb: number;
+        memory_total_mb: number;
+        temperature: number | null;
+        power_draw_w: number | null;
+        controls: { fan: false; power: false };
+    }>;
+    observed_at?: string;
+    error?: string;
+}
+
+export const EXECUTION_TARGET_STORAGE_KEY = 'bms.jobLauncher.executionTargetId';
+
+const selectedExecutionTargetForSubmission = (): string | null => (
+    typeof window !== 'undefined' && window.location.pathname === '/submit'
+        ? window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)
+        : null
+);
+
+export const assertLocalOnlySubmission = (launcher: string): void => {
+    if (selectedExecutionTargetForSubmission()) {
+        throw new Error(`${launcher} does not support Vast placement. Choose Local before submission.`);
+    }
+};
+
+export const fetchExecutionTargets = () =>
+    api.get<ExecutionTarget[]>('/api/execution-targets');
+
+export const refreshVastExecutionTargets = () =>
+    api.post<{ provider: 'vast'; available: boolean; credential_configured: boolean; message: string; instances: DiscoveredExecutionTarget[] }>(
+        '/api/execution-targets/providers/vast/refresh',
+    );
+
+export const activateExecutionTarget = (providerInstanceId: string) =>
+    api.post<ExecutionTarget>('/api/execution-targets/activate', {
+        provider: 'vast',
+        provider_instance_id: providerInstanceId,
+    });
+
+export const deactivateExecutionTarget = (executionTargetId: string) =>
+    api.post<ExecutionTarget>(
+        `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
+    );
+
+export const fetchActiveRemoteGpuTelemetry = () =>
+    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry');
 
 export interface CPUPowerTelemetry {
     source: 'rapl' | string;
@@ -508,7 +619,6 @@ export const fetchJobs = (params?: {
         summary: params?.summary ?? true,
     },
 });
-export const fetchBoltzCpShardPlans = () => api.get<BoltzCpShardPlanCatalog>('/api/jobs/boltz-cp/shard-plans');
 // Bound live telemetry requests so a half-open connection cannot permanently
 // occupy the shared collector and suppress its recovery/backoff loop.
 export interface TelemetryHistoryPoint {
@@ -549,6 +659,7 @@ export const fetchTelemetryChartHistory = (
 });
 export const fetchJobById = (id: string) => api.get<Job>(`/api/jobs/${id}`);
 export const fetchRFD3LocalRedesign = (id: string) => api.get<RFD3LocalRedesignReadModel>(`/api/jobs/${id}/rfd3-local-redesign`);
+export const fetchRFD3Generation = (id: string) => api.get<RFD3GenerationReadModel>(`/api/jobs/${encodeURIComponent(id)}/rfd3-generation`);
 export const fetchProteinLocalRedesignResults = (id: string) => api.get<ProteinLocalRedesignResultSurface>(`/api/jobs/${encodeURIComponent(id)}/workflow-results`);
 export const fetchDesignById = (id: string) => api.get<Design>(`/api/designs/${id}`);
 export interface ProteinBaseBundleImportRequest {
@@ -695,9 +806,13 @@ export const submitJob = (jobData: Partial<Job>, options: { launchContext?: bool
     const launchContextId = typeof window !== 'undefined' && useLaunchContext
         ? new URLSearchParams(window.location.search).get('launch_context_id')
         : null;
-    const payload = launchContextId && !jobData.launch_context_id
-        ? { ...jobData, launch_context_id: launchContextId }
+    const selectedExecutionTarget = selectedExecutionTargetForSubmission();
+    const targetedJobData = selectedExecutionTarget && !jobData.execution_target_id
+        ? { ...jobData, execution_target_id: selectedExecutionTarget }
         : jobData;
+    const payload = launchContextId && !targetedJobData.launch_context_id
+        ? { ...targetedJobData, launch_context_id: launchContextId }
+        : targetedJobData;
     return api.post('/api/jobs', payload, useLaunchContext
         ? undefined
         : { headers: { 'X-BMS-Skip-Launch-Context': '1' } });
@@ -791,11 +906,13 @@ export const uploadShapeGeometry = (file: File, unit: string) => {
     return api.post<ShapeGeometrySummary>('/api/shape-blueprint/geometries', body);
 };
 
-export const submitShapeBlueprint = (request: ShapeLaunchRequest) =>
-    api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
+export const submitShapeBlueprint = (request: ShapeLaunchRequest) => {
+    assertLocalOnlySubmission('Shape Blueprint');
+    return api.post<{ request_id: string; request_sha256: string; job_id: string; job_status: string; reused: boolean }>(
         '/api/shape-blueprint/requests',
         request,
     );
+};
 
 export interface BoltzApiStructureRequest {
     name: string;
@@ -883,7 +1000,10 @@ export const estimateBoltzApiJob = (payload: BoltzApiStructureRequest) => (
 
 export const submitBoltzApiJob = (
     payload: BoltzApiStructureRequest & { approved_estimate_fingerprint: string },
-) => api.post<Job>('/api/jobs/boltz-api', payload);
+) => {
+    assertLocalOnlySubmission('Boltz API');
+    return api.post<Job>('/api/jobs/boltz-api', payload);
+};
 
 export interface OntManagedReferenceRequest {
     global_domain_experiment_id: string;
@@ -899,8 +1019,10 @@ export interface OntNgsSubmitRequest {
     managed_reference?: OntManagedReferenceRequest | null;
 }
 
-export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) =>
-    api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+export const submitOntNgsJob = (workflowId: string, request: OntNgsSubmitRequest) => {
+    assertLocalOnlySubmission('ONT/NGS');
+    return api.post<Job>(`/api/ont/ngs/${workflowId}/submit`, request);
+};
 
 export interface MolBioNgsReceiptRequest {
     revision_id: string;
@@ -962,10 +1084,13 @@ export interface OntBarcodeBatchSubmitResponse {
 export const submitOntBarcodeBatch = (
     sourceJobId: string,
     request: OntBarcodeBatchSubmitRequest,
-) => api.post<OntBarcodeBatchSubmitResponse>(
-    `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
-    request,
-);
+) => {
+    assertLocalOnlySubmission('ONT barcode batch');
+    return api.post<OntBarcodeBatchSubmitResponse>(
+        `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
+        request,
+    );
+};
 
 export interface PooledReferenceAssignmentTarget {
     target_id: string;
@@ -993,7 +1118,13 @@ export interface PooledReferenceAssignmentSubmitResponse {
 
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
-) => api.post<PooledReferenceAssignmentSubmitResponse>('/api/ont/ngs/pooled-reference-assignment/submit', request);
+) => {
+    assertLocalOnlySubmission('Pooled reference assignment');
+    return api.post<PooledReferenceAssignmentSubmitResponse>(
+        '/api/ont/ngs/pooled-reference-assignment/submit',
+        request,
+    );
+};
 
 export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
 
@@ -1768,9 +1899,33 @@ export interface Design {
     created_at: string;
 }
 
+export interface DesignAggregateSummary {
+    total: number;
+    favorites: number;
+    avg_plddt: number | null;
+    avg_pae: number | null;
+    avg_ptm: number | null;
+    avg_iptm: number | null;
+    avg_ipsae: number | null;
+    avg_affinity: number | null;
+    avg_binder_probability: number | null;
+    avg_epitope_contacts: number | null;
+    avg_target_contacts: number | null;
+    avg_epitope_distance: number | null;
+    avg_target_distance: number | null;
+    avg_hotspot_coverage: number | null;
+    avg_psce: number | null;
+    high_confidence: number;
+    low_error: number;
+    high_contacts: number;
+    screen_passed: number;
+    screen_failed: number;
+}
+
 export interface DesignListResponse {
     designs: Design[];
     total: number;
+    summary?: DesignAggregateSummary | null;
 }
 
 export interface DesignFilters {
@@ -1808,6 +1963,7 @@ export interface DesignFilters {
     sort_desc?: boolean;
     limit?: number;
     offset?: number;
+    include_summary?: boolean;
 }
 
 export type DesignSortField =
@@ -2387,6 +2543,9 @@ export interface QueuedJob {
     pinned_gpu: number | null;
     assigned_gpu: number | null;
     display_gpu_ids: number[] | null;
+    execution_target_id?: string | null;
+    remote_state?: string | null;
+    remote_waiting_reason?: string | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;
@@ -5549,7 +5708,7 @@ export const updateOntSignalViewerSession = (
 ));
 
 export type ProjectHubSection = 'overview' | 'plasmids' | 'sequence-data' | 'experiments' | 'results' | 'activity';
-export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change';
+export type ProjectHubExperimentKind = 'pcr' | 'restriction_digest' | 'alignment' | 'sequence_change' | 'ligation' | 'gibson' | 'golden_gate';
 export type ProjectHubMapTone = 'accent' | 'success' | 'info' | 'warning' | 'secondary';
 
 export interface ProjectHubMapSegment {
@@ -5561,12 +5720,13 @@ export interface ProjectHubMapSegment {
     strand: 'forward' | 'reverse' | 'unknown';
 }
 
-export interface ProjectHubPlasmidSummary {
+export interface ProjectHubDNASequenceSummary {
     sequence_id: string;
     revision_id: string;
     receipt_id: string;
     receipt_sha256: string;
     content_digest: string;
+    current_content_sha256?: string | null;
     source_store_id: string;
     schema_name: string;
     revision_number: number;
@@ -5614,10 +5774,13 @@ export interface ProjectHubExperimentSummary {
     status: string;
     created_at: string;
     reopen_href: string | null;
+    input_sequence_ids?: string[];
+    output_sequence_ids?: string[];
 }
 
 export interface ProjectHubResultSummary {
     id: string;
+    plasmid_sequence_id?: string;
     plasmid_name: string;
     type: string;
     status: string;
@@ -5635,6 +5798,8 @@ export interface ProjectHubActivitySummary {
     receipt_id: string;
     envelope_sha256: string;
 }
+
+export type ProjectHubPlasmidSummary = ProjectHubDNASequenceSummary;
 
 export interface ProjectHubReadModel {
     schema: 'bms.project-hub.v1';
@@ -5660,7 +5825,8 @@ export interface ProjectHubReadModel {
         binding_status: string;
         adapter_status: string;
     };
-    plasmids: ProjectHubPlasmidSummary[];
+    /** Compatibility field name. Items are DNA sequences; plasmid is one possible sequence role. */
+    plasmids: ProjectHubDNASequenceSummary[];
     sequence_data: {
         items: ProjectHubSequenceDataItem[];
         import_href: string;

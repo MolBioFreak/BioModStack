@@ -7,29 +7,46 @@ import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import type { IGV as IgvLibrary } from 'igv';
 import { api, createOntSignalViewerSession, DEFAULT_ONT_SIGNAL_RENDER_PARAMS, fetchFullJob, fetchJobLogs, fetchJobStages, fetchJobs, fetchOntRawSignalCapabilities, fetchOntSignalViewerSession, fetchPooledAssignmentManifest, type Job, type JobLogs, type OntSignalViewerAlignmentColorBy, type OntSignalViewerAlignmentDisplayMode, type OntSignalViewerAlignmentGroupBy, type OntSignalViewerSession } from '../lib/api';
 import {
-    awaitCurrentGeneration,
     alignmentTrackAutoLoadDisposition,
+    buildAlignmentTrackConfig,
+    buildFullSourceCoverageTrackConfig,
     buildLocalIgvConfig,
     createGenerationBoundResourceWithTimeout,
+    createIgvGenerationMount,
     ownsIgvLoadTerminalState,
     parseLocalIgvRange,
+    loadMissingTracksById,
     removeIgvBrowser,
+    removeIgvGenerationMount,
     resolveAlignmentViewerArtifacts,
     resolveBoundSessionLocus,
+    resolveBrowserAlignmentTrackSource,
+    resolveIgvClickedReadId,
+    publishCurrentIgvReadSelection,
     resolveIgvReadLocus,
+    locusMatchesAlignmentSlice,
     resolvePendingSessionLocus,
     resolveSessionAuxiliaryTracks,
+    replaceAlignmentTrackTransactionally,
     type AlignmentReadLocus,
+    type BrowserAlignmentTrackSource,
     type PendingSessionNavigation,
 } from '../lib/ngsAlignmentViewer';
 import {
+    alignmentReadIgvLocus,
     bindAlignmentSessionsToResultAuthority,
+    createAlignmentLocusSlice,
+    createLatestRequestGuard,
     disposeAlignmentAccess,
     describeNgsError,
+    fetchAlignmentRead,
     fetchAlignmentSessions,
+    fetchAlignmentPresentation,
     isAlignmentAccessDenied,
     rotateAlignmentAccess,
     type AlignmentRead,
+    type AlignmentLocusSlice,
+    type AlignmentPresentation,
     type AlignmentSession,
 } from '../lib/ngsAlignmentSession';
 import {
@@ -50,6 +67,7 @@ import { BarcodeUnitsPanel } from './ngs/BarcodeUnitsPanel';
 import { PooledAssignmentReviewPanel } from './ngs/PooledAssignmentReviewPanel';
 import { SequenceQcManifestPanel } from './ngs/SequenceQcManifestPanel';
 import { OntFastqQcResultPanel } from './ngs/OntFastqQcResultPanel';
+import { AlignmentPresentationStatus } from './ngs/AlignmentPresentationStatus';
 import { useOntFastqQcResult } from './ngs/useOntFastqQcResult';
 import { useSequenceQcManifest } from './ngs/useSequenceQcManifest';
 import { useThemeColors, useThemePlotlyLayout } from './useThemeColors';
@@ -1946,12 +1964,14 @@ function ensureIgvThemeStyles(container: HTMLDivElement | null): void {
         color: var(--text-primary) !important;
       }
       .igv-menu-popup *,
+      .igv-ui-popover *,
       .igv-ui-dropdown *,
       .igv-track-menu-category {
         color: var(--text-primary) !important;
       }
       .igv-navbar,
       .igv-menu-popup,
+      .igv-ui-popover,
       .igv-ui-dropdown,
       .igv-ui-dropdown > div,
       .igv-ui-dropdown > div > div,
@@ -2262,12 +2282,29 @@ export function NGSToolkit() {
     const igvNavigationOwnerRef = useRef<OwnedIgvNavigation | null>(null);
     const selectedAlignmentSessionIdRef = useRef('');
     const igvLoadedSourceKeyRef = useRef('');
+    const igvCurrentLocusRef = useRef<AlignmentReadLocus | null>(null);
+    const igvLocusSliceRef = useRef<AlignmentLocusSlice | null>(null);
     const [igvCurrentLocus, setIgvCurrentLocus] = useState<AlignmentReadLocus | null>(null);
     const [igvReadsTrackLoaded, setIgvReadsTrackLoaded] = useState(false);
     const [igvReadsTrackLoading, setIgvReadsTrackLoading] = useState(false);
+    const [igvPresentation, setIgvPresentation] = useState<AlignmentPresentation | null>(null);
+    const [igvLocusSlice, setIgvLocusSlice] = useState<AlignmentLocusSlice | null>(null);
+    const [igvPresentationLoading, setIgvPresentationLoading] = useState(false);
+    const [igvLocusSliceLoading, setIgvLocusSliceLoading] = useState(false);
+    const igvPresentationGenerationRef = useRef(0);
+    const igvLocusSliceGenerationRef = useRef(0);
+    const igvTrackOperationGenerationRef = useRef(0);
+    const igvTrackOperationActiveRef = useRef(false);
     const [signalViewerSession, setSignalViewerSession] = useState<OntSignalViewerSession | null>(null);
     const themeColors = useThemeColors();
     const basePlotlyLayout = useThemePlotlyLayout();
+
+    useEffect(() => () => {
+        igvPresentationGenerationRef.current += 1;
+        igvLocusSliceGenerationRef.current += 1;
+        igvTrackOperationGenerationRef.current += 1;
+        igvTrackOperationActiveRef.current = false;
+    }, []);
 
     useEffect(() => {
         setSignalViewerSession(requestedViewerSessionQuery.data || null);
@@ -2724,7 +2761,10 @@ export function NGSToolkit() {
             generation: signalWorkbenchIdentityRef.current.generation + 1,
         };
     }, [signalWorkbenchIdentityKey]);
-    const openSignalWorkbenchForRead = useCallback(async (read: AlignmentRead) => {
+    const openSignalWorkbenchForRead = useCallback(async (
+        read: AlignmentRead,
+        selectionIsCurrent: () => boolean = () => true,
+    ) => {
         if (!selectedJob || !selectedAlignmentSession?.ready || !signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration) return;
         const identityGeneration = signalWorkbenchIdentityRef.current.generation;
         const identityKey = signalWorkbenchIdentityRef.current.key;
@@ -2733,7 +2773,9 @@ export function NGSToolkit() {
             && signalWorkbenchIdentityRef.current.key === identityKey
         );
         try {
-            const created = await createOntSignalViewerSession({
+            await publishCurrentIgvReadSelection(
+                () => identityIsCurrent() && selectionIsCurrent(),
+                () => createOntSignalViewerSession({
                 dataset_id: signalDatasetId,
                 run_id: rawSignalRunId,
                 observed_generation: rawSignalObservedGeneration,
@@ -2759,15 +2801,21 @@ export function NGSToolkit() {
                     read_mapping_job_id: null,
                     reference_mapping_job_id: null,
                 },
-            });
-            if (!identityIsCurrent()) return;
-            acceptSignalViewerSession(created);
-            openSignalWorkbench(created.viewer_session_id);
+                }),
+                (created) => {
+                    acceptSignalViewerSession(created);
+                    openSignalWorkbench(created.viewer_session_id);
+                },
+            );
         } catch (reason) {
-            if (!identityIsCurrent()) return;
+            if (!identityIsCurrent() || !selectionIsCurrent()) return;
             setIgvError(`Signal viewer session could not be created: ${reason instanceof Error ? reason.message : String(reason)}`);
         }
     }, [acceptSignalViewerSession, igvAlignmentColorBy, igvAlignmentDisplayMode, igvAlignmentGroupBy, igvCurrentLocus?.contig, igvCurrentLocus?.end, igvCurrentLocus?.start, igvReadsTrackLoaded, openSignalWorkbench, rawSignalObservedGeneration, rawSignalRunId, selectedAlignmentSession, selectedJob, signalDatasetId, signalReferenceRevisionId]);
+    const openSignalWorkbenchForReadRef = useRef(openSignalWorkbenchForRead);
+    const igvReadClickGuardRef = useRef(createLatestRequestGuard());
+    useEffect(() => { openSignalWorkbenchForReadRef.current = openSignalWorkbenchForRead; }, [openSignalWorkbenchForRead]);
+    useEffect(() => { igvCurrentLocusRef.current = igvCurrentLocus; }, [igvCurrentLocus]);
     useEffect(() => {
         const preferred = alignmentSessions.find((session) => session.session_id === persistedAlignmentSessionId)
             || alignmentSessions.find((session) => session.mode === 'primary')
@@ -2786,13 +2834,34 @@ export function NGSToolkit() {
         if (igvNavigationOwnerRef.current?.navigation.sessionId !== selectedSessionId) {
             igvNavigationOwnerRef.current = null;
         }
+        igvCurrentLocusRef.current = null;
+        igvLocusSliceRef.current = null;
         setIgvCurrentLocus(null);
+        setIgvPresentation(null);
+        setIgvLocusSlice(null);
+        setIgvPresentationLoading(false);
+        setIgvLocusSliceLoading(false);
+        igvPresentationGenerationRef.current += 1;
+        igvLocusSliceGenerationRef.current += 1;
+        igvTrackOperationGenerationRef.current += 1;
+        igvTrackOperationActiveRef.current = false;
     }, [selectedAlignmentSession?.session_id]);
     const activeIgvBamPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment` : null;
+    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(selectedAlignmentSession?.artifacts.alignment?.size_bytes);
+    const browserAlignmentTrack: BrowserAlignmentTrackSource | null = selectedJob
+        && selectedAlignmentSession?.artifacts.alignment
+        && selectedAlignmentSession.artifacts.alignment_index
+        ? resolveBrowserAlignmentTrackSource({
+            jobId: selectedJob.id,
+            sessionId: selectedAlignmentSession.session_id,
+            alignmentUrl: selectedAlignmentSession.artifacts.alignment.url,
+            alignmentIndexUrl: selectedAlignmentSession.artifacts.alignment_index.url,
+            alignmentSizeBytes: selectedAlignmentSession.artifacts.alignment.size_bytes,
+            presentation: igvPresentation,
+            locusSlice: igvLocusSlice,
+        })
+        : null;
     const activeIgvBamUrl = selectedAlignmentSession?.artifacts.alignment?.url || null;
-    const igvAlignmentLoadDisposition = alignmentTrackAutoLoadDisposition(
-        selectedAlignmentSession?.artifacts.alignment?.size_bytes,
-    );
     const activeIgvBaiPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:alignment-index` : null;
     const activeIgvBaiUrl = selectedAlignmentSession?.artifacts.alignment_index?.url || null;
     const activeIgvFastaPath = selectedAlignmentSession ? `${selectedAlignmentSession.mode}:reference` : null;
@@ -2885,7 +2954,7 @@ export function NGSToolkit() {
     }, [navigateToVerifiedLocus, selectedAlignmentSession?.reference?.contig]);
     const navigateToLocalIgvRange = useCallback((value: string, source: string) => {
         const referenceContig = selectedAlignmentSession?.reference?.contig;
-        const referenceLength = ontFastqQcResultState.result?.verification.summary.reference_length;
+        const referenceLength = selectedAlignmentSession?.reference?.length_bp;
         if (!referenceContig || typeof referenceLength !== 'number') {
             setIgvRangeError(`Cannot navigate ${source}: authoritative reference bounds are unavailable.`);
             return;
@@ -2903,7 +2972,21 @@ export function NGSToolkit() {
         setIgvRangeInput(locus);
         setIgvRangeError(null);
         navigateToVerifiedLocus(Number(coordinates[1]), Number(coordinates[2]), source);
-    }, [navigateToVerifiedLocus, ontFastqQcResultState.result, selectedAlignmentSession]);
+    }, [navigateToVerifiedLocus, selectedAlignmentSession]);
+    const focusReadableIgvRange = useCallback(() => {
+        const reference = selectedAlignmentSession?.reference;
+        if (!reference) {
+            setIgvRangeError('Cannot focus reference bases: authoritative reference bounds are unavailable.');
+            return;
+        }
+        const currentStart = igvCurrentLocus?.contig === reference.contig ? igvCurrentLocus.start : 1;
+        const currentEnd = igvCurrentLocus?.contig === reference.contig ? igvCurrentLocus.end : Math.min(reference.length_bp, 100);
+        const center = Math.floor((currentStart + currentEnd) / 2);
+        let start = Math.max(1, center - 49);
+        let end = Math.min(reference.length_bp, start + 99);
+        start = Math.max(1, end - 99);
+        navigateToLocalIgvRange(`${reference.contig}:${start}-${end}`, 'Read bases');
+    }, [igvCurrentLocus, navigateToLocalIgvRange, selectedAlignmentSession]);
     const selectedReferenceFastaUrl = activeIgvFastaUrl;
     const igvMissingReason = alignmentSessionsError
         ? describeNgsError(alignmentSessionsError, 'Authoritative alignment session is unavailable.')
@@ -3868,10 +3951,13 @@ export function NGSToolkit() {
             return;
         }
         const igvFastaUrl = activeIgvFastaUrl;
+        const igvContainer = igvContainerRef.current;
+        const igvMount = createIgvGenerationMount(igvContainer);
 
         let cancelled = false;
         let igvBrowser: UntypedApiValue = null;
         let removeLocusListener: (() => void) | null = null;
+        let removeTrackClickListener: (() => void) | null = null;
         let creationTimedOut = false;
         let timeoutInvalidationToken: number | null = null;
         const loadToken = ++igvLoadTokenRef.current;
@@ -3891,9 +3977,6 @@ export function NGSToolkit() {
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
             igvLoadedSourceKeyRef.current = '';
-            if (igvContainerRef.current) {
-                igvContainerRef.current.innerHTML = '';
-            }
 
             try {
                 const { igv, version } = await withTimeout(
@@ -3901,7 +3984,7 @@ export function NGSToolkit() {
                     IGV_INIT_TIMEOUT_MS,
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while loading IGV library`
                 );
-                if (cancelled || !igvContainerRef.current) return;
+                if (cancelled || !igvMount.isConnected) return;
                 if (isCurrentLoad() && !cancelled) {
                     setIgvVersion(version);
                 }
@@ -3926,7 +4009,7 @@ export function NGSToolkit() {
                     Math.max(5000, Math.floor(IGV_INIT_TIMEOUT_MS / 2)),
                     `IGV initialization timed out after ${Math.round(IGV_INIT_TIMEOUT_MS / 1000)}s while preparing reference`
                 );
-                if (cancelled || !igvContainerRef.current) return;
+                if (cancelled || !igvMount.isConnected) return;
 
                 const requestedLocus = resolvePendingSessionLocus(
                     pendingIgvLocusRef.current,
@@ -3944,7 +4027,7 @@ export function NGSToolkit() {
                     auxiliaryTracks: [],
                 });
                 igvBrowser = await createGenerationBoundResourceWithTimeout({
-                    create: () => igvAny.createBrowser(igvContainerRef.current, localIgvConfig),
+                    create: () => igvAny.createBrowser(igvMount, localIgvConfig),
                     remove: (staleBrowser: unknown) => removeIgvBrowser(igvAny, staleBrowser),
                     isCurrent: () => isCurrentLoad() && !cancelled,
                     invalidate: () => {
@@ -3959,17 +4042,60 @@ export function NGSToolkit() {
                 });
                 if (!igvBrowser) return;
                 igvLibraryRef.current = igvAny;
-                ensureIgvThemeStyles(igvContainerRef.current);
+                ensureIgvThemeStyles(igvMount);
                 patchIgvRulerContrast(igvBrowser);
                 igvBrowserRef.current = igvBrowser;
                 if (typeof igvBrowser.on === 'function') {
                     const locusHandler = (loci: unknown) => {
                         if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
-                        setIgvCurrentLocus(resolveIgvReadLocus(loci));
+                        const nextLocus = resolveIgvReadLocus(loci);
+                        const mountedSlice = igvLocusSliceRef.current;
+                        if (mountedSlice && !locusMatchesAlignmentSlice(nextLocus, mountedSlice)) {
+                            igvLocusSliceGenerationRef.current += 1;
+                            igvLocusSliceRef.current = null;
+                            setIgvLocusSlice(null);
+                            setIgvReadsTrackLoaded(false);
+                            setIgvAutoLoadAttempted(false);
+                            if (typeof igvBrowser.findTracks === 'function' && typeof igvBrowser.removeTrack === 'function') {
+                                const staleTracks = igvBrowser.findTracks((track: UntypedApiValue) => (
+                                    track?.type === 'alignment' && track?.name === 'Bounded full-source locus slice'
+                                ));
+                                for (const track of staleTracks) igvBrowser.removeTrack(track);
+                            }
+                        }
+                        igvCurrentLocusRef.current = nextLocus;
+                        setIgvCurrentLocus(nextLocus);
                     };
                     igvBrowser.on('locuschange', locusHandler);
                     removeLocusListener = () => {
                         if (typeof igvBrowser?.off === 'function') igvBrowser.off('locuschange', locusHandler);
+                    };
+                    const trackClickHandler = (_track: unknown, popoverData: unknown) => {
+                        if (!isCurrentLoad() || cancelled || igvBrowserRef.current !== igvBrowser) return;
+                        const readId = resolveIgvClickedReadId(popoverData);
+                        if (!readId || !selectedJob || !selectedAlignmentSession?.ready) return;
+                        const requestToken = igvReadClickGuardRef.current.begin();
+                        const locus = igvCurrentLocusRef.current;
+                        void fetchAlignmentRead(selectedJob.id, selectedAlignmentSession.session_id, readId, {
+                            contig: locus?.contig,
+                            start: locus?.start,
+                            end: locus?.end,
+                        }).then((read) => {
+                            if (igvReadClickGuardRef.current.isCurrent(requestToken) && isCurrentLoad() && !cancelled) {
+                                void openSignalWorkbenchForReadRef.current(read, () => (
+                                    igvReadClickGuardRef.current.isCurrent(requestToken)
+                                    && isCurrentLoad()
+                                    && !cancelled
+                                    && igvBrowserRef.current === igvBrowser
+                                ));
+                            }
+                        }).catch((reason: unknown) => {
+                            if (igvReadClickGuardRef.current.isCurrent(requestToken) && isCurrentLoad() && !cancelled) setIgvError(`Clicked read could not be selected: ${reason instanceof Error ? reason.message : String(reason)}`);
+                        });
+                    };
+                    igvBrowser.on('trackclick', trackClickHandler);
+                    removeTrackClickListener = () => {
+                        if (typeof igvBrowser?.off === 'function') igvBrowser.off('trackclick', trackClickHandler);
                     };
                 }
 
@@ -4018,14 +4144,14 @@ export function NGSToolkit() {
             }
         };
 
-        const igvContainer = igvContainerRef.current;
-
         initIgv();
 
         return () => {
             cancelled = true;
+            igvReadClickGuardRef.current.reset();
             if (isCurrentLoad()) igvLoadTokenRef.current += 1;
             removeLocusListener?.();
+            removeTrackClickListener?.();
             try {
                 if (igvBrowser) removeIgvBrowser(igvLibraryRef.current, igvBrowser);
             } catch {
@@ -4036,9 +4162,7 @@ export function NGSToolkit() {
             setIgvReadsTrackLoaded(false);
             setIgvReadsTrackLoading(false);
             setIgvAutoLoadAttempted(false);
-            if (igvContainer) {
-                igvContainer.innerHTML = '';
-            }
+            removeIgvGenerationMount(igvContainer, igvMount);
         };
     }, [
         igvModalOpen,
@@ -4050,17 +4174,50 @@ export function NGSToolkit() {
         selectedAlignmentSession?.session_id,
     ]);
 
+    useEffect(() => {
+        if (!igvModalOpen || igvLoading || !igvReady || igvAlignmentLoadDisposition.autoLoad
+            || igvPresentation || igvPresentationLoading || !selectedJob || !selectedAlignmentSession?.ready) return;
+        const generation = ++igvPresentationGenerationRef.current;
+        const sessionId = selectedAlignmentSession.session_id;
+        const alignment = selectedAlignmentSession.artifacts.alignment;
+        const alignmentIndex = selectedAlignmentSession.artifacts.alignment_index;
+        if (!alignment || !alignmentIndex) return;
+        setIgvPresentationLoading(true);
+        void fetchAlignmentPresentation(selectedJob.id, sessionId, {
+            mode: selectedAlignmentSession.mode,
+            packageManifestSha256: alignment.source_manifest_sha256,
+            alignmentSha256: alignment.sha256,
+            alignmentSizeBytes: alignment.size_bytes,
+            alignmentIndexSha256: alignmentIndex.sha256,
+            alignmentIndexSizeBytes: alignmentIndex.size_bytes,
+        }).then((receipt) => {
+            if (igvPresentationGenerationRef.current !== generation
+                || selectedAlignmentSessionIdRef.current !== sessionId) return;
+            setIgvPresentation(receipt);
+        }).catch((reason: unknown) => {
+            if (igvPresentationGenerationRef.current !== generation
+                || selectedAlignmentSessionIdRef.current !== sessionId) return;
+            setIgvError(describeNgsError(reason, 'Bounded alignment presentation is unavailable.').slice(0, 512));
+        }).finally(() => {
+            if (igvPresentationGenerationRef.current === generation
+                && selectedAlignmentSessionIdRef.current === sessionId) setIgvPresentationLoading(false);
+        });
+    }, [igvAlignmentLoadDisposition.autoLoad, igvLoading, igvModalOpen, igvPresentation, igvPresentationLoading, igvReady, selectedAlignmentSession, selectedJob]);
+
     const handleLoadIgvReadsTrack = useCallback(async () => {
-        if (igvReadsTrackLoading) return;
+        if (igvReadsTrackLoading || igvLocusSliceLoading || igvTrackOperationActiveRef.current) return;
         const browser = igvBrowserRef.current;
-        if (!browser || typeof browser.loadTrack !== 'function') {
+        if (!browser || typeof browser.loadTrack !== 'function'
+            || typeof browser.findTracks !== 'function' || typeof browser.removeTrack !== 'function') {
             setIgvError('IGV browser is not ready yet.');
             return;
         }
-        if (!activeIgvBamUrl || !activeIgvBaiUrl) {
-            setIgvError('Aligned BAM and index are required to load reads track.');
+        if (!browserAlignmentTrack) {
+            setIgvError('A validated full, preview, or locus alignment track source is required.');
             return;
         }
+        const operationGeneration = ++igvTrackOperationGenerationRef.current;
+        igvTrackOperationActiveRef.current = true;
         setIgvReadsTrackLoading(true);
         setIgvError(null);
         setIgvAuxTrackFailures([]);
@@ -4070,58 +4227,28 @@ export function NGSToolkit() {
             igvLoadTokenRef.current === loadToken
             && igvBrowserRef.current === browser
             && selectedAlignmentSessionIdRef.current === sessionId
+            && igvTrackOperationGenerationRef.current === operationGeneration
         );
+        const hadAlignmentTrack = (browser.findTracks(
+            (track: UntypedApiValue) => track?.type === 'alignment',
+        ) || []).length > 0;
         try {
-            if (typeof browser.findTracks === 'function' && typeof browser.removeTrack === 'function') {
-                const existingTracks = browser.findTracks((track: UntypedApiValue) => track && track.type !== 'ruler');
-                if (Array.isArray(existingTracks)) {
-                    for (const track of existingTracks) {
-                        try {
-                            browser.removeTrack(track);
-                        } catch {
-                            // keep loading remaining tracks
-                        }
-                    }
-                }
-            }
-
-            const auxiliaryTracks = resolveSessionAuxiliaryTracks(selectedAlignmentSession?.artifacts || {});
-
+            const auxiliaryTracks = [
+                ...(igvPresentation ? [buildFullSourceCoverageTrackConfig(igvPresentation)] : []),
+                ...resolveSessionAuxiliaryTracks(selectedAlignmentSession?.artifacts || {}),
+            ];
             const auxiliaryTrackHeightPx = auxiliaryTracks.reduce((sum, track) => (
                 sum + (typeof track.height === 'number' ? track.height : 0)
             ), 0);
             const readsTrackHeight = resolveIgvReadsTrackHeight(igvContainerRef.current, auxiliaryTrackHeightPx);
-            const alignmentTrack: Record<string, unknown> = {
-                name: 'Aligned Reads',
-                type: 'alignment',
-                format: 'bam',
-                url: activeIgvBamUrl,
-                indexURL: activeIgvBaiUrl,
-                showSoftClips: true,
-                showCoverage: true,
-                showMismatches: true,
-                showAllBases: false,
-                showInsertionText: true,
-                autoHeight: false,
-                height: readsTrackHeight,
+            const alignmentTrack = buildAlignmentTrackConfig(browserAlignmentTrack, readsTrackHeight, {
                 displayMode: igvAlignmentDisplayMode,
-                // FASTQ/dimer runs are typically small enough to render across full plasmids.
-                // A tiny visibilityWindow can make tracks appear "empty" until deep zoom.
-                visibilityWindow: -1,
-                samplingWindowSize: 40,
-                samplingDepth: 10000,
-                maxRows: 500,
-                alignmentRowHeight: 9,
-                squishedRowHeight: 4,
-            };
-            if (igvAlignmentColorBy !== 'none') {
-                alignmentTrack.colorBy = igvAlignmentColorBy;
-            }
-            if (igvAlignmentGroupBy !== 'none') {
-                alignmentTrack.groupBy = igvAlignmentGroupBy;
-            }
-            const loadedAlignmentTrack = await awaitCurrentGeneration(
-                Promise.resolve(browser.loadTrack(alignmentTrack)),
+                colorBy: igvAlignmentColorBy,
+                groupBy: igvAlignmentGroupBy,
+            });
+            const loadedAlignmentTrack = await replaceAlignmentTrackTransactionally(
+                browser,
+                alignmentTrack,
                 isCurrentTrackLoad,
             );
             if (loadedAlignmentTrack === null || !isCurrentTrackLoad()) return;
@@ -4131,45 +4258,100 @@ export function NGSToolkit() {
                 groupBy: igvAlignmentGroupBy,
             });
             setIgvReadsTrackLoaded(true);
-
-            for (const trackConfig of auxiliaryTracks) {
-                try {
-                    const loadedTrack = await awaitCurrentGeneration(
-                        Promise.resolve(browser.loadTrack(trackConfig)),
-                        isCurrentTrackLoad,
-                    );
-                    if (loadedTrack === null || !isCurrentTrackLoad()) return;
-                } catch (error) {
-                    if (!isCurrentTrackLoad()) return;
-                    const label = typeof trackConfig.name === 'string' ? trackConfig.name : 'Optional track';
-                    const message = error instanceof Error ? error.message : String(error);
-                    setIgvAuxTrackFailures((current) => [...current, `${label}: ${message}`]);
-                }
-            }
+            await loadMissingTracksById(browser, auxiliaryTracks, isCurrentTrackLoad, (trackConfig, error) => {
+                const label = typeof trackConfig.name === 'string' ? trackConfig.name : 'Optional track';
+                const message = error instanceof Error ? error.message : String(error);
+                setIgvAuxTrackFailures((current) => [...current, `${label}: ${message}`]);
+            });
             if (!isCurrentTrackLoad()) return;
             patchIgvRulerContrast(browser);
             resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
-
             // Track loading must never navigate. Browser creation already applied either
             // the session-bound requested locus or the FASTA-derived initial locus.
-            resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
             igvLoadedSourceKeyRef.current = activeIgvSourceKey;
         } catch (error) {
             const msg = error instanceof Error ? error.message : String(error);
-            if (isCurrentTrackLoad()) setIgvError(`Failed to load IGV tracks: ${msg}`);
+            if (isCurrentTrackLoad()) {
+                setIgvReadsTrackLoaded(hadAlignmentTrack);
+                setIgvError(`Failed to load IGV tracks: ${msg}`);
+            }
         } finally {
-            if (isCurrentTrackLoad()) setIgvReadsTrackLoading(false);
+            if (igvTrackOperationGenerationRef.current === operationGeneration) {
+                igvTrackOperationActiveRef.current = false;
+                setIgvReadsTrackLoading(false);
+            }
         }
     }, [
         igvReadsTrackLoading,
-        activeIgvBamUrl,
-        activeIgvBaiUrl,
+        igvLocusSliceLoading,
+        browserAlignmentTrack,
         activeIgvSourceKey,
         selectedAlignmentSession,
+        igvPresentation,
         igvAlignmentDisplayMode,
         igvAlignmentColorBy,
         igvAlignmentGroupBy,
     ]);
+
+    const handleLoadIgvLocusSlice = useCallback(async () => {
+        const requestedLocus = igvCurrentLocusRef.current || igvCurrentLocus;
+        if (igvLocusSliceLoading || igvReadsTrackLoading || igvTrackOperationActiveRef.current
+            || (!igvAlignmentLoadDisposition.autoLoad && !igvPresentation)
+            || !selectedJob || !selectedAlignmentSession?.ready || !requestedLocus) return;
+        const alignment = selectedAlignmentSession.artifacts.alignment;
+        const alignmentIndex = selectedAlignmentSession.artifacts.alignment_index;
+        const browser = igvBrowserRef.current;
+        if (!alignment || !alignmentIndex || !browser || typeof browser.loadTrack !== 'function'
+            || typeof browser.findTracks !== 'function' || typeof browser.removeTrack !== 'function') {
+            setIgvError('The authoritative locus and alignment browser must be ready before loading a bounded locus slice.');
+            return;
+        }
+        const loadToken = igvLoadTokenRef.current;
+        const sessionId = selectedAlignmentSession.session_id;
+        const generation = ++igvLocusSliceGenerationRef.current;
+        const operationGeneration = ++igvTrackOperationGenerationRef.current;
+        igvTrackOperationActiveRef.current = true;
+        const isCurrent = () => igvLocusSliceGenerationRef.current === generation
+            && igvLoadTokenRef.current === loadToken && igvBrowserRef.current === browser
+            && selectedAlignmentSessionIdRef.current === sessionId
+            && igvTrackOperationGenerationRef.current === operationGeneration
+            && igvCurrentLocusRef.current?.contig === requestedLocus.contig
+            && igvCurrentLocusRef.current?.start === requestedLocus.start
+            && igvCurrentLocusRef.current?.end === requestedLocus.end;
+        setIgvLocusSliceLoading(true);
+        setIgvError(null);
+        try {
+            const slice = await createAlignmentLocusSlice(selectedJob.id, sessionId, requestedLocus);
+            if (!isCurrent()) return;
+            const source = resolveBrowserAlignmentTrackSource({
+                jobId: selectedJob.id, sessionId, alignmentUrl: alignment.url,
+                alignmentIndexUrl: alignmentIndex.url, alignmentSizeBytes: alignment.size_bytes,
+                presentation: igvPresentation, locusSlice: slice,
+            });
+            if (!source) throw new Error('Locus slice did not resolve to a validated track source.');
+            const loaded = await replaceAlignmentTrackTransactionally(browser, buildAlignmentTrackConfig(
+                source,
+                resolveIgvReadsTrackHeight(igvContainerRef.current),
+                { displayMode: igvAlignmentDisplayMode, colorBy: igvAlignmentColorBy, groupBy: igvAlignmentGroupBy },
+            ), isCurrent);
+            if (loaded === null || !isCurrent()) return;
+            applyIgvAlignmentOptionsToTrack(loaded, {
+                displayMode: igvAlignmentDisplayMode, colorBy: igvAlignmentColorBy, groupBy: igvAlignmentGroupBy,
+            });
+            igvLocusSliceRef.current = slice;
+            setIgvLocusSlice(slice);
+            setIgvReadsTrackLoaded(true);
+            resizeIgvAlignmentTrackToContainer(browser, igvContainerRef.current);
+            // Replacing only the alignment track preserves the current authoritative locus.
+        } catch (reason) {
+            if (isCurrent()) setIgvError(describeNgsError(reason, 'Bounded locus slice could not be loaded.').slice(0, 512));
+        } finally {
+            if (igvTrackOperationGenerationRef.current === operationGeneration) {
+                igvTrackOperationActiveRef.current = false;
+                setIgvLocusSliceLoading(false);
+            }
+        }
+    }, [igvAlignmentColorBy, igvAlignmentDisplayMode, igvAlignmentGroupBy, igvAlignmentLoadDisposition.autoLoad, igvCurrentLocus, igvLocusSliceLoading, igvPresentation, igvReadsTrackLoading, selectedAlignmentSession, selectedJob]);
 
     useEffect(() => {
         if (!igvModalOpen || !igvReadsTrackLoaded) return;
@@ -4222,7 +4404,7 @@ export function NGSToolkit() {
     useEffect(() => {
         if (!igvModalOpen) return;
         if (!igvReady || igvLoading) return;
-        if (!igvAlignmentLoadDisposition.autoLoad) return;
+        if (!browserAlignmentTrack) return;
         if (igvReadsTrackLoading || igvReadsTrackLoaded) return;
         if (igvAutoLoadAttempted) return;
         if (!igvBrowserRef.current) return;
@@ -4232,7 +4414,7 @@ export function NGSToolkit() {
         igvModalOpen,
         igvReady,
         igvLoading,
-        igvAlignmentLoadDisposition.autoLoad,
+        browserAlignmentTrack,
         igvReadsTrackLoading,
         igvReadsTrackLoaded,
         igvAutoLoadAttempted,
@@ -5447,7 +5629,7 @@ export function NGSToolkit() {
             {igvModalOpen && (
                 <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm ${igvIsFullscreen ? 'p-0' : 'p-4'}`}>
                     <div ref={igvFullscreenShellRef} data-ngs-igv-fullscreen-shell className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
-                        <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[var(--border-primary)]">
+                        <div className="ngs-igv-toolbar flex flex-wrap items-center gap-2 px-3 py-2 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
                                 <span className="text-xs font-semibold text-[var(--text-primary)]">IGV · Read and Signal Workbench</span>
                                 {selectedJob && (
@@ -5501,11 +5683,20 @@ export function NGSToolkit() {
                                     >
                                         Go
                                     </button>
+                                    <button
+                                        type="button"
+                                        onClick={focusReadableIgvRange}
+                                        disabled={igvLoading || !selectedAlignmentSession?.ready}
+                                        title="Show a 100-base window so reference bases are readable"
+                                        className="rounded border border-[var(--accent-primary)]/60 px-2 py-0.5 text-[11px] text-[var(--accent-primary)] disabled:opacity-50"
+                                    >
+                                        Read bases
+                                    </button>
                                 </form>
                                 <select
                                     value={igvAlignmentDisplayMode}
                                     onChange={(event) => setIgvAlignmentDisplayMode(event.target.value as OntSignalViewerAlignmentDisplayMode)}
-                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    disabled={igvLoading || igvReadsTrackLoading || igvLocusSliceLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
                                     {IGV_ALIGNMENT_DISPLAY_OPTIONS.map((option) => (
@@ -5517,7 +5708,7 @@ export function NGSToolkit() {
                                 <select
                                     value={igvAlignmentColorBy}
                                     onChange={(event) => setIgvAlignmentColorBy(event.target.value as OntSignalViewerAlignmentColorBy)}
-                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    disabled={igvLoading || igvReadsTrackLoading || igvLocusSliceLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
                                     {IGV_ALIGNMENT_COLOR_OPTIONS.map((option) => (
@@ -5529,7 +5720,7 @@ export function NGSToolkit() {
                                 <select
                                     value={igvAlignmentGroupBy}
                                     onChange={(event) => setIgvAlignmentGroupBy(event.target.value as OntSignalViewerAlignmentGroupBy)}
-                                    disabled={igvLoading || igvReadsTrackLoading}
+                                    disabled={igvLoading || igvReadsTrackLoading || igvLocusSliceLoading}
                                     className="bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
                                     {IGV_ALIGNMENT_GROUP_OPTIONS.map((option) => (
@@ -5542,13 +5733,30 @@ export function NGSToolkit() {
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvReadsTrack()}
-                                disabled={igvLoading || igvReadsTrackLoading || !activeIgvBamUrl || !activeIgvBaiUrl || !igvAlignmentLoadDisposition.autoLoad}
+                                disabled={igvLoading || igvReadsTrackLoading || igvLocusSliceLoading || !browserAlignmentTrack}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                {igvAlignmentLoadDisposition.autoLoad
-                                    ? igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'
-                                    : 'Alignment too large for browser'}
+                                {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
                             </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleLoadIgvLocusSlice()}
+                                disabled={igvLoading || igvLocusSliceLoading || igvReadsTrackLoading
+                                    || (!igvAlignmentLoadDisposition.autoLoad && !igvPresentation)
+                                    || !igvCurrentLocus || !selectedAlignmentSession?.ready}
+                                className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-primary)]/60 text-[var(--accent-primary)] disabled:opacity-50"
+                            >
+                                {igvLocusSliceLoading ? 'Loading bounded locus...' : 'Load full-source reads for this locus'}
+                            </button>
+                            {selectedAlignmentSession?.artifacts.alignment && (
+                                <a
+                                    href={selectedAlignmentSession.artifacts.alignment.url}
+                                    download
+                                    className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)]"
+                                >
+                                    Download complete BAM ({(selectedAlignmentSession.artifacts.alignment.size_bytes / 1_048_576).toFixed(1)} MiB)
+                                </a>
+                            )}
                             <button
                                 type="button"
                                 onClick={() => {
@@ -5582,6 +5790,17 @@ export function NGSToolkit() {
                                 ×
                             </button>
                         </div>
+                        {browserAlignmentTrack && (
+                            <AlignmentPresentationStatus status={{
+                                kind: browserAlignmentTrack.kind,
+                                sourceSizeBytes: browserAlignmentTrack.fullSourceDownload.sizeBytes,
+                                selectedReadCount: browserAlignmentTrack.selectedReadCount,
+                                availableReadCount: browserAlignmentTrack.availableReadCount,
+                                byteSize: browserAlignmentTrack.byteSize,
+                                policyVersion: browserAlignmentTrack.policyVersion,
+                                capped: browserAlignmentTrack.capped,
+                            }} />
+                        )}
                         {igvRangeError && (
                             <div role="alert" className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-200">
                                 {igvRangeError}
@@ -5592,7 +5811,7 @@ export function NGSToolkit() {
                             <div className="relative w-full h-full">
                                 <div
                                     ref={igvContainerRef}
-                                    className="absolute inset-0 bg-[var(--bg-primary)]"
+                                    className="ngs-readable-igv absolute inset-0 bg-[var(--bg-primary)]"
                                 />
                                 {igvLoading && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]/65 text-[var(--text-secondary)] text-xs">
@@ -5604,7 +5823,7 @@ export function NGSToolkit() {
                                         {igvError}
                                     </div>
                                 )}
-                                {!igvLoading && !igvError && !igvReadsTrackLoaded && (
+                                {!igvLoading && !igvError && !browserAlignmentTrack && (
                                     <div className="absolute bottom-2 left-2 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)]/85 text-[var(--text-secondary)] text-xs px-2 py-1.5">
                                         {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
@@ -5657,11 +5876,23 @@ export function NGSToolkit() {
                                         jobId={selectedJob.id}
                                         sessionId={selectedAlignmentSession.session_id}
                                         currentLocus={igvCurrentLocus}
+                                        locusSlice={igvLocusSlice}
                                         rawSignalBinding={rawSignalRunId && rawSignalObservedGeneration && rawSignalRepresentationId ? {
                                             runId: rawSignalRunId,
                                             observedGeneration: rawSignalObservedGeneration,
                                             representationId: rawSignalRepresentationId,
                                         } : null}
+                                        onNavigateIgv={(read) => {
+                                            const locus = alignmentReadIgvLocus(read);
+                                            if (locus) {
+                                                navigateFromSignalWorkbench(
+                                                    locus.contig,
+                                                    locus.start,
+                                                    locus.end,
+                                                    'sortable read table',
+                                                );
+                                            }
+                                        }}
                                         onOpenRawSignal={(read) => void openSignalWorkbenchForRead(read)}
                                     />
                                 )}

@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+    stableReset: vi.fn(),
     admissionCalls: 0,
     v1DashboardEnabled: null as boolean | null,
     v1CatalogEnabled: null as boolean | null,
@@ -102,13 +103,20 @@ const state = vi.hoisted(() => ({
     },
     historyCalls: [] as number[],
     yInvokeCalls: [] as Array<Record<string, unknown>>,
+    deckInvokeCalls: [] as Array<Record<string, unknown>>,
     yInterruptCalls: [] as Array<Record<string, unknown>>,
     methodCalls: [] as Array<Record<string, unknown>>,
     yInvokeError: null as unknown,
+    deckInvokeError: null as unknown,
+    deckInvokePending: false,
+    deckDeferred: false,
+    deckCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
+    receiptHookCalls: [] as Array<{ commandId: string | null; generation: number; enabled: boolean }>,
     yInterruptError: null as unknown,
     yInvokeData: undefined as Record<string, unknown> | undefined,
     yInterruptData: undefined as Record<string, unknown> | undefined,
     yReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
+    deckReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
     v2Dashboard: {
         data: {
             schema_version: 'bioxp.operator_dashboard.v2',
@@ -303,7 +311,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     },
     useBioXpOperatorDashboardV2: () => state.v2Dashboard,
     useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
-    useBioXpOperatorReceiptV2: () => state.yReceipt,
+    useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
+        state.receiptHookCalls.push({ commandId, generation, enabled });
+        return commandId?.startsWith('deck-command-') ? state.deckReceipt : state.yReceipt;
+    },
     useBioXpOperatorActionHistory: (...args: unknown[]) => {
         state.historyCalls.push(args[2] as number);
         return state.history;
@@ -319,7 +330,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         state.v1CatalogEnabled = enabled;
         return state.catalog;
     },
-    useBioXpOperatorActionAdmission: (...args: unknown[]) => {
+    useBioXpOperatorActionAdmission: () => {
         state.admissionCalls += 1;
         return { data: { enabled: true, disabled_reason: null, dependencies: [] }, error: null };
     },
@@ -328,32 +339,54 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         error: null,
         isPending: state.invokePending,
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
-        reset: vi.fn(),
+        reset: state.stableReset,
     }),
     useInvokeBioXpOperatorActionV2: () => ({
         data: state.yInvokeData,
         error: state.yInvokeError,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.yInvokeCalls.push(payload),
-        reset: vi.fn(),
+        reset: state.stableReset,
     }),
+    useInvokeBioXpDeckActionV2: () => ({
+        data: undefined,
+        error: state.deckInvokeError,
+        isPending: state.deckInvokePending,
+        mutate: (
+            payload: Record<string, unknown>,
+            callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
+        ) => {
+            state.deckInvokeCalls.push(payload);
+            state.deckCallbacks = callbacks ?? {};
+            if (!state.deckDeferred) {
+                callbacks?.onSuccess?.({ command_id: 'deck-command-mounted-1', status: 'queued', terminal: false });
+            }
+        },
+        reset: state.stableReset,
+    }),
+    bioXpPostDispatchCommandIdentity: (error: unknown) => {
+        const detail = (error as { response?: { data?: { detail?: Record<string, unknown> } } })?.response?.data?.detail;
+        return typeof detail?.command_id === 'string'
+            ? { commandId: detail.command_id, statusPath: detail.status_path, retryGuidance: detail.retry_guidance }
+            : null;
+    },
     useInterruptBioXpOperatorActionV1: () => ({
         data: state.yInterruptData,
         error: state.yInterruptError,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.yInterruptCalls.push(payload),
-        reset: vi.fn(),
+        reset: state.stableReset,
     }),
     useSubmitBioXpOperatorMethodV1: () => ({
         data: undefined,
         error: null,
         isPending: false,
         mutate: (payload: Record<string, unknown>) => state.methodCalls.push(payload),
-        reset: vi.fn(),
+        reset: state.stableReset,
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     useDisconnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
-    useRecoverBioXpMotion: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn(), reset: vi.fn() }),
+    useRecoverBioXpMotion: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn(), reset: state.stableReset }),
     useUpdateBioXpFreshness: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     bioXpErrorText: (error: unknown) => String(error),
     bioXpErrorPresentation: (error: unknown) => {
@@ -445,13 +478,22 @@ beforeEach(() => {
     state.invokePending = false;
     state.historyCalls = [];
     state.yInvokeCalls = [];
+    state.deckInvokeCalls = [];
     state.yInterruptCalls = [];
     state.methodCalls = [];
     state.yInvokeError = null;
+    state.deckInvokeError = null;
+    state.deckInvokePending = false;
+    state.deckDeferred = false;
+    state.deckCallbacks = null;
+    state.receiptHookCalls = [];
     state.yInterruptError = null;
     state.yInvokeData = undefined;
     state.yInterruptData = undefined;
     state.yReceipt.data = undefined;
+    state.yReceipt.error = null;
+    state.deckReceipt.data = undefined;
+    state.deckReceipt.error = null;
     state.v2Dashboard.error = null;
     state.v2Dashboard.isStale = false;
     state.v2Dashboard.data.ownership_generation = 1;
@@ -498,6 +540,38 @@ beforeEach(() => {
             disabled_reason: null,
         }))),
     };
+    Object.assign(state.v2Dashboard.data, {
+        deck: {
+            current_location: 'LOC_TC',
+            current_well: 'B2',
+            position_table_revision: 'pt-206-9',
+            destination_catalog_revision: 'deck-206-4',
+            semantic_state_revision: 17,
+            ownership_generation: 1,
+            expected_board_epoch_by_board: { '4': 2, '5': 8 },
+            destinations: [
+                { key: 'LOC_TC', label: 'TC station', aliases: ['TC'], branch_kind: 'ordinary', camera_offset_supported: true },
+                { key: 'LOC_OC', label: 'OC chiller', aliases: ['OC chiller'], branch_kind: 'ordinary', camera_offset_supported: true },
+            ],
+        },
+    });
+    state.v2Catalog.data.dashboard = structuredClone(state.v2Dashboard.data);
+    (state.v2Catalog.data.actions as Array<Record<string, unknown>>).push({
+        action_id: 'oem.deck.move_to_location',
+        request_schema_version: 'bioxp.operator_action_request.v2',
+        response_schema_version: 'bioxp.operator_action_receipt.v2',
+        interrupt: false,
+        enabled: true,
+        disabled_reason: null,
+        destination_catalog_revision: 'deck-206-4',
+        position_table_revision: 'pt-206-9',
+        required_board_ids: [4, 5],
+        expected_board_epoch_by_board: { '4': 2, '5': 8 },
+        destinations: [
+            { key: 'LOC_TC', label: 'TC station', aliases: ['TC'], branch_kind: 'ordinary', camera_offset_supported: true },
+            { key: 'LOC_OC', label: 'OC chiller', aliases: ['OC chiller'], branch_kind: 'ordinary', camera_offset_supported: true },
+        ],
+    });
     state.history.data.receipts = [];
     state.dashboard.data.motion = { enabled: true, reason: null };
     state.dashboard.data.x_axis.latest_receipt = null;
@@ -593,6 +667,192 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
+    it('renders finite deck movement and submits exactly one semantic enqueue', async () => {
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        expect(panel).toBeTruthy();
+        expect(panel.textContent).toContain('LOC_TC');
+        expect(panel.textContent).toContain('B2');
+        expect(panel.textContent).toContain('pt-206-9');
+        expect(panel.textContent).toContain('deck-206-4');
+        const selector = panel.querySelector('select') as HTMLSelectElement;
+        await act(async () => {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+            setter?.call(selector, 'LOC_OC');
+            selector.dispatchEvent(new Event('change', { bubbles: true }));
+            await Promise.resolve();
+        });
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+        expect(state.deckInvokeCalls).toHaveLength(1);
+        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(state.deckInvokeCalls[0]).toMatchObject({ request: {
+            action_id: 'oem.deck.move_to_location',
+            expected_connection_generation: 1,
+            expected_ownership_generation: 1,
+            expected_board_epoch_by_board: { '4': 2, '5': 8 },
+            inputs: { target: 'LOC_OC', camera_offset: false },
+        } });
+        const submitted = state.deckInvokeCalls[0].request as { inputs: Record<string, unknown> };
+        expect(Object.keys(submitted.inputs).sort()).toEqual(['camera_offset', 'target']);
+        expect(panel.textContent).toContain('deck-command-mounted-1');
+        expect(state.receiptHookCalls.some((call) => call.commandId === 'deck-command-mounted-1' && call.generation === 1)).toBe(true);
+    });
+
+    it.each(['stopped', 'aborted', 'cancelled'])('renders truthful terminal deck lifecycle %s', async (status) => {
+        state.deckReceipt.data = {
+            command_id: 'deck-command-mounted-1',
+            action_id: 'oem.deck.move_to_location',
+            status,
+            terminal: true,
+            completion_class: status,
+            error: null,
+            deck_movement: {
+                target: 'LOC_TC',
+                target_label: 'TC station',
+                source_branch: 'ordinary.scriptmoveTo',
+                controller_completion_verified: false,
+                semantic_state_committed: false,
+                physical_observation_verified: false,
+            },
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+
+        const lifecycle = [...panel.querySelectorAll('dl > div')]
+            .find((row) => row.querySelector('dt')?.textContent === 'Lifecycle');
+        expect(lifecycle?.textContent).toContain(status);
+        expect(panel.textContent).toContain('not pending');
+    });
+
+    it('disables deck movement on stale generation authority with an exact reason', async () => {
+        state.v2Catalog.isStale = true;
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        expect(move.disabled).toBe(true);
+        expect(panel.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable.');
+    });
+
+    it.each([
+        ['ownership', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).ownership_generation = 2; }],
+        ['position table', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.position_table_revision = 'pt-stale'; }],
+        ['destination catalog', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.destination_catalog_revision = 'deck-stale'; }],
+        ['board epochs', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.expected_board_epoch_by_board['5'] = 9; }],
+        ['destination list', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.destinations = []; }],
+    ])('disables deck movement when separately fetched dashboard mismatches catalog embedded %s authority', async (_label, mutate) => {
+        mutate();
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        expect(move.disabled).toBe(true);
+        expect(panel.textContent).toContain('matching catalog and dashboard deck authority is unavailable');
+    });
+
+    it('keeps deck movement enabled for semantically equal board epochs in reversed key order', async () => {
+        const reversedEpochs = new Proxy({ '4': 2, '5': 8 }, {
+            ownKeys: () => ['5', '4'],
+        });
+        (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.expected_board_epoch_by_board = reversedEpochs;
+
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).toContain('Robot action enabled for the selected finite destination.');
+    });
+
+    it('renders receipt unavailable and outcome uncertain instead of inventing queued state', async () => {
+        state.yReceipt.error = new Error('detail parse failed');
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+        expect(panel.textContent).toContain('receipt unavailable / outcome uncertain');
+        expect(panel.textContent).toContain('Do not resubmit');
+        expect(panel.textContent).not.toContain('Lifecyclequeued');
+    });
+
+    it('keeps a recovered wrong-action receipt uncertain instead of confirming deck completion', async () => {
+        state.deckDeferred = true;
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+        await act(async () => state.deckCallbacks?.onError?.({
+            response: {
+                status: 502,
+                data: {
+                    detail: {
+                        error: 'operator_action_receipt_action_mismatch',
+                        command_id: 'deck-command-wrong-action',
+                        action_id: 'oem.y.move_steps',
+                        status_path: '/api/bioxp/operator/actions/v2/receipts/deck-command-wrong-action',
+                        retry_guidance: 'Do not resubmit; poll the command ID.',
+                    },
+                },
+            },
+        }));
+        state.deckReceipt.data = {
+            command_id: 'deck-command-wrong-action',
+            action_id: 'oem.y.move_steps',
+            status: 'completed',
+            terminal: true,
+            completion_class: 'event_128',
+            physical_effect_verified: true,
+            error: null,
+        };
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+
+        expect(panel.textContent).toContain('receipt unavailable / outcome uncertain');
+        expect(panel.textContent).toContain('Do not resubmit');
+        expect(panel.textContent).toContain('Lifecycleunavailable');
+        expect(panel.textContent).toContain('Ambiguous outcomeambiguous');
+        expect(panel.textContent).toContain('Recovery requiredrequired');
+        expect(panel.textContent).not.toContain('Lifecyclecompleted');
+    });
+
+    it('ignores a deferred deck enqueue completion after connection generation changes', async () => {
+        state.deckDeferred = true;
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+        const oldCallbacks = state.deckCallbacks;
+        state.connectionGeneration = 2;
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        await act(async () => oldCallbacks?.onSuccess?.({ command_id: 'deck-old-generation', status: 'queued', terminal: false }));
+        expect(container.textContent).not.toContain('deck-old-generation');
+    });
+
+    it('keeps Y and deck errors on their independent control surfaces', async () => {
+        state.yInvokeError = { response: { status: 409, data: { detail: { error: 'y_conflict' } } } };
+        state.deckInvokeError = { response: { status: 502, data: { detail: { error: 'deck_uncertain' } } } };
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const deck = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const y = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
+        const deckMove = [...deck.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        const yMove = [...y.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        await act(async () => { deckMove.click(); yMove.click(); await Promise.resolve(); });
+        expect(deck.textContent).toContain('Deck enqueue failed');
+        expect(deck.textContent).toContain('deck_uncertain');
+        expect(deck.textContent).not.toContain('y_conflict');
+        expect(y.textContent).toContain('Y enqueue failed');
+        expect(y.textContent).toContain('y_conflict');
+        expect(y.textContent).not.toContain('deck_uncertain');
+    });
+
     it('derives X enablement from catalog and dashboard with zero always-on admission calls', async () => {
         await act(async () => {
             root.render(<BioXpCockpit />);
@@ -1073,6 +1333,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             await Promise.resolve();
         });
         const section = container.querySelector('[data-testid="serial206-y-authority-panel"]') as HTMLElement;
+        const movePositive = [...section.querySelectorAll('button')].find((button) => button.textContent === 'Move +') as HTMLButtonElement;
+        await act(async () => { movePositive.click(); await Promise.resolve(); });
         expect(section.textContent).toContain('Y enqueue failed · HTTP 409 · board_epoch_conflict');
         expect(section.textContent).toContain('Y STOP failed · HTTP 504 · bioxp_robot_timeout');
         const raw = [...section.querySelectorAll('pre')].map((node) => node.textContent).join('\n');
@@ -1081,13 +1343,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"dispatch_state"');
     });
 
-    it.each([
-        ['dashboard error', () => { state.v2Dashboard.error = new Error('dashboard query failed'); }],
-        ['dashboard stale', () => { state.v2Dashboard.isStale = true; }],
-        ['catalog error', () => { state.v2Catalog.error = new Error('catalog query failed'); }],
-        ['catalog stale', () => { state.v2Catalog.isStale = true; }],
-    ])('fails normal Y closed for an isolated %s condition', async (_label, applyFault) => {
-        applyFault();
+    it('fails normal Y closed when current robot control state is unavailable', async () => {
+        state.v2Catalog.error = new Error('catalog query failed');
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();
@@ -1096,10 +1353,10 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const buttons = [...section.querySelectorAll('button')] as HTMLButtonElement[];
         expect((buttons.find((button) => button.textContent === 'Move +') as HTMLButtonElement).disabled).toBe(true);
         expect((buttons.find((button) => button.textContent === 'Stop') as HTMLButtonElement).disabled).toBe(false);
-        expect(section.textContent).toContain('Fresh v2 catalog or dashboard authority is unavailable');
+        expect(section.textContent).not.toContain('Fresh v2 catalog or dashboard authority is unavailable');
     });
 
-    it('disables Z normal controls when fresh v2 authority is unavailable instead of rendering dead controls', async () => {
+    it('disables Z normal controls when current robot control state is unavailable instead of rendering dead controls', async () => {
         state.catalog.data.actions.push({
             ...xAbsoluteAction(),
             action_id: 'oem.z.move_absolute',
@@ -1107,7 +1364,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             disabled_reason: null,
             inputs: [{ name: 'position_steps', type: 'integer', required: true, minimum: 0, maximum: 160000 }],
         });
-        state.v2Dashboard.isStale = true;
+        state.v2Catalog.error = new Error('catalog query failed');
         await act(async () => {
             root.render(<BioXpCockpit />);
             await Promise.resolve();

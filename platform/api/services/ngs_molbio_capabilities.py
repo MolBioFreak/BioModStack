@@ -896,32 +896,184 @@ def _verify_ngs_molbio_domain_semantics(value: dict[str, Any]) -> None:
     )
 
 
-def _verify_protein_domain_semantics(value: dict[str, Any]) -> None:
+def _protein_capability_catalogue() -> dict[str, dict[str, Any]]:
+    module = importlib.import_module("services.protein_project_capabilities")
+    inventory = module.protein_capability_inventory()
+    rows = inventory.get("capabilities") if isinstance(inventory, dict) else None
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise NgsMolBioCapabilityError("Protein capability inventory is malformed")
+    catalogue: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        capability_id = row.get("capability_id")
+        if not isinstance(capability_id, str) or not capability_id:
+            raise NgsMolBioCapabilityError("Protein capability inventory has an invalid capability ID")
+        if capability_id in catalogue:
+            raise NgsMolBioCapabilityError(f"duplicate Protein capability ID: {capability_id}")
+        catalogue[capability_id] = row
+    return catalogue
+
+
+def _verify_registered_schema_digest(
+    item: dict[str, Any],
+    *,
+    schema_entries: dict[str, dict[str, Any]],
+    label: str,
+) -> None:
+    schema_id = item["schema_id"]
+    entry = schema_entries.get(schema_id)
+    if entry is None:
+        raise NgsMolBioCapabilityError(f"unknown {label} schema ID: {schema_id}")
+    if item["schema_sha256"] != entry["schema_sha256"]:
+        raise NgsMolBioCapabilityError(f"{label} schema digest mismatch: {schema_id}")
+
+
+def _verify_protein_domain_semantics(
+    value: dict[str, Any],
+    schema_entries: dict[str, dict[str, Any]],
+) -> None:
     if value.get("domain_kind") != "protein_in_silico":
         return
-    if value["domain_payload"]["design_constraints"]:
+    payload = value["domain_payload"]
+    if payload["design_constraints"]:
         raise NgsMolBioCapabilityError(
             "Protein constraints are unavailable because the closed payload registry is empty"
         )
-    targets = value["domain_payload"].get("targets", [])
+
+    targets = payload.get("targets", [])
     _assert_unique_values((target["target_id"] for target in targets), label="protein target ID")
-    planned = value["domain_payload"].get("planned_capability_ids", [])
-    if value.get("status") in {"planned", "active"} and not planned:
-        raise NgsMolBioCapabilityError("planned or active Protein Domains require a registered execution capability")
+    for target in targets:
+        _assert_unique_values(
+            (
+                [ref["dataset_revision_id"], ref["member_id"]]
+                for ref in target.get("dataset_member_refs", [])
+            ),
+            label=f"Dataset member reference in Protein target {target['target_id']}",
+        )
+
     outer_dataset_ids = value.get("dataset_revision_ids", [])
     target_dataset_ids = [
         ref["dataset_revision_id"]
         for target in targets
         for ref in target.get("dataset_member_refs", [])
     ]
-    if len(target_dataset_ids) != len(set(target_dataset_ids)) or target_dataset_ids != outer_dataset_ids:
+    ordered_target_dataset_ids = list(dict.fromkeys(target_dataset_ids))
+    if ordered_target_dataset_ids != outer_dataset_ids:
         raise NgsMolBioCapabilityError(
             "Protein target Dataset member references must match the ordered outer dataset_revision_ids list"
         )
 
+    # Historical Protein v1/v2 payloads remain read-only under their frozen semantics.
+    if payload.get("schema") != "bms.protein-in-silico-experiment.v3":
+        return
+
+    mode = payload["experiment_mode"]
+    planned = payload["planned_capability_ids"]
+    validation = payload["validation_capability_ids"]
+    _assert_unique_values(planned, label="planned Protein capability ID")
+    _assert_unique_values(validation, label="Protein validation capability ID")
+    catalogue = _protein_capability_catalogue()
+
+    selected_rows: list[dict[str, Any]] = []
+    for capability_id in planned:
+        row = catalogue.get(capability_id)
+        if row is None:
+            raise NgsMolBioCapabilityError(f"unknown planned Protein capability ID: {capability_id}")
+        allowed_modes = row.get("allowed_domain_modes")
+        if (
+            row.get("exposure_state") != "accepted"
+            or row.get("plannable") is not True
+            or not isinstance(allowed_modes, list)
+            or mode not in allowed_modes
+        ):
+            raise NgsMolBioCapabilityError(
+                f"Protein capability is not accepted, plannable, and applicable to {mode}: {capability_id}"
+            )
+        selected_rows.append(row)
+
+    for capability_id in validation:
+        row = catalogue.get(capability_id)
+        if row is None:
+            raise NgsMolBioCapabilityError(f"unknown Protein validation capability ID: {capability_id}")
+        validator_modes = row.get("validator_domain_modes")
+        if (
+            row.get("exposure_state") != "accepted"
+            or row.get("allowed_as_validator") is not True
+            or not isinstance(validator_modes, list)
+            or mode not in validator_modes
+        ):
+            raise NgsMolBioCapabilityError(
+                f"Protein capability is not explicitly accepted as a validator for {mode}: {capability_id}"
+            )
+        selected_rows.append(row)
+
+    registered_compatibility_contracts: set[str] = set()
+    for row in selected_rows:
+        contract_ids = row.get("comparison_compatibility_contract_ids")
+        if contract_ids is None:
+            continue
+        if not isinstance(contract_ids, list) or any(
+            not isinstance(contract_id, str) or not contract_id for contract_id in contract_ids
+        ):
+            raise NgsMolBioCapabilityError(
+                f"Protein capability has malformed comparison compatibility contracts: {row['capability_id']}"
+            )
+        registered_compatibility_contracts.update(contract_ids)
+
+    target_ids = {target["target_id"] for target in targets}
+    groups = payload["comparison_groups"]
+    _assert_unique_values((group["group_id"] for group in groups), label="Protein comparison group ID")
+    for group in groups:
+        group_id = group["group_id"]
+        contract_id = group["compatibility_contract_id"]
+        if contract_id not in registered_compatibility_contracts:
+            raise NgsMolBioCapabilityError(
+                f"unknown Protein comparison compatibility contract ID: {contract_id}"
+            )
+        members = group["members"]
+        _assert_unique_values(
+            ([member["target_id"], member["role"]] for member in members),
+            label=f"member identity in Protein comparison group {group_id}",
+        )
+        _assert_unique_values(
+            (member["ordinal"] for member in members),
+            label=f"member ordinal in Protein comparison group {group_id}",
+        )
+        for member in members:
+            if member["target_id"] not in target_ids:
+                raise NgsMolBioCapabilityError(
+                    f"Protein comparison group {group_id} references an unknown target ID: {member['target_id']}"
+                )
+
+    criteria = payload["acceptance_criteria"]
+    evidence_plan = payload["evidence_plan"]
+    _assert_unique_values((item["criterion_id"] for item in criteria), label="Protein criterion ID")
+    _assert_unique_values(
+        (item["requirement_id"] for item in evidence_plan),
+        label="Protein evidence requirement ID",
+    )
+    for item in criteria:
+        _verify_registered_schema_digest(
+            item,
+            schema_entries=schema_entries,
+            label="Protein acceptance criterion",
+        )
+    for item in evidence_plan:
+        _verify_registered_schema_digest(
+            item,
+            schema_entries=schema_entries,
+            label="Protein evidence requirement",
+        )
+
+    if value.get("status") in {"planned", "active"}:
+        for field in ("planned_capability_ids", "acceptance_criteria", "evidence_plan"):
+            if not payload[field]:
+                raise NgsMolBioCapabilityError(
+                    f"{value['status']} Protein Domains require non-empty {field}"
+                )
+
 
 def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
-    _inventory, schemas, reference_registry, _documents = _loaded()
+    _inventory, schemas, reference_registry, documents = _loaded()
     schema_id = value.get("schema")
     if schema_id not in {"bms.domain-experiment.v2", "bms.domain-experiment.v3", "bms.domain-experiment.v4"}:
         raise NgsMolBioCapabilityError("unsupported Domain Experiment schema")
@@ -932,7 +1084,8 @@ def validate_domain_experiment(value: dict[str, Any]) -> dict[str, Any]:
         reference_registry,
     )
     _verify_ngs_molbio_domain_semantics(value)
-    _verify_protein_domain_semantics(value)
+    schema_entries = _unique(documents["schema"]["entries"], "schema_id", "schema ID")
+    _verify_protein_domain_semantics(value, schema_entries)
     return copy.deepcopy(value)
 
 

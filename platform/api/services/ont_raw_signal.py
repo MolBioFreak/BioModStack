@@ -40,11 +40,12 @@ from database import (
     OntRawSignalRepresentation,
 )
 from services.file_lease_signals import register_lease_break_listener
+from services.ont_read_metrics import publish_read_metrics_from_validation
 
 
 RepresentationPreference = Literal["auto", "pod5", "blow5"]
-BLOW5_PROFILE_ID = "bms.blow5.partitioned-zstd-svb-zd.v2"
-EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v1"
+BLOW5_PROFILE_ID = "bms.blow5.partitioned-zstd-svb-zd.v3"
+EXTERNAL_BLOW5_VALIDATION_PROFILE_ID = "bms.blow5.external-validation.v2"
 BLOW5_CONTAINER_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE"
 BLOW5_CONTAINER_DIGEST_ENV = "BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST"
 BLOW5_CONTAINER_RUNTIME_ENV = "BMS_ONT_CONTAINER_RUNTIME"
@@ -58,7 +59,7 @@ RAW_SIGNAL_RETENTION_POLICY_ENV = "BMS_ONT_RAW_SIGNAL_RETENTION_POLICY"
 BLOW5_DEFAULT_STAGING_ROOT = "/mnt/BioModStack/ont-raw-signal-staging"
 BLOW5_DEFAULT_MIN_FREE_BYTES = 20 * 1024 * 1024 * 1024
 RAW_SIGNAL_RUNTIME_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/ont_signal_workbench/raw_signal_runtime_policy_v1.json"
-RAW_SIGNAL_RUNTIME_POLICY_SHA256 = "6257135ec3f0669f7579e3c1d4d44742fa78c7913d32108b158da08e01ccdc05"
+RAW_SIGNAL_RUNTIME_POLICY_SHA256 = "7d504d40b1022120911400f74872b4d038d65dbbafd01ee5a0e318e9ade82a58"
 
 
 class SourceLeaseUnavailable(RuntimeError):
@@ -1978,7 +1979,8 @@ def conversion_semantic_command(commands: dict[str, Any], groups: list[str]) -> 
     return list(commands["common"]) + [
         "python3", "/opt/bms/ont_raw_signal_validate.py", "semantic-dataset",
         *list(commands["validator_input_args"]), *outputs,
-        "--routing", "/stage/routing.json", "--receipt", "/stage/semantic-receipt.json",
+        "--routing", "/stage/routing.json", "--metrics", "/stage/read-metrics.jsonl",
+        "--receipt", "/stage/semantic-receipt.json",
     ]
 
 
@@ -2171,7 +2173,10 @@ def _external_blow5_validation_commands(job: OntRawSignalDerivationJob, source: 
             {"kind": "index", "artifact": dict(index_artifact), "identity": index_identity},
         ],
         "quickcheck": common + validator_args + ["--receipt", "/stage/quickcheck-receipt.json"],
-        "semantic_validate": common + validator_args + ["--receipt", "/stage/semantic-receipt.json"],
+        "semantic_validate": common + validator_args + [
+            "--metrics", "/stage/read-metrics.jsonl",
+            "--receipt", "/stage/semantic-receipt.json",
+        ],
     }
 
 
@@ -2204,6 +2209,13 @@ async def complete_external_blow5_validation(
     source.profile_id = EXTERNAL_BLOW5_VALIDATION_PROFILE_ID
     source.published_at = _now()
     job.output_representation_id = source.id
+    await publish_read_metrics_from_validation(
+        session,
+        representation=source,
+        metrics_path=Path(commands["stage"]) / "read-metrics.jsonl",
+        semantic_receipt=receipt,
+        validation_runtime_identity=commands.get("runtime_identity") if isinstance(commands.get("runtime_identity"), dict) else {},
+    )
     await session.flush()
     return source
 
@@ -3699,7 +3711,7 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
                     os.fsync(descriptor)
                 finally:
                     os.close(descriptor)
-            for name in ("routing.json", "semantic-receipt.json"):
+            for name in ("routing.json", "semantic-receipt.json", "read-metrics.jsonl"):
                 descriptor = _open_publication_regular(stage_fd, name)
                 try:
                     os.fsync(descriptor)
@@ -3875,6 +3887,12 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
     if existing is not None:
         if existing.artifact_manifest != manifest or existing.state != "ready":
             raise ValueError("raw-signal publication representation authority diverged")
+        await publish_read_metrics_from_validation(
+            session,
+            representation=existing,
+            metrics_path=final_directory / "read-metrics.jsonl",
+            semantic_receipt=semantic,
+        )
         return existing
     representation = OntRawSignalRepresentation(
         id=_id("ont-raw-rep"), run_id=job.run_id, observed_generation=job.observed_generation,
@@ -3890,6 +3908,12 @@ async def publish_derivation(session: AsyncSession, job: OntRawSignalDerivationJ
     )
     session.add(representation)
     await session.flush()
+    await publish_read_metrics_from_validation(
+        session,
+        representation=representation,
+        metrics_path=final_directory / "read-metrics.jsonl",
+        semantic_receipt=semantic,
+    )
     job.output_representation_id = representation.id
     await session.flush()
     await _fence_active_derivation_claim(session, job.id, str(job.claim_token or ""))

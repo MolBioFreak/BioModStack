@@ -23,6 +23,7 @@ import random
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from jsonschema.exceptions import SchemaError
 
@@ -43,6 +44,7 @@ from database import (
     current_launch_context_id,
     get_session,
     Job,
+    ExecutionTarget,
     Design,
     FrustraMPNNResult,
     ConformationalMappingRequest,
@@ -86,6 +88,12 @@ from services.rfd3_local_redesign import (
     materialize_local_redesign_request,
     prepare_local_redesign_scheduler_params,
 )
+from services.rfd3_generation import (
+    GenerationContractError,
+    file_sha256,
+    materialize_generation_request,
+    normalize_generation_params,
+)
 from services.global_experiments.launch_contexts import (
     LaunchContextError,
     claim_launch_context,
@@ -118,15 +126,6 @@ from services.stage_review import (
     resolve_nextflow_run_dir,
     refresh_gate_payload,
 )
-from services.boltz_cp_shard_plans import (
-    BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-    coerce_boltz_cp_shard_plan_id,
-    get_boltz_cp_logical_size_cp,
-    get_boltz_cp_shard_plan_catalog,
-    infer_boltz_cp_shard_plan_id,
-    largest_square_divisor as boltz_cp_largest_square_divisor,
-)
-
 router = APIRouter()
 
 # Project root for resolving code-relative paths
@@ -1287,6 +1286,28 @@ def _to_bool(value: object) -> bool:
     return False
 
 
+def _should_normalize_antibody_job_params(
+    model_id: str,
+    mode: str,
+    params: Optional[Dict[str, Any]],
+) -> bool:
+    normalized_model_id = str(model_id or "").strip().lower()
+    normalized_mode = str(mode or "").strip().lower()
+    if (
+        normalized_model_id == "protein_local_redesign"
+        and normalized_mode == "local_redesign"
+    ) or (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "region_redesign"
+    ):
+        return False
+    return not (
+        normalized_model_id == "protein_modification_experimental"
+        and normalized_mode == "de_novo_design"
+        and str((params or {}).get("generator") or "rfd3").strip().lower() == "rfd3"
+    )
+
+
 def _normalize_antibody_job_params(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not isinstance(params, dict):
         return {}
@@ -1526,35 +1547,19 @@ BOLTZ_CP_STRUCTURE_LAUNCHER_INPUT_SENTINEL = "__boltz_cp_structure_launcher_inpu
 
 
 def _largest_square_divisor(value_count: int, requested_size_cp: Optional[int] = None) -> int:
-    return boltz_cp_largest_square_divisor(value_count, requested_size_cp)
+    if value_count < 1:
+        return 1
 
-
-def _get_boltz_cp_catalog_physical_gpu_count() -> int:
-    """Return the discovered host GPU count for UI catalog previews without DALAB ordinal assumptions."""
-    for env_key in ("BMS_BOLTZ_CP_CATALOG_GPU_COUNT", "BMS_MAX_PHYSICAL_GPUS"):
-        raw_value = os.getenv(env_key)
-        if raw_value in (None, ""):
+    requested = requested_size_cp if requested_size_cp and requested_size_cp > 0 else value_count
+    best = 1
+    for candidate in range(1, value_count + 1):
+        if value_count % candidate != 0:
             continue
-        try:
-            parsed = int(raw_value)
-        except (TypeError, ValueError):
+        root = int(candidate ** 0.5)
+        if root * root != candidate or candidate > requested:
             continue
-        if parsed > 0:
-            return parsed
-
-    try:
-        from services.gpu_metadata import GPU_METADATA
-
-        discovered_count = len(GPU_METADATA)
-    except Exception as exc:
-        logger.debug("Could not discover GPU count for Boltz-CP shard-plan catalog: %s", exc)
-        discovered_count = 0
-    return max(1, discovered_count)
-
-
-@router.get("/boltz-cp/shard-plans")
-def list_boltz_cp_shard_plans() -> Dict[str, Any]:
-    return get_boltz_cp_shard_plan_catalog(max_physical_gpu_count=_get_boltz_cp_catalog_physical_gpu_count())
+        best = candidate
+    return best
 
 
 def _default_structure_prediction_pred_method(model_id: str) -> str:
@@ -1730,17 +1735,6 @@ def _normalize_boltz_cp_params_for_validation(
     if input_path:
         normalized["input_path"] = input_path
 
-    shard_plan_id = coerce_boltz_cp_shard_plan_id(
-        normalized.get("shard_plan_id") or normalized.get("bcp_shard_plan_id")
-    )
-    if shard_plan_id is None:
-        shard_plan_id = infer_boltz_cp_shard_plan_id(
-            normalized.get("size_cp") or normalized.get("bcp_size_cp"),
-            default=BOLTZ_CP_DEFAULT_SHARD_PLAN_ID,
-        )
-    if shard_plan_id:
-        normalized["shard_plan_id"] = shard_plan_id
-
     gpu_ids = _coerce_nonempty_text(normalized.get("gpu_ids")) or _coerce_nonempty_text(
         normalized.get("bcp_gpu_ids")
     )
@@ -1749,27 +1743,24 @@ def _normalize_boltz_cp_params_for_validation(
     if gpu_ids:
         normalized["gpu_ids"] = gpu_ids
 
+    size_cp = _coerce_positive_int(normalized.get("size_cp")) or _coerce_positive_int(
+        normalized.get("bcp_size_cp")
+    )
+    if gpu_ids:
+        gpu_count = len([item for item in gpu_ids.split(",") if item.strip()])
+        if gpu_count > 0:
+            size_cp = _largest_square_divisor(gpu_count, size_cp)
+    if size_cp is not None:
+        normalized["size_cp"] = size_cp
+
     alias_mappings = {
-        "shard_plan_id": "bcp_shard_plan_id",
         "input_format": "bcp_input_format",
         "output_format": "bcp_output_format",
         "write_full_pae": "bcp_write_full_pae",
-        "confidence_prediction": "bcp_confidence_prediction",
         "recycling_steps": "bcp_recycling_steps",
         "sampling_steps": "bcp_sampling_steps",
         "diffusion_samples": "bcp_diffusion_samples",
-        "max_msa_seqs": "bcp_max_msa_seqs",
-        "max_parallel_samples": "bcp_max_parallel_samples",
-        "precision": "bcp_precision",
         "seed": "bcp_seed",
-        "backend": "bcp_backend",
-        "triattn_backend": "bcp_triattn_backend",
-        "context_store_mode": "bcp_context_store_mode",
-        "context_store_root": "bcp_context_store_root",
-        "context_query_tile_tokens": "bcp_context_query_tile_tokens",
-        "context_store_logical_size_cp": "bcp_context_store_logical_size_cp",
-        "context_store_pair_tile_tokens": "bcp_context_store_pair_tile_tokens",
-        "context_store_key_tile_tokens": "bcp_context_store_key_tile_tokens",
     }
     for canonical_key, alias_key in alias_mappings.items():
         if canonical_key not in normalized and alias_key in normalized:
@@ -1781,6 +1772,34 @@ def _normalize_boltz_cp_params_for_validation(
         normalized["sampling_steps"] = normalized["boltz_sampling_steps"]
     if "diffusion_samples" not in normalized and "boltz_num_samples" in normalized:
         normalized["diffusion_samples"] = normalized["boltz_num_samples"]
+
+    for retired_key in tuple(normalized):
+        if retired_key in {
+            "backend",
+            "shard_plan_id",
+            "confidence_prediction",
+            "max_msa_seqs",
+            "max_parallel_samples",
+            "precision",
+            "triattn_backend",
+            "context_store_mode",
+            "context_store_root",
+            "context_query_tile_tokens",
+            "context_store_logical_size_cp",
+            "context_store_pair_tile_tokens",
+            "context_store_key_tile_tokens",
+            "context_store_projection_cache_byte_budget",
+            "projection_cache_byte_budget",
+        } or retired_key.startswith("bcp_context_") or retired_key in {
+            "bcp_backend",
+            "bcp_shard_plan_id",
+            "bcp_confidence_prediction",
+            "bcp_max_msa_seqs",
+            "bcp_max_parallel_samples",
+            "bcp_precision",
+            "bcp_triattn_backend",
+        }:
+            normalized.pop(retired_key, None)
 
     return normalized
 
@@ -5098,6 +5117,12 @@ async def list_jobs(
         Job.selection_source_job_id,
         Job.selection_dataset_name,
         Job.pinned_gpu,
+        Job.execution_target_id,
+        Job.execution_source_revision,
+        Job.execution_source_tree,
+        Job.execution_bundle_sha256,
+        Job.remote_attempt_id,
+        Job.remote_state,
         Job.current_stage,
         Job.completed_stages,
         Job.awaiting_input,
@@ -5250,6 +5275,12 @@ async def list_jobs(
             provenance=None if summary else job.provenance,
             saved_selection_sets=None if summary else _serialized_saved_review_filter_sets(job),
             pinned_gpu=job.pinned_gpu,
+            execution_target_id=job.execution_target_id,
+            execution_source_revision=job.execution_source_revision,
+            execution_source_tree=job.execution_source_tree,
+            execution_bundle_sha256=job.execution_bundle_sha256,
+            remote_attempt_id=job.remote_attempt_id,
+            remote_state=job.remote_state,
             current_stage=job.current_stage,
             completed_stages=completed_stages,
             stage_outputs={} if summary else stage_outputs,
@@ -5273,7 +5304,7 @@ async def import_proteinbase_bundle_job(
     request: ProteinBaseBundleImportRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Import an uploaded ProteinBase JSONL bundle as a synthetic completed job."""
+    """Import an uploaded ProteinBase CSV or JSONL bundle as a completed job."""
     try:
         resolved_bundle_path = resolve_allowed_path(request.bundle_path)
     except ValueError as exc:
@@ -5291,10 +5322,10 @@ async def import_proteinbase_bundle_job(
             dataset_name=request.dataset_name,
             job_name=request.job_name,
         )
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=422, detail=f"ProteinBase bundle is not valid JSONL: {exc}") from exc
     except UnicodeDecodeError as exc:
         raise HTTPException(status_code=422, detail=f"ProteinBase bundle must be UTF-8 text: {exc}") from exc
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"ProteinBase bundle is invalid: {exc}") from exc
 
     await session.refresh(job)
 
@@ -5344,6 +5375,12 @@ async def import_proteinbase_bundle_job(
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
         pinned_gpu=job.pinned_gpu,
+        execution_target_id=job.execution_target_id,
+        execution_source_revision=job.execution_source_revision,
+        execution_source_tree=job.execution_source_tree,
+        execution_bundle_sha256=job.execution_bundle_sha256,
+        remote_attempt_id=job.remote_attempt_id,
+        remote_state=job.remote_state,
         current_stage=job.current_stage,
         completed_stages=job.completed_stages,
         stage_outputs=job.stage_outputs,
@@ -5455,6 +5492,54 @@ async def _create_job(
     }
     normalized_model_id = str(job_data.model_id or "").strip().lower()
     normalized_mode = str(job_data.mode or "").strip().lower()
+    inherited_source_revision: str | None = None
+    inherited_source_tree: str | None = None
+    selected_execution_target: ExecutionTarget | None = None
+    execution_parent: Job | None = None
+    if job_data.parent_job_id:
+        execution_parent = await session.get(Job, str(job_data.parent_job_id))
+        if execution_parent is not None:
+            parent_target_id = str(execution_parent.execution_target_id or "").strip() or None
+            requested_target_id = str(job_data.execution_target_id or "").strip() or None
+            if requested_target_id is not None and requested_target_id != parent_target_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Child execution_target_id must match the parent Job",
+                )
+            job_data.execution_target_id = parent_target_id
+            inherited_source_revision = execution_parent.execution_source_revision
+            inherited_source_tree = execution_parent.execution_source_tree
+    if job_data.execution_target_id:
+        selected_execution_target = await session.get(
+            ExecutionTarget,
+            str(job_data.execution_target_id),
+        )
+        if (
+            selected_execution_target is None
+            or not selected_execution_target.active
+            or selected_execution_target.state != "ready"
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="execution_target_id is not an active ready execution target",
+            )
+        if execution_parent is not None:
+            if not inherited_source_revision or not inherited_source_tree:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Remote parent Job is missing its immutable source identity",
+                )
+        else:
+            try:
+                from services.remote_execution.bundle import current_source_identity
+
+                inherited_source_revision, inherited_source_tree = current_source_identity()
+            except Exception as exc:
+                logger.exception("Unable to capture the remote Job source identity")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Committed BMS source identity is unavailable",
+                ) from exc
     if normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign":
         try:
             job_data.params = normalize_plr_structure_validators(job_data.params or {})
@@ -5495,10 +5580,20 @@ async def _create_job(
                     )
                 },
             )
-        from routers.gpu import get_gpu_stats_with_error
+        if selected_execution_target is not None:
+            capabilities = (
+                selected_execution_target.capabilities
+                if isinstance(selected_execution_target.capabilities, dict)
+                else {}
+            )
+            remote_gpu_count = int(capabilities.get("gpu_count") or 0)
+            valid_gpu_indices = list(range(remote_gpu_count))
+            gpu_error = None if remote_gpu_count > 0 else "remote target has no GPU inventory"
+        else:
+            from routers.gpu import get_gpu_stats_with_error
 
-        live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
-        valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
+            live_gpus, gpu_error = await asyncio.to_thread(get_gpu_stats_with_error, True)
+            valid_gpu_indices = sorted({int(gpu.index) for gpu in live_gpus})
         if gpu_error or pinned_gpu not in valid_gpu_indices:
             raise HTTPException(
                 status_code=422,
@@ -5592,12 +5687,11 @@ async def _create_job(
         job_data.params = _normalize_structure_runtime_paths(job_data.model_id, job_data.params)
         job_data.params = _normalize_structure_geometry_params(job_data.params)
         job_data.params = _normalize_boltz_no_msa_quality_params(job_data.model_id, job_data.mode, job_data.params)
-        is_protein_local_redesign = (
-            normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign"
-        ) or (
-            normalized_model_id == "protein_modification_experimental" and normalized_mode == "region_redesign"
-        )
-        if not is_protein_local_redesign:
+        if _should_normalize_antibody_job_params(
+            normalized_model_id,
+            normalized_mode,
+            job_data.params,
+        ):
             job_data.params = _normalize_antibody_job_params(job_data.params)
 
         if normalized_model_id == "protein_local_redesign" and normalized_mode == "local_redesign":
@@ -5615,6 +5709,23 @@ async def _create_job(
             except ContractError as exc:
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
             job_data.params = normalized_local_params
+
+        if (
+            normalized_model_id == "protein_modification_experimental"
+            and normalized_mode == "de_novo_design"
+            and str(job_data.params.get("generator") or "rfd3").strip().lower() == "rfd3"
+        ):
+            try:
+                normalized_generation_params, _generation_request, _generation_digest = normalize_generation_params(
+                    job_data.params,
+                    job_name=job_data.name,
+                )
+            except GenerationContractError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"rfd3_generation_contract_error": str(exc)},
+                ) from exc
+            job_data.params = normalized_generation_params
 
         if job_data.model_id == "molecular_dynamics" and job_data.mode == "simulate":
             try:
@@ -5732,6 +5843,12 @@ async def _create_job(
                 provenance=existing_child.provenance,
                 saved_selection_sets=_serialized_saved_review_filter_sets(existing_child),
                 pinned_gpu=existing_child.pinned_gpu,
+                execution_target_id=existing_child.execution_target_id,
+                execution_source_revision=existing_child.execution_source_revision,
+                execution_source_tree=existing_child.execution_source_tree,
+                execution_bundle_sha256=existing_child.execution_bundle_sha256,
+                remote_attempt_id=existing_child.remote_attempt_id,
+                remote_state=existing_child.remote_state,
                 awaiting_input=existing_child.awaiting_input,
                 awaiting_stage=existing_child.awaiting_stage,
                 awaiting_payload=existing_child.awaiting_payload,
@@ -5950,6 +6067,9 @@ async def _create_job(
             priority=10,  # HIGH priority - unblocks inference jobs
             job_phase='msa_generation',
             msa_sequences=sequences_for_msa,
+            execution_target_id=job_data.execution_target_id,
+            execution_source_revision=inherited_source_revision,
+            execution_source_tree=inherited_source_tree,
         )
         session.add(msa_job)
         logger.info(f"[MSA BATCH] Created MSA batch job {msa_job_id[:8]}... for {len(sequences_for_msa)} sequences")
@@ -6069,6 +6189,23 @@ async def _create_job(
                     created=md_output_dir_created,
                 )
                 raise HTTPException(status_code=422, detail={"local_redesign_contract_error": str(exc)}) from exc
+
+        if (
+            normalized_model_id == "protein_modification_experimental"
+            and normalized_mode == "de_novo_design"
+            and str(job_params.get("generator") or "rfd3").strip().lower() == "rfd3"
+        ):
+            try:
+                job_params, _generation_request_path = materialize_generation_request(
+                    job_params,
+                    output_dir=output_dir,
+                    job_id=job_id,
+                )
+            except GenerationContractError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"rfd3_generation_contract_error": str(exc)},
+                ) from exc
 
         if isinstance(job_params, dict):
             job_params = _ensure_job_resume_identity(
@@ -6223,6 +6360,9 @@ async def _create_job(
             selection_dataset_name=provenance_selection_dataset_name,
             selected_loop_scope=provenance_selection_scope,
             provenance=provenance_payload,
+            execution_target_id=job_data.execution_target_id,
+            execution_source_revision=inherited_source_revision,
+            execution_source_tree=inherited_source_tree,
             # GPU Orchestrator fields
             queue_status=initial_queue_status,
             vram_estimate_mb=vram_estimate,
@@ -6293,6 +6433,8 @@ async def _create_job(
         await session.commit()
     
     # Refresh first job for response
+    if first_job is None:
+        raise HTTPException(status_code=500, detail="Job creation produced no canonical Job")
     await session.refresh(first_job)
     
     if num_jobs > 1:
@@ -6337,6 +6479,12 @@ async def _create_job(
         provenance=first_job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(first_job),
         pinned_gpu=first_job.pinned_gpu,
+        execution_target_id=first_job.execution_target_id,
+        execution_source_revision=first_job.execution_source_revision,
+        execution_source_tree=first_job.execution_source_tree,
+        execution_bundle_sha256=first_job.execution_bundle_sha256,
+        remote_attempt_id=first_job.remote_attempt_id,
+        remote_state=first_job.remote_state,
         awaiting_input=first_job.awaiting_input,
         awaiting_stage=first_job.awaiting_stage,
         awaiting_payload=first_job.awaiting_payload,
@@ -7169,6 +7317,139 @@ def _public_job_params(job: Any) -> dict[str, Any]:
     return params
 
 
+def _rfd3_generation_range(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"min": None, "mean": None, "max": None}
+    return {"min": min(values), "mean": round(sum(values) / len(values), 6), "max": max(values)}
+
+
+@router.get("/{job_id}/rfd3-generation")
+async def get_rfd3_generation_result(job_id: str, session: AsyncSession = Depends(get_session)):
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if (
+        job is None
+        or str(job.model_id or "").strip().lower() != "protein_modification_experimental"
+        or str(job.mode or "").strip().lower() != "de_novo_design"
+    ):
+        raise HTTPException(status_code=404, detail="RFD3 generation job not found")
+    params = job.params if isinstance(job.params, dict) else {}
+    request = params.get("rfd3_generation_request")
+    manifest_sha256 = params.get("rfd3_generation_result_manifest_sha256")
+    if not isinstance(request, dict) or not isinstance(manifest_sha256, str):
+        raise HTTPException(status_code=404, detail="RFD3 generation typed result is not available")
+    designs = list(
+        (await session.execute(select(Design).where(Design.job_id == job_id).order_by(Design.name.asc())))
+        .scalars()
+        .all()
+    )
+    if not designs:
+        raise HTTPException(status_code=404, detail="RFD3 generation candidates are not available")
+    candidates: list[dict[str, Any]] = []
+    lengths: list[float] = []
+    radii: list[float] = []
+    helices: list[float] = []
+    strands: list[float] = []
+    accepted = 0
+    for design in designs:
+        provenance = design.provenance if isinstance(design.provenance, dict) else {}
+        metrics = provenance.get("metrics")
+        if not isinstance(metrics, dict):
+            raise HTTPException(status_code=409, detail="RFD3 generation candidate metrics are unavailable")
+        length = float(metrics["residue_count"])
+        radius = float(metrics["radius_of_gyration"])
+        helix_count = metrics.get("helix_count")
+        strand_count = metrics.get("strand_count")
+        is_accepted = bool(provenance.get("accepted"))
+        accepted += int(is_accepted)
+        lengths.append(length)
+        radii.append(radius)
+        if helix_count is not None:
+            helices.append(float(helix_count))
+        if strand_count is not None:
+            strands.append(float(strand_count))
+        candidates.append(
+            {
+                "candidate_id": design.name,
+                "status": "accepted" if is_accepted else "generated",
+                "length": int(length),
+                "radius": radius,
+                "helix_count": None if helix_count is None else int(helix_count),
+                "strand_count": None if strand_count is None else int(strand_count),
+                "structure_url": (
+                    f"/api/jobs/{quote(job_id, safe='')}/rfd3-generation/artifacts/"
+                    f"{quote(design.name, safe='')}/candidate_structure"
+                ),
+            }
+        )
+    aggregate = params.get("rfd3_generation_aggregate")
+    if not isinstance(aggregate, dict):
+        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract is unavailable")
+    if (
+        aggregate.get("length") != _rfd3_generation_range(lengths)
+        or aggregate.get("radius_of_gyration") != _rfd3_generation_range(radii)
+    ):
+        raise HTTPException(status_code=409, detail="RFD3 generation aggregate contract does not match persisted candidates")
+    return {
+        "schema": "bms.rfd3.generation.read-model.v1",
+        "job_id": job_id,
+        "request": _rfd3_public_json(request),
+        "result_manifest_sha256": manifest_sha256,
+        "counts": {
+            "requested": int(aggregate["requested"]),
+            "generated": len(candidates),
+            "accepted": accepted,
+        },
+        "aggregates": {
+            "length": _rfd3_generation_range(lengths),
+            "radius": _rfd3_generation_range(radii),
+            "helix": _rfd3_generation_range(helices),
+            "strand": _rfd3_generation_range(strands),
+        },
+        "candidates": candidates,
+    }
+
+
+@router.get("/{job_id}/rfd3-generation/artifacts/{candidate_id}/{role}")
+async def get_rfd3_generation_artifact(
+    job_id: str,
+    candidate_id: str,
+    role: str,
+    session: AsyncSession = Depends(get_session),
+):
+    if role not in {"candidate_structure", "candidate_metadata"}:
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact role not found")
+    job = (await session.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    design = (
+        await session.execute(select(Design).where(Design.job_id == job_id, Design.name == candidate_id))
+    ).scalar_one_or_none()
+    if job is None or design is None or not isinstance(design.provenance, dict):
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
+    artifacts = design.provenance.get("artifacts")
+    descriptor = next(
+        (item for item in artifacts if isinstance(item, dict) and item.get("role") == role),
+        None,
+    ) if isinstance(artifacts, list) else None
+    if not isinstance(descriptor, dict):
+        raise HTTPException(status_code=404, detail="RFD3 generation artifact not found")
+    root = resolve_runtime_data_path(str(job.output_dir or ""))
+    relative = Path(str(descriptor.get("relative_path") or ""))
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        raise HTTPException(status_code=409, detail="RFD3 generation artifact path is unsafe")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise HTTPException(status_code=409, detail="RFD3 generation artifact path contains a symlink")
+    path = current.resolve()
+    if not path.is_relative_to(root.resolve()) or not path.is_file() or path.stat().st_size != descriptor.get("bytes"):
+        raise HTTPException(status_code=410, detail="RFD3 generation artifact is unavailable")
+    if file_sha256(path) != descriptor.get("sha256"):
+        raise HTTPException(status_code=409, detail="RFD3 generation artifact hash mismatch")
+    headers = {"Content-Encoding": "gzip"} if path.name.endswith(".gz") else None
+    media_type = "chemical/x-mmcif" if path.name.endswith(".cif.gz") else str(descriptor.get("media_type"))
+    return FileResponse(str(path), media_type=media_type, filename=path.name, headers=headers)
+
+
 @router.get("/{job_id}/rfd3-local-redesign")
 async def get_rfd3_local_redesign_result(job_id: str, session: AsyncSession = Depends(get_session)):
     """Return the typed local-redesign request and result projection."""
@@ -7426,6 +7707,12 @@ async def get_job(
         provenance=job.provenance,
         saved_selection_sets=_serialized_saved_review_filter_sets(job),
         pinned_gpu=job.pinned_gpu,
+        execution_target_id=job.execution_target_id,
+        execution_source_revision=job.execution_source_revision,
+        execution_source_tree=job.execution_source_tree,
+        execution_bundle_sha256=job.execution_bundle_sha256,
+        remote_attempt_id=job.remote_attempt_id,
+        remote_state=job.remote_state,
         current_stage=job.current_stage,
         completed_stages=completed_stages,
         stage_outputs=stage_outputs,
@@ -7693,10 +7980,14 @@ async def resubmit_job(
         batch_name=original_job.batch_name,
         selected_input_artifact_class=resubmit_selected_input_artifact_class,
         selected_input_schema_version=resubmit_selected_input_schema_version,
+        execution_target_id=original_job.execution_target_id,
+        execution_source_revision=original_job.execution_source_revision,
+        execution_source_tree=original_job.execution_source_tree,
         # GPU Orchestrator fields - let orchestrator pick it up
         queue_status='queued',
         vram_estimate_mb=resubmit_vram_estimate,
         sequence_length=resubmit_sequence_length,
+        pinned_gpu=original_job.pinned_gpu,
         priority=0,
         paused=False,
         retry_count=0,
@@ -9288,9 +9579,44 @@ async def get_job_logs(
         "parsed_error": None,
         "nextflow_log_source": None,
     }
+
+    if job.execution_target_id:
+        logs_data["nextflow_log_source"] = "remote_pending"
+        output_path = resolve_output_dir(job.output_dir) if job.output_dir else None
+
+        def _bounded_remote_log(path: Path) -> str | None:
+            if not path.is_file():
+                return None
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(0, 2)
+                    size = handle.tell()
+                    handle.seek(max(0, size - 1_048_576))
+                    content = handle.read(1_048_576).decode("utf-8", errors="replace")
+                bounded_tail = max(1, min(int(tail), 5000))
+                return "\n".join(content.splitlines()[-bounded_tail:])
+            except OSError:
+                return None
+
+        if output_path is not None:
+            remote_log_root = output_path / "_remote"
+            logs_data["nextflow_log"] = _bounded_remote_log(remote_log_root / "nextflow.log")
+            logs_data["command_log"] = _bounded_remote_log(remote_log_root / "supervisor.log")
+        if logs_data["nextflow_log"] is not None or logs_data["command_log"] is not None:
+            logs_data["nextflow_log_source"] = "remote_returned"
+        logs_data["parsed_error"] = extract_error_from_logs(
+            logs_data["command_log"],
+            None,
+        )
+        if not logs_data["parsed_error"] and logs_data["nextflow_log"]:
+            logs_data["parsed_error"] = extract_error_from_logs(logs_data["nextflow_log"], None)
+        if not logs_data["parsed_error"] and job.error_message:
+            logs_data["parsed_error"] = str(job.error_message)[:4000]
+        return logs_data
     
     # --- Step 1: Find the nextflow log for THIS job ---
     nf_log_content = None
+    output_path = None
     nf_log_candidates = []
     
     if job.output_dir:
@@ -9422,7 +9748,10 @@ async def get_job_logs(
     return logs_data
 
 
-def extract_error_from_logs(command_log: str = None, command_err: str = None) -> str:
+def extract_error_from_logs(
+    command_log: Optional[str] = None,
+    command_err: Optional[str] = None,
+) -> Optional[str]:
     """
     Extract meaningful error message from log files.
     

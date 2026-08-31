@@ -149,7 +149,6 @@ include { Compress as CompressAF2 } from '../modules/compress'
 include { Compress as CompressBoltz } from '../modules/compress'
 include { MergeUncroppedTarget } from '../modules/merge_uncropped_target.nf'
 include { BoltzFromSequence } from '../modules/structure_prediction.nf'
-include { RF3FromSequence } from '../modules/structure_prediction.nf'
 include { structure_prediction_wf } from '../modules/structure_prediction.nf'
 include { OpenMMRelaxation ; OpenMMScore } from '../modules/openmm.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
@@ -501,6 +500,59 @@ PY
 
 
 
+process PrepareGeneralRFD3Input {
+    label 'pyrosetta_tools'
+    stageInMode 'copy'
+    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_*json'
+
+    input:
+    path request_json
+
+    output:
+    tuple val('generation_0'), path('rfd3_generation_native_input.json'), path(request_json), emit: input_json
+    path 'rfd3_generation_preparation_receipt.json', emit: receipt
+
+    script:
+    """
+    set -euo pipefail
+    python3 -u '${params.code_root}/scripts/rfd3_generation/prepare_native_input.py' \
+      --request '${request_json}' \
+      --expected-min-length '${params.rfd3_generation_min_length}' \
+      --expected-max-length '${params.rfd3_generation_max_length}' \
+      --expected-num-designs '${params.rfd3_generation_num_designs}' \
+      --expected-seed '${params.rfd3_generation_seed}' \
+      --expected-dump-trajectories '${params.rfd3_generation_dump_trajectories}' \
+      --output-native rfd3_generation_native_input.json \
+      --output-receipt rfd3_generation_preparation_receipt.json
+    """
+}
+
+process BuildGeneralRFD3ResultManifest {
+    label 'process_low'
+    stageInMode 'copy'
+    publishDir "${params.out_dir}/collected/rfd3_generation", mode: 'copy', pattern: 'rfd3_generation_result_manifest.json'
+
+    input:
+    tuple path(cif_files), path(json_files)
+    path request_json
+
+    output:
+    path 'rfd3_generation_result_manifest.json', emit: manifest
+
+    script:
+    def cifArgs = cif_files.collect { item -> "--cif-file '${item}'" }.join(' ')
+    def jsonArgs = json_files.collect { item -> "--json-file '${item}'" }.join(' ')
+    """
+    set -euo pipefail
+    python3 -u '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py' \
+      --request '${request_json}' \
+      ${cifArgs} \
+      ${jsonArgs} \
+      --storage-prefix run/rfd3 \
+      --output rfd3_generation_result_manifest.json
+    """
+}
+
 workflow PROTEIN_DESIGN {
     try {
         nextflow.preview.topic = true
@@ -509,6 +561,31 @@ workflow PROTEIN_DESIGN {
     }
 
     def outputDirectory = params.out_dir
+    def generalRfd3Generation = params.rfd3_generation_request_path ? true : false
+    if (generalRfd3Generation) {
+        if (params.rfd3_request_path) {
+            error("General RFD3 generation cannot be combined with a local-redesign RFD3 request")
+        }
+        if (params.diffusion_method != 'rfd3') {
+            error("General RFD3 generation requires diffusion_method='rfd3'")
+        }
+        if (params.run_rfd_only != true) {
+            error("General RFD3 generation requires run_rfd_only=true")
+        }
+        if (params.skip_rfd || params.skip_rfd_seq || params.skip_rfd_seq_pred) {
+            error("General RFD3 generation does not accept skip/resume flags")
+        }
+        def requiredGenerationParams = [
+            'rfd3_generation_min_length', 'rfd3_generation_max_length',
+            'rfd3_generation_num_designs', 'rfd3_generation_dump_trajectories',
+        ]
+        def missingGenerationParams = requiredGenerationParams.findAll {
+            !params.containsKey(it) || params[it] == null
+        }
+        if (missingGenerationParams) {
+            error("General RFD3 generation is missing required params: ${missingGenerationParams.join(',')}")
+        }
+    }
 
     if (params.run_rfd_only && (params.skip_rfd_seq || params.skip_rfd_seq_pred)) {
         error("Cannot use --run_rfd_only with skip flags --skip_rfd_seq or --skip_rfd_seq_pred. These options are contradictory.")
@@ -517,8 +594,11 @@ workflow PROTEIN_DESIGN {
         error("Cannot use --run_rfd_only with --skip_rfd. These options are contradictory.")
     }
 
-    def num_batches = Math.min(params.gpus, params.rfd_num_designs).intValue()
-    def batch_size = Math.ceil(params.rfd_num_designs / num_batches).intValue()
+    def requestedRfdDesigns = generalRfd3Generation
+        ? params.rfd3_generation_num_designs
+        : params.rfd_num_designs
+    def num_batches = Math.min(params.gpus, requestedRfdDesigns).intValue()
+    def batch_size = Math.ceil(requestedRfdDesigns / num_batches).intValue()
     def num_designs = num_batches * batch_size
 
     println("Pipeline Mode: ${params.rfd_mode}")
@@ -618,32 +698,41 @@ workflow PROTEIN_DESIGN {
 
 
     if (!params.skip_rfd & !params.skip_rfd_seq & !params.skip_rfd_seq_pred & params.diffusion_method != 'boltzgen') {
-        if (!params.rfd_num_designs) {
+        if (!generalRfd3Generation && !params.rfd_num_designs) {
             error("Please provide the number of designs for RFdiffusion to generate")
         }
 
         if (params.diffusion_method == "rfd3") {
             println("Using RFdiffusion3 (Foundry) for structure generation")
 
-            def inputFiles = collectInputFiles(params)
-            inputFiles.each { inputFile ->
-                "rsync -r ${inputFile} ${inputsDir}/.".execute()
+            if (generalRfd3Generation) {
+                def generationRequest = Channel.value(file(params.rfd3_generation_request_path))
+                PrepareGeneralRFD3Input(generationRequest)
+                RunRFD3(PrepareGeneralRFD3Input.out.input_json)
+                BuildGeneralRFD3ResultManifest(
+                    RunRFD3.out.structures_metadata,
+                    Channel.value(file(params.rfd3_generation_request_path)),
+                )
+            } else {
+                def inputFiles = collectInputFiles(params)
+                inputFiles.each { inputFile ->
+                    "rsync -r ${inputFile} ${inputsDir}/.".execute()
+                }
+
+                def rfd3_input_ch = Channel.of(
+                    [
+                        params.rfd_mode,
+                        params.rfd_contigs ?: '[100-100]',
+                        params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${params.code_root}/lib/NO_FILE"),
+                        params.rfd_hotspots ?: '',
+                        params.rfd_num_designs,
+                        0,
+                    ]
+                )
+
+                PrepRFD3Input(rfd3_input_ch)
+                RunRFD3(PrepRFD3Input.out.input_json)
             }
-
-            def rfd3_input_ch = Channel.of(
-                [
-                    params.rfd_mode,
-                    params.rfd_contigs ?: '[100-100]',
-                    params.rfd_input_pdb ? file(params.rfd_input_pdb) : file("${params.code_root}/lib/NO_FILE"),
-                    params.rfd_hotspots ?: '',
-                    params.rfd_num_designs,
-                    0,
-                ]
-            )
-
-            PrepRFD3Input(rfd3_input_ch)
-
-            RunRFD3(PrepRFD3Input.out.input_json)
 
             RunRFD3.out.structures_metadata.set { rfd_pdbs_jsons }
 
