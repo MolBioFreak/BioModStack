@@ -515,7 +515,7 @@ process PrepareGeneralRFD3Input {
     script:
     """
     set -euo pipefail
-    '${params.api_python}' '${params.code_root}/scripts/rfd3_generation/prepare_native_input.py' \
+    python3 -u '${params.code_root}/scripts/rfd3_generation/prepare_native_input.py' \
       --request '${request_json}' \
       --expected-min-length '${params.rfd3_generation_min_length}' \
       --expected-max-length '${params.rfd3_generation_max_length}' \
@@ -544,7 +544,7 @@ process BuildGeneralRFD3ResultManifest {
     def jsonArgs = json_files.collect { item -> "--json-file '${item}'" }.join(' ')
     """
     set -euo pipefail
-    '${params.api_python}' '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py' \
+    python3 -u '${params.code_root}/scripts/rfd3_generation/build_result_manifest.py' \
       --request '${request_json}' \
       ${cifArgs} \
       ${jsonArgs} \
