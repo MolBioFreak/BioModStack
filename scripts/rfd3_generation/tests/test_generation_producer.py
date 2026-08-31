@@ -120,6 +120,7 @@ class GenerationProducerTests(unittest.TestCase):
         self.assertIn("PrepareGeneralRFD3Input", workflow)
         self.assertIn("BuildGeneralRFD3ResultManifest", workflow)
         self.assertIn("General RFD3 generation requires run_rfd_only=true", workflow)
+        self.assertNotIn("include { RF3FromSequence }", workflow)
         self.assertIn("params.rfd3_generation_num_designs", module)
         self.assertIn("params.rfd3_generation_seed", module)
         self.assertIn("params.rfd3_generation_dump_trajectories", module)
