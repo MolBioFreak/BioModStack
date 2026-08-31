@@ -247,6 +247,8 @@ class ExecutionTarget(Base):
     capabilities = Column(JSON, nullable=False, default=dict)
     pricing = Column(JSON, nullable=False, default=dict)
     provider_metadata = Column(JSON, nullable=False, default=dict)
+    leased_job_id = Column(String(64), nullable=True, index=True)
+    lease_acquired_at = Column(LenientSQLiteDateTime, nullable=True)
     last_error = Column(Text, nullable=True)
     last_seen_at = Column(LenientSQLiteDateTime, nullable=True)
     activated_at = Column(LenientSQLiteDateTime, nullable=True)

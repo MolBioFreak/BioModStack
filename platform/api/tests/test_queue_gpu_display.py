@@ -163,3 +163,25 @@ async def test_retry_restores_full_queued_state() -> None:
     assert job.completed_at is None
     assert job.current_stage is None
     assert job.stage_progress is None
+
+
+@pytest.mark.asyncio
+async def test_running_remote_job_cannot_enter_false_paused_state() -> None:
+    job = SimpleNamespace(
+        id="remote-running",
+        name="remote",
+        model_id="boltz2",
+        mode="predict",
+        queue_status="running",
+        paused=False,
+        execution_target_id="vast:123",
+    )
+    session = _Session(job)
+
+    with pytest.raises(HTTPException) as rejected:
+        await queue.pause_job(job.id, session)
+
+    assert rejected.value.status_code == 409
+    assert job.queue_status == "running"
+    assert job.paused is False
+    assert session.commits == 0

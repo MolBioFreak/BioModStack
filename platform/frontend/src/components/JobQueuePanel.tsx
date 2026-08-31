@@ -762,7 +762,7 @@ function JobRow({
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="text-xs text-slate-500">{job.mode}</span>
-                            {job.queue_status === 'running' ? (
+                            {!isRemoteJob && (job.queue_status === 'running' ? (
                                 <>
                                     {job.live_vram_mb ? (
                                         <VramBadge vramMb={job.live_vram_mb} label="Live" tone="live" />
@@ -777,7 +777,7 @@ function JobRow({
                                 </>
                             ) : (
                                 <VramBadge vramMb={job.vram_estimate_mb} label="Est" tone="muted" />
-                            )}
+                            ))}
                             {isRemoteJob ? (
                                 <span
                                     className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-300"
@@ -810,15 +810,20 @@ function JobRow({
                                     <ElapsedTimeBadge startedAt={job.started_at} nowMs={elapsedNowMs} />
                                 </>
                             )}
-                            {job.queue_status === 'queued' && job.scheduler_required_mb ? (
+                            {!isRemoteJob && job.queue_status === 'queued' && job.scheduler_required_mb ? (
                                 <VramBadge vramMb={job.scheduler_required_mb} label="Need" tone="accent" />
                             ) : null}
-                            {job.queue_status === 'queued' && job.scheduler_ready ? (
+                            {!isRemoteJob && job.queue_status === 'queued' && job.scheduler_ready ? (
                                 <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/20 text-emerald-400">
                                     Ready now
                                 </span>
                             ) : null}
                         </div>
+                        {isRemoteJob && job.remote_waiting_reason && (
+                            <div className="mt-1 text-xs text-amber-300" title={job.remote_waiting_reason}>
+                                Remote: {job.remote_waiting_reason}
+                            </div>
+                        )}
                         {!isRemoteJob && (job.queue_status === 'queued' || (job.display_gpu_ids?.length ?? 0) > 1) && (
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                                 {launchGpuLabel && (job.display_gpu_ids?.length ?? 0) > 1 && (

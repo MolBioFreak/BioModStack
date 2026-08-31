@@ -32,13 +32,17 @@ from .targets import ExecutionTargetError, get_ready_target
 from .transport import (
     RemoteConnection,
     RemoteTransportError,
-    rsync_from_remote,
+    rsync_selected_from_remote,
     rsync_to_remote,
     run_remote,
 )
 
 REMOTE_RUN_PREFIX = "remote:"
 TERMINAL_REMOTE_STATES = frozenset({"cancelled", "succeeded", "failed", "lost"})
+MAX_RESULT_MANIFEST_BYTES = 4 * 1024 * 1024
+MAX_RESULT_ARTIFACTS = 100_000
+DEFAULT_MAX_RESULT_BYTES = 1024 * 1024 * 1024 * 1024
+RESULT_DISK_RESERVE_BYTES = 10 * 1024 * 1024 * 1024
 
 
 class RemoteExecutionError(RuntimeError):
@@ -46,6 +50,10 @@ class RemoteExecutionError(RuntimeError):
 
 
 class RemoteCollectionPending(RemoteExecutionError):
+    pass
+
+
+class RemoteStagingIncomplete(RemoteExecutionError):
     pass
 
 
@@ -192,6 +200,13 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/apptainer-cache",
         ],
     )
+    if bundle.local_output_dir.exists():
+        await rsync_to_remote(
+            connection,
+            bundle.local_output_dir,
+            f"{bundle.remote_attempt_dir}/results",
+            delete=False,
+        )
     output_alias = PurePosixPath(bundle.remote_output_alias)
     await run_remote(connection, ["mkdir", "-p", str(output_alias.parent)])
     link_writer = (
@@ -211,7 +226,12 @@ async def _stage_bundle(
             f"{bundle.remote_attempt_dir}/results",
         ],
     )
-    await rsync_to_remote(connection, bundle.local_attempt_dir, bundle.remote_attempt_dir)
+    await rsync_to_remote(
+        connection,
+        bundle.local_attempt_dir,
+        bundle.remote_attempt_dir,
+        delete=False,
+    )
     for transfer in bundle.input_transfers:
         await _transfer_plan(connection, transfer)
     await run_remote(
@@ -490,6 +510,7 @@ async def launch_remote_job(
                 error=str(exc),
             )
             job.provenance = provenance
+            await _release_remote_target_lease(session, job)
             await session.commit()
             try:
                 await run_remote(
@@ -562,6 +583,25 @@ async def _acquire_remote_terminal_fence(session: AsyncSession, job: Job) -> boo
     return True
 
 
+async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
+    target_id = str(job.execution_target_id or "").strip()
+    if not target_id:
+        return
+    await session.execute(
+        update(ExecutionTarget)
+        .where(
+            ExecutionTarget.id == target_id,
+            ExecutionTarget.leased_job_id == str(job.id),
+        )
+        .values(
+            leased_job_id=None,
+            lease_acquired_at=None,
+            updated_at=datetime.utcnow(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
@@ -576,7 +616,28 @@ async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
             timeout=30,
         )
     except RemoteTransportError as exc:
-        raise RemoteExecutionError(str(exc)) from exc
+        if str(job.remote_state or "") != "staging":
+            raise RemoteExecutionError(str(exc)) from exc
+        try:
+            response = await run_remote(
+                connection,
+                _worker_argv(connection, "prepare", attempt_dir),
+                timeout=300,
+            )
+        except RemoteTransportError as prepare_exc:
+            started_at = job.started_at or datetime.utcnow()
+            age_seconds = max(0.0, (datetime.utcnow() - started_at).total_seconds())
+            grace_seconds = max(
+                0,
+                int(os.environ.get("BMS_REMOTE_STAGING_RECOVERY_GRACE_SECONDS", "900")),
+            )
+            if age_seconds >= grace_seconds:
+                raise RemoteStagingIncomplete(
+                    "Remote attempt did not reach a durable prepared receipt"
+                ) from prepare_exc
+            raise RemoteExecutionError(
+                "Remote attempt staging is not ready for restart recovery"
+            ) from prepare_exc
     status = _parse_status(response.stdout)
     if status.job_id != str(job.id) or status.attempt_id != str(job.remote_attempt_id):
         raise RemoteExecutionError("Remote attempt status does not match the BMS Job")
@@ -645,11 +706,60 @@ def _verify_result_package(
     return manifest
 
 
+async def _fetch_result_manifest(
+    connection: RemoteConnection,
+    remote_results_dir: str,
+    incoming: Path,
+    job: Job,
+    status: RemoteAttemptStatus,
+) -> RemoteResultManifest:
+    manifest_path = f"{remote_results_dir.rstrip('/')}/result-manifest.json"
+    reader = (
+        "import pathlib,sys; "
+        "p=pathlib.Path(sys.argv[1]); n=int(sys.argv[2]); "
+        "b=p.read_bytes(); "
+        "(_ for _ in ()).throw(RuntimeError('manifest too large')) if len(b)>n else None; "
+        "sys.stdout.buffer.write(b)"
+    )
+    response = await run_remote(
+        connection,
+        ["python3", "-c", reader, manifest_path, str(MAX_RESULT_MANIFEST_BYTES)],
+        timeout=30,
+    )
+    manifest_bytes = response.stdout.encode("utf-8")
+    if not manifest_bytes or len(manifest_bytes) > MAX_RESULT_MANIFEST_BYTES:
+        raise RemoteExecutionError("Remote result manifest exceeds the bounded size")
+    if hashlib.sha256(manifest_bytes).hexdigest() != status.result_manifest_sha256:
+        raise RemoteExecutionError("Remote result manifest hash does not match terminal status")
+    try:
+        manifest = RemoteResultManifest.model_validate_json(manifest_bytes)
+    except ValueError as exc:
+        raise RemoteExecutionError("Remote result manifest is invalid") from exc
+    if (
+        manifest.job_id != str(job.id)
+        or manifest.attempt_id != str(job.remote_attempt_id)
+        or manifest.source_revision != str(job.execution_source_revision)
+        or manifest.source_tree != str(job.execution_source_tree)
+        or manifest.execution_envelope_sha256 != str(job.execution_bundle_sha256)
+    ):
+        raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
+    if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
+        raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
+    total_bytes = sum(int(artifact.size_bytes) for artifact in manifest.artifacts)
+    configured_limit = int(os.environ.get("BMS_REMOTE_MAX_RETURN_BYTES", DEFAULT_MAX_RESULT_BYTES))
+    free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
+    if total_bytes > min(configured_limit, free_budget):
+        raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
+    incoming.mkdir(parents=True, exist_ok=False)
+    (incoming / "result-manifest.json").write_bytes(manifest_bytes)
+    return manifest
+
+
 async def collect_remote_results(
     session: AsyncSession,
     job: Job,
     status: RemoteAttemptStatus,
-) -> RemoteResultManifest:
+) -> tuple[RemoteResultManifest, Path]:
     target = await session.get(ExecutionTarget, str(job.execution_target_id))
     if target is None:
         raise RemoteCollectionPending("Remote execution target record is missing")
@@ -657,39 +767,62 @@ async def collect_remote_results(
     incoming = get_data_root() / "remote-execution" / "incoming" / str(job.remote_attempt_id)
     if incoming.exists():
         shutil.rmtree(incoming)
-    incoming.mkdir(parents=True, exist_ok=False)
+    incoming.parent.mkdir(parents=True, exist_ok=True)
+    remote_results_dir = f"{attempt_dir}/results"
     try:
-        await rsync_from_remote(
+        manifest = await _fetch_result_manifest(
             connection,
-            f"{attempt_dir}/results",
+            remote_results_dir,
             incoming,
+            job,
+            status,
         )
+        if manifest.artifacts:
+            await rsync_selected_from_remote(
+                connection,
+                remote_results_dir,
+                incoming,
+                [artifact.relative_path for artifact in manifest.artifacts],
+                max_file_bytes=max(int(artifact.size_bytes) for artifact in manifest.artifacts),
+            )
         manifest = await asyncio.to_thread(_verify_result_package, incoming, job, status)
-    except (RemoteTransportError, RemoteExecutionError, OSError) as exc:
+    except (RemoteTransportError, RemoteExecutionError, OSError, ValueError) as exc:
         job.remote_state = "remote_finished_results_waiting"
         job.error_message = f"Remote results are waiting for verified return: {str(exc)[:1500]}"
         await session.commit()
         raise RemoteCollectionPending(str(exc)) from exc
+    return manifest, incoming
+
+
+def _publish_result_generation(job: Job, incoming: Path) -> tuple[Path, Path | None]:
+    """Atomically make one verified attempt the only visible result generation."""
+    manifest_path = incoming / "result-manifest.json"
+    manifest_path.unlink(missing_ok=False)
+    local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
+    local_output.parent.mkdir(parents=True, exist_ok=True)
+    if incoming.stat().st_dev != local_output.parent.stat().st_dev:
+        raise RemoteExecutionError("Remote result staging and Job output are on different filesystems")
+    backup: Path | None = None
+    if local_output.exists():
+        backup = (
+            get_data_root()
+            / "remote-execution"
+            / "quarantine"
+            / str(job.id)
+            / str(job.remote_attempt_id)
+            / "previous"
+        )
+        if backup.exists():
+            shutil.rmtree(backup)
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(local_output, backup)
     try:
-        local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
-        local_output.mkdir(parents=True, exist_ok=True)
-        for artifact in manifest.artifacts:
-            source_path = _safe_result_path(incoming, artifact.relative_path)
-            destination_path = _safe_result_path(local_output, artifact.relative_path)
-            if destination_path.is_symlink() or any(
-                parent != local_output and parent.is_symlink()
-                for parent in destination_path.parents
-                if parent == local_output or local_output in parent.parents
-            ):
-                raise RemoteExecutionError("Local result destination contains a symlink")
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, destination_path)
-    except (RemoteExecutionError, OSError) as exc:
-        job.remote_state = "remote_finished_results_waiting"
-        job.error_message = f"Remote results are waiting for verified local copy: {str(exc)[:1500]}"
-        await session.commit()
-        raise RemoteCollectionPending(str(exc)) from exc
-    return manifest
+        os.replace(incoming, local_output)
+    except Exception:
+        if backup is not None and backup.exists() and not local_output.exists():
+            os.replace(backup, local_output)
+        raise
+    return local_output, backup
 
 
 async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
@@ -697,7 +830,43 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
     job_id = str(job.id)
     expected_run_id = str(job.nextflow_run_id or "")
     expected_attempt_id = str(job.remote_attempt_id or "")
-    status = await remote_status(session, job)
+    if (
+        str(job.remote_state or "") == "staging"
+        and not expected_run_id
+        and not expected_attempt_id
+    ):
+        job.status = JobStatus.QUEUED.value
+        job.queue_status = "queued"
+        job.remote_state = "requeued_before_remote_attempt"
+        job.started_at = None
+        job.assigned_gpu = None
+        job.params = release_scheduler_gpu_assignment(job.params)
+        await _release_remote_target_lease(session, job)
+        await session.commit()
+        return True
+    try:
+        status = await remote_status(session, job)
+    except RemoteStagingIncomplete as exc:
+        await session.rollback()
+        current_job = await session.get(Job, job_id)
+        if (
+            current_job is None
+            or str(current_job.nextflow_run_id or "") != expected_run_id
+            or str(current_job.remote_attempt_id or "") != expected_attempt_id
+            or current_job.status != JobStatus.RUNNING.value
+            or current_job.queue_status != "running"
+        ):
+            return False
+        current_job.status = JobStatus.FAILED.value
+        current_job.queue_status = "failed"
+        current_job.remote_state = "staging_failed"
+        current_job.error_message = str(exc)
+        current_job.completed_at = datetime.utcnow()
+        current_job.assigned_gpu = None
+        current_job.params = release_scheduler_gpu_assignment(current_job.params)
+        await _release_remote_target_lease(session, current_job)
+        await session.commit()
+        return True
     # Remote I/O can outlive a concurrent operator action. End the current read
     # transaction and reload local authority before any resume or publication.
     await session.rollback()
@@ -714,8 +883,45 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
         job.remote_state = "cancelled"
         job.assigned_gpu = None
         job.params = release_scheduler_gpu_assignment(job.params)
+        await _release_remote_target_lease(session, job)
         await session.commit()
         return True
+    if job.queue_status == "cancelling":
+        if status.state == "cancelled":
+            params = release_scheduler_gpu_assignment(job.params)
+            cancellation_receipt = dict(params.get("cancellation_receipt") or {})
+            cancellation_receipt.update(
+                {
+                    "schema": "bms.workflow-cancellation.v1",
+                    "state": "completed",
+                    "completed_at": datetime.utcnow().isoformat() + "Z",
+                    "run_identity": str(job.nextflow_run_id or ""),
+                }
+            )
+            params["cancellation_receipt"] = cancellation_receipt
+            job.status = JobStatus.CANCELLED.value
+            job.queue_status = "cancelled"
+            job.remote_state = "cancelled"
+            job.params = params
+            job.paused = False
+            job.assigned_gpu = None
+            job.completed_at = job.completed_at or datetime.utcnow()
+            job.error_message = job.error_message or "Cancelled by user"
+            await _release_remote_target_lease(session, job)
+            await session.commit()
+            return True
+        if status.state not in TERMINAL_REMOTE_STATES:
+            job.remote_state = status.state
+            await session.commit()
+            return True
+        params = dict(job.params or {})
+        cancellation_receipt = dict(params.get("cancellation_receipt") or {})
+        cancellation_receipt["state"] = "superseded_by_remote_terminal"
+        cancellation_receipt["remote_terminal_state"] = status.state
+        params["cancellation_receipt"] = cancellation_receipt
+        job.params = params
+        job.queue_status = "running"
+        await session.commit()
     if job.status != JobStatus.RUNNING.value or job.queue_status != "running":
         return False
     if status.state == "prepared":
@@ -779,11 +985,12 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
                 job_id=str(job.id),
                 exit_code=status.exit_code or 1,
             )
+        await _release_remote_target_lease(session, job)
         await session.commit()
         return True
-    manifest = await collect_remote_results(session, job, status)
     if not await _acquire_remote_terminal_fence(session, job):
         return False
+    manifest, incoming = await collect_remote_results(session, job, status)
     provenance = dict(job.provenance or {})
     receipt = dict(provenance.get("remote_execution_receipt") or {})
     receipt.update(
@@ -814,10 +1021,27 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
             job.error_message = "REMOTE_RESULT_CONTRACT_IDENTITY_MISMATCH"
             job.assigned_gpu = None
             job.params = release_scheduler_gpu_assignment(job.params)
+            await _release_remote_target_lease(session, job)
             await session.commit()
             return True
+        try:
+            local_output, previous_generation = await asyncio.to_thread(
+                _publish_result_generation,
+                job,
+                incoming,
+            )
+        except (OSError, RemoteExecutionError) as exc:
+            job.remote_state = "remote_finished_results_waiting"
+            job.error_message = f"Verified remote results could not be published: {str(exc)[:1500]}"
+            await session.commit()
+            raise RemoteCollectionPending(str(exc)) from exc
+        receipt["published_output_dir"] = str(local_output)
+        receipt["previous_generation_quarantine"] = (
+            str(previous_generation) if previous_generation is not None else None
+        )
+        provenance["remote_execution_receipt"] = receipt
+        job.provenance = provenance
         if job.model_id == "msa_batch":
-            local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
             msa_manifest = local_output / "msa_manifest.json"
             if msa_manifest.is_symlink() or not msa_manifest.is_file():
                 job.status = JobStatus.FAILED.value
@@ -827,6 +1051,7 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
                 job.assigned_gpu = None
                 job.params = release_scheduler_gpu_assignment(job.params)
                 job.completed_at = job.completed_at or datetime.utcnow()
+                await _release_remote_target_lease(session, job)
                 await session.commit()
                 return True
             from services.nextflow import apply_msa_manifest_to_child_jobs
@@ -852,13 +1077,14 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
 
             result = await finalize_successful_job(
                 job,
-                str(job.child_output_dir or job.output_dir),
+                str(local_output),
                 session,
             )
             if not result.completed:
                 job.remote_state = "returned_ingestion_failed"
                 job.assigned_gpu = None
                 job.params = release_scheduler_gpu_assignment(job.params)
+                await _release_remote_target_lease(session, job)
                 await session.commit()
                 return True
             from services.analysis_autorun import schedule_viewer_minimum_analyses_for_job
@@ -889,6 +1115,7 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
     job.assigned_gpu = None
     job.params = release_scheduler_gpu_assignment(job.params)
     job.completed_at = job.completed_at or datetime.utcnow()
+    await _release_remote_target_lease(session, job)
     await session.commit()
     return True
 
@@ -916,7 +1143,27 @@ async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0)
         except RemoteTransportError:
             return False
         status = _parse_status(response.stdout)
-        return status.state == "cancelled"
+        if status.state == "cancelled":
+            return True
+        if status.state in TERMINAL_REMOTE_STATES:
+            current = await session.get(Job, str(job.id))
+            if (
+                current is not None
+                and current.status == JobStatus.RUNNING.value
+                and current.queue_status == "cancelling"
+                and str(current.nextflow_run_id or "") == str(job.nextflow_run_id or "")
+                and str(current.remote_attempt_id or "") == str(job.remote_attempt_id or "")
+            ):
+                current.queue_status = "running"
+                params = dict(current.params or {})
+                receipt = dict(params.get("cancellation_receipt") or {})
+                receipt["state"] = "superseded_by_remote_terminal"
+                receipt["remote_terminal_state"] = status.state
+                params["cancellation_receipt"] = receipt
+                current.params = params
+                await session.commit()
+                await reconcile_remote_job(session, current)
+        return False
 
 
 async def cancel_remote_run_id(

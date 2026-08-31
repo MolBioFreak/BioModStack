@@ -1404,11 +1404,29 @@ async def _claim_remote_job(
 ) -> Dict[str, Any] | None:
     """Atomically claim one Job for its persisted remote execution target."""
     from sqlalchemy import update
-    from database import Job
+    from database import ExecutionTarget, Job
     from services.execution_ownership import attach_scheduler_gpu_assignment
 
     target_id = str(getattr(job, "execution_target_id", "") or "").strip()
     if not target_id:
+        return None
+    lease_transition = await session.execute(
+        update(ExecutionTarget)
+        .where(
+            ExecutionTarget.id == target_id,
+            ExecutionTarget.active.is_(True),
+            ExecutionTarget.state == "ready",
+            ExecutionTarget.leased_job_id.is_(None),
+        )
+        .values(
+            leased_job_id=str(job.id),
+            lease_acquired_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(lease_transition.rowcount or 0) != 1:
+        await session.rollback()
         return None
     original = _normalize_job_params(getattr(job, "params", None))
     scheduler_params = (
@@ -1464,6 +1482,7 @@ async def _claim_remote_job(
     job.provenance = provenance
     job.remote_state = "staging"
     job.error_message = None
+    await session.commit()
     return scheduler_params
 
 
@@ -3138,7 +3157,7 @@ class GPUOrchestrator:
                 # Get jobs that are currently running
                 result = await session.execute(
                     select(Job).where(
-                        Job.queue_status == "running"
+                        Job.queue_status.in_(("running", "cancelling"))
                     )
                 )
                 running_jobs = result.scalars().all()

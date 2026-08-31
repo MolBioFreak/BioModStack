@@ -35,6 +35,8 @@ def migrate(db_path: str | Path | None = None) -> None:
                 capabilities JSON NOT NULL DEFAULT '{}',
                 pricing JSON NOT NULL DEFAULT '{}',
                 provider_metadata JSON NOT NULL DEFAULT '{}',
+                leased_job_id VARCHAR(64),
+                lease_acquired_at DATETIME,
                 last_error TEXT,
                 last_seen_at DATETIME,
                 activated_at DATETIME,
@@ -51,6 +53,19 @@ def migrate(db_path: str | Path | None = None) -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS ix_execution_targets_provider_state ON execution_targets(provider, state)"
+        )
+        target_columns = _columns(connection, "execution_targets")
+        target_additions = {
+            "leased_job_id": "VARCHAR(64)",
+            "lease_acquired_at": "DATETIME",
+        }
+        for name, sql_type in target_additions.items():
+            if name not in target_columns:
+                connection.execute(
+                    f"ALTER TABLE execution_targets ADD COLUMN {name} {sql_type}"
+                )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS ix_execution_targets_leased_job_id ON execution_targets(leased_job_id)"
         )
         job_columns = _columns(connection, "jobs")
         additions = {

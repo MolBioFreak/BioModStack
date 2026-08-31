@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Sequence
@@ -192,6 +193,7 @@ async def rsync_to_remote(
     source: Path,
     destination: str,
     *,
+    delete: bool = True,
     timeout: float = 3600,
 ) -> None:
     source = source.resolve()
@@ -206,7 +208,7 @@ async def rsync_to_remote(
         "--protect-args",
         "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r",
     ]
-    if source.is_dir():
+    if source.is_dir() and delete:
         rsync_options.append("--delete")
     result = await _run(
         [
@@ -246,6 +248,48 @@ async def rsync_from_remote(
     )
     if result.returncode != 0:
         raise RemoteTransportError((result.stderr.strip() or "rsync download failed")[-500:])
+
+
+async def rsync_selected_from_remote(
+    connection: RemoteConnection,
+    source: str,
+    destination: Path,
+    relative_paths: list[str],
+    *,
+    max_file_bytes: int,
+    timeout: float = 3600,
+) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    ssh_command = " ".join(shlex.quote(value) for value in _ssh_base(connection)[:-1])
+    list_path: Path | None = None
+    result: CommandResult | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="bms-rsync-files-", delete=False) as handle:
+            list_path = Path(handle.name)
+            for relative_path in relative_paths:
+                handle.write(relative_path.encode("utf-8") + b"\0")
+        result = await _run(
+            [
+                "rsync",
+                "--archive",
+                "--partial",
+                "--protect-args",
+                "--from0",
+                f"--files-from={list_path}",
+                f"--max-size={int(max_file_bytes)}",
+                "--rsh",
+                ssh_command,
+                f"{connection.username}@{connection.host}:{source.rstrip('/')}/",
+                str(destination.resolve()) + "/",
+            ],
+            timeout=timeout,
+        )
+    finally:
+        if list_path is not None:
+            list_path.unlink(missing_ok=True)
+    if result is None or result.returncode != 0:
+        detail = result.stderr.strip() if result is not None else ""
+        raise RemoteTransportError((detail or "rsync selected download failed")[-500:])
 
 
 async def probe_readiness(connection: RemoteConnection) -> dict[str, object]:

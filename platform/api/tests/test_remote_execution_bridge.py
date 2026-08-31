@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from migrations.add_remote_execution import migrate
 from services.remote_execution import bundle as bundle_module
+from services.remote_execution import executor as executor_module
 from services.remote_execution.bundle import (
     RemoteBundleError,
     current_source_identity,
@@ -274,12 +275,50 @@ def test_remote_execution_migration_is_idempotent(tmp_path: Path) -> None:
         ).fetchone()
         columns = {row[1] for row in connection.execute("PRAGMA table_info('jobs')")}
         indexes = {row[1] for row in connection.execute("PRAGMA index_list('jobs')")}
+        target_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info('execution_targets')")
+        }
+        target_indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list('execution_targets')")
+        }
     assert target_table == ("execution_targets",)
     assert {
         "execution_target_id", "execution_source_revision", "execution_source_tree",
         "execution_bundle_sha256", "remote_attempt_id", "remote_state",
     } <= columns
     assert {"ix_jobs_execution_target_id", "ix_jobs_remote_attempt_id"} <= indexes
+    assert {"leased_job_id", "lease_acquired_at"} <= target_columns
+    assert "ix_execution_targets_leased_job_id" in target_indexes
+
+
+def test_verified_remote_generation_replaces_stale_output_atomically(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_root = tmp_path / "data"
+    output = data_root / "results" / "job-1"
+    output.mkdir(parents=True)
+    (output / "stale.txt").write_text("stale", encoding="utf-8")
+    incoming = data_root / "remote-execution" / "incoming" / "attempt-1"
+    incoming.mkdir(parents=True)
+    (incoming / "result-manifest.json").write_text("{}", encoding="utf-8")
+    (incoming / "fresh.txt").write_text("fresh", encoding="utf-8")
+    monkeypatch.setattr(executor_module, "get_data_root", lambda: data_root)
+    job = SimpleNamespace(
+        id="job-1",
+        remote_attempt_id="attempt-1",
+        child_output_dir=None,
+        output_dir=str(output),
+    )
+
+    published, previous = executor_module._publish_result_generation(job, incoming)
+
+    assert published == output
+    assert (output / "fresh.txt").read_text(encoding="utf-8") == "fresh"
+    assert not (output / "result-manifest.json").exists()
+    assert not (output / "stale.txt").exists()
+    assert previous is not None
+    assert (previous / "stale.txt").read_text(encoding="utf-8") == "stale"
 
 
 class _FakeScalarResult:

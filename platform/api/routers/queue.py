@@ -63,6 +63,7 @@ class QueuedJobResponse(BaseModel):
     display_gpu_ids: Optional[List[int]] = None
     execution_target_id: Optional[str] = None
     remote_state: Optional[str] = None
+    remote_waiting_reason: Optional[str] = None
     priority: int
     vram_estimate_mb: Optional[int]
     sequence_length: Optional[int]
@@ -346,6 +347,9 @@ def _queue_enrichment_signature(jobs: List[Job]) -> Tuple[Tuple[object, ...], ..
             str(job.current_stage or ""),
             str(job.stage_progress or ""),
             str(job.stage_work_dir or ""),
+            str(job.execution_target_id or ""),
+            str(job.remote_state or ""),
+            str(job.error_message or ""),
             int(job.vram_estimate_mb or 0),
             job.started_at.isoformat() if job.started_at else None,
         ))
@@ -369,8 +373,14 @@ def _get_queue_enrichment(jobs: List[Job]) -> Dict[str, Dict[str, object]]:
     scheduler_diagnostics: Dict[str, Dict[str, object]] = {}
     stage_progress_by_job = _collect_stage_progress_by_job(jobs)
 
-    running_jobs = [job for job in jobs if job.queue_status == "running"]
-    queued_jobs = [job for job in jobs if job.queue_status == "queued"]
+    running_jobs = [
+        job for job in jobs
+        if job.queue_status == "running" and not job.execution_target_id
+    ]
+    queued_jobs = [
+        job for job in jobs
+        if job.queue_status == "queued" and not job.execution_target_id
+    ]
 
     try:
         from routers.gpu import get_gpu_stats_with_error
@@ -501,6 +511,7 @@ async def list_queue(
             display_gpu_ids=_resolve_display_gpu_ids(job),
             execution_target_id=job.execution_target_id,
             remote_state=job.remote_state,
+            remote_waiting_reason=(job.error_message if job.execution_target_id else None),
             priority=job.priority,
             vram_estimate_mb=job.vram_estimate_mb,
             sequence_length=job.sequence_length,
@@ -559,6 +570,11 @@ async def pause_job(job_id: str, session: AsyncSession = Depends(get_session)):
     
     if job.queue_status not in ['queued', 'running']:
         raise HTTPException(status_code=400, detail=f"Cannot pause job with status: {job.queue_status}")
+    if job.execution_target_id and job.queue_status == 'running':
+        raise HTTPException(
+            status_code=409,
+            detail="Running remote Jobs cannot be paused; cancel them or wait for completion",
+        )
     
     job.paused = True
     job.queue_status = 'paused'

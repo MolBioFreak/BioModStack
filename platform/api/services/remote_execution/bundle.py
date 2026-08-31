@@ -42,6 +42,7 @@ class PreparedRemoteBundle:
     remote_source_dir: str
     remote_runtime_dir: str
     remote_output_alias: str
+    local_output_dir: Path
     envelope: RemoteExecutionEnvelope
     envelope_sha256: str
     runtime_identity_sha256: str
@@ -351,13 +352,22 @@ def prepare_remote_bundle(
     local_output = raw_output.resolve()
     if raw_output.is_symlink() or Path(os.path.abspath(str(raw_output))) != local_output:
         raise RemoteBundleError("Remote Job output path cannot traverse symlinks")
-    reserved_output_roots = (container_root, weights_root, data_root / "runtime")
+    reserved_output_roots = (
+        container_root,
+        weights_root,
+        data_root / "runtime",
+        data_root / "remote-execution",
+    )
     if (
         not _under(local_output, data_root)
         or local_output == data_root
         or any(_under(local_output, reserved_root.resolve()) for reserved_root in reserved_output_roots)
     ):
         raise RemoteBundleError("Remote Job output must remain under BMS-managed storage")
+    if local_output.exists():
+        for output_entry in local_output.rglob("*"):
+            if output_entry.is_symlink():
+                raise RemoteBundleError(f"Remote Job output seed contains a symlink: {output_entry}")
     attempt_id = str(attempt_id or uuid.uuid4())
     try:
         parsed_attempt_id = uuid.UUID(attempt_id)
@@ -548,6 +558,7 @@ def prepare_remote_bundle(
         remote_source_dir=remote_source,
         remote_runtime_dir=remote_runtime,
         remote_output_alias=str(local_output),
+        local_output_dir=local_output,
         envelope=envelope,
         envelope_sha256=envelope_sha256,
         runtime_identity_sha256=runtime_identity,

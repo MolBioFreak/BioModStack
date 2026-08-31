@@ -43,7 +43,7 @@ export function ExecutionTargetPicker() {
         },
     });
 
-    const targets = targetsQuery.data?.data ?? [];
+    const targets = targetsQuery.isError ? [] : (targetsQuery.data?.data ?? []);
     const readyTargets = useMemo(
         () => targets.filter((target) => target.active && target.state === 'ready'),
         [targets],

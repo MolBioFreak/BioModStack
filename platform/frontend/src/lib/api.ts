@@ -460,7 +460,7 @@ const selectedExecutionTargetForSubmission = (): string | null => (
         : null
 );
 
-const assertLocalOnlySubmission = (launcher: string): void => {
+export const assertLocalOnlySubmission = (launcher: string): void => {
     if (selectedExecutionTargetForSubmission()) {
         throw new Error(`${launcher} does not support Vast placement. Choose Local before submission.`);
     }
@@ -1084,10 +1084,13 @@ export interface OntBarcodeBatchSubmitResponse {
 export const submitOntBarcodeBatch = (
     sourceJobId: string,
     request: OntBarcodeBatchSubmitRequest,
-) => api.post<OntBarcodeBatchSubmitResponse>(
-    `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
-    request,
-);
+) => {
+    assertLocalOnlySubmission('ONT barcode batch');
+    return api.post<OntBarcodeBatchSubmitResponse>(
+        `/api/jobs/${encodeURIComponent(sourceJobId)}/barcode-batches`,
+        request,
+    );
+};
 
 export interface PooledReferenceAssignmentTarget {
     target_id: string;
@@ -1115,7 +1118,13 @@ export interface PooledReferenceAssignmentSubmitResponse {
 
 export const submitPooledReferenceAssignment = (
     request: PooledReferenceAssignmentSubmitRequest,
-) => api.post<PooledReferenceAssignmentSubmitResponse>('/api/ont/ngs/pooled-reference-assignment/submit', request);
+) => {
+    assertLocalOnlySubmission('Pooled reference assignment');
+    return api.post<PooledReferenceAssignmentSubmitResponse>(
+        '/api/ont/ngs/pooled-reference-assignment/submit',
+        request,
+    );
+};
 
 export type PooledAssignmentTargetWorkflow = 'ont_plasmid_qc' | 'ont_construct_screening';
 
@@ -2536,6 +2545,7 @@ export interface QueuedJob {
     display_gpu_ids: number[] | null;
     execution_target_id?: string | null;
     remote_state?: string | null;
+    remote_waiting_reason?: string | null;
     priority: number;
     vram_estimate_mb: number | null;
     live_vram_mb: number | null;

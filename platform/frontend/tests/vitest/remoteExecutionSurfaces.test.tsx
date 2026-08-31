@@ -6,13 +6,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { RemoteGpuTelemetry } from '../../src/components/RemoteGpuTelemetry';
 import {
+    api,
     EXECUTION_TARGET_STORAGE_KEY,
     submitBoltzApiJob,
+    submitOntBarcodeBatch,
     submitOntNgsJob,
+    submitPooledReferenceAssignment,
     submitShapeBlueprint,
 } from '../../src/lib/api';
+import { submitCmRequest } from '../../src/components/conformationalMapping/conformationalMappingApi';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
+const defaultApiAdapter = api.defaults.adapter;
 
 const readyTarget = {
     id: 'vast:123',
@@ -36,16 +41,42 @@ const readyTarget = {
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
+    api.defaults.adapter = defaultApiAdapter;
 });
 
 describe('remote execution operator surfaces', () => {
-    it('fails closed for Job Submission launchers that cannot execute on Vast', () => {
+    it('fails closed for Job Submission launchers that cannot execute on Vast', async () => {
         window.history.replaceState({}, '', '/submit');
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');
 
         expect(() => submitShapeBlueprint({} as never)).toThrow(/Choose Local/);
         expect(() => submitBoltzApiJob({} as never)).toThrow(/Choose Local/);
         expect(() => submitOntNgsJob('wf-clone', {} as never)).toThrow(/Choose Local/);
+        expect(() => submitOntBarcodeBatch('source', {} as never)).toThrow(/Choose Local/);
+        expect(() => submitPooledReferenceAssignment({} as never)).toThrow(/Choose Local/);
+        await expect(submitCmRequest({} as never)).rejects.toThrow(/Choose Local/);
+    });
+
+    it('clears retained Vast selection when target refresh fails', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([readyTarget]));
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><ExecutionTargetPicker /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+        api.defaults.adapter = async () => Promise.reject(new Error('offline'));
+        await act(async () => {
+            await client.invalidateQueries({ queryKey: ['execution-targets'] });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(container.textContent).not.toContain('Vast · Remote 4090');
+        await act(async () => root.unmount());
+        client.clear();
     });
 
     it('keeps Local as the default and persists only an explicit Vast selection', async () => {
