@@ -435,7 +435,7 @@ def test_catalog_openapi_query_parameters_publish_exact_runtime_constraints() ->
     }
 
 
-def test_openapi_examples_execute_and_phase2_analyze_is_mounted() -> None:
+def test_openapi_examples_execute_and_phase3_routes_are_mounted() -> None:
     client = _client(_authority())
     document = client.app.openapi()
     paths = document["paths"]
@@ -443,8 +443,10 @@ def test_openapi_examples_execute_and_phase2_analyze_is_mounted() -> None:
         "/api/molbio/restriction/catalog",
         "/api/molbio/restriction/catalog/{enzyme_id}",
         "/api/molbio/restriction/analyze",
+        "/api/molbio/restriction/digests/simulate",
+        "/api/molbio/restriction/digests",
+        "/api/molbio/restriction/digests/{operation_id}",
     }
-    assert not any("digest" in path for path in paths)
     parameters = paths["/api/molbio/restriction/catalog"]["get"]["parameters"]
     for parameter in parameters:
         values = [parameter["example"]] if "example" in parameter else parameter.get("schema", {}).get("examples", [])
@@ -464,18 +466,20 @@ def test_openapi_examples_execute_and_phase2_analyze_is_mounted() -> None:
     assert cursor_response.status_code == 200, cursor_response.text
 
 
-def test_main_application_mounts_phase2_analyze_but_not_digest_routes() -> None:
+def test_main_application_mounts_phase3_digest_routes() -> None:
     import main
 
     paths = main.app.openapi()["paths"]
     assert "/api/molbio/restriction/catalog" in paths
     assert "/api/molbio/restriction/catalog/{enzyme_id}" in paths
     assert "/api/molbio/restriction/analyze" in paths
-    assert "/api/molbio/restriction/digests/simulate" not in paths
+    assert "/api/molbio/restriction/digests/simulate" in paths
+    assert "/api/molbio/restriction/digests" in paths
+    assert "/api/molbio/restriction/digests/{operation_id}" in paths
 
 
-def test_router_description_names_phase1_and_phase2_scope() -> None:
-    assert "Phase 1+2" in (molbio_restriction.__doc__ or "")
+def test_router_description_names_phase3_scope() -> None:
+    assert "duplex digest" in (molbio_restriction.__doc__ or "")
 
 
 def _inline_request(**updates):

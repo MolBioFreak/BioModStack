@@ -227,6 +227,30 @@ class MolecularOperationOutput(MolBioBase):
     snapshot = Column(JSON, nullable=False, default=dict)
 
 
+class RestrictionDigestResult(MolBioBase):
+    """Immutable canonical digest result bound one-to-one to its operation."""
+
+    __tablename__ = "restriction_digest_results"
+    __table_args__ = (
+        UniqueConstraint("operation_id", name="uq_restriction_digest_result_operation"),
+        Index("ix_restriction_digest_results_source_created", "source_revision_id", "created_at"),
+    )
+
+    id = Column(String(36), primary_key=True)
+    operation_id = Column(
+        String(36), ForeignKey("molecular_operations.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_revision_id = Column(
+        String(36), ForeignKey("molecular_revisions.id", ondelete="RESTRICT"), nullable=False
+    )
+    catalog_id = Column(String(128), nullable=False)
+    catalog_sha256 = Column(String(64), nullable=False)
+    request_sha256 = Column(String(64), nullable=False)
+    result_sha256 = Column(String(64), nullable=False)
+    result = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
 class ProjectPlasmidMetadata(MolBioBase):
     """Project-local plasmid metadata, activated only by an exact Domain state revision."""
 
@@ -445,6 +469,7 @@ IMMUTABLE_TABLES = (
     "molecular_operations",
     "molecular_operation_inputs",
     "molecular_operation_outputs",
+    "restriction_digest_results",
     "molecular_import_batches",
     "tm_model_revisions",
     "polymerase_preset_revisions",

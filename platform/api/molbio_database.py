@@ -4,12 +4,14 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 import fcntl
+import hashlib
 import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 
+import rfc8785
 from sqlalchemy import UniqueConstraint, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
@@ -163,6 +165,19 @@ def _molbio_schema_issues_sync(sync_connection) -> list[str]:  # noqa: ANN001
             issues.append(
                 f"required unique constraint differs or is missing: {table_name} {sorted(missing_unique)}"
             )
+
+    from molbio_migrations import restriction_digest_integrity_trigger_sql
+
+    digest_trigger = sync_connection.exec_driver_sql(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+        "AND name='molbio_restriction_digest_results_integrity_insert'"
+    ).scalar_one_or_none()
+    if (
+        digest_trigger is None
+        or _normalize_sql(str(digest_trigger))
+        != _normalize_sql(restriction_digest_integrity_trigger_sql())
+    ):
+        issues.append("restriction digest integrity trigger differs or is missing")
     return issues
 
 
@@ -372,6 +387,12 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
 
     @event.listens_for(engine.sync_engine, "connect")
     def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
+        from molbio_migrations import validate_restriction_digest_result
+
+        dbapi_connection.create_function(
+            "bms_restriction_digest_result_valid", 7,
+            validate_restriction_digest_result, deterministic=True,
+        )
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys=ON")
@@ -552,6 +573,15 @@ async def _migration_project_plasmid_metadata(connection: AsyncConnection) -> No
     )
 
 
+async def _migration_restriction_digest_results(connection: AsyncConnection) -> None:
+    """Register Phase 3 immutable digest results without changing prior migrations."""
+
+    from molbio_migrations import apply_restriction_digest_result_migration
+
+    await apply_restriction_digest_result_migration(connection)
+    await _migration_append_only_guards(connection)
+
+
 MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
     ("0001_initial", "create Mol Bio owned schema", _migration_initial),
     ("0002_append_only_guards", "enforce append-only scientific history", _migration_append_only_guards),
@@ -574,6 +604,11 @@ MOLBIO_MIGRATIONS: tuple[Migration, ...] = (
         "0006_project_plasmid_metadata",
         "persist project-local plasmid tags and notes behind exact state activation",
         _migration_project_plasmid_metadata,
+    ),
+    (
+        "0007_restriction_digest_results",
+        "immutable exact restriction digest results",
+        _migration_restriction_digest_results,
     ),
 )
 
@@ -628,14 +663,25 @@ async def run_molbio_migrations(*, engine: AsyncEngine) -> list[str]:
                 )
             )
         rows = await connection.execute(
-            text("SELECT version FROM molbio_schema_migrations ORDER BY version")
+            text("SELECT version, description FROM molbio_schema_migrations ORDER BY version")
         )
-        applied = {str(row[0]) for row in rows.fetchall()}
+        applied_rows = [(str(row[0]), str(row[1])) for row in rows.fetchall()]
+        applied = {version for version, _description in applied_rows}
         await connection.commit()
-        known = {version for version, _description, _apply in MOLBIO_MIGRATIONS}
-        unknown = applied - known
+        known_descriptions = {
+            version: description for version, description, _apply in MOLBIO_MIGRATIONS
+        }
+        unknown = applied - set(known_descriptions)
         if unknown:
             raise RuntimeError(f"Mol Bio database has unknown migrations: {sorted(unknown)}")
+        changed = [
+            version for version, description in applied_rows
+            if known_descriptions[version] != description
+        ]
+        if changed:
+            raise RuntimeError(
+                f"Mol Bio database migration ledger mismatch: {sorted(changed)}"
+            )
 
         for version, description, apply_migration in MOLBIO_MIGRATIONS:
             if version in applied:
@@ -740,6 +786,23 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             and sequence_parent_fk_current
             and not sequence_parent_cycles
         )
+        from molbio_migrations import restriction_digest_migration_attestation
+        from services.restriction_digest import resource_policy_receipt
+
+        digest_policy = resource_policy_receipt().model_dump(mode="json", by_alias=True)
+        digest_readiness = {
+            "required": True,
+            "ready": healthy,
+            "status": "ready" if healthy else "degraded",
+            "resource_policy": digest_policy,
+            "resource_policy_sha256": hashlib.sha256(rfc8785.dumps(digest_policy)).hexdigest(),
+            "migration": restriction_digest_migration_attestation(),
+            "routes": [
+                "POST /api/molbio/restriction/digests/simulate",
+                "POST /api/molbio/restriction/digests",
+                "GET /api/molbio/restriction/digests/{operation_id}",
+            ],
+        }
         return {
             "owner": "molbio",
             "database_kind": "sqlite",
@@ -755,6 +818,7 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "immutable_triggers_current": triggers_current,
             "sequence_parent_foreign_key_current": sequence_parent_fk_current,
             "sequence_parent_cycle_count": len(sequence_parent_cycles),
+            "restriction_digest": digest_readiness,
         }
     except Exception as exc:  # health endpoints must report, not propagate
         return {
@@ -772,6 +836,11 @@ async def molbio_health(*, engine: AsyncEngine | None = None) -> dict[str, objec
             "immutable_triggers_current": False,
             "sequence_parent_foreign_key_current": False,
             "sequence_parent_cycle_count": None,
+            "restriction_digest": {
+                "required": True,
+                "ready": False,
+                "status": "unavailable",
+            },
             "error": f"{type(exc).__name__}: database health query failed",
         }
 
