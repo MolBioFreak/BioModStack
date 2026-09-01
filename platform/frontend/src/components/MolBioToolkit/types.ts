@@ -86,37 +86,6 @@ export interface NucleotideSequenceListItem {
     updated_at?: string | null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ENZYME TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export interface EnzymeInfo {
-    name: string;
-    site: string;
-    cutCount: number;
-    overhangType: 'blunt' | '5_prime' | '3_prime';
-    positions: number[];
-}
-
-export interface EnzymeFilter {
-    cutCount?: { min: number; max: number };
-    overhangType?: 'blunt' | '5_prime' | '3_prime' | 'all';
-    suppliers?: string[];
-    searchQuery?: string;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DIGEST/PCR TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export interface DigestFragment {
-    sequence: string;
-    start: number;
-    end: number;
-    length?: number;
-    wraps_origin?: boolean;
-}
-
 export interface PCRProduct {
     id: string;
     name: string;

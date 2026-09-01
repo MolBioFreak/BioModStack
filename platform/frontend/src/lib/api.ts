@@ -2957,15 +2957,19 @@ export interface GibsonDesignResponse {
 export interface GoldenGateAssemblyRequest {
     fragments: AssemblyFragmentInput[];
     circular?: boolean;
-    enzyme_name?: string;
+    enzyme_id?: string;
     new_name?: string;
     save_description?: string;
 }
 
 export interface GoldenGateAssemblyOptionsResponse {
+    catalog: {
+        catalog_id: string;
+        catalog_sha256: string;
+    } | null;
     enzymes: Array<{
-        name: string;
-        site: string;
+        enzyme_id: string;
+        canonical_name: string;
         overhang_length: number;
     }>;
 }

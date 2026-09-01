@@ -49,6 +49,43 @@ def test_builder_defaults_to_active_v2_runtime_authority() -> None:
     assert builder.DENOMINATOR_SCHEMA == "bms.ngs-molbio.runtime-source-denominator.v2"
 
 
+def test_runtime_denominator_covers_complete_restriction_authority() -> None:
+    denominator = json.loads(DENOMINATOR_V2.read_text(encoding="utf-8"))
+    required = {
+        "platform/api/config/molbio/restriction/restriction_enzyme_catalog_change_report_v1.json",
+        "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json",
+        "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json",
+        "platform/api/config/molbio/restriction/restriction_enzyme_products_v1.json",
+        "platform/api/molbio_migrations.py",
+        "platform/api/readiness.py",
+        "platform/api/restriction_catalog_integrity.py",
+        "platform/api/routers/molbio_restriction.py",
+        "platform/api/services/restriction_analysis.py",
+        "platform/api/services/restriction_catalog.py",
+        "platform/api/services/restriction_digest.py",
+        "platform/api/services/restriction_digest_save_receipt.py",
+        "platform/api/services/restriction_products.py",
+        "platform/api/services/sqlite_schema_attestation.py",
+        "platform/api/services/assembly/golden_gate.py",
+        "platform/api/services/molbio_ops.py",
+        "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
+        "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
+        "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
+        "platform/frontend/src/components/MolBioToolkit/panels/AssemblyPanel.tsx",
+        "platform/frontend/src/components/MolBioToolkit/hooks/useSequenceOperations.ts",
+        "platform/frontend/src/components/MolBioToolkit/types.ts",
+        "platform/frontend/src/lib/restrictionAnalysis.ts",
+        "packages/sequence-utils/src/index.js",
+        "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
+        "schemas/molbio/restriction_enzyme_products_v1.schema.json",
+        "schemas/ngs_molbio/molbio-restriction_digest-v2.schema.json",
+        "schemas/ngs_molbio/molbio-assembly-golden_gate-v1.schema.json",
+        "scripts/build_restriction_enzyme_catalog.py",
+    }
+    assert required <= set(denominator["paths"])
+    assert len(denominator["paths"]) == 252
+
+
 def test_checked_in_active_runtime_record_is_accepted() -> None:
     accepted = ngs_molbio_runtime_status.runtime_implementation_record()
     assert accepted["implementation_state"] == "implemented_unverified"

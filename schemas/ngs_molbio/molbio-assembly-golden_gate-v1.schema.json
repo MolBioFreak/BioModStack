@@ -33,18 +33,18 @@
       "x-bms-ui-control": "typed_control",
       "x-bms-units": "not_applicable"
     },
-    "enzyme_name": {
+    "enzyme_id": {
       "maxLength": 128,
       "minLength": 1,
       "type": "string",
       "x-bms-applicability": "always",
       "x-bms-default-policy": "required_explicit_or_authority_bound",
       "x-bms-incompatibilities": [],
-      "x-bms-native-key": "enzyme_name",
+      "x-bms-native-key": "enzyme_id",
       "x-bms-persisted-representation": "requested_and_effective",
       "x-bms-precision": "exact_utf8_or_enum",
       "x-bms-reproducibility-effect": "changes_output",
-      "x-bms-scientific-meaning": "enzyme name",
+      "x-bms-scientific-meaning": "stable restriction catalog enzyme identity",
       "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
       "x-bms-ui-control": "typed_control",
       "x-bms-units": "not_applicable"
@@ -98,7 +98,7 @@
     "fragment_revision_ids",
     "orientations",
     "circular",
-    "enzyme_name",
+    "enzyme_id",
     "change_summary"
   ],
   "title": "molbio.assembly.golden_gate operation v1",
