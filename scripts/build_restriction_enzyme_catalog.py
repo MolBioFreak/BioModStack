@@ -13,6 +13,8 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import stat
+import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -20,8 +22,12 @@ from typing import Any
 
 import rfc8785
 from Bio.Restriction import Restriction_Dictionary as restriction_dictionary
+from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "platform/api"))
+from restriction_catalog_integrity import validate_catalog_integrity
+
 DEFAULT_CATALOG = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json"
 DEFAULT_MANIFEST = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
 DEFAULT_CHANGE_REPORT = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_change_report_v1.json"
@@ -30,6 +36,8 @@ DICTIONARY_SHA256 = "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908d
 CATALOG_ID = "biopython-rebase-404-bms-v1"
 GENERATOR_VERSION = "bms-restriction-catalog-generator-v1"
 IUPAC_COMPLEMENT = str.maketrans("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN")
+IUPAC = frozenset("ACGTRYSWKMBDHVN")
+MAX_PRIOR_CATALOG_BYTES = 64 * 1024 * 1024
 
 NICKASE_SUPPLEMENT: tuple[dict[str, Any], ...] = (
     {
@@ -95,6 +103,11 @@ def reverse_complement(site: str) -> str:
 
 def recognition_projection(source_notation: str) -> dict[str, Any]:
     alternatives = source_notation.upper().split("|")
+    if any(not site or not set(site) <= IUPAC for site in alternatives):
+        raise ValueError("recognition alternatives must contain only non-empty DNA IUPAC strings")
+    lengths = {len(site) for site in alternatives}
+    if len(lengths) != 1:
+        raise ValueError("recognition alternatives must have equal length")
     reverse_alternatives = [reverse_complement(site) for site in alternatives]
     primary = alternatives[0]
     return {
@@ -103,7 +116,7 @@ def recognition_projection(source_notation: str) -> dict[str, Any]:
         "source_notation": source_notation.upper(),
         "reverse_complement_iupac": reverse_alternatives[0],
         "reverse_complement_alternatives_iupac": reverse_alternatives,
-        "length_bp": len(primary),
+        "length_bp": next(iter(lengths)),
         "palindromic": len(alternatives) == 1 and primary == reverse_alternatives[0],
     }
 
@@ -136,19 +149,16 @@ def stable_ids(names: list[str]) -> dict[str, str]:
     collisions: dict[str, list[str]] = defaultdict(list)
     for name in names:
         collisions[name.casefold()].append(name)
-    result: dict[str, str] = {}
-    for names_for_key in collisions.values():
-        for name in sorted(names_for_key):
-            result[name] = (
-                name
-                if len(names_for_key) == 1
-                else f"{name}--{hashlib.sha256(name.encode('utf-8')).hexdigest()[:12]}"
-            )
-    return result
+    collided = [sorted(values) for values in collisions.values() if len(values) > 1]
+    if collided:
+        raise ValueError(f"canonical-name case-fold collision requires a reviewed persistent ID mapping: {collided!r}")
+    return {name: name for name in names}
 
 
 def base_record(name: str, source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
     site = str(source["site"]).upper()
+    recognition = recognition_projection(site)
+    site_length = recognition["length_bp"]
     fst5 = source.get("fst5")
     fst3 = source.get("fst3")
     scd5 = source.get("scd5")
@@ -156,15 +166,15 @@ def base_record(name: str, source: dict[str, Any], enzyme_id: str) -> dict[str, 
     known = fst5 is not None and fst3 is not None
     events: list[dict[str, Any]] = []
     if known:
-        events.append(double_strand_event(int(fst5), int(fst3), len(site)))
+        events.append(double_strand_event(int(fst5), int(fst3), site_length))
         if scd5 is not None and scd3 is not None:
-            events.append(double_strand_event(int(scd5), int(scd3), len(site)))
+            events.append(double_strand_event(int(scd5), int(scd3), site_length))
     record = {
         "enzyme_id": enzyme_id,
-        "id_policy": "canonical_name_with_deterministic_collision_suffix",
+        "id_policy": "canonical_name_v1_casefold_unique",
         "canonical_name": name,
         "aliases": [],
-        "recognition": recognition_projection(site),
+        "recognition": recognition,
         "cleavage": {
             "status": "known_double_strand" if known else "unknown",
             "events": events,
@@ -208,12 +218,13 @@ def nickase_record(source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
     site = source["site"]
     strand = source["strand"]
     boundary_offset = source["boundary_offset"]
+    recognition = recognition_projection(site)
     return {
         "enzyme_id": enzyme_id,
-        "id_policy": "canonical_name_with_deterministic_collision_suffix",
+        "id_policy": "canonical_name_v1_casefold_unique",
         "canonical_name": name,
         "aliases": [],
-        "recognition": recognition_projection(site),
+        "recognition": recognition,
         "cleavage": {
             "status": "known_single_strand_nick",
             "events": [],
@@ -222,7 +233,7 @@ def nickase_record(source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
                 "boundary_offset": boundary_offset,
                 "reverse_orientation": {
                     "strand": "bottom" if strand == "top" else "top",
-                    "boundary_offset": len(site) - boundary_offset,
+                    "boundary_offset": recognition["length_bp"] - boundary_offset,
                 },
             },
             "source_fields": {"fst5": None, "fst3": None, "scd5": None, "scd3": None},
@@ -253,23 +264,24 @@ def nickase_record(source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
     }
 
 
-def geometry_key(record: dict[str, Any]) -> Any:
+def geometry_key(record: dict[str, Any]) -> Any | None:
     cleavage = record["cleavage"]
-    if cleavage["status"] == "known_double_strand":
+    source_fields = cleavage["source_fields"]
+    secondary_complete = (source_fields["scd5"] is None) == (source_fields["scd3"] is None)
+    if (
+        cleavage["status"] == "known_double_strand"
+        and record["enzyme_kind"] == "double_strand_endonuclease"
+        and record["analysis_capability"] == "digest_simulation"
+        and source_fields["fst5"] is not None
+        and source_fields["fst3"] is not None
+        and secondary_complete
+        and cleavage["events"]
+    ):
         return [
             [event["top_offset"], event["bottom_offset"]]
             for event in cleavage["events"]
         ]
-    if cleavage["status"] == "known_single_strand_nick":
-        nick = cleavage["nick"]
-        return [
-            "nick",
-            nick["strand"],
-            nick["boundary_offset"],
-            nick["reverse_orientation"]["strand"],
-            nick["reverse_orientation"]["boundary_offset"],
-        ]
-    return ["unknown"]
+    return None
 
 
 def apply_relationships(records: list[dict[str, Any]]) -> None:
@@ -280,21 +292,25 @@ def apply_relationships(records: list[dict[str, Any]]) -> None:
     for site_records in by_site.values():
         alternatives = site_records[0]["recognition"]["site_alternatives_iupac"]
         iso_group = group_id("recognition_alternatives", alternatives)
+        comparable = [record for record in site_records if geometry_key(record) is not None]
         geometry_groups: dict[bytes, list[dict[str, Any]]] = defaultdict(list)
-        for record in site_records:
+        for record in comparable:
             geometry_groups[rfc8785.dumps(geometry_key(record))].append(record)
         for record in site_records:
-            key = rfc8785.dumps(geometry_key(record))
-            same_geometry = geometry_groups[key]
+            geometry = geometry_key(record)
+            key = rfc8785.dumps(geometry) if geometry is not None else None
+            same_geometry = geometry_groups[key] if key is not None else []
             different_geometry = [
                 other["enzyme_id"]
-                for other in site_records
+                for other in comparable
                 if rfc8785.dumps(geometry_key(other)) != key
-            ]
+            ] if key is not None else []
             record["relationships"] = {
                 "isoschizomer_group_id": iso_group,
-                "equischizomer_group_id": group_id(
-                    "recognition_and_geometry", [alternatives, geometry_key(record)]
+                "equischizomer_group_id": (
+                    group_id("recognition_and_geometry", [alternatives, geometry])
+                    if geometry is not None
+                    else None
                 ),
                 "equischizomer_ids": sorted(
                     (other["enzyme_id"] for other in same_geometry if other is not record),
@@ -320,11 +336,30 @@ def _catalog_identity(catalog: dict[str, Any]) -> dict[str, Any]:
     return identity
 
 
+def _canonical_record(record: dict[str, Any]) -> dict[str, Any]:
+    value = copy.deepcopy(record)
+    value.pop("record_sha256", None)
+    return value
+
+
+def _changed_fields(before: Any, after: Any, prefix: str = "") -> list[str]:
+    if isinstance(before, dict) and isinstance(after, dict):
+        fields: list[str] = []
+        for key in sorted(set(before) | set(after)):
+            child = f"{prefix}.{key}" if prefix else key
+            if key not in before or key not in after:
+                fields.append(child)
+            else:
+                fields.extend(_changed_fields(before[key], after[key], child))
+        return fields
+    return [] if before == after else [prefix]
+
+
 def build_change_report(
     prior_catalog: dict[str, Any] | None,
     current_catalog: dict[str, Any],
 ) -> dict[str, Any]:
-    """Return a canonical review report for one exact catalog transition."""
+    """Return an exhaustive canonical review report for one catalog transition."""
     prior_records = {
         row["enzyme_id"]: row for row in (prior_catalog or {}).get("records", [])
     }
@@ -334,44 +369,50 @@ def build_change_report(
     prior_ids = set(prior_records)
     current_ids = set(current_records)
     shared_ids = prior_ids & current_ids
-    changes = {
+
+    def category(*fields: str) -> list[str]:
+        return sorted(
+            (
+                enzyme_id
+                for enzyme_id in shared_ids
+                if any(
+                    _canonical_record(prior_records[enzyme_id]).get(field)
+                    != _canonical_record(current_records[enzyme_id]).get(field)
+                    for field in fields
+                )
+            ),
+            key=str.casefold,
+        )
+
+    record_changes = []
+    for enzyme_id in sorted(shared_ids, key=str.casefold):
+        changed = _changed_fields(
+            _canonical_record(prior_records[enzyme_id]),
+            _canonical_record(current_records[enzyme_id]),
+        )
+        if changed:
+            record_changes.append({"enzyme_id": enzyme_id, "changed_fields": changed})
+    changes: dict[str, Any] = {
         "additions": sorted(current_ids - prior_ids, key=str.casefold),
         "removals": sorted(prior_ids - current_ids, key=str.casefold),
-        "cleavage_geometry_changes": sorted(
-            (
-                enzyme_id
-                for enzyme_id in shared_ids
-                if prior_records[enzyme_id]["cleavage"]
-                != current_records[enzyme_id]["cleavage"]
-            ),
-            key=str.casefold,
+        "recognition_changes": category("recognition"),
+        "identity_changes": category("canonical_name", "id_policy"),
+        "cleavage_geometry_changes": category("cleavage"),
+        "relationship_changes": category("relationships"),
+        "source_provenance_changes": category("source"),
+        "historical_supplier_code_commercial_report_changes": category("supplier_provenance"),
+        "enzyme_kind_capability_exclusion_changes": category(
+            "enzyme_kind", "analysis_capability", "exclusion_reason"
         ),
-        "relationship_changes": sorted(
-            (
-                enzyme_id
-                for enzyme_id in shared_ids
-                if prior_records[enzyme_id]["relationships"]
-                != current_records[enzyme_id]["relationships"]
-            ),
-            key=str.casefold,
-        ),
-        "historical_supplier_code_changes": sorted(
-            (
-                enzyme_id
-                for enzyme_id in shared_ids
-                if prior_records[enzyme_id]["supplier_provenance"]["historical_supplier_codes"]
-                != current_records[enzyme_id]["supplier_provenance"]["historical_supplier_codes"]
-            ),
-            key=str.casefold,
-        ),
+        "record_changes": record_changes,
     }
     return with_digest(
         {
             "schema": "bms.molbio.restriction-enzyme-catalog-change-report.v1",
-            "comparison_policy": "exact_enzyme_id_and_canonical_scientific_fields",
+            "comparison_policy": "all_canonical_record_fields_except_record_sha256",
             "prior_catalog": _catalog_identity(prior_catalog) if prior_catalog is not None else None,
             "current_catalog": _catalog_identity(current_catalog),
-            "summary": {name: len(enzyme_ids) for name, enzyme_ids in changes.items()},
+            "summary": {name: len(entries) for name, entries in changes.items()},
             "changes": changes,
         },
         "content_sha256",
@@ -477,6 +518,13 @@ def build_documents() -> tuple[dict[str, Any], dict[str, Any]]:
         },
         "content_sha256",
     )
+    catalog_schema = json.loads(
+        (ROOT / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    Draft202012Validator(catalog_schema).validate(catalog)
+    validate_catalog_integrity(catalog, manifest)
     return catalog, manifest
 
 
@@ -497,6 +545,44 @@ def write_exact(path: Path, payload: bytes) -> None:
         raise
 
 
+def load_prior_catalog(path: Path) -> dict[str, Any]:
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            observed = os.fstat(descriptor)
+            if not stat.S_ISREG(observed.st_mode):
+                raise ValueError("prior catalog must be a regular file")
+            chunks: list[bytes] = []
+            remaining = MAX_PRIOR_CATALOG_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            if len(raw) > MAX_PRIOR_CATALOG_BYTES:
+                raise ValueError("prior catalog is too large")
+        finally:
+            os.close(descriptor)
+        prior = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("prior catalog is unreadable or malformed JSON") from exc
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("prior catalog is unreadable or malformed JSON") from exc
+    schema = json.loads(
+        (ROOT / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    error = next(Draft202012Validator(schema).iter_errors(prior), None)
+    if error is not None:
+        raise ValueError(f"prior catalog schema validation failed: {error.message}")
+    validate_catalog_integrity(prior)
+    return prior
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog-output", type=Path, default=DEFAULT_CATALOG)
@@ -506,16 +592,42 @@ def main() -> int:
         "--prior-catalog",
         type=Path,
         default=None,
-        help="Optional prior canonical catalog; omission denotes the initial release.",
+        help="Required prior canonical catalog for every non-initial release.",
+    )
+    parser.add_argument(
+        "--initial-release",
+        action="store_true",
+        help="Explicitly authorize a change report with no prior catalog.",
     )
     arguments = parser.parse_args()
-    catalog, manifest = build_documents()
-    prior_catalog = (
-        json.loads(arguments.prior_catalog.read_text(encoding="utf-8"))
-        if arguments.prior_catalog is not None
-        else None
-    )
-    change_report = build_change_report(prior_catalog, catalog)
+    if arguments.initial_release == (arguments.prior_catalog is not None):
+        parser.error("choose exactly one of --initial-release or --prior-catalog")
+    paths = [arguments.catalog_output, arguments.manifest_output, arguments.change_report_output]
+    if arguments.prior_catalog is not None:
+        paths.append(arguments.prior_catalog)
+    resolved = [path.resolve() for path in paths]
+    if len(resolved) != len(set(resolved)):
+        parser.error("catalog, manifest, change report, and prior catalog paths must be distinct")
+    existing_identities: list[tuple[int, int]] = []
+    for path in resolved:
+        try:
+            observed = path.stat()
+        except FileNotFoundError:
+            continue
+        identity = (observed.st_dev, observed.st_ino)
+        if identity in existing_identities:
+            parser.error("catalog, manifest, change report, and prior catalog paths must be distinct")
+        existing_identities.append(identity)
+    try:
+        prior_catalog = (
+            load_prior_catalog(arguments.prior_catalog)
+            if arguments.prior_catalog is not None
+            else None
+        )
+        catalog, manifest = build_documents()
+        change_report = build_change_report(prior_catalog, catalog)
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        parser.error(str(exc))
     write_exact(arguments.catalog_output, rfc8785.dumps(catalog))
     write_exact(arguments.manifest_output, rfc8785.dumps(manifest))
     write_exact(arguments.change_report_output, rfc8785.dumps(change_report))
