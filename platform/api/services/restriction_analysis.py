@@ -36,6 +36,8 @@ from services.restriction_catalog import (
     ANALYSIS_SCAN_WORK_FORMULA_VERSION,
     CatalogView,
     RestrictionRecord,
+    resource_policy_receipt as catalog_resource_policy_receipt,
+    resource_policy_sha256,
 )
 
 ALGORITHM_ID = "bms-restriction-analysis"
@@ -185,32 +187,7 @@ class GroupedCleavage(StrictModel):
     contributors: tuple[CleavageContributor, ...]
 
 
-_RESOURCE_POLICY_OPENAPI_EXAMPLE = {
-    "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
-    "policy_version": "1.1.0",
-    "scan_work_formula_id": "candidate-starts-times-motif-width",
-    "scan_work_formula_version": "1.0.0",
-    "sequence_length_maximum": 5_000_000,
-    "explicit_enzyme_maximum": 256,
-    "region_maximum": 128,
-    "actual_scan_pattern_maximum": 1_056,
-    "scan_work_maximum": 32_000_000,
-    "occurrence_maximum": 25_000,
-    "event_maximum": 50_000,
-    "response_maximum_bytes": 32 * 1024 * 1024,
-    "response_base_budget_bytes": 64 * 1024,
-    "response_occurrence_budget_bytes": 2_048,
-    "response_event_budget_bytes": 1_024,
-    "worker_concurrency": 2,
-    "queue_policy": "reject_when_all_workers_busy",
-    "timeout_seconds": 60,
-    "cancellation_policy": "worker_continues_and_capacity_is_retained_until_completion",
-    "cache_entry_maximum": 32,
-    "cache_total_weight_maximum_bytes": 64 * 1024 * 1024,
-    "cache_result_weight_maximum_bytes": 8 * 1024 * 1024,
-    "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
-    "cache_weight_formula_version": "2.0.0",
-}
+_RESOURCE_POLICY_OPENAPI_EXAMPLE = dict(catalog_resource_policy_receipt())
 
 
 class ResourcePolicyReceipt(StrictModel):
@@ -245,31 +222,8 @@ class ResourcePolicyReceipt(StrictModel):
 
 
 def resource_policy_receipt() -> ResourcePolicyReceipt:
-    return ResourcePolicyReceipt(
-        schema="bms.molbio.restriction-analysis-resource-policy.v1",
-        policy_version="1.1.0",
-        scan_work_formula_id=SCAN_WORK_FORMULA_ID,
-        scan_work_formula_version=SCAN_WORK_FORMULA_VERSION,
-        sequence_length_maximum=MAX_INLINE_SEQUENCE_LENGTH,
-        explicit_enzyme_maximum=MAX_EXPLICIT_ENZYME_IDS,
-        region_maximum=MAX_REGIONS,
-        actual_scan_pattern_maximum=MAX_ANALYSIS_PATTERNS,
-        scan_work_maximum=MAX_SCAN_WORK,
-        occurrence_maximum=MAX_RETURNED_OCCURRENCES,
-        event_maximum=MAX_RETURNED_EVENTS,
-        response_maximum_bytes=MAX_RESPONSE_BYTES,
-        response_base_budget_bytes=_RESPONSE_BASE_BUDGET,
-        response_occurrence_budget_bytes=_RESPONSE_OCCURRENCE_BUDGET,
-        response_event_budget_bytes=_RESPONSE_EVENT_BUDGET,
-        worker_concurrency=ANALYSIS_WORKER_CONCURRENCY,
-        queue_policy=ANALYSIS_QUEUE_POLICY,
-        timeout_seconds=ANALYSIS_TIMEOUT_SECONDS,
-        cancellation_policy=ANALYSIS_CANCELLATION_POLICY,
-        cache_entry_maximum=CACHE_MAX_ENTRIES,
-        cache_total_weight_maximum_bytes=CACHE_MAX_TOTAL_WEIGHT_BYTES,
-        cache_result_weight_maximum_bytes=CACHE_MAX_RESULT_WEIGHT_BYTES,
-        cache_weight_formula_id="canonical-json-entry-and-complete-cache-graph",
-        cache_weight_formula_version="2.0.0",
+    return ResourcePolicyReceipt.model_validate(
+        catalog_resource_policy_receipt(scan_work_maximum=MAX_SCAN_WORK)
     )
 
 
@@ -594,9 +548,9 @@ def analyze_sequence(
 
     selected = {record.enzyme_id: record for record in records}
     policy_receipt = resource_policy_receipt()
-    policy_sha256 = hashlib.sha256(
-        rfc8785.dumps(policy_receipt.model_dump(mode="json", by_alias=True))
-    ).hexdigest()
+    policy_sha256 = resource_policy_sha256(
+        policy_receipt.model_dump(mode="json", by_alias=True)
+    )
     scan_plan, long_motifs, scan_work = _build_scan_plan(
         tuple(selected.values()), len(normalized), topology,
     )

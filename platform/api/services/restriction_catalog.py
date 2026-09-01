@@ -83,6 +83,42 @@ EXPECTED_MANIFEST_NOTICES = (
 )
 
 
+def resource_policy_receipt(**overrides: object) -> Mapping[str, object]:
+    receipt = {
+        "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
+        "policy_version": "1.1.0",
+        "scan_work_formula_id": ANALYSIS_SCAN_WORK_FORMULA_ID,
+        "scan_work_formula_version": ANALYSIS_SCAN_WORK_FORMULA_VERSION,
+        "sequence_length_maximum": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
+        "explicit_enzyme_maximum": ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
+        "region_maximum": ANALYSIS_REGION_MAXIMUM,
+        "actual_scan_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
+        "scan_work_maximum": ANALYSIS_SCAN_WORK_MAXIMUM,
+        "occurrence_maximum": ANALYSIS_OCCURRENCE_MAXIMUM,
+        "event_maximum": ANALYSIS_EVENT_MAXIMUM,
+        "response_maximum_bytes": ANALYSIS_RESPONSE_MAXIMUM_BYTES,
+        "response_base_budget_bytes": ANALYSIS_RESPONSE_BASE_BUDGET_BYTES,
+        "response_occurrence_budget_bytes": ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES,
+        "response_event_budget_bytes": ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES,
+        "worker_concurrency": ANALYSIS_WORKER_CONCURRENCY,
+        "queue_policy": ANALYSIS_QUEUE_POLICY,
+        "timeout_seconds": ANALYSIS_TIMEOUT_SECONDS,
+        "cancellation_policy": ANALYSIS_CANCELLATION_POLICY,
+        "cache_entry_maximum": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
+        "cache_total_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
+        "cache_result_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
+        "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
+        "cache_weight_formula_version": "2.0.0",
+    }
+    receipt.update(overrides)
+    return MappingProxyType(receipt)
+
+
+def resource_policy_sha256(receipt: Mapping[str, object] | None = None) -> str:
+    canonical_receipt = dict(receipt if receipt is not None else resource_policy_receipt())
+    return hashlib.sha256(rfc8785.dumps(canonical_receipt)).hexdigest()
+
+
 class StrictFrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -547,34 +583,8 @@ class CatalogAuthority:
                         "analysis_cache_maximum_result_weight_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
                     }
                 ),
-                "resource_policy": MappingProxyType(
-                    {
-                        "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
-                        "policy_version": "1.1.0",
-                        "scan_work_formula_id": ANALYSIS_SCAN_WORK_FORMULA_ID,
-                        "scan_work_formula_version": ANALYSIS_SCAN_WORK_FORMULA_VERSION,
-                        "sequence_length_maximum": ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
-                        "explicit_enzyme_maximum": ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
-                        "region_maximum": ANALYSIS_REGION_MAXIMUM,
-                        "actual_scan_pattern_maximum": ANALYSIS_PATTERN_MAXIMUM,
-                        "scan_work_maximum": ANALYSIS_SCAN_WORK_MAXIMUM,
-                        "occurrence_maximum": ANALYSIS_OCCURRENCE_MAXIMUM,
-                        "event_maximum": ANALYSIS_EVENT_MAXIMUM,
-                        "response_maximum_bytes": ANALYSIS_RESPONSE_MAXIMUM_BYTES,
-                        "response_base_budget_bytes": ANALYSIS_RESPONSE_BASE_BUDGET_BYTES,
-                        "response_occurrence_budget_bytes": ANALYSIS_RESPONSE_OCCURRENCE_BUDGET_BYTES,
-                        "response_event_budget_bytes": ANALYSIS_RESPONSE_EVENT_BUDGET_BYTES,
-                        "worker_concurrency": ANALYSIS_WORKER_CONCURRENCY,
-                        "queue_policy": ANALYSIS_QUEUE_POLICY,
-                        "timeout_seconds": ANALYSIS_TIMEOUT_SECONDS,
-                        "cancellation_policy": ANALYSIS_CANCELLATION_POLICY,
-                        "cache_entry_maximum": ANALYSIS_CACHE_MAXIMUM_ENTRIES,
-                        "cache_total_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_TOTAL_WEIGHT_BYTES,
-                        "cache_result_weight_maximum_bytes": ANALYSIS_CACHE_MAXIMUM_RESULT_WEIGHT_BYTES,
-                        "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
-                        "cache_weight_formula_version": "2.0.0",
-                    }
-                ),
+                "resource_policy": resource_policy_receipt(),
+                "resource_policy_sha256": resource_policy_sha256(),
                 "analysis_enabled": True,
                 "digest_enabled": False,
             }

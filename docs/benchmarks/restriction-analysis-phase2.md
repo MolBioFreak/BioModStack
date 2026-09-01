@@ -12,7 +12,7 @@ The scanner-job inventory was derived from the current catalog bytes, not from `
 | two-event `BcgI` | 54 | 2 | 1,032 | 0.000654 | 69,748 | 1 | 2 | 4,794 | complete |
 | ambiguous `N` source with explicit `EcoRI` | 5,000 | 1 | 29,970 | 0.640293 | 109,352 | 4,995 possible | 4,995 | 8,111,844 | complete; retained weight 12,663,084 bytes, so cache bypassed |
 
-All rows carried resource-policy SHA-256 `94d0ab410dec1f2510e3b13f0434cc1561ec133f8c042e4e8c76ec32ba647e64`.
+All rows carried the historical benchmark-run resource-policy SHA-256 `94d0ab410dec1f2510e3b13f0434cc1561ec133f8c042e4e8c76ec32ba647e64`; that digest identifies only the recorded run and is not the current policy identity.
 
 ## Selected limits and exact semantics
 
@@ -33,4 +33,4 @@ The former nominal 100,000,000 source-bp × forward-pattern policy was removed: 
 
 The worker lane is process-wide and fixed at two threads. A request is rejected with `analysis_busy` when both workers are occupied. Timeout or caller cancellation does not cancel a running Python worker and does not release its capacity; capacity is released only by the worker future's completion callback.
 
-Cache weight uses `canonical-json-entry-and-complete-cache-graph` version `2.0.0`. Each entry retains an immutable canonical JSON byte representation and its exact cache key; the per-entry limit counts that complete entry graph once by identity. The total limit independently counts the complete `OrderedDict` graph, including keys, tuples, strings, values, entry objects, and container overhead, once by identity after insertion and each eviction. Hits strictly reconstruct a fresh `AnalysisResult`. LRU eviction enforces entry count and total weight together, and a result above the per-entry threshold bypasses caching. The complete policy receipt and digest are included in the request authority, inner analysis-result JCS hash, outer public result hash, and cache key.
+The current resource policy version `1.1.0` has RFC 8785 receipt SHA-256 `790b363a2b6928fa6a7cd371ff7add77e46b36a3c8f987af49ef7ae6c434499f`. Cache weight uses `canonical-json-entry-and-complete-cache-graph` version `2.0.0`. Each entry retains an immutable canonical JSON byte representation and its exact cache key; the per-entry limit counts that complete entry graph once by identity. The total limit independently counts the complete `OrderedDict` graph, including keys, tuples, strings, values, entry objects, and container overhead, once by identity after insertion and each eviction. Hits strictly reconstruct a fresh `AnalysisResult`. LRU eviction enforces entry count and total weight together, and a result above the per-entry threshold bypasses caching. The complete current policy receipt and digest are included in the request authority, inner analysis-result JCS hash, outer public result hash, and cache key.

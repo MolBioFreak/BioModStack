@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,9 @@ SCHEMA_REGISTRY = REPO_ROOT / "platform/api/config/ngs_molbio/schema_registry_v2
 CAPABILITY_INVENTORY = REPO_ROOT / "platform/api/config/ngs_molbio/capability_inventory_v2.json"
 ATTRIBUTION = REPO_ROOT / "docs/scientific-sources/restriction-enzyme-catalog-attribution.md"
 COORDINATE_CONTRACT = REPO_ROOT / "docs/contracts/restriction-enzyme-catalog-api-v2.md"
+PHASE2_BENCHMARK = REPO_ROOT / "docs/benchmarks/restriction-analysis-phase2.md"
 SHA256_PATTERN = "^[0-9a-f]{64}$"
+RESOURCE_POLICY_SHA256 = "790b363a2b6928fa6a7cd371ff7add77e46b36a3c8f987af49ef7ae6c434499f"
 
 
 def _load(path: Path) -> dict[str, object]:
@@ -872,3 +875,18 @@ def test_phase2_catalog_readiness_exposes_receipt_age_bounds_and_analysis_capabi
     assert readiness["source_year"] == 2024
     assert readiness["analysis_enabled"] is True
     assert readiness["digest_enabled"] is False
+    receipt = readiness["resource_policy"]
+    assert isinstance(receipt, Mapping)
+    assert readiness["resource_policy_sha256"] == RESOURCE_POLICY_SHA256
+    assert readiness["resource_policy_sha256"] == hashlib.sha256(
+        rfc8785.dumps(dict(receipt))
+    ).hexdigest()
+
+
+def test_phase2_benchmark_distinguishes_historical_run_policy_from_current_policy() -> None:
+    benchmark = PHASE2_BENCHMARK.read_text(encoding="utf-8")
+    historical = "94d0ab410dec1f2510e3b13f0434cc1561ec133f8c042e4e8c76ec32ba647e64"
+    assert f"historical benchmark-run resource-policy SHA-256 `{historical}`" in benchmark
+    assert "current resource policy version `1.1.0`" in benchmark
+    assert f"SHA-256 `{RESOURCE_POLICY_SHA256}`" in benchmark
+    assert "`canonical-json-entry-and-complete-cache-graph` version `2.0.0`" in benchmark

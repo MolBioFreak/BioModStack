@@ -26,6 +26,7 @@ API_ROOT = Path(__file__).resolve().parents[1]
 CATALOG = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_v1.json"
 MANIFEST = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
 SCHEMA = API_ROOT.parents[1] / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json"
+RESOURCE_POLICY_SHA256 = "790b363a2b6928fa6a7cd371ff7add77e46b36a3c8f987af49ef7ae6c434499f"
 
 
 def _client(authority: CatalogAuthority | None = None, session=None) -> TestClient:
@@ -73,6 +74,11 @@ def test_catalog_page_publishes_exact_receipt_bounds_and_historical_notice() -> 
         "analysis_cache_maximum_result_weight_bytes": 8 * 1024 * 1024,
     }
     assert body["catalog"]["analysis_enabled"] is True
+    policy_receipt = body["catalog"]["resource_policy"]
+    assert body["catalog"]["resource_policy_sha256"] == RESOURCE_POLICY_SHA256
+    assert body["catalog"]["resource_policy_sha256"] == hashlib.sha256(
+        rfc8785.dumps(policy_receipt)
+    ).hexdigest()
     assert body["catalog"]["source_year"] == 2024
     assert "historical" in body["catalog"]["supplier_code_notice"].lower()
     assert "current" not in body["catalog"]["supplier_code_notice"].lower().replace("not current", "")
@@ -1046,9 +1052,16 @@ def test_analyze_openapi_response_is_strict_and_publishes_all_resource_bounds() 
     assert schemas["AnalysisResponse"]["additionalProperties"] is False
     assert schemas["AnalysisResult"]["additionalProperties"] is False
     assert schemas["DoubleStrandEvent"]["additionalProperties"] is False
+    assert "resource_policy_sha256" in schemas["CatalogReceipt"]["required"]
+    assert schemas["CatalogReceipt"]["properties"]["resource_policy_sha256"]["pattern"] == "^[0-9a-f]{64}$"
     policy_example = schemas["ResourcePolicyReceipt"]["examples"][0]
     catalog_policy = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]["resource_policy"]
     assert policy_example == catalog_policy
+    catalog_receipt = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]
+    assert catalog_receipt["resource_policy_sha256"] == RESOURCE_POLICY_SHA256
+    assert catalog_receipt["resource_policy_sha256"] == hashlib.sha256(
+        rfc8785.dumps(policy_example)
+    ).hexdigest()
     bounds = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]["bounds"]
     assert set(bounds) == {
         "default_limit", "maximum_limit", "query_max_length",
