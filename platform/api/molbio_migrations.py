@@ -311,9 +311,11 @@ WHEN bms_restriction_digest_result_valid(
          AND input.position = 0
          AND json_valid(input.snapshot) = 1
          AND json_type(input.snapshot) = 'object'
-         AND (SELECT count(*) FROM json_each(input.snapshot)) = 2
+         AND (SELECT count(*) FROM json_each(input.snapshot)) = 3
          AND json_extract(input.snapshot, '$.content_sha256')
              IS json_extract(NEW.result, '$.simulation.source.content_sha256')
+         AND json_extract(input.snapshot, '$.name')
+             IS json_extract(NEW.result, '$.simulation.source.name')
          AND json_extract(input.snapshot, '$.sequence_id')
              IS json_extract(NEW.result, '$.simulation.source.sequence_id')
      )
@@ -331,7 +333,6 @@ WHEN bms_restriction_digest_result_valid(
          AND revision.content_length
              IS json_extract(NEW.result, '$.simulation.source.content_length')
          AND document.document_kind = 'dna'
-         AND document.name IS json_extract(NEW.result, '$.simulation.source.name')
          AND (
                (
                  json_type(revision.snapshot, '$.is_circular') = 'true'
@@ -368,9 +369,11 @@ WHEN bms_restriction_digest_result_valid(
           OR edge.position IS NOT CAST(identity.key AS INTEGER)
           OR json_valid(edge.snapshot) != 1
           OR json_type(edge.snapshot) != 'object'
-          OR (SELECT count(*) FROM json_each(edge.snapshot)) != 2
+          OR (SELECT count(*) FROM json_each(edge.snapshot)) != 3
           OR json_extract(edge.snapshot, '$.fragment_index')
              IS NOT CAST(identity.key AS INTEGER)
+          OR json_extract(edge.snapshot, '$.name')
+             IS NOT json_extract(identity.value, '$.name')
           OR json_extract(edge.snapshot, '$.simulation_sha256') IS NOT NEW.result_sha256
           OR revision.id IS NULL
           OR revision.document_id IS NOT json_extract(identity.value, '$.document_id')
@@ -417,10 +420,6 @@ WHEN bms_restriction_digest_result_valid(
              ) != 1
           OR document.id IS NULL
           OR document.document_kind != 'dna'
-          OR document.name IS NOT json_extract(identity.value, '$.name')
-          OR document.current_revision_id
-             IS NOT json_extract(identity.value, '$.revision_id')
-          OR document.deleted_at IS NOT NULL
           OR json_extract(identity.value, '$.fragment_index')
              IS NOT CAST(identity.key AS INTEGER)
           OR json_extract(identity.value, '$.topology') IS NOT json_extract(

@@ -1171,7 +1171,6 @@ async def _load_saved_digest(
             or source_revision.content_sha256 != response.simulation.source.content_sha256
             or source_revision.content_length != response.simulation.source.content_length
             or source_document.document_kind != "dna"
-            or source_document.name != response.simulation.source.name
             or not isinstance(source_snapshot.get("sequence_type"), str)
             or source_snapshot["sequence_type"].lower() != "dna"
             or not isinstance(source_sequence, str)
@@ -1183,6 +1182,7 @@ async def _load_saved_digest(
             or str(inputs[0].revision_id) != response.source_revision_id
             or inputs[0].snapshot != {
                 "content_sha256": response.simulation.source.content_sha256,
+                "name": response.simulation.source.name,
                 "sequence_id": response.simulation.source.sequence_id,
             }
             or len(response.outputs) != expected_output_count
@@ -1235,14 +1235,12 @@ async def _load_saved_digest(
                 or str(edge.revision_id) != identity.revision_id
                 or edge.snapshot != {
                     "fragment_index": ordinal,
+                    "name": expected_name,
                     "simulation_sha256": response.result_sha256,
                 }
                 or revision is None or document_row is None
                 or str(revision.document_id) != identity.document_id
-                or str(document_row.current_revision_id) != identity.revision_id
                 or document_row.document_kind != "dna"
-                or document_row.name != expected_name
-                or document_row.deleted_at is not None
                 or revision.operation_id != operation_id
                 or revision.revision_number != 1
                 or revision.change_kind != "restriction_digest_fragment"
@@ -1350,6 +1348,7 @@ async def save_restriction_digest(
             revision_id=payload.source.revision_id, role="digest_source", position=0,
             snapshot={
                 "content_sha256": payload.source.expected_content_sha256,
+                "name": simulation.source.name,
                 "sequence_id": payload.source.sequence_id,
             },
         ))
@@ -1391,6 +1390,7 @@ async def save_restriction_digest(
                     role="digest_fragment", position=fragment.fragment_index,
                     snapshot={
                         "fragment_index": fragment.fragment_index,
+                        "name": name,
                         "simulation_sha256": simulation.simulation_sha256,
                     },
                 )

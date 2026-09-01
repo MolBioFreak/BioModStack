@@ -424,6 +424,34 @@ async def _client(sessions):
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
+async def _immutable_digest_rows(connection, operation_id: str) -> dict[str, tuple[tuple, ...]]:
+    statements = {
+        "operation": "SELECT * FROM molecular_operations WHERE id=:operation_id ORDER BY id",
+        "inputs": (
+            "SELECT * FROM molecular_operation_inputs "
+            "WHERE operation_id=:operation_id ORDER BY position,id"
+        ),
+        "outputs": (
+            "SELECT * FROM molecular_operation_outputs "
+            "WHERE operation_id=:operation_id ORDER BY position,id"
+        ),
+        "result": (
+            "SELECT * FROM restriction_digest_results "
+            "WHERE operation_id=:operation_id ORDER BY id"
+        ),
+        "revisions": (
+            "SELECT * FROM molecular_revisions "
+            "WHERE id='source-revision' OR operation_id=:operation_id ORDER BY id"
+        ),
+    }
+    return {
+        name: tuple(tuple(row) for row in (
+            await connection.execute(text(statement), {"operation_id": operation_id})
+        ).all())
+        for name, statement in statements.items()
+    }
+
+
 @pytest.mark.asyncio
 async def test_digest_routes_reject_caller_geometry_unknown_fields_and_stale_authorities(tmp_path: Path) -> None:
     engine, sessions, digest = await _store(tmp_path)
@@ -606,6 +634,79 @@ async def test_preview_has_no_database_effect_and_save_is_atomic_idempotent(tmp_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "projection_mutation",
+    ("source_rename", "output_rename", "output_head_advance", "output_soft_delete"),
+)
+async def test_saved_digest_reload_ignores_mutable_document_projections(
+    tmp_path: Path, projection_mutation: str,
+) -> None:
+    case_path = tmp_path / projection_mutation
+    case_path.mkdir()
+    engine, sessions, digest = await _store(case_path)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": f"mutable-projection-{projection_mutation}",
+                "persistence_mode": "operation_and_fragments",
+                "fragment_name_prefix": "Historical fragment",
+            }
+            saved = await client.post("/api/molbio/restriction/digests", json=save)
+            assert saved.status_code == 200, saved.text
+            original = saved.json()
+            operation_id = original["operation_id"]
+            output = original["outputs"][0]
+
+            async with engine.begin() as connection:
+                immutable_before = await _immutable_digest_rows(connection, operation_id)
+                if projection_mutation == "source_rename":
+                    await connection.execute(text(
+                        "UPDATE molecular_documents SET name='renamed source' "
+                        "WHERE id='source-document'"
+                    ))
+                elif projection_mutation == "output_rename":
+                    await connection.execute(text(
+                        "UPDATE molecular_documents SET name='renamed output' WHERE id=:id"
+                    ), {"id": output["document_id"]})
+                elif projection_mutation == "output_head_advance":
+                    await connection.execute(text(
+                        "INSERT INTO molecular_revisions("
+                        "id,document_id,revision_number,change_kind,content_sha256,content_length,"
+                        "snapshot,provenance,operation_id,created_by,created_at) VALUES ("
+                        ":id,:document_id,2,'edited',:sha,4,:snapshot,'{}',NULL,'test',CURRENT_TIMESTAMP)"
+                    ), {
+                        "id": "later-output-revision",
+                        "document_id": output["document_id"],
+                        "sha": hashlib.sha256(b"ACGT").hexdigest(),
+                        "snapshot": rfc8785.dumps({
+                            "sequence_type": "dna", "sequence": "ACGT", "is_circular": False,
+                        }).decode(),
+                    })
+                    await connection.execute(text(
+                        "UPDATE molecular_documents SET current_revision_id=:revision_id WHERE id=:id"
+                    ), {"revision_id": "later-output-revision", "id": output["document_id"]})
+                else:
+                    await connection.execute(text(
+                        "UPDATE molecular_documents SET deleted_at=CURRENT_TIMESTAMP WHERE id=:id"
+                    ), {"id": output["document_id"]})
+
+                immutable_after = await _immutable_digest_rows(connection, operation_id)
+            assert immutable_after == immutable_before
+
+            loaded = await client.get(f"/api/molbio/restriction/digests/{operation_id}")
+            assert loaded.status_code == 200, loaded.text
+            assert loaded.json() == original
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_database_rejects_correct_count_fully_populated_forged_output_graph(
     tmp_path: Path,
 ) -> None:
@@ -700,6 +801,7 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
                 "operation_id": operation_id,
                 "snapshot": rfc8785.dumps({
                     "content_sha256": digest,
+                    "name": "source",
                     "sequence_id": "source-document",
                 }).decode(),
             })
@@ -759,6 +861,7 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
                     "position": ordinal,
                     "snapshot": rfc8785.dumps({
                         "fragment_index": ordinal,
+                        "name": identity["name"],
                         "simulation_sha256": (
                             "0" * 64 if ordinal == 0 else simulation.simulation_sha256
                         ),
@@ -794,14 +897,20 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
     "operation_provenance",
     "persistence_mode",
     "input_sequence_id",
+    "input_snapshot_name",
     "output_edge_snapshot",
+    "output_edge_snapshot_name",
     "output_identity_name",
     "output_identity_topology",
-    "document_name",
     "document_kind",
+    "source_revision_document_id",
+    "output_revision_document_id",
     "revision_number",
     "revision_change_kind",
     "revision_snapshot",
+    "revision_content",
+    "revision_topology",
+    "output_ordinal",
 ])
 async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
     tmp_path: Path, mutation: str,
@@ -881,24 +990,27 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                     await connection.execute(text(
                         f"UPDATE molecular_operations SET {column}=:value WHERE id=:id"
                     ), {"value": rfc8785.dumps(document).decode(), "id": operation_id})
-                elif mutation == "input_sequence_id":
+                elif mutation in {"input_sequence_id", "input_snapshot_name"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operation_inputs_update"
                     ))
+                    path = "$.sequence_id" if mutation == "input_sequence_id" else "$.name"
                     await connection.execute(text(
-                        "UPDATE molecular_operation_inputs "
-                        "SET snapshot=json_set(snapshot,'$.sequence_id','forged-document') "
+                        "UPDATE molecular_operation_inputs SET snapshot=json_set(snapshot,:path,:value) "
                         "WHERE operation_id=:id"
-                    ), {"id": operation_id})
-                elif mutation == "output_edge_snapshot":
+                    ), {"path": path, "value": "forged name", "id": operation_id})
+                elif mutation in {"output_edge_snapshot", "output_edge_snapshot_name"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operation_outputs_update"
                     ))
+                    path = (
+                        "$.simulation_sha256"
+                        if mutation == "output_edge_snapshot" else "$.name"
+                    )
                     await connection.execute(text(
-                        "UPDATE molecular_operation_outputs "
-                        "SET snapshot=json_set(snapshot,'$.simulation_sha256',:digest) "
+                        "UPDATE molecular_operation_outputs SET snapshot=json_set(snapshot,:path,:value) "
                         "WHERE id=:id"
-                    ), {"digest": "0" * 64, "id": identity["output_edge_id"]})
+                    ), {"path": path, "value": "forged name", "id": identity["output_edge_id"]})
                 elif mutation in {"output_identity_name", "output_identity_topology"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_restriction_digest_results_update"
@@ -914,14 +1026,36 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                     await connection.execute(text(
                         "UPDATE restriction_digest_results SET result=:result WHERE operation_id=:id"
                     ), {"result": rfc8785.dumps(document).decode(), "id": operation_id})
-                elif mutation in {"document_name", "document_kind"}:
-                    column = "name" if mutation == "document_name" else "document_kind"
+                elif mutation == "document_kind":
                     await connection.execute(text(
-                        f"UPDATE molecular_documents SET {column}=:value WHERE id=:id"
+                        "UPDATE molecular_documents SET document_kind='rna' WHERE id=:id"
                     ), {
-                        "value": "forged name" if mutation == "document_name" else "rna",
                         "id": identity["document_id"],
                     })
+                elif mutation in {"source_revision_document_id", "output_revision_document_id"}:
+                    await connection.execute(text(
+                        "DROP TRIGGER molbio_immutable_molecular_revisions_update"
+                    ))
+                    revision_id = (
+                        "source-revision"
+                        if mutation == "source_revision_document_id" else identity["revision_id"]
+                    )
+                    document_id = f"hostile-target-{mutation}"
+                    await connection.execute(text(
+                        "INSERT INTO molecular_documents("
+                        "id,document_kind,name,current_revision_id,created_at) "
+                        "VALUES (:id,'dna','hostile target',NULL,CURRENT_TIMESTAMP)"
+                    ), {"id": document_id})
+                    await connection.execute(text(
+                        "UPDATE molecular_revisions SET document_id=:document_id WHERE id=:id"
+                    ), {"document_id": document_id, "id": revision_id})
+                elif mutation == "output_ordinal":
+                    await connection.execute(text(
+                        "DROP TRIGGER molbio_immutable_molecular_operation_outputs_update"
+                    ))
+                    await connection.execute(text(
+                        "UPDATE molecular_operation_outputs SET position=7 WHERE id=:id"
+                    ), {"id": identity["output_edge_id"]})
                 else:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_revisions_update"
@@ -932,10 +1066,20 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
                         statement = (
                             "UPDATE molecular_revisions SET change_kind='forged' WHERE id=:id"
                         )
-                    else:
+                    elif mutation == "revision_snapshot":
                         statement = (
                             "UPDATE molecular_revisions "
                             "SET snapshot=json_set(snapshot,'$.sequence_type','rna') WHERE id=:id"
+                        )
+                    elif mutation == "revision_content":
+                        statement = (
+                            "UPDATE molecular_revisions SET content_sha256='" + "0" * 64
+                            + "' WHERE id=:id"
+                        )
+                    else:
+                        statement = (
+                            "UPDATE molecular_revisions "
+                            "SET snapshot=json_set(snapshot,'$.topology','circular') WHERE id=:id"
                         )
                     await connection.execute(text(statement), {"id": identity["revision_id"]})
 
@@ -1104,7 +1248,7 @@ async def test_migration_rejects_wrong_ledger_identity_and_attests_integrity_tri
         await init_molbio_db(engine=engine)
         attestation = restriction_digest_migration_attestation()
         assert RESTRICTION_DIGEST_MIGRATION_CHECKSUM == (
-            "b57635c4eebedeb8066cd413b7dbae9740982b69f039bbdf066fed9ed8795e81"
+            "b0d8186b42c98cf0ecd4fefb914c969fb94f9b1da99e95788256e2b2f4a5728b"
         )
         assert attestation["version"] == "0007_restriction_digest_results"
         assert attestation["objects"] == {
@@ -1444,6 +1588,7 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
                     f"input-{identity}", identity, source_id, "digest_source", 0,
                     rfc8785.dumps({
                         "content_sha256": sequence_sha,
+                        "name": "direct",
                         "sequence_id": document_id,
                     }).decode(),
                 ),
