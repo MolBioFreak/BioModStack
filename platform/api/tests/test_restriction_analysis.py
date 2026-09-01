@@ -9,6 +9,7 @@ from services.restriction_analysis import (
     AnalysisLimitError,
     InvalidDNAError,
     analyze_sequence,
+    normalize_dna,
     reverse_complement,
 )
 
@@ -57,6 +58,34 @@ def test_nonpalindromic_type_iis_forward_and_reverse_mirror_and_swap() -> None:
             reverse.double_strand_events[0].bottom_boundary_unwrapped) == ("reverse", -3, 1)
 
 
+def test_overhang_sequence_and_protruding_strand_follow_common_axis_not_motif_orientation() -> None:
+    forward = _occ(_analyze("AAGGTCTCAGTACAAAA", ["BsaI"]), "BsaI")[0]
+    reverse = _occ(_analyze("ACGTACGTAAGAGACCAAAA", ["BsaI"]), "BsaI")[0]
+    assert (
+        forward.double_strand_events[0].overhang_kind,
+        forward.double_strand_events[0].overhang_sequence_5to3,
+        forward.double_strand_events[0].overhang_source_strand,
+        forward.double_strand_events[0].protruding_strand,
+    ) == ("five_prime", "GTAC", "top", "top")
+    assert (
+        reverse.double_strand_events[0].overhang_kind,
+        reverse.double_strand_events[0].overhang_sequence_5to3,
+        reverse.double_strand_events[0].overhang_source_strand,
+        reverse.double_strand_events[0].protruding_strand,
+    ) == ("five_prime", "CGTA", "top", "top")
+
+    three_cases = (
+        ("AACTGAAG" + "A" * 14 + "GCAA", "forward", "GC"),
+        ("AAAATC" + "A" * 14 + "CTTCAGAA", "reverse", "GA"),
+    )
+    for sequence, orientation, expected in three_cases:
+        occurrence = next(row for row in _occ(_analyze(sequence, ["AcuI"]), "AcuI") if row.orientation == orientation)
+        event = occurrence.double_strand_events[0]
+        assert event.overhang_kind == "three_prime"
+        assert event.overhang_source_strand == event.protruding_strand == "bottom"
+        assert event.overhang_sequence_5to3 == expected
+
+
 def test_three_state_iupac_matching_definite_possible_and_none() -> None:
     definite = _analyze("GGCCNNNNNGGCC", ["SfiI"])
     possible = _analyze("GGCCRAAAAGGCC", ["SfiI"])
@@ -92,6 +121,13 @@ def test_circular_origin_site_and_type_iis_cut_keep_unwrapped_geometry() -> None
     cut = type_iis.double_strand_events[0]
     assert (cut.top_boundary_unwrapped, cut.bottom_boundary_unwrapped) == (7, 11)
     assert (cut.top_boundary, cut.bottom_boundary) == (7, 3)
+    assert cut.overhang_sequence_5to3 == "AGGT"
+
+    reverse_wrap = _occ(_analyze("ACCAGAG", ["BsaI"], topology="circular"), "BsaI")[0]
+    reverse_cut = reverse_wrap.double_strand_events[0]
+    assert reverse_wrap.orientation == "reverse"
+    assert reverse_cut.overhang_sequence_5to3 == "GACC"
+    assert reverse_cut.overhang_source_strand == reverse_cut.protruding_strand == "top"
 
 
 def test_linear_off_end_site_is_retained_with_typed_geometry_limitation() -> None:
@@ -111,6 +147,18 @@ def test_same_site_records_stay_distinct_and_duplicate_geometry_has_group_identi
     events = [event for row in duplicate.occurrences for event in row.double_strand_events]
     assert len(events) == 2
     assert events[0].contributor_group_id == events[1].contributor_group_id
+    assert len(duplicate.grouped_cleavages) == 1
+    group = duplicate.grouped_cleavages[0]
+    assert group.contributing_enzyme_ids == ("AanI", "PsiI")
+    assert [(ref.enzyme_id, ref.event_ordinal) for ref in group.contributors] == [
+        ("AanI", 0), ("PsiI", 0)
+    ]
+    for occurrence in duplicate.occurrences:
+        event = occurrence.double_strand_events[0]
+        assert event.enzyme_id == occurrence.enzyme_id
+        assert event.occurrence_id == occurrence.occurrence_id
+        assert event.orientation == occurrence.orientation
+        assert event.activity_assessment == "not_evaluated"
 
 
 def test_bcgi_has_two_deterministically_ordered_dsb_events() -> None:
@@ -152,14 +200,38 @@ def test_all_curated_nickases_forward_and_reverse(
     assert forward.double_strand_events == reverse.double_strand_events == ()
 
 
-def test_motif_longer_than_molecule_is_not_scanned_even_for_circular() -> None:
-    assert not _analyze("GAA", ["EcoRI"], topology="circular").occurrences
+def test_motif_longer_than_molecule_is_not_scanned_and_has_grouped_typed_limitation() -> None:
+    view = catalog_authority.require()
+    duplicate = view.by_id["EcoRI"].model_copy(update={
+        "enzyme_id": "EcoRI-duplicate", "canonical_name": "EcoRI duplicate",
+    })
+    result = analyze_sequence(
+        sequence="GAA", topology="circular", catalog=view,
+        records=(view.by_id["EcoRI"], duplicate),
+    )
+    assert not result.occurrences
+    assert [item.code for item in result.limitations] == ["recognition_motif_longer_than_molecule"]
+    limitation = result.limitations[0]
+    assert limitation.motif == "GAATTC"
+    assert limitation.molecule_length_bp == 3
+    assert limitation.motif_length_bp == 6
+    assert limitation.enzyme_ids == ("EcoRI", "EcoRI-duplicate")
+    assert all(
+        summary.limitations == ("recognition_motif_longer_than_molecule",)
+        for summary in result.enzyme_summaries
+    )
+
+    origin = _analyze("AATTCCCG", ["EcoRI"], topology="circular")
+    assert len(origin.occurrences) == 1
+    assert not origin.limitations
 
 
 def test_invalid_dna_and_output_bound_fail_closed() -> None:
-    for invalid in ("GA ATTC", "GA-ATTC", "", "GZATTC"):
+    for invalid in ("GA ATTC", "GA-ATTC", "", "GZATTC", "GAUUUC"):
         with pytest.raises(InvalidDNAError):
             _analyze(invalid, ["EcoRI"])
+    with pytest.raises(InvalidDNAError):
+        normalize_dna("augu")
     with pytest.raises(AnalysisLimitError):
         _analyze("GATC" * 25_001, ["DpnI"])
 
@@ -174,67 +246,185 @@ def test_analysis_is_deterministic_and_cache_separates_authorities() -> None:
     assert first.result_sha256 == hashlib.sha256(first.canonical_result_bytes()).hexdigest()
 
 
+def test_enzyme_summaries_are_complete_ordered_and_separate_counts() -> None:
+    result = _analyze("GATCGAATTC", ["MboI", "EcoRI"])
+    assert [summary.enzyme_id for summary in result.enzyme_summaries] == ["EcoRI", "MboI"]
+    assert result.enzyme_summaries[0].model_dump() == {
+        "enzyme_id": "EcoRI", "canonical_name": "EcoRI",
+        "analysis_capability": "digest_simulation", "cleavage_status": "known_double_strand",
+        "recognition_site_count_definite": 1, "recognition_site_count_possible": 0,
+        "double_strand_break_count": 1, "nick_count": 0, "limitations": (),
+    }
+
+
+def test_resource_admission_rejects_before_scan_or_excess_models(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    view = catalog_authority.require()
+    scanned = 0
+    original_scan = module._scan
+
+    def counted_scan(*args, **kwargs):
+        nonlocal scanned
+        scanned += 1
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(module, "_scan", counted_scan)
+    with pytest.raises(AnalysisLimitError, match="scan work"):
+        analyze_sequence(
+            sequence="A" * (module.MAX_SCAN_WORK // 292 + 1), topology="linear",
+            catalog=view, records=view.by_capability["digest_simulation"],
+        )
+    assert scanned == 0
+
+    monkeypatch.setattr(module, "MAX_RETURNED_OCCURRENCES", 2)
+    constructed = 0
+    original_occurrence = module.AnalysisOccurrence
+
+    class CountedOccurrence(original_occurrence):
+        def __init__(self, **data):
+            nonlocal constructed
+            constructed += 1
+            super().__init__(**data)
+
+    monkeypatch.setattr(module, "AnalysisOccurrence", CountedOccurrence)
+    with pytest.raises(AnalysisLimitError, match="occurrences"):
+        _analyze("GATCGATCGATC", ["DpnI"])
+    assert constructed == 0
+
+    monkeypatch.setattr(module, "MAX_RETURNED_OCCURRENCES", 25_000)
+    monkeypatch.setattr(module, "MAX_RETURNED_EVENTS", 1)
+    event_models = 0
+    original_event = module.DoubleStrandEvent
+
+    class CountedEvent(original_event):
+        def __init__(self, **data):
+            nonlocal event_models
+            event_models += 1
+            super().__init__(**data)
+
+    monkeypatch.setattr(module, "DoubleStrandEvent", CountedEvent)
+    with pytest.raises(AnalysisLimitError, match="events"):
+        _analyze("A" * 12 + "CGAAAAAAATGC" + "A" * 30, ["BcgI"])
+    assert event_models == 0
+
+
 def test_every_geometry_ready_enzyme_matches_independent_biopython_cut_oracle() -> None:
     from Bio.Restriction import AllEnzymes
-    from Bio.Seq import Seq
 
     view = catalog_authority.require()
     oracle = {str(enzyme): enzyme for enzyme in AllEnzymes}
     records = view.by_capability["digest_simulation"]
     assert len(records) == 754
+    choices = {
+        "A": "A", "C": "C", "G": "G", "T": "T", "R": "AG", "Y": "CT",
+        "S": "CG", "W": "AT", "K": "GT", "M": "AC", "B": "CGT",
+        "D": "AGT", "H": "ACT", "V": "ACG", "N": "ACGT",
+    }
+    complement = str.maketrans("ACGTRYSWKMBDHVN", "TGCAYRSWMKVHDBN")
+
+    def independent_rc(value: str) -> str:
+        return value.translate(complement)[::-1]
+
+    def exact_matches(sequence: str, pattern: str) -> list[int]:
+        allowed = {
+            "A": "A", "C": "C", "G": "G", "T": "T", "R": "AG", "Y": "CT",
+            "S": "CG", "W": "AT", "K": "GT", "M": "AC", "B": "CGT",
+            "D": "AGT", "H": "ACT", "V": "ACG", "N": "ACGT",
+        }
+        return [
+            start for start in range(len(sequence) - len(pattern) + 1)
+            if all(base in allowed[symbol] for base, symbol in zip(
+                sequence[start:start + len(pattern)], pattern, strict=True
+            ))
+        ]
+
+    def isolated_fixture(enzyme_id: str, motif: str, orientation: str) -> tuple[str, int]:
+        reverse_pattern = independent_rc(motif)
+        seed = int(hashlib.sha256(f"{enzyme_id}:{orientation}".encode()).hexdigest(), 16)
+        for attempt in range(260):
+            concrete_state = seed + attempt
+            concrete_bases = []
+            for symbol in motif:
+                concrete_state = (2862933555777941757 * concrete_state + 3037000493) & ((1 << 64) - 1)
+                options = choices[symbol]
+                concrete_bases.append(options[concrete_state % len(options)])
+            concrete = "".join(concrete_bases)
+            if orientation == "reverse":
+                concrete = independent_rc(concrete)
+            opposite = reverse_pattern if orientation == "forward" else motif
+            if motif != reverse_pattern and exact_matches(concrete, opposite):
+                continue
+            if attempt < 4:
+                flank = ["ACGT"[attempt]] * 100
+            else:
+                state = seed + attempt - 4
+                flank = []
+                for _ in range(100):
+                    state = (6364136223846793005 * state + 1442695040888963407) & ((1 << 64) - 1)
+                    flank.append("ACGT"[(state >> 32) & 3])
+            sequence = "".join(flank) + concrete + "".join(reversed(flank))
+            forward_starts = exact_matches(sequence, motif)
+            reverse_starts = [] if motif == reverse_pattern else exact_matches(sequence, reverse_pattern)
+            expected = [100]
+            if orientation == "forward" and forward_starts == expected and not reverse_starts:
+                return sequence, 100
+            if orientation == "reverse" and reverse_starts == expected and not forward_starts:
+                return sequence, 100
+        raise AssertionError(f"could not isolate {enzyme_id} {orientation} fixture")
+
     for record in records:
-        concrete = "".join({
-            "A": "A", "C": "C", "G": "G", "T": "T", "R": "A", "Y": "C",
-            "S": "C", "W": "A", "K": "G", "M": "A", "B": "C", "D": "A",
-            "H": "A", "V": "A", "N": "A",
-        }[base] for base in record.recognition.site_iupac)
-        filler = next(
-            base for base in "ACGT"
-            if not analyze_sequence(
-                sequence=base * 220, topology="linear", catalog=view, records=(record,),
-                include_possible_sites=False,
-            ).occurrences
-        )
-        sequence = filler * 100 + concrete + filler * 100
-        result = analyze_sequence(
-            sequence=sequence, topology="linear", catalog=view, records=(record,),
-            include_possible_sites=False,
-        )
-        actual_top = sorted(
-            event.top_boundary_unwrapped
-            for occurrence in result.occurrences
-            for event in occurrence.double_strand_events
-            if event.status == "complete"
-        )
-        actual_bottom = sorted(
-            event.bottom_boundary_unwrapped
-            for occurrence in result.occurrences
-            for event in occurrence.double_strand_events
-            if event.status == "complete"
-        )
         enzyme = oracle[record.enzyme_id]
-        expected_top = sorted(position - 1 for position in enzyme.search(Seq(sequence), linear=True))
-        expected_pairs = []
         source_pairs = [(enzyme.fst5, enzyme.fst3)]
         if enzyme.scd5 is not None and enzyme.scd3 is not None:
             source_pairs.append((enzyme.scd5, enzyme.scd3))
-        for occurrence in result.occurrences:
+        lanes = ["forward"] if record.recognition.palindromic else ["forward", "reverse"]
+        for lane in lanes:
+            sequence, site_start = isolated_fixture(
+                record.enzyme_id, str(enzyme.site), lane
+            )
+            result = analyze_sequence(
+                sequence=sequence, topology="linear", catalog=view, records=(record,),
+                include_possible_sites=False,
+            )
+            assert [(occurrence.site_start, occurrence.orientation) for occurrence in result.occurrences] == [
+                (site_start, lane)
+            ], (record.enzyme_id, lane)
+            expected_pairs = []
             for top_source, bottom_source_from_end in source_pairs:
-                if occurrence.orientation == "forward":
+                if lane == "forward":
                     expected_pairs.append((
-                        occurrence.site_start + top_source,
-                        occurrence.site_start + record.recognition.length_bp + bottom_source_from_end,
+                        site_start + top_source,
+                        site_start + len(str(enzyme.site)) + bottom_source_from_end,
                     ))
                 else:
                     expected_pairs.append((
-                        occurrence.site_start - bottom_source_from_end,
-                        occurrence.site_start + record.recognition.length_bp - top_source,
+                        site_start - bottom_source_from_end,
+                        site_start + len(str(enzyme.site)) - top_source,
                     ))
-        actual_pairs = [
-            (event.top_boundary_unwrapped, event.bottom_boundary_unwrapped)
-            for occurrence in result.occurrences
-            for event in occurrence.double_strand_events
-            if event.status == "complete"
-        ]
-        assert sorted(set(actual_top)) == sorted(set(expected_top)), record.enzyme_id
-        assert sorted(actual_pairs) == sorted(expected_pairs), record.enzyme_id
+            actual_pairs = [
+                (event.top_boundary_unwrapped, event.bottom_boundary_unwrapped)
+                for occurrence in result.occurrences
+                for event in occurrence.double_strand_events
+                if event.status == "complete"
+            ]
+            assert sorted(actual_pairs) == sorted(expected_pairs), (record.enzyme_id, lane)
+
+
+def test_independent_circular_winding_and_target_derived_overhang_oracle() -> None:
+    from Bio.Restriction import BsaI
+
+    sequence = "GGTCTCAA"
+    top_unwrapped = BsaI.fst5
+    bottom_unwrapped = len(str(BsaI.site)) + BsaI.fst3
+    occurrence = _occ(_analyze(sequence, ["BsaI"], topology="circular"), "BsaI")[0]
+    event = occurrence.double_strand_events[0]
+    assert (
+        event.top_boundary_unwrapped, event.bottom_boundary_unwrapped,
+        event.top_boundary, event.bottom_boundary,
+        event.top_winding, event.bottom_winding,
+    ) == (top_unwrapped, bottom_unwrapped, top_unwrapped % len(sequence),
+          bottom_unwrapped % len(sequence), top_unwrapped // len(sequence),
+          bottom_unwrapped // len(sequence))
+    interval = "".join(sequence[index % len(sequence)] for index in range(top_unwrapped, bottom_unwrapped))
+    assert event.overhang_sequence_5to3 == interval

@@ -1,26 +1,44 @@
-"""Exact IUPAC-aware restriction-site and strand-cleavage analysis."""
+"""Exact, bounded, IUPAC-aware restriction-site and cleavage analysis."""
 from __future__ import annotations
 
 import hashlib
 import threading
 from collections import OrderedDict, defaultdict
+from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Literal, Sequence
 
 import rfc8785
 from pydantic import BaseModel, ConfigDict
 
-from services.restriction_catalog import CatalogView, RestrictionRecord
+from services.restriction_catalog import (
+    ANALYSIS_CACHE_MAXIMUM_ENTRIES,
+    ANALYSIS_EVENT_MAXIMUM,
+    ANALYSIS_EXPLICIT_ENZYME_MAXIMUM,
+    ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH,
+    ANALYSIS_OCCURRENCE_MAXIMUM,
+    ANALYSIS_PATTERN_MAXIMUM,
+    ANALYSIS_REGION_MAXIMUM,
+    ANALYSIS_RESPONSE_MAXIMUM_BYTES,
+    ANALYSIS_SCAN_WORK_MAXIMUM,
+    CatalogView,
+    RestrictionRecord,
+)
 
 ALGORITHM_ID = "bms-restriction-analysis"
-ALGORITHM_VERSION = "2.0.0"
-MAX_INLINE_SEQUENCE_LENGTH = 5_000_000
-MAX_EXPLICIT_ENZYME_IDS = 256
-MAX_REGIONS = 128
-MAX_RETURNED_OCCURRENCES = 25_000
-MAX_RETURNED_EVENTS = 50_000
-MAX_RESPONSE_BYTES = 32 * 1024 * 1024
-CACHE_MAX_ENTRIES = 32
+ALGORITHM_VERSION = "2.1.0"
+MAX_INLINE_SEQUENCE_LENGTH = ANALYSIS_INLINE_SEQUENCE_MAX_LENGTH
+MAX_EXPLICIT_ENZYME_IDS = ANALYSIS_EXPLICIT_ENZYME_MAXIMUM
+MAX_REGIONS = ANALYSIS_REGION_MAXIMUM
+MAX_ANALYSIS_PATTERNS = ANALYSIS_PATTERN_MAXIMUM
+MAX_SCAN_WORK = ANALYSIS_SCAN_WORK_MAXIMUM
+MAX_RETURNED_OCCURRENCES = ANALYSIS_OCCURRENCE_MAXIMUM
+MAX_RETURNED_EVENTS = ANALYSIS_EVENT_MAXIMUM
+MAX_RESPONSE_BYTES = ANALYSIS_RESPONSE_MAXIMUM_BYTES
+CACHE_MAX_ENTRIES = ANALYSIS_CACHE_MAXIMUM_ENTRIES
+_RESPONSE_BASE_BUDGET = 64 * 1024
+_RESPONSE_OCCURRENCE_BUDGET = 2_048
+_RESPONSE_EVENT_BUDGET = 1_024
 
 _IUPAC = MappingProxyType(
     {
@@ -53,8 +71,19 @@ class AnalysisCounts(StrictModel):
     nick_count: int
 
 
+class AnalysisLimitation(StrictModel):
+    code: Literal["recognition_motif_longer_than_molecule"]
+    motif: str
+    motif_length_bp: int
+    molecule_length_bp: int
+    enzyme_ids: tuple[str, ...]
+
+
 class DoubleStrandEvent(StrictModel):
+    enzyme_id: str
+    occurrence_id: str
     event_ordinal: int
+    orientation: Literal["forward", "reverse"]
     status: Literal["complete", "geometry_out_of_bounds"]
     top_boundary: int | None
     bottom_boundary: int | None
@@ -65,18 +94,25 @@ class DoubleStrandEvent(StrictModel):
     overhang_kind: Literal["blunt", "five_prime", "three_prime"]
     overhang_length_nt: int
     overhang_sequence_5to3: str | None
+    overhang_source_strand: Literal["top", "bottom"] | None
+    protruding_strand: Literal["top", "bottom"] | None
     contributor_group_id: str
     activity_assessment: Literal["not_evaluated"] = "not_evaluated"
     methylation_context: Literal["unknown"] = "unknown"
 
 
 class NickEvent(StrictModel):
+    enzyme_id: str
+    occurrence_id: str
     event_ordinal: int
+    orientation: Literal["forward", "reverse"]
     strand: Literal["top", "bottom"]
     status: Literal["complete", "geometry_out_of_bounds"]
     boundary: int | None
     boundary_unwrapped: int
     winding: int
+    contributor_group_id: str
+    activity_assessment: Literal["not_evaluated"] = "not_evaluated"
 
 
 class AnalysisOccurrence(StrictModel):
@@ -99,9 +135,42 @@ class AnalysisOccurrence(StrictModel):
     methylation_context: Literal["unknown"] = "unknown"
 
 
+class EnzymeSummary(StrictModel):
+    enzyme_id: str
+    canonical_name: str
+    analysis_capability: Literal["digest_simulation", "nicking_analysis", "recognition_only"]
+    cleavage_status: Literal["known_double_strand", "known_single_strand_nick", "unknown"]
+    recognition_site_count_definite: int
+    recognition_site_count_possible: int
+    double_strand_break_count: int
+    nick_count: int
+    limitations: tuple[str, ...]
+
+
+class CleavageContributor(StrictModel):
+    enzyme_id: str
+    occurrence_id: str
+    event_ordinal: int
+    orientation: Literal["forward", "reverse"]
+
+
+class GroupedCleavage(StrictModel):
+    contributor_group_id: str
+    status: Literal["complete", "geometry_out_of_bounds"]
+    top_boundary: int | None
+    bottom_boundary: int | None
+    overhang_kind: Literal["blunt", "five_prime", "three_prime"]
+    overhang_length_nt: int
+    overhang_sequence_5to3: str | None
+    overhang_source_strand: Literal["top", "bottom"] | None
+    protruding_strand: Literal["top", "bottom"] | None
+    contributing_enzyme_ids: tuple[str, ...]
+    contributors: tuple[CleavageContributor, ...]
+
+
 class AnalysisResult(StrictModel):
     algorithm_id: Literal["bms-restriction-analysis"] = ALGORITHM_ID
-    algorithm_version: Literal["2.0.0"] = ALGORITHM_VERSION
+    algorithm_version: Literal["2.1.0"] = ALGORITHM_VERSION
     source_sha256: str
     topology: Literal["linear", "circular"]
     sequence_length: int
@@ -109,9 +178,11 @@ class AnalysisResult(StrictModel):
     scope_sha256: str
     region_policy_sha256: str
     counts: AnalysisCounts
+    enzyme_summaries: tuple[EnzymeSummary, ...]
     occurrences: tuple[AnalysisOccurrence, ...]
+    grouped_cleavages: tuple[GroupedCleavage, ...]
     warnings: tuple[str, ...]
-    limitations: tuple[str, ...]
+    limitations: tuple[AnalysisLimitation, ...]
     result_sha256: str
 
     def canonical_result_bytes(self) -> bytes:
@@ -133,9 +204,9 @@ def reverse_complement(sequence: str) -> str:
 def normalize_dna(sequence: str) -> str:
     if not isinstance(sequence, str) or not sequence or any(c.isspace() for c in sequence):
         raise InvalidDNAError("DNA must be nonempty and contain no whitespace")
-    normalized = sequence.upper().replace("U", "T")
+    normalized = sequence.upper()
     if any(character not in _IUPAC for character in normalized):
-        raise InvalidDNAError("DNA contains a symbol outside the IUPAC alphabet")
+        raise InvalidDNAError("DNA contains a symbol outside the DNA IUPAC alphabet")
     return normalized
 
 
@@ -159,21 +230,20 @@ def _certainty(window: str, motif: tuple[frozenset[str], ...]) -> str | None:
     return "definite" if definite else "possible"
 
 
-def _scan(sequence: str, pattern: str, topology: str) -> tuple[tuple[int, str, str], ...]:
+def _scan(sequence: str, pattern: str, topology: str) -> Iterator[tuple[int, str, str]]:
+    """Yield matches incrementally; a circular molecule never reuses physical bases."""
     length = len(sequence)
     motif = _compile(pattern)
     width = len(motif)
     if width > length:
-        return ()
+        return
     starts = length if topology == "circular" else length - width + 1
     extended = sequence + sequence[: width - 1] if topology == "circular" and width > 1 else sequence
-    matches = []
     for start in range(starts):
         window = extended[start:start + width]
         certainty = _certainty(window, motif)
         if certainty is not None:
-            matches.append((start, certainty, window))
-    return tuple(matches)
+            yield start, certainty, window
 
 
 def _segments(start: int, end: int, length: int, topology: str) -> tuple[tuple[int, int], ...]:
@@ -191,14 +261,28 @@ def _target_slice(sequence: str, start: int, end: int, topology: str) -> str:
     return "".join(sequence[index % length] for index in range(start, end))
 
 
-def _group_id(source_sha: str, topology: str, top: int, bottom: int) -> str:
-    identity = {"source_sha256": source_sha, "topology": topology, "top": top, "bottom": bottom}
+def _group_id(source_sha: str, topology: str, top: int, bottom: int, length: int) -> str:
+    physical_top = top % length if topology == "circular" else top
+    physical_bottom = bottom % length if topology == "circular" else bottom
+    identity = {
+        "source_sha256": source_sha, "topology": topology,
+        "top_boundary": physical_top, "bottom_boundary": physical_bottom,
+    }
+    return "sha256:" + hashlib.sha256(rfc8785.dumps(identity)).hexdigest()
+
+
+def _nick_group_id(source_sha: str, topology: str, strand: str, boundary: int, length: int) -> str:
+    physical = boundary % length if topology == "circular" else boundary
+    identity = {
+        "source_sha256": source_sha, "topology": topology,
+        "strand": strand, "boundary": physical,
+    }
     return "sha256:" + hashlib.sha256(rfc8785.dumps(identity)).hexdigest()
 
 
 def _dsb_events(
     sequence: str, topology: str, source_sha: str, record: RestrictionRecord,
-    start: int, orientation: str, certainty: str,
+    start: int, orientation: str, certainty: str, occurrence_id: str,
 ) -> tuple[tuple[DoubleStrandEvent, ...], tuple[str, ...]]:
     length = len(sequence)
     width = record.recognition.length_bp
@@ -216,31 +300,41 @@ def _dsb_events(
             limitations.add("geometry_out_of_bounds")
         delta = bottom - top
         kind = "blunt" if delta == 0 else "five_prime" if delta > 0 else "three_prime"
-        overhang = None
-        if complete and certainty == "definite":
-            bases = _target_slice(sequence, min(top, bottom), max(top, bottom), topology)
-            overhang = reverse_complement(bases) if orientation == "reverse" else bases
-        events.append(
-            DoubleStrandEvent(
-                event_ordinal=ordinal,
-                status="complete" if complete else "geometry_out_of_bounds",
-                top_boundary=top % length if topology == "circular" else top if complete else None,
-                bottom_boundary=bottom % length if topology == "circular" else bottom if complete else None,
-                top_boundary_unwrapped=top,
-                bottom_boundary_unwrapped=bottom,
-                top_winding=top // length if topology == "circular" else 0,
-                bottom_winding=bottom // length if topology == "circular" else 0,
-                overhang_kind=kind,
-                overhang_length_nt=abs(delta),
-                overhang_sequence_5to3=overhang,
-                contributor_group_id=_group_id(source_sha, topology, top, bottom),
-            )
-        )
+        source_strand: Literal["top", "bottom"] | None = None
+        overhang: str | None = None
+        if delta > 0:
+            source_strand = "top"
+            if complete and certainty == "definite":
+                overhang = _target_slice(sequence, top, bottom, topology)
+        elif delta < 0:
+            source_strand = "bottom"
+            if complete and certainty == "definite":
+                overhang = reverse_complement(_target_slice(sequence, bottom, top, topology))
+        events.append(DoubleStrandEvent(
+            enzyme_id=record.enzyme_id,
+            occurrence_id=occurrence_id,
+            event_ordinal=ordinal,
+            orientation=orientation,
+            status="complete" if complete else "geometry_out_of_bounds",
+            top_boundary=top % length if topology == "circular" else top if complete else None,
+            bottom_boundary=bottom % length if topology == "circular" else bottom if complete else None,
+            top_boundary_unwrapped=top,
+            bottom_boundary_unwrapped=bottom,
+            top_winding=top // length if topology == "circular" else 0,
+            bottom_winding=bottom // length if topology == "circular" else 0,
+            overhang_kind=kind,
+            overhang_length_nt=abs(delta),
+            overhang_sequence_5to3=overhang,
+            overhang_source_strand=source_strand,
+            protruding_strand=source_strand,
+            contributor_group_id=_group_id(source_sha, topology, top, bottom, length),
+        ))
     return tuple(events), tuple(sorted(limitations))
 
 
 def _nick_events(
-    topology: str, record: RestrictionRecord, start: int, orientation: str, length: int
+    topology: str, source_sha: str, record: RestrictionRecord, start: int,
+    orientation: str, length: int, occurrence_id: str,
 ) -> tuple[tuple[NickEvent, ...], tuple[str, ...]]:
     nick = record.cleavage.nick
     if nick is None:
@@ -254,12 +348,16 @@ def _nick_events(
     complete = topology == "circular" or 0 <= boundary <= length
     return (
         (NickEvent(
+            enzyme_id=record.enzyme_id,
+            occurrence_id=occurrence_id,
             event_ordinal=0,
+            orientation=orientation,
             strand=strand,
             status="complete" if complete else "geometry_out_of_bounds",
             boundary=boundary % length if topology == "circular" else boundary if complete else None,
             boundary_unwrapped=boundary,
             winding=boundary // length if topology == "circular" else 0,
+            contributor_group_id=_nick_group_id(source_sha, topology, strand, boundary, length),
         ),),
         () if complete else ("geometry_out_of_bounds",),
     )
@@ -267,6 +365,18 @@ def _nick_events(
 
 def _region_contains(start: int, regions: tuple[tuple[int, int], ...]) -> bool:
     return not regions or any(region_start <= start < region_end for region_start, region_end in regions)
+
+
+def _event_cardinality(record: RestrictionRecord) -> int:
+    if record.cleavage.status == "known_double_strand":
+        return len(record.cleavage.events)
+    if record.cleavage.status == "known_single_strand_nick":
+        return 1
+    return 0
+
+
+def _analysis_pattern_count(records: Sequence[RestrictionRecord]) -> int:
+    return len({pattern for record in records for pattern in record.recognition.site_alternatives_iupac})
 
 
 def analyze_sequence(
@@ -291,20 +401,51 @@ def analyze_sequence(
     if any(a[1] > b[0] for a, b in zip(ordered_regions, ordered_regions[1:])):
         raise InvalidDNAError("analysis regions overlap")
 
+    selected = {record.enzyme_id: record for record in records}
+    pattern_count = _analysis_pattern_count(tuple(selected.values()))
+    if pattern_count > MAX_ANALYSIS_PATTERNS:
+        raise AnalysisLimitError("pattern count exceeds analysis limit")
+    scan_work = len(normalized) * pattern_count
+    if scan_work > MAX_SCAN_WORK:
+        raise AnalysisLimitError("scan work exceeds analysis limit")
+
     source_sha = hashlib.sha256(normalized.encode("ascii")).hexdigest()
-    record_ids = tuple(sorted({record.enzyme_id for record in records}))
+    record_ids = tuple(sorted(selected))
     scope_sha = hashlib.sha256(rfc8785.dumps({"enzyme_ids": record_ids})).hexdigest()
-    region_sha = hashlib.sha256(rfc8785.dumps({"regions": ordered_regions, "include_possible_sites": include_possible_sites})).hexdigest()
-    cache_key = (source_sha, topology, catalog.content_sha256, scope_sha, region_sha, ALGORITHM_VERSION)
+    region_sha = hashlib.sha256(rfc8785.dumps({
+        "regions": ordered_regions, "include_possible_sites": include_possible_sites,
+    })).hexdigest()
+    cache_key = tuple(str(item) for item in (
+        source_sha, topology, catalog.content_sha256, scope_sha, region_sha, ALGORITHM_VERSION,
+        MAX_RETURNED_OCCURRENCES, MAX_RETURNED_EVENTS, MAX_RESPONSE_BYTES, MAX_SCAN_WORK,
+    ))
     with _cache_lock:
         cached = _cache.get(cache_key)
         if cached is not None:
             _cache.move_to_end(cache_key)
             return cached
 
-    selected = {record.enzyme_id: record for record in records}
+    long_motifs: dict[str, set[str]] = defaultdict(set)
+    for record in selected.values():
+        for motif in record.recognition.site_alternatives_iupac:
+            if len(motif) > len(normalized):
+                long_motifs[motif].add(record.enzyme_id)
+    typed_limitations = tuple(
+        AnalysisLimitation(
+            code="recognition_motif_longer_than_molecule",
+            motif=motif,
+            motif_length_bp=len(motif),
+            molecule_length_bp=len(normalized),
+            enzyme_ids=tuple(sorted(enzyme_ids, key=str.casefold)),
+        )
+        for motif, enzyme_ids in sorted(long_motifs.items())
+    )
+    long_limited_enzymes = {enzyme_id for ids in long_motifs.values() for enzyme_id in ids}
+
     scan_jobs: dict[str, list[tuple[RestrictionRecord, str]]] = defaultdict(list)
     for record in selected.values():
+        if record.enzyme_id in long_limited_enzymes:
+            continue
         for pattern in record.recognition.site_alternatives_iupac:
             scan_jobs[pattern].append((record, "forward"))
         if not record.recognition.palindromic:
@@ -313,17 +454,31 @@ def analyze_sequence(
 
     raw_occurrences: list[tuple[RestrictionRecord, int, str, str, str, str]] = []
     seen: set[tuple[str, int, str]] = set()
+    event_count = 0
+    encoded_budget = _RESPONSE_BASE_BUDGET
     for pattern, consumers in scan_jobs.items():
         for start, certainty, window in _scan(normalized, pattern, topology):
-            if certainty == "possible" and not include_possible_sites or not _region_contains(start, ordered_regions):
+            if (certainty == "possible" and not include_possible_sites) or not _region_contains(start, ordered_regions):
                 continue
             for record, orientation in consumers:
                 key = (record.enzyme_id, start, orientation)
-                if key not in seen:
-                    seen.add(key)
-                    raw_occurrences.append((record, start, orientation, certainty, window, pattern))
-            if len(raw_occurrences) > MAX_RETURNED_OCCURRENCES:
-                raise AnalysisLimitError("returned occurrences exceed analysis limit")
+                if key in seen:
+                    continue
+                next_events = _event_cardinality(record)
+                if len(raw_occurrences) >= MAX_RETURNED_OCCURRENCES:
+                    raise AnalysisLimitError("returned occurrences exceed analysis limit")
+                if event_count + next_events > MAX_RETURNED_EVENTS:
+                    raise AnalysisLimitError("returned events exceed analysis limit")
+                next_budget = (
+                    encoded_budget + _RESPONSE_OCCURRENCE_BUDGET
+                    + next_events * _RESPONSE_EVENT_BUDGET
+                )
+                if next_budget > MAX_RESPONSE_BYTES:
+                    raise AnalysisLimitError("analysis response exceeds byte limit")
+                seen.add(key)
+                raw_occurrences.append((record, start, orientation, certainty, window, pattern))
+                event_count += next_events
+                encoded_budget = next_budget
 
     raw_occurrences.sort(key=lambda row: (
         row[0].canonical_name.casefold(), row[0].enzyme_id.casefold(), row[1],
@@ -331,33 +486,32 @@ def analyze_sequence(
     ))
     per_enzyme: dict[str, int] = defaultdict(int)
     occurrences: list[AnalysisOccurrence] = []
-    event_count = 0
     for record, start, orientation, certainty, window, pattern in raw_occurrences:
         ordinal = per_enzyme[record.enzyme_id]
         per_enzyme[record.enzyme_id] += 1
+        occurrence_identity = {
+            "enzyme_id": record.enzyme_id, "site_start": start,
+            "orientation": orientation, "ordinal": ordinal,
+        }
+        occurrence_id = "sha256:" + hashlib.sha256(rfc8785.dumps(occurrence_identity)).hexdigest()
         limitations: set[str] = set()
         dsb: tuple[DoubleStrandEvent, ...] = ()
         nicks: tuple[NickEvent, ...] = ()
         if record.cleavage.status == "known_double_strand":
             dsb, event_limitations = _dsb_events(
-                normalized, topology, source_sha, record, start, orientation, certainty
+                normalized, topology, source_sha, record, start, orientation, certainty, occurrence_id,
             )
             limitations.update(event_limitations)
         elif record.cleavage.status == "known_single_strand_nick":
-            nicks, nick_limitations = _nick_events(topology, record, start, orientation, len(normalized))
+            nicks, nick_limitations = _nick_events(
+                topology, source_sha, record, start, orientation, len(normalized), occurrence_id,
+            )
             limitations.update(nick_limitations)
         else:
             limitations.add("enzyme_geometry_unavailable")
-        event_count += len(dsb) + len(nicks)
-        if event_count > MAX_RETURNED_EVENTS:
-            raise AnalysisLimitError("returned events exceed analysis limit")
         end = start + len(pattern)
-        occurrence_identity = {
-            "enzyme_id": record.enzyme_id, "site_start": start,
-            "orientation": orientation, "ordinal": ordinal,
-        }
         occurrences.append(AnalysisOccurrence(
-            occurrence_id="sha256:" + hashlib.sha256(rfc8785.dumps(occurrence_identity)).hexdigest(),
+            occurrence_id=occurrence_id,
             occurrence_ordinal=ordinal,
             enzyme_id=record.enzyme_id,
             canonical_name=record.canonical_name,
@@ -384,12 +538,74 @@ def analyze_sequence(
         nick.status == "complete" and row.certainty == "definite"
         for row in occurrences for nick in row.nicks
     )
+
+    occurrence_by_enzyme: dict[str, list[AnalysisOccurrence]] = defaultdict(list)
+    for occurrence in occurrences:
+        occurrence_by_enzyme[occurrence.enzyme_id].append(occurrence)
+    enzyme_summaries = []
+    for record in sorted(selected.values(), key=lambda row: (
+        row.canonical_name.casefold(), row.enzyme_id.casefold(),
+    )):
+        rows = occurrence_by_enzyme[record.enzyme_id]
+        summary_limitations = {item for row in rows for item in row.limitations}
+        if record.enzyme_id in long_limited_enzymes:
+            summary_limitations.add("recognition_motif_longer_than_molecule")
+        enzyme_summaries.append(EnzymeSummary(
+            enzyme_id=record.enzyme_id,
+            canonical_name=record.canonical_name,
+            analysis_capability=record.analysis_capability,
+            cleavage_status=record.cleavage.status,
+            recognition_site_count_definite=sum(row.certainty == "definite" for row in rows),
+            recognition_site_count_possible=sum(row.certainty == "possible" for row in rows),
+            double_strand_break_count=sum(
+                event.status == "complete" and row.certainty == "definite"
+                for row in rows for event in row.double_strand_events
+            ),
+            nick_count=sum(
+                nick.status == "complete" and row.certainty == "definite"
+                for row in rows for nick in row.nicks
+            ),
+            limitations=tuple(sorted(summary_limitations)),
+        ))
+
+    groups: dict[str, list[DoubleStrandEvent]] = defaultdict(list)
+    for row in occurrences:
+        for event in row.double_strand_events:
+            groups[event.contributor_group_id].append(event)
+    grouped_cleavages = []
+    for group_id, events in sorted(groups.items()):
+        ordered_events = sorted(events, key=lambda event: (
+            event.enzyme_id.casefold(), event.occurrence_id, event.event_ordinal,
+        ))
+        first = ordered_events[0]
+        grouped_cleavages.append(GroupedCleavage(
+            contributor_group_id=group_id,
+            status=first.status,
+            top_boundary=first.top_boundary,
+            bottom_boundary=first.bottom_boundary,
+            overhang_kind=first.overhang_kind,
+            overhang_length_nt=first.overhang_length_nt,
+            overhang_sequence_5to3=first.overhang_sequence_5to3,
+            overhang_source_strand=first.overhang_source_strand,
+            protruding_strand=first.protruding_strand,
+            contributing_enzyme_ids=tuple(sorted({event.enzyme_id for event in ordered_events}, key=str.casefold)),
+            contributors=tuple(CleavageContributor(
+                enzyme_id=event.enzyme_id,
+                occurrence_id=event.occurrence_id,
+                event_ordinal=event.event_ordinal,
+                orientation=event.orientation,
+            ) for event in ordered_events),
+        ))
+
     warnings = ("possible_recognition_sites_present",) if possible else ()
-    limitations = tuple(sorted({item for row in occurrences for item in row.limitations}))
     payload = {
-        "algorithm_id": ALGORITHM_ID, "algorithm_version": ALGORITHM_VERSION,
-        "source_sha256": source_sha, "topology": topology, "sequence_length": len(normalized),
-        "catalog_sha256": catalog.content_sha256, "scope_sha256": scope_sha,
+        "algorithm_id": ALGORITHM_ID,
+        "algorithm_version": ALGORITHM_VERSION,
+        "source_sha256": source_sha,
+        "topology": topology,
+        "sequence_length": len(normalized),
+        "catalog_sha256": catalog.content_sha256,
+        "scope_sha256": scope_sha,
         "region_policy_sha256": region_sha,
         "counts": AnalysisCounts(
             recognition_site_count_definite=definite,
@@ -397,7 +613,11 @@ def analyze_sequence(
             double_strand_break_count=complete_dsb,
             nick_count=complete_nicks,
         ),
-        "occurrences": tuple(occurrences), "warnings": warnings, "limitations": limitations,
+        "enzyme_summaries": tuple(enzyme_summaries),
+        "occurrences": tuple(occurrences),
+        "grouped_cleavages": tuple(grouped_cleavages),
+        "warnings": warnings,
+        "limitations": typed_limitations,
     }
     digest_payload = AnalysisResult.model_validate({**payload, "result_sha256": "0" * 64})
     result = AnalysisResult.model_validate({
@@ -416,7 +636,8 @@ def analyze_sequence(
 
 __all__ = [
     "ALGORITHM_ID", "ALGORITHM_VERSION", "AnalysisLimitError", "AnalysisResult",
-    "InvalidDNAError", "MAX_EXPLICIT_ENZYME_IDS", "MAX_INLINE_SEQUENCE_LENGTH",
-    "MAX_REGIONS", "MAX_RESPONSE_BYTES", "MAX_RETURNED_EVENTS",
-    "MAX_RETURNED_OCCURRENCES", "analyze_sequence", "normalize_dna", "reverse_complement",
+    "CACHE_MAX_ENTRIES", "InvalidDNAError", "MAX_ANALYSIS_PATTERNS",
+    "MAX_EXPLICIT_ENZYME_IDS", "MAX_INLINE_SEQUENCE_LENGTH", "MAX_REGIONS",
+    "MAX_RESPONSE_BYTES", "MAX_RETURNED_EVENTS", "MAX_RETURNED_OCCURRENCES",
+    "MAX_SCAN_WORK", "analyze_sequence", "normalize_dna", "reverse_complement",
 ]

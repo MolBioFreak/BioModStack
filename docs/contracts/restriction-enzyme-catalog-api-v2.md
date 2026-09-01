@@ -18,6 +18,10 @@ All scientific coordinates are **zero-based interbase boundaries** on the canoni
 
 Using unwrapped boundaries on the common reference axis, `delta = bottom - top`: zero is blunt, positive is a 5-prime overhang of `delta` nucleotides, and negative is a 3-prime overhang of `abs(delta)` nucleotides. No midpoint cut may be synthesized.
 
+Overhang sequence is derived only after the orientation transform, on that common axis. For `delta > 0`, it is the top/reference interval `[top, bottom]` in 5-prime-to-3-prime order and the protruding strand is `top`. For `delta < 0`, it is the reverse complement of reference interval `[bottom, top]` in 5-prime-to-3-prime order and the protruding strand is `bottom`. Motif orientation never reverse-complements a 5-prime overhang by itself. Circular slicing retains signed unwrapped boundaries and winding.
+
+A circular recognition motif longer than the molecule is unsupported because matching it would reuse physical base pairs. It yields zero occurrences and a deterministic `recognition_motif_longer_than_molecule` limitation grouped by motif with the affected enzyme IDs. Ordinary origin-spanning matches remain supported when motif length is at most molecule length.
+
 ## Catalog capabilities
 
 The frozen base source is Biopython 1.87 / REBASE EMBOSS release 404 (2024): 1,088 source records, of which 754 are double-strand geometry-ready and 334 are recognition-only. The release adds four separately reviewed official-REBASE nickase receipts, for 1,092 discoverable/selectable records total. Capability is record-specific:
@@ -44,3 +48,5 @@ The server must reload and verify both immutable authorities and rerun simulatio
 ## Determinism and updates
 
 Catalog and manifest bytes are RFC 8785/JCS canonical JSON. Each record, catalog, and manifest digest omits only its own digest field from the canonical preimage. Generated wall-clock time is deliberately omitted (`null`) under `omitted_for_deterministic_release_bytes`; Git history records publication chronology. Updates are reviewed source changes, generated twice to exact-byte equality, and never fetched or activated at runtime.
+
+Analysis results include ordered per-enzyme summaries, complete enzyme/occurrence/event identities on raw cleavage evidence, and an explicit ordered grouped-cleavage projection with all contributor references. These fields, typed limitations, and resource-policy identities are inside the RFC 8785 result hash. Readiness and OpenAPI publish sequence, explicit-enzyme, region, pattern, scan-work, occurrence, event, response-byte, and cache bounds. Admission is incremental and fail-closed; final serialization is a backstop rather than the first resource gate.

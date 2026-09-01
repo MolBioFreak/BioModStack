@@ -55,9 +55,12 @@ def test_catalog_page_publishes_exact_receipt_bounds_and_historical_notice() -> 
         "analysis_inline_sequence_max_length": 5_000_000,
         "analysis_explicit_enzyme_maximum": 256,
         "analysis_region_maximum": 128,
+        "analysis_pattern_maximum": 619,
+        "analysis_scan_work_maximum": 100_000_000,
         "analysis_occurrence_maximum": 25_000,
         "analysis_event_maximum": 50_000,
         "analysis_response_maximum_bytes": 32 * 1024 * 1024,
+        "analysis_cache_maximum_entries": 32,
     }
     assert body["catalog"]["analysis_enabled"] is True
     assert body["catalog"]["source_year"] == 2024
@@ -555,3 +558,54 @@ def test_analyze_binds_exact_immutable_revision_and_rejects_stale_digest() -> No
     stale = client.post("/api/molbio/restriction/analyze", json=request)
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "source_revision_digest_mismatch"
+
+
+def test_analyze_rejects_u_without_normalizing_source_receipt_or_request_hash() -> None:
+    client = _client(_authority())
+    inline = _inline_request()
+    inline["source"]["dna"] = "GAUUUC"
+    rejected = client.post("/api/molbio/restriction/analyze", json=inline)
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "invalid_dna"
+
+    from types import SimpleNamespace
+
+    sequence = "GAUUUC"
+    digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+    document = SimpleNamespace(id="sequence-u", name="saved-u")
+    revision = SimpleNamespace(
+        id="revision-u", document_id="sequence-u", revision_number=1,
+        content_sha256=digest, content_length=len(sequence),
+        snapshot={"sequence_type": "dna", "sequence": sequence, "is_circular": False},
+    )
+
+    class Session:
+        async def get(self, model, identity):
+            return document if identity == document.id else revision if identity == revision.id else None
+
+    request = _inline_request()
+    request["source"] = {
+        "kind": "molecular_revision", "sequence_id": document.id,
+        "revision_id": revision.id, "expected_content_sha256": digest,
+    }
+    stored = _client(_authority(), Session()).post("/api/molbio/restriction/analyze", json=request)
+    assert stored.status_code == 422
+    assert stored.json()["detail"]["code"] == "invalid_dna"
+
+
+def test_analyze_openapi_response_is_strict_and_publishes_all_resource_bounds() -> None:
+    client = _client(_authority())
+    document = client.app.openapi()
+    schemas = document["components"]["schemas"]
+    assert schemas["AnalysisResponse"]["additionalProperties"] is False
+    assert schemas["AnalysisResult"]["additionalProperties"] is False
+    assert schemas["DoubleStrandEvent"]["additionalProperties"] is False
+    bounds = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]["bounds"]
+    assert set(bounds) == {
+        "default_limit", "maximum_limit", "query_max_length",
+        "analysis_inline_sequence_max_length", "analysis_explicit_enzyme_maximum",
+        "analysis_region_maximum", "analysis_pattern_maximum",
+        "analysis_scan_work_maximum", "analysis_occurrence_maximum",
+        "analysis_event_maximum", "analysis_cache_maximum_entries",
+        "analysis_response_maximum_bytes",
+    }
