@@ -1268,11 +1268,30 @@ def _strict_json_equal(left: object, right: object) -> bool:
     return left == right
 
 
+def _reject_duplicate_json_members(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, member in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON member")
+        value[key] = member
+    return value
+
+
+def _reject_non_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
 def _load_json_value(raw: object, expected_type: type, label: str) -> object:
     if not isinstance(raw, str):
         raise ValueError(f"invalid {label} JSON storage")
 
-    value = json.loads(raw)
+    value = json.loads(
+        raw,
+        object_pairs_hook=_reject_duplicate_json_members,
+        parse_constant=_reject_non_json_constant,
+    )
     if type(value) is not expected_type:
         raise ValueError(f"invalid {label} JSON shape")
     return value
