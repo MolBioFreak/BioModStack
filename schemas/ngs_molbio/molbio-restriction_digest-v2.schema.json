@@ -1,0 +1,77 @@
+{
+  "$id": "bms.operation-parameters.molbio.restriction_digest.v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "molbio.restriction_digest operation v2",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sequence_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": ["sequence_id", "revision_id", "content_sha256"]
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "catalog_id": {"const": "biopython-rebase-404-bms-v1"},
+        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": ["catalog_id", "content_sha256"]
+    },
+    "enzyme_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "simulation_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm_id": {"const": "bms-restriction-digest"},
+        "algorithm_version": {"const": "1"},
+        "topology": {"enum": ["linear", "circular"]},
+        "recognition_certainty": {"const": "definite_only"},
+        "unknown_geometry": {"const": "reject"},
+        "linear_out_of_bounds": {"const": "reject"},
+        "overlapping_geometry": {"const": "reject_non_identical"},
+        "circular_coordinates": {"const": "modulo_with_unwrapped_derivation"}
+      },
+      "required": ["algorithm_id", "algorithm_version", "topology", "recognition_certainty", "unknown_geometry", "linear_out_of_bounds", "overlapping_geometry", "circular_coordinates"]
+    },
+    "result_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "simulation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "required": ["request_sha256", "simulation_sha256"]
+    },
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 255},
+    "persistence_mode": {"enum": ["operation_only", "operation_and_fragments"]},
+    "fragment_name_prefix": {
+      "oneOf": [
+        {"type": "string", "minLength": 1, "maxLength": 128},
+        {"type": "null"}
+      ]
+    }
+  },
+  "required": ["source", "catalog", "enzyme_ids", "simulation_policy", "result_binding", "idempotency_key", "persistence_mode", "fragment_name_prefix"],
+  "x-bms-authority-state": "new_write_authority_contract_frozen_runtime_not_yet_implemented",
+  "x-bms-coordinate-contract": "docs/contracts/restriction-enzyme-catalog-api-v2.md",
+  "x-bms-predecessor": {
+    "schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
+    "status": "legacy_inexact_read_compatibility_only",
+    "new_writes_forbidden": true
+  },
+  "x-bms-browser-authority-forbidden": ["site", "cut_index", "chemistry", "recognition", "cleavage"],
+  "x-bms-unknown-fields": "reject_before_preparation"
+}

@@ -951,12 +951,18 @@
       "capability_kind": "domain_operation",
       "capability_version": "1",
       "classified_parameter_keys": [
-        "enzymes",
-        "source_revision_id"
+        "catalog",
+        "enzyme_ids",
+        "fragment_name_prefix",
+        "idempotency_key",
+        "persistence_mode",
+        "result_binding",
+        "simulation_policy",
+        "source"
       ],
       "entrypoint_owner": null,
-      "exposure_state": "internal",
-      "inventory_sha256": "26d508181cc138a0da6cf013d1af863ac074c54239636ec7b2f68abe2bd47aa3",
+      "exposure_state": "disabled",
+      "inventory_sha256": "a4b1d98c6cd7b6aed7cafdca1974b5189f95f627952f7e33d6a5fdf34ca329f8",
       "label": "Restriction Digest",
       "launch_mode": "domain_operation",
       "materializer_owner": null,
@@ -964,61 +970,60 @@
         "id": "molbio.restriction_digest",
         "kind": "domain_operation",
         "native_request_compatibility": "requires_unimplemented_revision_materializer",
-        "source": "POST /api/molbio/digest"
+        "source": "POST /api/molbio/restriction/digests"
       },
       "observed_parameter_keys": [
-        "enzymes",
-        "is_circular",
-        "name",
-        "new_name",
-        "save",
-        "sequence",
-        "sequence_id",
-        "sequence_type",
-        "source_revision_id"
+        "catalog",
+        "enzyme_ids",
+        "fragment_name_prefix",
+        "idempotency_key",
+        "persistence_mode",
+        "result_binding",
+        "simulation_policy",
+        "source"
       ],
-      "parameter_schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
-      "parameter_schema_sha256": "e797b571d5008e72f0f0833a8ba617a0876b48ef571e7ff636c3496e8217ba29",
+      "parameter_schema_id": "bms.operation-parameters.molbio.restriction_digest.v2",
+      "parameter_schema_sha256": "2a1b5f9027343c620190e76b9ad3a467ca4ba6d4aa29fd7f7179502e1418717f",
       "parity_ledger": [
         {
-          "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
+          "evidence": "The v2 immutable source/catalog/enzyme-ID contract is frozen; v1 is legacy/inexact read compatibility only.",
           "gate": "installed_inventory",
           "state": "pass"
         },
         {
-          "evidence": "Closed schema bytes and digest are registered. Unknown fields reject.",
+          "evidence": "Closed v2 schema bytes and digest are registered; caller-supplied site, cut_index, and chemistry are forbidden.",
           "gate": "global_schema",
           "state": "pass"
         },
         {
-          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "evidence": "Phase 0 freezes authority only; browser cutover is not implemented.",
           "gate": "browser_controls",
-          "state": "partial"
+          "state": "missing"
         },
         {
-          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "evidence": "Phase 0 freezes authority only; v2 submission and discovery are not implemented.",
           "gate": "agent_parity",
           "state": "missing"
         },
         {
-          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "evidence": "Exact v2 result persistence is not implemented in Phase 0.",
           "gate": "persistence",
-          "state": "partial"
+          "state": "missing"
         },
         {
-          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "evidence": "The v2 route and digest runtime are intentionally absent in Phase 0.",
           "gate": "execution",
-          "state": "partial"
+          "state": "missing"
         },
         {
-          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "evidence": "The v2 runtime provenance receipt is specified but not implemented in Phase 0.",
           "gate": "receipt",
           "state": "missing"
         },
         {
-          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "evidence": "The v2 result surface is not implemented in Phase 0.",
           "gate": "global_result_experience",
-          "state": "partial"
+          "state": "missing"
         },
         {
           "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
@@ -1026,7 +1031,7 @@
           "state": "not_applicable"
         },
         {
-          "evidence": "No authorized Development acceptance has been run for this frozen contract.",
+          "evidence": "No Development runtime acceptance is permitted for the Phase 0 contract-only slice.",
           "gate": "live_agreement",
           "state": "missing"
         }
@@ -1041,18 +1046,9 @@
         "bms.molbio.molecular-operation.v1"
       ],
       "scientific_role": "analysis",
-      "server_owned_parameter_keys": [
-        "new_name",
-        "save"
-      ],
-      "submission_owner": "routers.molbio_ops.digest",
-      "unclassified_parameter_keys": [
-        "is_circular",
-        "name",
-        "sequence",
-        "sequence_id",
-        "sequence_type"
-      ],
+      "server_owned_parameter_keys": [],
+      "submission_owner": null,
+      "unclassified_parameter_keys": [],
       "unsupported_parameter_keys": [],
       "viewer_destination": "/molbio?operation_id={operation_id}"
     },
@@ -2909,7 +2905,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "418462578651de93d8fc441c9868d69fc2b830141ae3467e4d8cf33ed6355d73",
+  "content_sha256": "0576955f99fd949829e3074542b652502aa54cfc6aae115dc10a5646f71b61fd",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2935,7 +2931,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "cc522f21bf32414da361f651d01d505141c891975766c4f785ca437e87ef47ae",
+  "schema_registry_sha256": "2f0f5ae5f453611ed0963ddac85a4c13c10991b854f98da01466ad2ab8bb61d1",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

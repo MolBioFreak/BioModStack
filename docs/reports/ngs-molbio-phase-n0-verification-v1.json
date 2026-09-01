@@ -1,7 +1,7 @@
 {
   "baseline_commit": "d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
   "baseline_tree": "f89094ba373e3dd8fa181fd17d942e54a6f0f63e",
-  "content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
+  "content_sha256": "9ae7d1de53a8f1969e577a3a2f6c06e0181b9d170bcdc2cdcfdb567a7d898d13",
   "environment": {
     "git": "git version 2.34.1",
     "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
@@ -241,6 +241,11 @@
       "size_bytes": 2586
     },
     {
+      "path": "schemas/ngs_molbio/molbio-restriction_digest-v2.schema.json",
+      "sha256": "2a1b5f9027343c620190e76b9ad3a467ca4ba6d4aa29fd7f7179502e1418717f",
+      "size_bytes": 3264
+    },
+    {
       "path": "schemas/ngs_molbio/molbio-sequence-alignment-v1.schema.json",
       "sha256": "e6788fc379087bb8f8540df5b0f11f859d85b9af3307deb1f6d4533e335e83a3",
       "size_bytes": 3522
@@ -456,7 +461,7 @@
       "size_bytes": 21576
     }
   ],
-  "payload_fingerprint_sha256": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
+  "payload_fingerprint_sha256": "d7321a13d420c5c8f9f6a4c94edd084d7a89206319e9f677d113bedaa265abd3",
   "result": {
     "adapters": 27,
     "capabilities": 21,
