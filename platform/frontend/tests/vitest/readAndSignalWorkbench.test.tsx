@@ -679,42 +679,19 @@ afterEach(async () => {
 });
 
 describe('ReadAndSignalWorkbench governed behavior', () => {
-    it('provides a draggable and keyboard-accessible vertical resize separator', async () => {
-        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
+    it('keeps a compact fixed-width panel with diagnostics closed on first use', async () => {
         await renderWorkbench({ viewerSession: null });
         await settlePromises();
 
         const panel = container.querySelector('[data-signal-workbench-panel]') as HTMLElement | null;
-        const separator = container.querySelector('[role="separator"][aria-orientation="vertical"]') as HTMLElement | null;
+        const diagnostics = container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null;
         expect(panel).not.toBeNull();
-        expect(separator).not.toBeNull();
-        const initialWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
-
-        await act(async () => {
-            separator?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 600 }));
-            window.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 520 }));
-            window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 520 }));
-        });
-        const draggedWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
-        expect(draggedWidth).toBeGreaterThan(initialWidth);
-
-        await act(async () => {
-            separator?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
-        });
-        const keyboardWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
-        expect(keyboardWidth).toBeLessThan(draggedWidth);
-
-        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
-        await act(async () => { window.dispatchEvent(new Event('resize')); });
-        const viewportBoundWidth = Number.parseFloat(panel?.style.getPropertyValue('--signal-workbench-width') || '0');
-        expect(viewportBoundWidth).toBe(704);
-        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
-        expect(separator?.getAttribute('aria-valuemax')).toBe('704');
-
-        Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1366 });
-        await act(async () => { window.dispatchEvent(new Event('resize')); });
-        expect(separator?.getAttribute('aria-valuenow')).toBe('704');
-        expect(separator?.getAttribute('aria-valuemax')).toBe('1046');
+        expect(panel?.className).toContain('lg:w-[560px]');
+        expect(container.querySelector('[role="separator"]')).toBeNull();
+        expect(diagnostics).not.toBeNull();
+        expect(diagnostics?.open).toBe(false);
+        expect(container.textContent).toContain('Read and signal');
+        expect(container.textContent).not.toContain('IGV remains the alignment authority.');
     });
 
     it('loads a bounded searchable read list with provenance-labelled filter presets inside its own scroll owner', async () => {
@@ -1290,8 +1267,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             }),
         });
         await waitUntil(() => expect(container.textContent).toContain('BLOW5 blow5-persisted'));
-        await act(async () => button('Show provenance').click());
-
+        expect((container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null)?.open).toBe(false);
         expect(container.textContent).toContain('"raw_representation_id": "blow5-persisted"');
         expect(container.textContent).not.toContain('"raw_representation_id": "blow5-newer"');
     });
@@ -1360,7 +1336,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         expect(apiMocks.fetchMapping).not.toHaveBeenCalledWith(newerMapping.mapping_job_id);
 
         await act(async () => {
-            button('Inspect raw waveform').click();
+            button('Load waveform').click();
             await Promise.resolve();
         });
         await settlePromises();
@@ -1406,7 +1382,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             }),
         });
         await act(async () => {
-            button('Inspect raw waveform').click();
+            button('Load waveform').click();
             await Promise.resolve();
         });
         await settlePromises();
@@ -1416,7 +1392,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await settlePromises();
 
         expect(apiMocks.fetchRawWaveform).toHaveBeenCalledTimes(31);
-        expect(container.textContent).toContain('4 source samples');
+        expect(container.textContent).toContain('4 samples · 4 shown');
         expect(container.querySelector('[aria-label="Raw electrical signal waveform"]')).not.toBeNull();
     });
 
@@ -1858,8 +1834,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
         await waitUntil(() => expect(button('Open IGV').disabled).toBe(false));
         await act(async () => button('Open IGV').click());
-        await waitUntil(() => expect(button('Inspect reads')).not.toBeNull());
-        await act(async () => button('Inspect reads').click());
+        await waitUntil(() => expect(button('Reads')).not.toBeNull());
+        await act(async () => button('Reads').click());
         await waitUntil(() => expect(button('Open raw signal for read')).not.toBeNull());
 
         await act(async () => {
@@ -1893,7 +1869,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             },
         }));
 
-        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Authoritative job-scoped alignment session"]');
+        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Choose alignment"]');
         expect(sessionSelect).not.toBeNull();
         await act(async () => {
             const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
@@ -1975,11 +1951,11 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
         await waitUntil(() => expect(button('Open IGV').disabled).toBe(false));
         await act(async () => button('Open IGV').click());
-        await waitUntil(() => expect(button('Inspect reads')).not.toBeNull());
-        await act(async () => button('Inspect reads').click());
+        await waitUntil(() => expect(button('Reads')).not.toBeNull());
+        await act(async () => button('Reads').click());
         await waitUntil(() => expect(button('Open raw signal for read')).not.toBeNull());
 
-        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Authoritative job-scoped alignment session"]');
+        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Choose alignment"]');
         expect(sessionSelect).not.toBeNull();
         await act(async () => {
             React.startTransition(() => {
@@ -2294,7 +2270,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
 
         contextMocks.updateQueryParams.mockClear();
-        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Authoritative job-scoped alignment session"]');
+        const sessionSelect = container.querySelector<HTMLSelectElement>('select[title="Choose alignment"]');
         expect(sessionSelect).not.toBeNull();
         await act(async () => {
             const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
@@ -2429,7 +2405,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
 
         await waitUntil(() => expect(
-            container.querySelector<HTMLSelectElement>('select[title="Authoritative job-scoped alignment session"]')?.value,
+            container.querySelector<HTMLSelectElement>('select[title="Choose alignment"]')?.value,
         ).toBe(nonPrimarySession.session_id));
         await waitUntil(() => expect(input('Exact read ID').value).toBe('persisted-non-primary-read'));
         expect(contextMocks.updateQueryParams).not.toHaveBeenCalledWith({ viewer_session_id: null }, { replace: true });
@@ -2564,7 +2540,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             readInput.dispatchEvent(new Event('input', { bubbles: true }));
         });
         await act(async () => {
-            button('Inspect raw waveform').click();
+            button('Load waveform').click();
             await Promise.resolve();
         });
         await settlePromises();
@@ -2575,7 +2551,8 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             'blow5-indexed-1',
             'read-42',
         );
-        expect(container.textContent).toContain('Run run-1 generation 3');
+        expect(container.textContent).not.toContain('Run run-1 generation 3');
+        expect((container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null)?.open).toBe(false);
         expect(container.textContent).toContain('blow5-indexed-1');
         expect(container.querySelector('svg[aria-label="Raw electrical signal waveform"]')).not.toBeNull();
         expect(alignmentMocks.fetchRead).not.toHaveBeenCalled();
@@ -2608,9 +2585,9 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await renderWorkbench();
         await waitUntil(() => expect(container.textContent).toContain('approved_mapping_profile_required'));
 
-        expect(container.textContent).toContain('IGV remains the alignment authority.');
-        expect(container.textContent).toContain('igv');
-        expect(container.textContent).toContain('independent');
+        expect(container.textContent).not.toContain('IGV remains the alignment authority.');
+        expect((container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null)?.open).toBe(false);
+        expect(container.querySelector('details[data-signal-diagnostics]')?.textContent).toContain('igv');
         expect(container.textContent).toContain('signal_to_read_mapping_required');
         const pileupCapability = Array.from(container.querySelectorAll<HTMLElement>('[title]'))
             .find((candidate) => candidate.textContent?.includes('signal pileup'));
@@ -2757,7 +2734,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             'read-42',
             { contig: 'chr7', start: 401, end: 460 },
         );
-        expect(container.textContent).toContain('read-42 · - · MAPQ 60 · 21M');
+        expect(container.textContent).toContain('read-42 · chr7:510 · - · MAPQ 60');
 
         await act(async () => button('Locate read in IGV').click());
         expect(onNavigateIgv).toHaveBeenCalledWith('chr7', 510, 530, 'selected raw-signal read');
@@ -2785,7 +2762,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
             signal_state: expect.objectContaining({ mode: 'reference', view_job_id: 'view-ready-1' }),
         }));
 
-        await act(async () => button('Show provenance').click());
+        expect((container.querySelector('details[data-signal-diagnostics]') as HTMLDetailsElement | null)?.open).toBe(false);
         expect(container.textContent).toContain('"viewer_session_id": "viewer-session-1"');
         expect(container.textContent).toContain('"alignment_session_id": "alignment-session-1"');
         expect(container.textContent).toContain('"reference_revision_id": "reference-revision-7"');
@@ -2821,7 +2798,7 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         await settlePromises();
 
         expect(container.querySelector('iframe')).toBeNull();
-        expect(container.textContent).toContain('No ready bounded signal artifact.');
+        expect(container.textContent).toContain('Open Diagnostics to prepare an aligned signal view.');
         expect(apiMocks.fetchView).toHaveBeenCalledTimes(1);
         expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:bounded-signal-view');
     });
@@ -2840,17 +2817,17 @@ describe('ReadAndSignalWorkbench governed behavior', () => {
         });
 
         await renderWorkbench({ viewerSession: sessionA });
-        await waitUntil(() => expect(button('Inspect raw waveform').disabled).toBe(false));
+        await waitUntil(() => expect(button('Load waveform').disabled).toBe(false));
         await act(async () => {
-            button('Inspect raw waveform').click();
+            button('Load waveform').click();
             await Promise.resolve();
         });
-        await waitUntil(() => expect(container.textContent).toContain('4 source samples'));
+        await waitUntil(() => expect(container.textContent).toContain('4 samples · 4 shown'));
 
         await renderWorkbench({ viewerSession: sessionB });
         await settlePromises();
 
-        expect(container.textContent).not.toContain('4 source samples');
+        expect(container.textContent).not.toContain('4 samples · 4 shown');
         expect(container.querySelector('svg[aria-label="Raw electrical signal waveform"]')).toBeNull();
     });
 

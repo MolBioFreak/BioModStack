@@ -206,7 +206,7 @@ export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | und
     if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes <= 0) {
         return {
             autoLoad: false,
-            reason: 'Alignment size is unknown or invalid; full-source browser loading is disabled. A bounded presentation is required.',
+            reason: 'This BAM cannot be opened automatically. Load locus reads instead.',
         };
     }
     if (sizeBytes <= MAX_BROWSER_ALIGNMENT_BYTES) {
@@ -214,7 +214,7 @@ export function alignmentTrackAutoLoadDisposition(sizeBytes: number | null | und
     }
     return {
         autoLoad: false,
-        reason: `Alignment is ${(sizeBytes / 1_048_576).toFixed(1)} MiB; browser track loading is disabled. Use Inspect reads instead.`,
+        reason: 'This BAM is too large to open automatically. Load locus reads instead.',
     };
 }
 
@@ -230,7 +230,7 @@ export interface BrowserAlignmentTrackInput {
 
 export interface BrowserAlignmentTrackSource {
     kind: 'full' | 'preview' | 'locus';
-    name: 'Full alignment' | 'Primary-read preview' | 'Bounded full-source locus slice';
+    name: 'Reads' | 'Read preview' | 'Locus reads';
     bamUrl: string;
     baiUrl: string;
     byteSize: number;
@@ -250,7 +250,7 @@ export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackI
     };
     if (input.locusSlice) {
         return {
-            kind: 'locus', name: 'Bounded full-source locus slice', bamUrl: input.locusSlice.bam.url,
+            kind: 'locus', name: 'Locus reads', bamUrl: input.locusSlice.bam.url,
             baiUrl: input.locusSlice.index.url, byteSize: input.locusSlice.bam.size_bytes,
             selectedReadCount: input.locusSlice.selected_read_count,
             availableReadCount: input.locusSlice.overlapping_read_count,
@@ -259,14 +259,14 @@ export function resolveBrowserAlignmentTrackSource(input: BrowserAlignmentTrackI
     }
     if (alignmentTrackAutoLoadDisposition(input.alignmentSizeBytes).autoLoad) {
         return {
-            kind: 'full', name: 'Full alignment', bamUrl: input.alignmentUrl, baiUrl: input.alignmentIndexUrl,
+            kind: 'full', name: 'Reads', bamUrl: input.alignmentUrl, baiUrl: input.alignmentIndexUrl,
             byteSize: input.alignmentSizeBytes as number, selectedReadCount: null, availableReadCount: null,
             policyVersion: null, capped: false, fullSourceDownload,
         };
     }
     if (!input.presentation || input.presentation.job_id !== input.jobId || input.presentation.session_id !== input.sessionId) return null;
     return {
-        kind: 'preview', name: 'Primary-read preview', bamUrl: input.presentation.preview.bam.url,
+        kind: 'preview', name: 'Read preview', bamUrl: input.presentation.preview.bam.url,
         baiUrl: input.presentation.preview.index.url, byteSize: input.presentation.preview.bam.size_bytes,
         selectedReadCount: input.presentation.preview.selected_read_count,
         availableReadCount: input.presentation.source.primary_read_count,
@@ -295,7 +295,7 @@ export function buildAlignmentTrackConfig(
 export function buildFullSourceCoverageTrackConfig(presentation: AlignmentPresentation): Record<string, unknown> {
     return {
         id: 'ngs-full-source-primary-read-coverage',
-        name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph',
+        name: 'Read coverage', type: 'wig', format: 'bedgraph',
         url: presentation.coverage.artifact.url, autoscale: true, graphType: 'bar', height: 72,
     };
 }

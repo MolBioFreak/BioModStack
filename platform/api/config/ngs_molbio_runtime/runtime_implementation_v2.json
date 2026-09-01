@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "de9c089d81c688257663607e9b13f965c4864cc348484100e90afe9e5abf0f98",
+  "content_sha256": "a8159ce694d90208a3fc303055616a4936612f30a6150f4b03dd7482b295b239",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -799,8 +799,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "cbb4baf8bfb2eaf9c4e93a6c13833acbfdbf507941f75ef6001698bf205ace17",
-      "size_bytes": 328224
+      "sha256": "e104c13187614e909f1a216b67b9d56b1af97a90b62cb6ac9732bc8ec4563a28",
+      "size_bytes": 328506
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -849,8 +849,8 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/AlignmentPresentationStatus.tsx",
-      "sha256": "938d9909e3a20fc814c59f481b45f19a6500a3d92e9bee50011c0bf45300a683",
-      "size_bytes": 1940
+      "sha256": "6274a3623b38161f256729c6c2ab073cfb62a3d93242cb8717437bebfa00e730",
+      "size_bytes": 1072
     },
     {
       "path": "platform/frontend/src/components/ngs/NanoporeWorkflowChooser.tsx",
@@ -869,13 +869,13 @@
     },
     {
       "path": "platform/frontend/src/components/ngs/RawReadInspector.tsx",
-      "sha256": "5cbd021939738c5a1ff90561bb01f3ef49d988af6b489e69f879c294c6f6668e",
-      "size_bytes": 30206
+      "sha256": "9ffefd0fa3edea75e91b2d1a4369692856f115b408707086ed3d626f63abd606",
+      "size_bytes": 28583
     },
     {
       "path": "platform/frontend/src/components/ngs/ReadAndSignalWorkbench.tsx",
-      "sha256": "49711b5e546e8dab39409c7dab55a30d582f8b05a39d02f4f7eda06acb3b92f5",
-      "size_bytes": 84366
+      "sha256": "faf3efa96b7fa0a176601fd4c1b231164a881462ccc7fa23e666dceaaa1d89ed",
+      "size_bytes": 80648
     },
     {
       "path": "platform/frontend/src/components/ngs/ngsFullscreenOwner.ts",
@@ -929,8 +929,8 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentViewer.ts",
-      "sha256": "a399d6f0d2155b3b68a4898192ad3a416932803ca239c7d257e4bcdcbffe064a",
-      "size_bytes": 18164
+      "sha256": "ee17b8b8116ec3f1b18185ac5511039ade6333d0e687d7dd994220b3f0b740d5",
+      "size_bytes": 17975
     },
     {
       "path": "platform/frontend/src/lib/ngsResultRouting.ts",
@@ -954,8 +954,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "2089f5cc57fdf5cf149d5cdd3642810367b55d13376326578c2543007d826802",
-      "size_bytes": 34059
+      "sha256": "5423a6da2b151c78be716a500d57cafa4f0345c3eff59c2ee41ff68790e12023",
+      "size_bytes": 34217
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -964,8 +964,8 @@
     },
     {
       "path": "platform/frontend/tests/vitest/alignmentPresentationStatus.test.tsx",
-      "sha256": "75eafb170326394125c157218c7b43bf174b6dfed814a04403ec6941c01038f3",
-      "size_bytes": 1782
+      "sha256": "9d5d60b0e1dc8ba1d62aae1b092e0b7b3cd9b26b9296a2b4b0ec069792fe27ce",
+      "size_bytes": 2107
     },
     {
       "path": "platform/frontend/tests/vitest/ontSignalIdealComparison.test.tsx",
@@ -974,13 +974,13 @@
     },
     {
       "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
-      "sha256": "e32801e0e4746af9734e39d21fc10b85c91006db31f21de008737154aaa221b6",
-      "size_bytes": 139336
+      "sha256": "469a8cc189ff154530340fbbbc214bf8696b1ad2e2a846213fbf6432fb754f0a",
+      "size_bytes": 138074
     },
     {
       "path": "platform/frontend/tests/vitest/rawReadSortableWorkbench.test.tsx",
-      "sha256": "da92e4b06f2c5b94fe4b174ddd44c84cd607ac800fcf282161241ebb926504d4",
-      "size_bytes": 18261
+      "sha256": "dadb7be5589a071e66814f39633e2547e6a17a40e2b689724d065286f04d7bce",
+      "size_bytes": 18206
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "9bbabe20b9b8eca7aeda33bf33a3435a5277a877",
-  "successor_source_tree": "41489bcac9563f8adfb869236d7fef1d2fcf8089",
+  "successor_source_commit": "55a9efa0aad877a816fe7be8514e9a962a1ed317",
+  "successor_source_tree": "36c45d0e1d842d91e189f074ee6679bdca58fab1",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

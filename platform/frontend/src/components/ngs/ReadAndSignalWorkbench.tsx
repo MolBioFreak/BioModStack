@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
     DEFAULT_ONT_SIGNAL_RENDER_PARAMS,
@@ -48,18 +48,7 @@ import { GovernedRawSignalWaveform } from './RawReadInspector';
 import { OntSignalIdealComparison } from './OntSignalIdealComparison';
 
 const TERMINAL_STATES = new Set(['ready', 'failed', 'cancelled']);
-const MIN_SIGNAL_WORKBENCH_WIDTH = 320;
-const MIN_IGV_WORKSPACE_WIDTH = 320;
 type WorkbenchViewMode = OntSignalViewMode | 'raw_waveform' | 'ideal_comparison';
-
-function clampSignalWorkbenchWidth(width: number, viewportWidth = window.innerWidth): number {
-    const maximum = Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH);
-    return Math.min(maximum, Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, width));
-}
-
-function initialSignalWorkbenchWidth(): number {
-    return clampSignalWorkbenchWidth(Math.min(760, window.innerWidth * 0.56));
-}
 
 interface ReadAndSignalWorkbenchProps {
     datasetId: string;
@@ -182,53 +171,8 @@ export function ReadAndSignalWorkbench({
     const [renderParams, setRenderParams] = useState<OntSignalRenderParams>(DEFAULT_ONT_SIGNAL_RENDER_PARAMS);
     const [profileBaseShiftValue, setProfileBaseShiftValue] = useState(0);
     const [advancedOpen, setAdvancedOpen] = useState(false);
-    const [provenanceOpen, setProvenanceOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [panelWidth, setPanelWidth] = useState(initialSignalWorkbenchWidth);
-    const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-    const panelWidthRef = useRef(panelWidth);
-    const resizeCleanupRef = useRef<(() => void) | null>(null);
-
-    const updatePanelWidth = useCallback((nextWidth: number) => {
-        const bounded = clampSignalWorkbenchWidth(nextWidth);
-        panelWidthRef.current = bounded;
-        setPanelWidth(bounded);
-    }, []);
-
-    const beginPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        resizeCleanupRef.current?.();
-        const startX = event.clientX;
-        const startWidth = panelWidthRef.current;
-        const move = (moveEvent: PointerEvent) => updatePanelWidth(startWidth + startX - moveEvent.clientX);
-        const stop = () => {
-            window.removeEventListener('pointermove', move);
-            window.removeEventListener('pointerup', stop);
-            resizeCleanupRef.current = null;
-        };
-        resizeCleanupRef.current = stop;
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', stop);
-    }, [updatePanelWidth]);
-
-    const resizePanelByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
-        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-        event.preventDefault();
-        updatePanelWidth(panelWidthRef.current + (event.key === 'ArrowLeft' ? 32 : -32));
-    }, [updatePanelWidth]);
-
-    useEffect(() => {
-        const handleViewportResize = () => {
-            setViewportWidth(window.innerWidth);
-            updatePanelWidth(panelWidthRef.current);
-        };
-        window.addEventListener('resize', handleViewportResize);
-        return () => {
-            window.removeEventListener('resize', handleViewportResize);
-            resizeCleanupRef.current?.();
-        };
-    }, [updatePanelWidth]);
 
     const persistedReadMappingJobId = typeof viewerSession?.signal_state.read_mapping_job_id === 'string'
         ? viewerSession.signal_state.read_mapping_job_id
@@ -1037,43 +981,14 @@ export function ReadAndSignalWorkbench({
     return (
         <aside
             data-signal-workbench-panel
-            style={{ '--signal-workbench-width': `${panelWidth}px` } as CSSProperties}
-            className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[var(--signal-workbench-width)] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col"
+            className="absolute right-0 top-0 bottom-0 z-20 w-full lg:w-[560px] min-w-0 border-l border-[var(--border-primary)] bg-[var(--bg-secondary)]/98 shadow-2xl flex flex-col"
         >
-            <div
-                role="separator"
-                aria-label="Resize Read and Signal Workbench"
-                aria-orientation="vertical"
-                aria-valuemin={MIN_SIGNAL_WORKBENCH_WIDTH}
-                aria-valuemax={Math.max(MIN_SIGNAL_WORKBENCH_WIDTH, viewportWidth - MIN_IGV_WORKSPACE_WIDTH)}
-                aria-valuenow={Math.round(panelWidth)}
-                tabIndex={0}
-                onPointerDown={beginPanelResize}
-                onKeyDown={resizePanelByKeyboard}
-                className="absolute inset-y-0 -left-1 z-30 hidden w-2 cursor-col-resize touch-none items-center justify-center lg:flex focus:outline-none focus:ring-2 focus:ring-[var(--accent-primary)]"
-            >
-                <span className="h-12 w-0.5 rounded bg-[var(--border-primary)] hover:bg-[var(--accent-primary)]" />
-            </div>
             <header className="border-b border-[var(--border-primary)] px-3 py-2 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                    <div>
-                        <h2 className="text-sm font-semibold text-[var(--text-primary)]">Read and Signal Workbench</h2>
-                        <p className="text-[10px] text-[var(--text-secondary)]">Run <code>{runId}</code> generation {observedGeneration} · IGV remains the alignment authority. Raw waveform remains independent when alignment is unavailable.</p>
-                    </div>
+                    <h2 className="text-sm font-semibold text-[var(--text-primary)]">Read and signal</h2>
                     <button type="button" onClick={() => void persistSession()} disabled={busy || !viewerSession} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[11px] disabled:opacity-40">
                         Save session
                     </button>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-1 text-[10px]">
-                    {(['igv', 'raw_waveform', 'signal_to_read', 'signal_to_reference', 'signal_pileup'] as const).map((name) => {
-                        const capability = capabilities?.modes[name];
-                        return (
-                            <div key={name} title={capability?.reason_code || 'loading'} className="rounded border border-[var(--border-primary)] px-1.5 py-1">
-                                <div className="truncate text-[var(--text-secondary)]">{name.replaceAll('_', ' ')}</div>
-                                <span className={`inline-block rounded px-1 ${stateBadge(capability?.state || 'loading')}`}>{capability?.state || 'loading'}</span>
-                            </div>
-                        );
-                    })}
                 </div>
                 {error && <div role="alert" className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">{error}</div>}
             </header>
@@ -1081,7 +996,7 @@ export function ReadAndSignalWorkbench({
             <div data-signal-workbench-scroll onWheel={(event) => event.stopPropagation()} className="flex-1 min-h-0 overflow-y-scroll overscroll-contain [scrollbar-gutter:stable] p-3 space-y-3">
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">Shared read and locus</h3>
+                        <h3 className="text-xs font-semibold">Read and locus</h3>
                         <button type="button" onClick={() => void loadLocusReads()} disabled={busy || !alignmentSession?.ready} className="rounded border border-[var(--border-primary)] px-2 py-1 text-[10px] disabled:opacity-40">Reads in locus</button>
                     </div>
                     <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_1fr]">
@@ -1124,15 +1039,30 @@ export function ReadAndSignalWorkbench({
                     </details>
                     {selectedRead && (
                         <div className="rounded bg-[var(--bg-secondary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]">
-                            <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'} · {selectedRead.cigar || 'no CIGAR'} · {formatAlignmentReadSummary(selectedRead)} · model {compatibleSource?.basecall_model_id || 'unresolved'} · raw signal {capabilities?.modes.raw_waveform.state || 'loading'}
+                            <code className="text-[var(--text-primary)]">{selectedRead.read_id}</code> · {selectedRead.contig || 'unmapped'}:{selectedRead.start_1based ?? 'n/a'} · {selectedRead.strand} · MAPQ {selectedRead.mapq ?? 'n/a'}
                         </div>
                     )}
                 </section>
 
+                <details data-signal-diagnostics className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 text-[10px]">
+                    <summary className="cursor-pointer font-semibold text-[var(--text-secondary)]">Diagnostics</summary>
+                    <div className="mt-2 space-y-2">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-1">
+                            {(['igv', 'raw_waveform', 'signal_to_read', 'signal_to_reference', 'signal_pileup'] as const).map((name) => {
+                                const capability = capabilities?.modes[name];
+                                return (
+                                    <div key={name} title={capability?.reason_code || 'loading'} className="rounded border border-[var(--border-primary)] px-1.5 py-1">
+                                        <div className="truncate text-[var(--text-secondary)]">{name.replaceAll('_', ' ')}</div>
+                                        <span className={`inline-block rounded px-1 ${stateBadge(capability?.state || 'loading')}`}>{capability?.state || 'loading'}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-xs font-semibold">External move-BAM intake</h3>
-                        <span className="text-[10px] text-[var(--text-secondary)]">Server-governed candidates only</span>
+                        <h3 className="text-xs font-semibold">External move BAM</h3>
+                        <span className="text-[10px] text-[var(--text-secondary)]">Server candidates</span>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-[1fr_80px_auto] gap-1 text-[10px]">
                         <select
@@ -1246,6 +1176,25 @@ export function ReadAndSignalWorkbench({
                     <div className="text-[10px] text-[var(--text-secondary)] break-all">BLOW5 {activeRawRepresentationId || 'unresolved'} · move source {compatibleSource?.move_source_id || 'unresolved'} · profile {compatibleProfile?.mapping_profile_id || 'unresolved'} ({compatibleProfile?.name || 'no exact approved profile'}) · profile base shift {compatibleProfile?.base_shift_value ?? profileBaseShiftValue} · reference {referenceRevisionId || 'not bound'} · alignment {alignmentSession?.session_id || 'not bound'}</div>
                 </section>
 
+                        <details className="rounded border border-[var(--border-primary)] px-2 py-1">
+                            <summary className="cursor-pointer">Technical details</summary>
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 text-[9px] text-[var(--text-secondary)]">{JSON.stringify({
+                                viewer_session_id: viewerSession?.viewer_session_id || null,
+                                dataset_id: datasetId,
+                                run_id: runId,
+                                observed_generation: observedGeneration,
+                                alignment_session_id: alignmentSession?.session_id || null,
+                                reference_revision_id: referenceRevisionId,
+                                raw_representation_id: activeRawRepresentationId,
+                                move_source: compatibleSource,
+                                mapping_profile: compatibleProfile,
+                                mapping: mappingForMode,
+                                render: viewJob,
+                            }, null, 2)}</pre>
+                        </details>
+                    </div>
+                </details>
+
                 <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 space-y-2">
                     <div className="flex flex-wrap items-center gap-1">
                         {([
@@ -1327,28 +1276,10 @@ export function ReadAndSignalWorkbench({
                             className="h-[360px] w-full rounded border border-[var(--border-primary)] bg-white"
                         />
                     ) : (
-                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">No ready bounded signal artifact.</div>
+                        <div className="flex h-40 items-center justify-center rounded border border-dashed border-[var(--border-primary)] text-xs text-[var(--text-secondary)]">Open Diagnostics to prepare an aligned signal view.</div>
                     ))}
                 </section>
 
-                <section className="rounded border border-[var(--border-primary)] bg-[var(--bg-primary)]/40 p-2 text-[10px]">
-                    <button type="button" onClick={() => setProvenanceOpen((value) => !value)} className="w-full text-left font-semibold">{provenanceOpen ? 'Hide' : 'Show'} provenance</button>
-                    {provenanceOpen && (
-                        <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-[var(--bg-primary)] p-2 text-[9px] text-[var(--text-secondary)]">{JSON.stringify({
-                            viewer_session_id: viewerSession?.viewer_session_id || null,
-                            dataset_id: datasetId,
-                            run_id: runId,
-                            observed_generation: observedGeneration,
-                            alignment_session_id: alignmentSession?.session_id || null,
-                            reference_revision_id: referenceRevisionId,
-                            raw_representation_id: activeRawRepresentationId,
-                            move_source: compatibleSource,
-                            mapping_profile: compatibleProfile,
-                            mapping: mappingForMode,
-                            render: viewJob,
-                        }, null, 2)}</pre>
-                    )}
-                </section>
             </div>
         </aside>
     );
