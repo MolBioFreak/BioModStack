@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "2beed7507d26bb6cb5b73041da9b4618940d41acd38dfc4a7cd8bacb48394a3e",
+  "content_sha256": "f611e465e44094e46c99958c6b117ad4c36d17608584a683efa9eb57e3773fea",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -774,8 +774,8 @@
     },
     {
       "path": "platform/frontend/src/App.tsx",
-      "sha256": "5084688ab7b90829449fb232b9ea047065c95c8fb7cc05434e7073e0cec2551e",
-      "size_bytes": 6162
+      "sha256": "385c487854fdc5f5067401f98307e188779d44fda4bca5a68f540a9f80016af7",
+      "size_bytes": 6045
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
@@ -989,8 +989,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "53420a40f166c0cbf57ce5084a4a4fea3338c71305c4a354e2394e6bf3dab640",
-      "size_bytes": 3317
+      "sha256": "59837561a1f82383d8246be2046771077f6709bdf0a427ef5a260f0ecc890f2d",
+      "size_bytes": 3381
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "8c171f062306cfd01591018c158cb0a657e25b85",
-  "successor_source_tree": "6905780cf605f77f19ba153e6f9cb79114b30e54",
+  "successor_source_commit": "86d49b18d6daaeacee2c9f83c34b6dc2f1685115",
+  "successor_source_tree": "5775899daf654b8c56d8f62bdd08199f8e4ede0b",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
