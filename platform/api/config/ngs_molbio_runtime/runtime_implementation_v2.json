@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "be8507b5faf3d9f66079b2bb2e57afb71735f4524dc71fb997694ab357c6f524",
+  "content_sha256": "60d6d9b3a4ee3b1834804e5043ba6a3941347690ac925281c5e992e0dcbb329a",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -254,13 +254,13 @@
     },
     {
       "path": "platform/api/experiment_migrations.py",
-      "sha256": "8fb05eaf6701b1ac284467944b8f237dc2e96cfa2bf70fea15535fec9e7b8b54",
-      "size_bytes": 182957
+      "sha256": "f34cff0dfc95017e43d90fddd1d48df8469eb95d549df303e1e72a1fc9da6d4f",
+      "size_bytes": 187394
     },
     {
       "path": "platform/api/experiment_models.py",
-      "sha256": "b07976ccc6d1c2b7c0d964839cf4ace132b873cf7e6a99c56f64ba2f9311c036",
-      "size_bytes": 34291
+      "sha256": "269f4218a503f3bc716068363c3e0d790bd6314f7fec66a1cb47fd9a5d3194d8",
+      "size_bytes": 36156
     },
     {
       "path": "platform/api/experiment_operations.py",
@@ -269,8 +269,8 @@
     },
     {
       "path": "platform/api/experiment_services.py",
-      "sha256": "4144cb6a882018352786845487fb4eaf03f3a8bda3b64c56e8c0daa4717159f1",
-      "size_bytes": 271385
+      "sha256": "0b9c4f685bf5db76fbc84aa1c16bf72afa27ec90ec291204bbc09fe52328f222",
+      "size_bytes": 270472
     },
     {
       "path": "platform/api/main.py",
@@ -449,8 +449,8 @@
     },
     {
       "path": "platform/api/routers/project_manager.py",
-      "sha256": "49e04933d0d6f4ac167507340d03c9af7b9d5866f3d42c1678be4becf5fe7ba3",
-      "size_bytes": 134715
+      "sha256": "acf9423da40294a5d402569944273dbed9faa26186728eca0b9c38c20b62b0bc",
+      "size_bytes": 141269
     },
     {
       "path": "platform/api/routers/projects.py",
@@ -509,8 +509,8 @@
     },
     {
       "path": "platform/api/services/global_experiments/read_models.py",
-      "sha256": "1447736dfb0cf29bf3312f54e8250a956da805bc0e2595b3c18d2651176aabdf",
-      "size_bytes": 82422
+      "sha256": "31e42321ac9c78205296303d30fe9a46e4144ca78e88d0eeb1946f10c7648517",
+      "size_bytes": 85564
     },
     {
       "path": "platform/api/services/global_experiments/receipts.py",
@@ -659,8 +659,8 @@
     },
     {
       "path": "platform/api/services/protein_project_capabilities.py",
-      "sha256": "12d068e718cccdc0edf779043e7d299704d83b4dbf9e620df52dbdf3e68a0b03",
-      "size_bytes": 53155
+      "sha256": "e6ffa402b013f634c87db5da9f3e38aacddfc8034b488ae89c128fd3d565ebde",
+      "size_bytes": 61180
     },
     {
       "path": "platform/api/services/resource_usage_evidence.py",
@@ -899,8 +899,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/protein/ProteinProjectWorkspace.tsx",
-      "sha256": "df9ecf2c5d149ca42efd97e16b908cc6fa7ca4ace4ce64581257a2f61874e67b",
-      "size_bytes": 22462
+      "sha256": "e2aed7d95d25d8b12ed8f109ed686024e86104300e916bfac6b72166d80e38c3",
+      "size_bytes": 25117
     },
     {
       "path": "platform/frontend/src/index.css",
@@ -939,13 +939,13 @@
     },
     {
       "path": "platform/frontend/src/lib/projectManager.ts",
-      "sha256": "1391fe7c0fad8343840a08894329d6cd0c166a1520bb8099bfe05a74bdddee42",
-      "size_bytes": 109600
+      "sha256": "d5f44f1084bd9f514a6704afbe53e723eb8bb7d9062bf3c10fade037e5fe71cb",
+      "size_bytes": 122107
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "fb7dd95fabc176b5c1b90a88de99b55848011d540ebdaebec3ed802e58da6eb4",
-      "size_bytes": 64152
+      "sha256": "31792a7babf38b923b2f9cbd8633a2738b2e7f72a9ca6f08ed6d35fed71ccbfb",
+      "size_bytes": 64718
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentSession.test.ts",
@@ -989,8 +989,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "59837561a1f82383d8246be2046771077f6709bdf0a427ef5a260f0ecc890f2d",
-      "size_bytes": 3381
+      "sha256": "e7b5868e1a956bbfc0ce60532d0430f76c555cbbb7bdcb9f4df01c7dd15fe508",
+      "size_bytes": 3507
     },
     {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "d8185f3d1e63c7a09cd5cbfc19f603c2f58526e7",
-  "successor_source_tree": "10af8092dc183396ee239b6a0355561f9ab8642f",
+  "successor_source_commit": "4cb250bcf8bd8fabac471ecd7b543b37615482db",
+  "successor_source_tree": "a2e22b6c22e6ead923184a46afcc95b4f86f4083",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
