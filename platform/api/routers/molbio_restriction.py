@@ -11,7 +11,8 @@ import re
 import secrets
 import threading
 from collections.abc import Callable
-from typing import Annotated, Any, Coroutine, Literal, Union
+from dataclasses import dataclass
+from typing import Annotated, Any, Coroutine, Literal, Union, cast
 
 import rfc8785
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -89,12 +90,15 @@ class AnalysisTimeoutError(RuntimeError):
     pass
 
 
-async def _run_analysis(**kwargs: Any) -> AnalysisResult:
-    """Run CPU analysis in the bounded process-wide lane without blocking asyncio."""
+def _reserve_analysis_capacity() -> None:
     if not _analysis_capacity.acquire(blocking=False):
         raise AnalysisBusyError
+
+
+async def _run_capacity_owned(function: Callable[..., Any], **kwargs: Any) -> Any:
+    """Run one already-admitted worker and retain its slot until it really ends."""
     try:
-        future = _analysis_executor.submit(analyze_sequence, **kwargs)
+        future = _analysis_executor.submit(function, **kwargs)
     except BaseException:
         _analysis_capacity.release()
         raise
@@ -106,6 +110,12 @@ async def _run_analysis(**kwargs: Any) -> AnalysisResult:
         )
     except TimeoutError as exc:
         raise AnalysisTimeoutError from exc
+
+
+async def _run_analysis(**kwargs: Any) -> AnalysisResult:
+    """Compatibility helper for focused analysis-lane lifecycle tests."""
+    _reserve_analysis_capacity()
+    return await _run_capacity_owned(analyze_sequence, **kwargs)
 
 
 class CatalogRoute(APIRoute):
@@ -647,8 +657,52 @@ def _analysis_records(view: CatalogView, scope: AnalysisScope) -> tuple[Restrict
     )))
 
 
-async def _analysis_source(
-    source: AnalysisSource, session: AsyncSession
+@dataclass(frozen=True, slots=True)
+class _ResolvedRevisionSource:
+    document_id: str
+    document_name: str
+    revision_id: str
+    revision_number: int
+    stored_content_sha256: str
+    stored_content_length: int
+    sequence_type: str
+    sequence: str
+    is_circular: bool | None
+    topology: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CanonicalAnalysisOutput:
+    response: AnalysisResponse
+    canonical_bytes: bytes
+
+
+async def _resolve_revision_source(
+    source: MolecularRevisionSource, session: AsyncSession,
+) -> _ResolvedRevisionSource:
+    """Snapshot ORM-owned revision fields without sharing a Session with workers."""
+    document = await session.get(MolecularDocument, source.sequence_id)
+    revision = await session.get(MolecularRevision, source.revision_id)
+    if document is None or revision is None or revision.document_id != document.id:
+        raise _error(404, "source_revision_not_found", "molecular revision was not found")
+    snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+    return _ResolvedRevisionSource(
+        document_id=str(document.id),
+        document_name=str(document.name),
+        revision_id=str(revision.id),
+        revision_number=int(revision.revision_number),
+        stored_content_sha256=str(revision.content_sha256),
+        stored_content_length=int(revision.content_length),
+        sequence_type=str(snapshot.get("sequence_type") or ""),
+        sequence=str(snapshot.get("sequence") or ""),
+        is_circular=(snapshot.get("is_circular") if isinstance(snapshot.get("is_circular"), bool) else None),
+        topology=(snapshot.get("topology") if snapshot.get("topology") in {"linear", "circular"} else None),
+    )
+
+
+def _analysis_source(
+    source: AnalysisSource,
+    resolved_revision: _ResolvedRevisionSource | None,
 ) -> tuple[str, Literal["linear", "circular"], AnalysisSourceReceipt]:
     if isinstance(source, InlineDNASource):
         try:
@@ -662,51 +716,47 @@ async def _analysis_source(
             topology=source.topology,
         )
 
-    document = await session.get(MolecularDocument, source.sequence_id)
-    revision = await session.get(MolecularRevision, source.revision_id)
-    if document is None or revision is None or revision.document_id != document.id:
-        raise _error(404, "source_revision_not_found", "molecular revision was not found")
-    snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
-    if str(snapshot.get("sequence_type") or "").lower() != "dna":
+    if resolved_revision is None:
+        raise RuntimeError("resolved molecular revision is missing")
+    if resolved_revision.sequence_type.lower() != "dna":
         raise _error(422, "invalid_dna", "molecular revision is not DNA")
     try:
-        sequence = normalize_dna(str(snapshot.get("sequence") or ""))
+        sequence = normalize_dna(resolved_revision.sequence)
     except InvalidDNAError as exc:
         raise _error(422, "invalid_dna", "molecular revision DNA is invalid") from exc
     digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
     if (
-        revision.content_sha256 != source.expected_content_sha256
-        or digest != revision.content_sha256
-        or revision.content_length != len(sequence)
+        resolved_revision.stored_content_sha256 != source.expected_content_sha256
+        or digest != resolved_revision.stored_content_sha256
+        or resolved_revision.stored_content_length != len(sequence)
     ):
         raise _error(
             409, "source_revision_digest_mismatch",
             "molecular revision content digest or length does not match",
         )
     owned_topology: Literal["linear", "circular"] | None = None
-    if isinstance(snapshot.get("is_circular"), bool):
-        owned_topology = "circular" if snapshot["is_circular"] else "linear"
-    elif snapshot.get("topology") in {"linear", "circular"}:
-        owned_topology = snapshot["topology"]
+    if resolved_revision.is_circular is not None:
+        owned_topology = "circular" if resolved_revision.is_circular else "linear"
+    elif resolved_revision.topology in {"linear", "circular"}:
+        owned_topology = cast(Literal["linear", "circular"], resolved_revision.topology)
     topology = owned_topology or source.topology
     if topology is None or (owned_topology is not None and source.topology not in {None, owned_topology}):
         raise _error(422, "invalid_dna", "molecular revision topology authority is invalid")
     return sequence, topology, AnalysisSourceReceipt(
-        kind="molecular_revision", name=document.name, sequence_id=document.id,
-        revision_id=revision.id, revision_number=revision.revision_number,
-        content_sha256=digest, content_length=len(sequence), topology=topology,
+        kind="molecular_revision", name=resolved_revision.document_name,
+        sequence_id=resolved_revision.document_id, revision_id=resolved_revision.revision_id,
+        revision_number=resolved_revision.revision_number, content_sha256=digest,
+        content_length=len(sequence), topology=topology,
     )
 
 
-@router.post("/analyze", response_model=AnalysisResponse)
-async def analyze_restriction_sites(
-    payload: Annotated[
-        AnalysisRequest,
-        Body(openapi_examples={"inline_dna": {"summary": "Inline DNA", "value": _ANALYZE_EXAMPLE}}),
-    ],
-    authority: CatalogAuthority = Depends(get_catalog_authority),
-    molbio_session: AsyncSession = Depends(get_molbio_session),
-) -> AnalysisResponse:
+def _complete_analysis_pipeline(
+    *,
+    payload: AnalysisRequest,
+    authority: CatalogAuthority,
+    resolved_revision: _ResolvedRevisionSource | None,
+) -> _CanonicalAnalysisOutput:
+    """Own preprocessing, analysis, model authority, hashing, and final bytes."""
     view = _require_view(authority)
     if payload.catalog.catalog_id != view.catalog_id:
         raise _error(404, "catalog_not_found", "restriction catalog was not found")
@@ -717,7 +767,7 @@ async def analyze_restriction_sites(
             409, "product_evidence_unavailable",
             "approved product evidence is unavailable in Phase 2",
         )
-    sequence, topology, source_receipt = await _analysis_source(payload.source, molbio_session)
+    sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
     records = _analysis_records(view, payload.scope)
     normalized_request = payload.model_dump(mode="json", by_alias=True)
     normalized_request["source"] = {
@@ -726,7 +776,9 @@ async def analyze_restriction_sites(
     }
     if isinstance(payload.scope, ExplicitAnalysisScope):
         normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
-    normalized_request["regions"] = sorted(normalized_request["regions"], key=lambda row: (row["start"], row["end"]))
+    normalized_request["regions"] = sorted(
+        normalized_request["regions"], key=lambda row: (row["start"], row["end"]),
+    )
     policy_receipt = resource_policy_receipt()
     policy_sha256 = resource_policy_sha256(
         policy_receipt.model_dump(mode="json", by_alias=True)
@@ -735,23 +787,14 @@ async def analyze_restriction_sites(
         "request": normalized_request,
         "resource_policy_sha256": policy_sha256,
     })).hexdigest()
-    try:
-        analysis = await _run_analysis(
-            sequence=sequence,
-            topology=topology,
-            catalog=view,
-            records=records,
-            include_possible_sites=payload.include_possible_sites,
-            regions=tuple((region.start, region.end) for region in payload.regions),
-        )
-    except InvalidDNAError as exc:
-        raise _error(422, "invalid_dna", "DNA input or regions are invalid") from exc
-    except AnalysisLimitError as exc:
-        raise _error(413, "request_too_large", "restriction analysis request is too large") from exc
-    except AnalysisBusyError as exc:
-        raise _error(503, "analysis_busy", "restriction analysis capacity is busy") from exc
-    except AnalysisTimeoutError as exc:
-        raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
+    analysis = analyze_sequence(
+        sequence=sequence,
+        topology=topology,
+        catalog=view,
+        records=records,
+        include_possible_sites=payload.include_possible_sites,
+        regions=tuple((region.start, region.end) for region in payload.regions),
+    )
     catalog_receipt = _receipt(authority)
     result_preimage = {
         "source": source_receipt.model_dump(mode="json"),
@@ -769,9 +812,51 @@ async def analyze_restriction_sites(
         result_sha256=result_sha256,
         analysis=analysis,
     )
-    canonical_response = rfc8785.dumps(
-        response.model_dump(mode="json", by_alias=True)
-    )
-    if len(canonical_response) > MAX_RESPONSE_BYTES:
-        raise _error(413, "request_too_large", "restriction analysis request is too large")
-    return response
+    canonical_bytes = rfc8785.dumps(response.model_dump(mode="json", by_alias=True))
+    if len(canonical_bytes) > MAX_RESPONSE_BYTES:
+        raise AnalysisLimitError("analysis response exceeds byte limit")
+    return _CanonicalAnalysisOutput(response=response, canonical_bytes=canonical_bytes)
+
+
+@router.post("/analyze", response_model=AnalysisResponse)
+async def analyze_restriction_sites(
+    payload: Annotated[
+        AnalysisRequest,
+        Body(openapi_examples={"inline_dna": {"summary": "Inline DNA", "value": _ANALYZE_EXAMPLE}}),
+    ],
+    authority: CatalogAuthority = Depends(get_catalog_authority),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> Response:
+    try:
+        _reserve_analysis_capacity()
+    except AnalysisBusyError as exc:
+        raise _error(503, "analysis_busy", "restriction analysis capacity is busy") from exc
+
+    try:
+        resolved_revision = (
+            await _resolve_revision_source(payload.source, molbio_session)
+            if isinstance(payload.source, MolecularRevisionSource)
+            else None
+        )
+    except BaseException:
+        _analysis_capacity.release()
+        raise
+
+    try:
+        output = await _run_capacity_owned(
+            _complete_analysis_pipeline,
+            payload=payload,
+            authority=authority,
+            resolved_revision=resolved_revision,
+        )
+    except HTTPException:
+        raise
+    except InvalidDNAError as exc:
+        raise _error(422, "invalid_dna", "DNA input or regions are invalid") from exc
+    except AnalysisLimitError as exc:
+        raise _error(413, "request_too_large", "restriction analysis request is too large") from exc
+    except AnalysisTimeoutError as exc:
+        raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
+    except Exception as exc:
+        raise _error(500, "analysis_failed", "restriction analysis failed") from exc
+    return Response(content=output.canonical_bytes, media_type="application/json")

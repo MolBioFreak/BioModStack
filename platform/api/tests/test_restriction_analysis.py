@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
 
@@ -378,6 +379,45 @@ def test_cache_exact_key_identity_and_thread_safety() -> None:
     entries, retained_weight = module._cache_snapshot_for_testing()
     assert entries <= module.CACHE_MAX_ENTRIES
     assert retained_weight <= module.CACHE_MAX_TOTAL_WEIGHT_BYTES
+
+
+def test_blocked_cache_hit_parse_does_not_hold_global_cache_lock(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    module._clear_cache_for_testing()
+    _analyze("AAAAAA", ["EcoRI"])
+    _analyze("CCCCCC", ["EcoRI"])
+    original = module.AnalysisResult.model_validate_json
+    first_parse_entered = threading.Event()
+    second_parse_entered = threading.Event()
+    release_first_parse = threading.Event()
+    parse_lock = threading.Lock()
+    parse_count = 0
+
+    def controlled_parse(cls, value, *args, **kwargs):
+        nonlocal parse_count
+        with parse_lock:
+            parse_count += 1
+            ordinal = parse_count
+        if ordinal == 1:
+            first_parse_entered.set()
+            assert release_first_parse.wait(2)
+        elif ordinal == 2:
+            second_parse_entered.set()
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(
+        module.AnalysisResult, "model_validate_json", classmethod(controlled_parse),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(_analyze, "AAAAAA", ["EcoRI"])
+        assert first_parse_entered.wait(2)
+        second = executor.submit(_analyze, "CCCCCC", ["EcoRI"])
+        second_entered_while_first_blocked = second_parse_entered.wait(1)
+        release_first_parse.set()
+        assert first.result(timeout=2).sequence_length == 6
+        assert second.result(timeout=2).sequence_length == 6
+    assert second_entered_while_first_blocked
 
 
 def test_enzyme_summaries_are_complete_ordered_and_separate_counts() -> None:

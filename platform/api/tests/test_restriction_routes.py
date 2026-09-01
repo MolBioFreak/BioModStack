@@ -693,6 +693,246 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_busy_rejection_precedes_custom_normalization_and_jcs(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    authority = _authority()
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
+    original_analysis = molbio_restriction.analyze_sequence
+    original_normalize = molbio_restriction.normalize_dna
+    original_dumps = molbio_restriction.rfc8785.dumps
+    release = threading.Event()
+    both_started = threading.Event()
+    lock = threading.Lock()
+    started = 0
+    helper_calls = 0
+
+    def blocked_analysis(**kwargs):
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release.wait(4)
+        return original_analysis(**kwargs)
+
+    def counted_normalize(value):
+        nonlocal helper_calls
+        with lock:
+            helper_calls += 1
+        return original_normalize(value)
+
+    def counted_dumps(value):
+        nonlocal helper_calls
+        with lock:
+            helper_calls += 1
+        return original_dumps(value)
+
+    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    monkeypatch.setattr(molbio_restriction, "normalize_dna", counted_normalize)
+    monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", counted_dumps)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
+        second_payload = _inline_request()
+        second_payload["source"]["name"] = "second"
+        second = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=second_payload))
+        assert await asyncio.to_thread(both_started.wait, 3)
+        with lock:
+            calls_before_rejection = helper_calls
+        busy_payload = _inline_request()
+        busy_payload["source"]["dna"] = "A" * molbio_restriction.MAX_INLINE_SEQUENCE_LENGTH
+        rejected = await client.post("/api/molbio/restriction/analyze", json=busy_payload)
+        with lock:
+            calls_after_rejection = helper_calls
+        release.set()
+        completed = await asyncio.gather(first, second)
+    assert rejected.status_code == 503
+    assert rejected.json()["detail"]["code"] == "analysis_busy"
+    assert calls_after_rejection == calls_before_rejection
+    assert [response.status_code for response in completed] == [200, 200]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_phase", ["preprocessing", "serialization"])
+async def test_complete_cpu_pipeline_does_not_block_lightweight_routes(
+    monkeypatch, blocked_phase: str,
+) -> None:
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    authority = _authority()
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
+    started = threading.Event()
+    release = threading.Event()
+    lightweight_completed = threading.Event()
+    observed: list[bool] = []
+    event_loop_thread = threading.get_ident()
+
+    if blocked_phase == "preprocessing":
+        original = molbio_restriction.normalize_dna
+
+        def blocked_normalize(value):
+            assert threading.get_ident() != event_loop_thread
+            started.set()
+            assert release.wait(3)
+            return original(value)
+
+        monkeypatch.setattr(molbio_restriction, "normalize_dna", blocked_normalize)
+    else:
+        original = molbio_restriction.rfc8785.dumps
+
+        def blocked_serialize(value):
+            if isinstance(value, dict) and value.get("schema") == "bms.molbio.restriction-analysis-response.v1":
+                assert threading.get_ident() != event_loop_thread
+                started.set()
+                assert release.wait(3)
+            return original(value)
+
+        monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", blocked_serialize)
+
+    def controller() -> None:
+        assert started.wait(3)
+        observed.append(lightweight_completed.wait(1))
+        release.set()
+
+    control = threading.Thread(target=controller)
+    control.start()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        analysis_task = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
+        assert await asyncio.to_thread(started.wait, 3)
+        lightweight = await client.get("/api/molbio/restriction/catalog?limit=1")
+        lightweight_completed.set()
+        analysis = await analysis_task
+    control.join(timeout=2)
+    assert observed == [True]
+    assert lightweight.status_code == analysis.status_code == 200
+
+
+def test_analysis_returns_exact_validated_worker_canonical_bytes() -> None:
+    response = _client(_authority()).post(
+        "/api/molbio/restriction/analyze", json=_inline_request(),
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert len(response.content) <= molbio_restriction.MAX_RESPONSE_BYTES
+    assert response.content == rfc8785.dumps(response.json())
+    strict = molbio_restriction.AnalysisResponse.model_validate_json(
+        response.content, strict=True,
+    )
+    body = strict.model_dump(mode="json", by_alias=True)
+    analysis = body["analysis"]
+    inner_preimage = dict(analysis)
+    inner_digest = inner_preimage.pop("result_sha256")
+    assert inner_digest == hashlib.sha256(rfc8785.dumps(inner_preimage)).hexdigest()
+    outer_preimage = {
+        "source": body["source"],
+        "catalog_id": body["catalog"]["catalog_id"],
+        "catalog_sha256": body["catalog"]["catalog_sha256"],
+        "request_sha256": body["request_sha256"],
+        "analysis": analysis,
+    }
+    assert body["result_sha256"] == hashlib.sha256(rfc8785.dumps(outer_preimage)).hexdigest()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ownership_loss", "blocked_phase"),
+    [("timeout", "serialization"), ("cancellation", "preprocessing")],
+)
+async def test_capacity_survives_waiter_loss_until_complete_pipeline_finishes(
+    monkeypatch, ownership_loss: str, blocked_phase: str,
+) -> None:
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    authority = _authority()
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
+    release = threading.Event()
+    both_started = threading.Event()
+    both_released = threading.Event()
+    lock = threading.Lock()
+    started = 0
+
+    class TrackingCapacity:
+        def __init__(self) -> None:
+            self.semaphore = threading.BoundedSemaphore(2)
+            self.releases = 0
+
+        def acquire(self, *, blocking: bool) -> bool:
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self) -> None:
+            self.semaphore.release()
+            with lock:
+                self.releases += 1
+                if self.releases == 2:
+                    both_released.set()
+
+    def mark_and_wait() -> None:
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release.wait(4)
+
+    if blocked_phase == "preprocessing":
+        original_normalize = molbio_restriction.normalize_dna
+
+        def blocked_normalize(value):
+            mark_and_wait()
+            return original_normalize(value)
+
+        monkeypatch.setattr(molbio_restriction, "normalize_dna", blocked_normalize)
+    else:
+        original_dumps = molbio_restriction.rfc8785.dumps
+
+        def blocked_serialize(value):
+            if isinstance(value, dict) and value.get("schema") == "bms.molbio.restriction-analysis-response.v1":
+                mark_and_wait()
+            return original_dumps(value)
+
+        monkeypatch.setattr(molbio_restriction.rfc8785, "dumps", blocked_serialize)
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(molbio_restriction, "_analysis_executor", executor)
+    monkeypatch.setattr(molbio_restriction, "_analysis_capacity", TrackingCapacity())
+    monkeypatch.setattr(
+        molbio_restriction, "ANALYSIS_TIMEOUT_SECONDS",
+        0.01 if ownership_loss == "timeout" else 60,
+    )
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
+            second = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
+            assert await asyncio.to_thread(both_started.wait, 3)
+            if ownership_loss == "timeout":
+                ended = await asyncio.gather(first, second)
+                assert [response.status_code for response in ended] == [504, 504]
+            else:
+                first.cancel()
+                second.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+                with pytest.raises(asyncio.CancelledError):
+                    await second
+            busy = await client.post("/api/molbio/restriction/analyze", json=_inline_request())
+            assert busy.status_code == 503
+            assert busy.json()["detail"]["code"] == "analysis_busy"
+            release.set()
+            assert await asyncio.to_thread(both_released.wait, 3)
+            recovered = await client.post("/api/molbio/restriction/analyze", json=_inline_request())
+            assert recovered.status_code == 200
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
 async def test_worker_timeout_retains_capacity_until_both_underlying_futures_finish(
     monkeypatch,
 ) -> None:
