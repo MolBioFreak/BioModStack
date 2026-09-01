@@ -10,7 +10,7 @@ import {
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
-    useUpdateBioXpFreshness,
+
 
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
@@ -247,7 +247,7 @@ export function BioXpCockpit() {
     const emergencyAction = useInvokeBioXpOperatorAction();
 
     const recoverMotion = useRecoverBioXpMotion();
-    const updateFreshness = useUpdateBioXpFreshness();
+
     const resetInvokeOperatorAction = invokeOperatorAction.reset;
     const resetEmergencyAction = emergencyAction.reset;
     const resetRecoverMotion = recoverMotion.reset;
@@ -269,28 +269,10 @@ export function BioXpCockpit() {
         z: 65000,
         g: 0,
     });
-    const [freshnessMinutes, setFreshnessMinutes] = useState('30');
-    const [freshnessDisabled, setFreshnessDisabled] = useState(false);
+
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
     const dashboard = !robotControlReady || dashboardQuery.isError ? undefined : currentTelemetry;
     const ownershipGeneration = catalog?.ownership_generation ?? 0;
-    useEffect(() => {
-        const budget = connection?.freshness_budget_seconds;
-        if (budget === undefined) return;
-        setFreshnessDisabled(budget === null);
-        if (budget !== null) setFreshnessMinutes(String(Number((budget / 60).toFixed(2))));
-    }, [connection?.freshness_budget_seconds]);
-    const saveFreshness = () => {
-        if (freshnessDisabled) {
-            updateFreshness.mutate(null);
-            return;
-        }
-        const minutes = Number(freshnessMinutes);
-        if (Number.isFinite(minutes) && minutes > 0) updateFreshness.mutate(minutes * 60);
-    };
-    const freshnessSummary = connection?.freshness_budget_seconds == null
-        ? 'Disabled — no BMS observation-age expiry'
-        : `${Math.round(connection.freshness_budget_seconds / 60)} minutes`;
 
     const ownership = connection?.ownership;
     const maintenance = connection?.maintenance_state;
@@ -338,7 +320,7 @@ export function BioXpCockpit() {
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptZAbort.isPending || interruptAggregateAbort.isPending;
-    const busy = invokeOperatorAction.isPending || invokeYAction.isPending || invokeDeckAction.isPending || invokeXYMethod.isPending || interruptAnyPending || emergencyAction.isPending || recoverMotion.isPending || updateFreshness.isPending;
+    const busy = invokeOperatorAction.isPending || invokeYAction.isPending || invokeDeckAction.isPending || invokeXYMethod.isPending || interruptAnyPending || emergencyAction.isPending || recoverMotion.isPending;
     const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeYAction.data ?? invokeXYMethod.data ?? invokeOperatorAction.data;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
@@ -774,7 +756,7 @@ export function BioXpCockpit() {
         : value === false
             ? negative
             : 'unknown';
-    const error = currentDeckInvokeError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
+    const error = currentDeckInvokeError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? recoverMotion.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -825,45 +807,6 @@ export function BioXpCockpit() {
                         <dd className="mt-1 text-slate-100">{connection?.observed_at ? new Date(connection.observed_at).toLocaleString() : 'Unavailable'}</dd>
                     </div>
                 </dl>
-            </section>
-
-            <section className="rounded-xl border border-cyan-800/70 bg-cyan-950/20 p-4">
-                <h2 className="text-lg font-semibold">Hardware evidence freshness</h2>
-                <p className="mt-1 text-sm text-slate-300">
-                    BMS observation expiry defaults to 30 minutes. Disable it completely when desired; this does not fabricate a missing snapshot or override robot-owned hardware validity.
-                </p>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                    <label className="flex items-center gap-2 text-sm text-slate-200">
-                        <input
-                            type="checkbox"
-                            checked={freshnessDisabled}
-                            onChange={(event) => setFreshnessDisabled(event.target.checked)}
-                        />
-                        Disable BMS age expiry
-                    </label>
-                    <label className="text-sm text-slate-300">
-                        Window (minutes)
-                        <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            disabled={freshnessDisabled}
-                            value={freshnessMinutes}
-                            onChange={(event) => setFreshnessMinutes(event.target.value)}
-                            className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm disabled:opacity-40"
-                        />
-                    </label>
-                    <button
-                        type="button"
-                        disabled={!configured || !linkConnected || updateFreshness.isPending || (!freshnessDisabled && !(Number(freshnessMinutes) > 0))}
-                        onClick={saveFreshness}
-                        className={actionClass}
-                    >{updateFreshness.isPending ? 'Saving…' : 'Save freshness policy'}</button>
-                </div>
-                <p className="mt-2 text-sm text-cyan-100">Current policy: {freshnessSummary}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                    Automatic OEM snapshots: {connection?.automatic_snapshot_refresh?.published === true ? 'last collection published successfully' : 'collector awaiting its next refresh cycle'}.
-                </p>
             </section>
 
             <BioXpQuickDashboard
