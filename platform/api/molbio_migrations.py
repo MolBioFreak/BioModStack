@@ -29,6 +29,7 @@ from molbio_models import (
 )
 from services.sqlite_backup import backup_sqlite_database
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
+from services.sqlite_schema_attestation import sqlite_master_sql_identity
 
 
 class MigrationConflictError(RuntimeError):
@@ -67,7 +68,7 @@ _RESTRICTION_DIGEST_INDEXES = (
 
 
 def _normalize_restriction_digest_sql(sql: object) -> str:
-    return " ".join(str(sql or "").strip().rstrip(";").split()).casefold()
+    return sqlite_master_sql_identity(sql)
 
 
 def _restriction_digest_immutable_trigger_sql(action: str) -> str:
@@ -204,12 +205,65 @@ WHEN bms_restriction_digest_result_valid(
          AND operation.status = 'completed'
          AND json_valid(operation.parameters) = 1
          AND json_type(operation.parameters) = 'object'
-         AND (SELECT count(*) FROM json_each(operation.parameters)) = 5
+         AND (SELECT count(*) FROM json_each(operation.parameters)) = 6
          AND json_extract(operation.parameters, '$.schema')
              = 'bms.molbio.restriction-digest-operation-parameters.v1'
          AND json_extract(operation.parameters, '$.selected_enzyme_ids')
              IS json_extract(NEW.result, '$.simulation.selected_enzyme_ids')
          AND json_extract(operation.parameters, '$.simulation_sha256') IS NEW.result_sha256
+         AND json_type(operation.parameters, '$.save_request_receipt') = 'text'
+         AND bms_restriction_digest_save_receipt_valid(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               operation.idempotency_key,
+               operation.request_fingerprint
+             ) = 1
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.schema'
+             ) = 'bms.molbio.restriction-digest-save-request.v1'
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.kind'
+             ) = 'molecular_revision'
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.sequence_id'
+             ) IS json_extract(NEW.result, '$.simulation.source.sequence_id')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.revision_id'
+             ) IS NEW.source_revision_id
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.source.expected_content_sha256'
+             ) IS json_extract(NEW.result, '$.simulation.source.content_sha256')
+         AND (
+               json_type(
+                 json_extract(operation.parameters, '$.save_request_receipt'), '$.source.topology'
+               ) = 'null'
+               OR json_extract(
+                    json_extract(operation.parameters, '$.save_request_receipt'), '$.source.topology'
+                  ) IS json_extract(NEW.result, '$.simulation.source.topology')
+             )
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.catalog.catalog_id'
+             ) IS NEW.catalog_id
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.catalog.expected_catalog_sha256'
+             ) IS NEW.catalog_sha256
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.enzyme_ids'
+             ) IS json_extract(NEW.result, '$.simulation.selected_enzyme_ids')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.simulation_sha256'
+             ) IS NEW.result_sha256
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.idempotency_key'
+             ) IS operation.idempotency_key
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.persistence_mode'
+             ) IS json_extract(operation.parameters, '$.persistence_mode')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.fragment_name_prefix'
+             ) IS json_extract(operation.parameters, '$.fragment_name_prefix')
          AND json_type(operation.parameters, '$.fragment_name_prefix') IN ('null', 'text')
          AND (
                json_type(operation.parameters, '$.fragment_name_prefix') = 'null'

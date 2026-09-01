@@ -609,6 +609,8 @@ async def test_preview_has_no_database_effect_and_save_is_atomic_idempotent(tmp_
 async def test_database_rejects_correct_count_fully_populated_forged_output_graph(
     tmp_path: Path,
 ) -> None:
+    from services.restriction_digest_save_receipt import canonical_save_request_receipt
+
     engine, _sessions, digest = await _store(tmp_path)
     sequence = "TTGAATTCAA"
     operation_id = "forged-graph-operation"
@@ -644,6 +646,21 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
         "simulation": simulation.model_dump(mode="json", by_alias=True),
         "outputs": outputs,
     }
+    save_receipt = canonical_save_request_receipt({
+        "schema": "bms.molbio.restriction-digest-save-request.v1",
+        "source": {
+            "kind": "molecular_revision", "sequence_id": "source-document",
+            "revision_id": "source-revision", "expected_content_sha256": digest,
+            "topology": None,
+        },
+        "catalog": {
+            "catalog_id": CATALOG_ID, "expected_catalog_sha256": CATALOG_SHA,
+        },
+        "enzyme_ids": ["EcoRI"], "simulation_sha256": simulation.simulation_sha256,
+        "idempotency_key": "forged-graph-key",
+        "persistence_mode": "operation_and_fragments",
+        "fragment_name_prefix": "forged fragment",
+    })
     try:
         async with engine.begin() as connection:
             await connection.execute(text(
@@ -663,6 +680,7 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
                     "persistence_mode": "operation_and_fragments",
                     "fragment_name_prefix": "forged fragment",
                     "simulation_sha256": simulation.simulation_sha256,
+                    "save_request_receipt": save_receipt,
                 }).decode(),
                 "warnings": rfc8785.dumps(list(simulation.warnings)).decode(),
                 "provenance": rfc8785.dumps({
@@ -767,6 +785,11 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", [
+    "receipt_fingerprint",
+    "receipt_key",
+    "receipt_scientific",
+    "receipt_extra",
+    "receipt_noncanonical",
     "operation_parameters",
     "operation_provenance",
     "persistence_mode",
@@ -783,6 +806,8 @@ async def test_database_rejects_correct_count_fully_populated_forged_output_grap
 async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
     tmp_path: Path, mutation: str,
 ) -> None:
+    from services.restriction_digest_save_receipt import save_request_fingerprint
+
     case_path = tmp_path / mutation
     case_path.mkdir()
     engine, sessions, digest = await _store(case_path)
@@ -805,7 +830,40 @@ async def test_get_rejects_every_mutated_digest_operation_and_output_binding(
             operation_id = saved.json()["operation_id"]
 
             async with engine.begin() as connection:
-                if mutation in {"operation_parameters", "operation_provenance", "persistence_mode"}:
+                if mutation.startswith("receipt_"):
+                    await connection.execute(text(
+                        "DROP TRIGGER molbio_immutable_molecular_operations_update"
+                    ))
+                    raw = (await connection.execute(text(
+                        "SELECT parameters FROM molecular_operations WHERE id=:id"
+                    ), {"id": operation_id})).scalar_one()
+                    parameters = json.loads(raw)
+                    receipt = json.loads(parameters["save_request_receipt"])
+                    fingerprint = save_request_fingerprint(parameters["save_request_receipt"])
+                    if mutation == "receipt_fingerprint":
+                        fingerprint = "a" * 64
+                    elif mutation == "receipt_key":
+                        receipt["idempotency_key"] = "different-key"
+                    elif mutation == "receipt_scientific":
+                        receipt["catalog"]["catalog_id"] = "different-catalog"
+                    elif mutation == "receipt_extra":
+                        receipt["extra"] = True
+                    else:
+                        parameters["save_request_receipt"] = json.dumps(receipt, indent=2)
+                    if mutation not in {"receipt_fingerprint", "receipt_noncanonical"}:
+                        parameters["save_request_receipt"] = rfc8785.dumps(receipt).decode()
+                        fingerprint = hashlib.sha256(
+                            parameters["save_request_receipt"].encode("utf-8")
+                        ).hexdigest()
+                    await connection.execute(text(
+                        "UPDATE molecular_operations SET parameters=:parameters, "
+                        "request_fingerprint=:fingerprint WHERE id=:id"
+                    ), {
+                        "parameters": rfc8785.dumps(parameters).decode(),
+                        "fingerprint": fingerprint,
+                        "id": operation_id,
+                    })
+                elif mutation in {"operation_parameters", "operation_provenance", "persistence_mode"}:
                     await connection.execute(text(
                         "DROP TRIGGER molbio_immutable_molecular_operations_update"
                     ))
@@ -1046,7 +1104,7 @@ async def test_migration_rejects_wrong_ledger_identity_and_attests_integrity_tri
         await init_molbio_db(engine=engine)
         attestation = restriction_digest_migration_attestation()
         assert RESTRICTION_DIGEST_MIGRATION_CHECKSUM == (
-            "63a6cb67bb9e10f0582faf81b722aadf31e20ce580c414bb7cde6121be4eb907"
+            "b57635c4eebedeb8066cd413b7dbae9740982b69f039bbdf066fed9ed8795e81"
         )
         assert attestation["version"] == "0007_restriction_digest_results"
         assert attestation["objects"] == {
@@ -1118,6 +1176,40 @@ async def test_migration_rejects_wrong_ledger_identity_and_attests_integrity_tri
         health = await molbio_health(engine=engine)
         assert health["status"] == "degraded"
         assert health["database_schema_current"] is False
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                "DELETE FROM molbio_schema_migrations "
+                "WHERE version='0007_restriction_digest_results'"
+            ))
+        with pytest.raises(RuntimeError, match="counterfeit restriction digest schema"):
+            await init_molbio_db(engine=engine)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_and_health_reject_quoted_json_path_case_counterfeit(
+    tmp_path: Path,
+) -> None:
+    from molbio_database import molbio_health
+    from molbio_migrations import restriction_digest_integrity_trigger_sql
+
+    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'quoted-path.db'}")
+    try:
+        await init_molbio_db(engine=engine)
+        counterfeit = restriction_digest_integrity_trigger_sql().replace(
+            "$.simulation.simulation_sha256", "$.Simulation.simulation_sha256", 1,
+        )
+        async with engine.begin() as connection:
+            await connection.execute(text(
+                "DROP TRIGGER molbio_restriction_digest_results_integrity_insert"
+            ))
+            await connection.execute(text(counterfeit))
+
+        health = await molbio_health(engine=engine)
+        assert health["status"] == "degraded"
+        assert health["database_schema_current"] is False
+
         async with engine.begin() as connection:
             await connection.execute(text(
                 "DELETE FROM molbio_schema_migrations "
@@ -1216,6 +1308,9 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
         restriction_digest_json_equal,
         validate_restriction_digest_result,
     )
+    from services.restriction_digest_save_receipt import (
+        validate_persisted_save_request_receipt,
+    )
 
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{database}")
     asyncio.run(init_molbio_db(engine=engine))
@@ -1260,6 +1355,10 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
             "bms_restriction_digest_json_equal", 2,
             restriction_digest_json_equal, deterministic=True,
         )
+        connection.create_function(
+            "bms_restriction_digest_save_receipt_valid", 3,
+            validate_persisted_save_request_receipt, deterministic=True,
+        )
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute(
             "INSERT INTO molecular_documents(id,document_kind,name,created_at) VALUES (?,?,?,CURRENT_TIMESTAMP)",
@@ -1270,10 +1369,43 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
             (source_id, document_id, 1, "created", sequence_sha, len(sequence),
              rfc8785.dumps({"is_circular": False, "sequence": sequence, "sequence_type": "dna"}).decode(), '{}'),
         )
-        for identity, result_sha in (
-            (operation_id, simulation.simulation_sha256),
-            ("other-operation", mutant_sha),
+        for identity, result_sha, receipt_mutation, fingerprint_override in (
+            (operation_id, simulation.simulation_sha256, None, None),
+            ("other-operation", mutant_sha, None, None),
+            ("arbitrary-operation", simulation.simulation_sha256, None, "a" * 64),
+            ("key-mismatch-operation", simulation.simulation_sha256, "key", None),
+            ("scientific-mismatch-operation", simulation.simulation_sha256, "catalog", None),
+            ("extra-receipt-operation", simulation.simulation_sha256, "extra", None),
+            ("noncanonical-receipt-operation", simulation.simulation_sha256, "noncanonical", None),
         ):
+            key = f"key-{identity}"
+            receipt_document = {
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "source": {
+                    "kind": "molecular_revision", "sequence_id": document_id,
+                    "revision_id": source_id, "expected_content_sha256": sequence_sha,
+                    "topology": None,
+                },
+                "catalog": {
+                    "catalog_id": CATALOG_ID,
+                    "expected_catalog_sha256": CATALOG_SHA,
+                },
+                "enzyme_ids": ["EcoRI"], "simulation_sha256": result_sha,
+                "idempotency_key": key, "persistence_mode": "operation_only",
+                "fragment_name_prefix": None,
+            }
+            if receipt_mutation == "key":
+                receipt_document["idempotency_key"] = "different-key"
+            elif receipt_mutation == "catalog":
+                receipt_document["catalog"]["catalog_id"] = "different-catalog"
+            elif receipt_mutation == "extra":
+                receipt_document["extra"] = True
+            receipt = (
+                json.dumps(receipt_document, indent=2)
+                if receipt_mutation == "noncanonical"
+                else rfc8785.dumps(receipt_document).decode()
+            )
+            fingerprint = fingerprint_override or hashlib.sha256(receipt.encode()).hexdigest()
             connection.execute(
                 "INSERT INTO molecular_operations("
                 "id,operation_kind,implementation,implementation_version,status,parameters,"
@@ -1291,6 +1423,7 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
                         "persistence_mode": "operation_only",
                         "fragment_name_prefix": None,
                         "simulation_sha256": result_sha,
+                        "save_request_receipt": receipt,
                     }).decode(),
                     rfc8785.dumps(list(simulation.warnings)).decode(),
                     rfc8785.dumps({
@@ -1299,8 +1432,8 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
                         "catalog_sha256": CATALOG_SHA,
                         "request_sha256": simulation.request_sha256,
                     }).decode(),
-                    f"key-{identity}",
-                    "a" * 64,
+                    key,
+                    fingerprint,
                 ),
             )
             connection.execute(
@@ -1320,6 +1453,22 @@ def test_restriction_digest_snapshot_is_canonical_and_direct_sql_mutation_is_rej
             ("result-direct", operation_id, source_id, CATALOG_ID, CATALOG_SHA,
              simulation.request_sha256, simulation.simulation_sha256, canonical),
         )
+        for hostile_operation in (
+            "arbitrary-operation",
+            "key-mismatch-operation",
+            "scientific-mismatch-operation",
+            "extra-receipt-operation",
+            "noncanonical-receipt-operation",
+        ):
+            hostile_snapshot = {**snapshot, "operation_id": hostile_operation}
+            with pytest.raises(sqlite3.IntegrityError, match="integrity"):
+                connection.execute(
+                    "INSERT INTO restriction_digest_results(id,operation_id,source_revision_id,catalog_id,catalog_sha256,request_sha256,result_sha256,result,created_at) VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+                    (f"result-{hostile_operation}", hostile_operation, source_id,
+                     CATALOG_ID, CATALOG_SHA, simulation.request_sha256,
+                     simulation.simulation_sha256,
+                     rfc8785.dumps(hostile_snapshot).decode()),
+                )
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute("UPDATE restriction_digest_results SET catalog_id='mutant' WHERE id='result-direct'")
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
