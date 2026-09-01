@@ -899,7 +899,6 @@ export function MolBioToolkitV2() {
             topology: sequenceData.circular ? 'circular' : 'linear',
         };
     }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
-    const restrictionSelectionKey = useMemo(() => JSON.stringify([...selectedEnzymes].sort()), [selectedEnzymes]);
 
     useEffect(() => {
         const authorityController = restrictionAuthorityControllerRef.current;
@@ -947,7 +946,7 @@ export function MolBioToolkitV2() {
             }
         })();
         return () => abort.abort();
-    }, [restrictionSelectionKey, restrictionSource]);
+    }, [restrictionSource]);
 
     useEffect(() => () => {
         restrictionAuthorityControllerRef.current.dispose();

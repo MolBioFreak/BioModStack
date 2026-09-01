@@ -63,18 +63,25 @@ export function restrictionBoundaryPositions(
 ): number[] {
     if (sequenceLength <= 0) return [];
     const selected = new Set(selectedEnzymes);
-    const positions = occurrences.flatMap((occurrence) => {
-        if (!selected.has(occurrence.enzyme_id)) return [];
-        const eventBoundaries = [
-            ...occurrence.double_strand_events.flatMap((event) => event.status === 'complete'
-                ? [event.top_boundary, event.bottom_boundary]
-                : []),
-            ...occurrence.nicks.flatMap((event) => event.status === 'complete' ? [event.boundary] : []),
-        ].filter((position): position is number => position !== null);
-        return eventBoundaries.length > 0 ? eventBoundaries : [occurrence.site_start];
-    }).map((position) => ((position % sequenceLength) + sequenceLength) % sequenceLength)
-        .map((position) => reverseCoordinates ? sequenceLength - 1 - position : position);
-    return Array.from(new Set(positions)).sort((left, right) => left - right);
+    const seenDsbGroups = new Set<string>();
+    const positions: number[] = [];
+    for (const occurrence of occurrences) {
+        if (!selected.has(occurrence.enzyme_id)) continue;
+        for (const event of occurrence.double_strand_events) {
+            if (event.status !== 'complete' || seenDsbGroups.has(event.contributor_group_id)) continue;
+            const boundary = event.top_boundary;
+            if (boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary >= sequenceLength) continue;
+            seenDsbGroups.add(event.contributor_group_id);
+            positions.push(boundary);
+        }
+        for (const event of occurrence.nicks) {
+            const boundary = event.boundary;
+            if (event.status !== 'complete' || boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary >= sequenceLength) continue;
+            positions.push(boundary);
+        }
+    }
+    const displayed = positions.map((position) => reverseCoordinates ? sequenceLength - 1 - position : position);
+    return Array.from(new Set(displayed)).sort((left, right) => left - right);
 }
 
 const CANONICAL_BASES = new Set(['A', 'C', 'G', 'T']);

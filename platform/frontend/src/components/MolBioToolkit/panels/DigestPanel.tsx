@@ -139,9 +139,9 @@ export function DigestPanel({ mobile = false, compactLandscape = false, sequence
     };
 
     useEffect(() => {
-        if (!digestSimulation) return;
-        const regions = digestSimulation.fragments.flatMap((fragment, index) => fragment.source_segments.map(([start, end]) => ({ start, end, color: index % 2 ? '#34d399' : '#38bdf8', label: `Fragment ${fragment.fragment_index + 1} (${fragment.reference_span_bp} bp)` })));
+        const regions = digestSimulation?.fragments.flatMap((fragment, index) => fragment.source_segments.map(([start, end]) => ({ start, end, color: index % 2 ? '#34d399' : '#38bdf8', label: `Fragment ${fragment.fragment_index + 1} (${fragment.reference_span_bp} bp)` }))) ?? [];
         onHighlight(regions);
+        return () => onHighlight([]);
     }, [digestSimulation, onHighlight]);
 
     return <div data-digest-layout={mobile ? 'mobile' : 'desktop'} data-digest-compact-landscape={mobile && compactLandscape ? 'true' : undefined} className={mobile ? 'digest-panel flex h-full min-h-0 flex-col overflow-hidden bg-slate-900 text-sm' : 'digest-panel space-y-4 p-3 text-sm'}>

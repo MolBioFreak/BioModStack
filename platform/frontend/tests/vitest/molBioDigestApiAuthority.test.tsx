@@ -1,4 +1,6 @@
 import React, { act } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import './setup';
@@ -21,6 +23,40 @@ describe('DigestPanel backend authority', () => {
     let root: Root | undefined;
     let container: HTMLDivElement | undefined;
     afterEach(async () => { if (root) await act(async () => root?.unmount()); container?.remove(); });
+
+    it('keeps catalog/all-analysis authority and digest highlights stable across map-only selection changes', async () => {
+        const toolkitSource = readFileSync(resolve(process.cwd(), 'src/components/MolBioToolkit/MolBioToolkitV2.tsx'), 'utf8');
+        const authorityEffect = toolkitSource.slice(toolkitSource.indexOf('const restrictionSource ='), toolkitSource.indexOf('const runRestrictionDigest ='));
+        expect(authorityEffect).not.toContain('restrictionSelectionKey');
+        expect(authorityEffect).toContain('}, [restrictionSource]);');
+        expect(authorityEffect).not.toMatch(/fetchRestrictionAnalysis\([\s\S]*?enzymeIds/);
+
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const highlight = vi.fn();
+        const mapChange = vi.fn();
+        await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={highlight} selectedEnzymes={[]} onEnzymesChange={mapChange} catalog={catalog} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
+        const highlighted = highlight.mock.calls.at(-1)?.[0];
+        const map = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Map');
+        await act(async () => map?.click());
+        expect(mapChange).toHaveBeenCalledWith(['EcoRI']);
+        expect(highlight.mock.calls.at(-1)?.[0]).toBe(highlighted);
+        expect(container.querySelector('[data-fragment-index="0"]')).toBeTruthy();
+    });
+
+    it('clears fragment highlights when digest authority disappears and on unmount', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const highlight = vi.fn();
+        const props = { sequenceData: sequence, sequenceId: null, onHighlight: highlight, selectedEnzymes: [], onEnzymesChange: vi.fn(), catalog, catalogRecords: [record], analysis, authorityLoading: false, authorityError: null, digestLoading: false, onDigestSelectionChange: vi.fn(), onSimulateDigest: vi.fn() };
+        await act(async () => root?.render(<DigestPanel {...props} digestSimulation={simulation} digestError={null} />));
+        expect(highlight.mock.calls.at(-1)?.[0]).toHaveLength(2);
+        await act(async () => root?.render(<DigestPanel {...props} digestSimulation={null} digestError="Restriction digest is unavailable." />));
+        expect(highlight.mock.calls.at(-1)?.[0]).toEqual([]);
+        const callsBeforeUnmount = highlight.mock.calls.length;
+        await act(async () => root?.unmount());
+        root = undefined;
+        expect(highlight.mock.calls.length).toBeGreaterThan(callsBeforeUnmount);
+        expect(highlight.mock.calls.at(-1)?.[0]).toEqual([]);
+    });
 
     it('keeps recognition, DSB and nick counts separate and submits only stable IDs', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
