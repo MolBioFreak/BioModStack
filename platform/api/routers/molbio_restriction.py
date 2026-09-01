@@ -27,6 +27,7 @@ from services.restriction_analysis import (
     MAX_EXPLICIT_ENZYME_IDS,
     MAX_INLINE_SEQUENCE_LENGTH,
     MAX_REGIONS,
+    MAX_RESPONSE_BYTES,
     AnalysisLimitError,
     AnalysisResult,
     ResourcePolicyReceipt,
@@ -758,7 +759,7 @@ async def analyze_restriction_sites(
         "analysis": analysis.model_dump(mode="json", by_alias=True),
     }
     result_sha256 = hashlib.sha256(rfc8785.dumps(result_preimage)).hexdigest()
-    return AnalysisResponse(
+    response = AnalysisResponse(
         schema="bms.molbio.restriction-analysis-response.v1",
         source=source_receipt,
         catalog=catalog_receipt,
@@ -766,3 +767,9 @@ async def analyze_restriction_sites(
         result_sha256=result_sha256,
         analysis=analysis,
     )
+    canonical_response = rfc8785.dumps(
+        response.model_dump(mode="json", by_alias=True)
+    )
+    if len(canonical_response) > MAX_RESPONSE_BYTES:
+        raise _error(413, "request_too_large", "restriction analysis request is too large")
+    return response

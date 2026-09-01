@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import threading
+import concurrent.futures
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,7 +15,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from molbio_models import MolBioBase, MolecularDocument, MolecularRevision
 from routers import molbio_restriction
 from services.restriction_catalog import CatalogAuthority, CatalogUnavailable
 
@@ -524,7 +528,7 @@ def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch
     assert first["analysis"]["resource_policy_sha256"] == policy_sha
     assert receipt == {
         "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
-        "policy_version": "1.0.0",
+        "policy_version": "1.1.0",
         "scan_work_formula_id": "candidate-starts-times-motif-width",
         "scan_work_formula_version": "1.0.0",
         "sequence_length_maximum": 5_000_000,
@@ -545,8 +549,8 @@ def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch
         "cache_entry_maximum": 32,
         "cache_total_weight_maximum_bytes": 64 * 1024 * 1024,
         "cache_result_weight_maximum_bytes": 8 * 1024 * 1024,
-        "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
-        "cache_weight_formula_version": "1.0.0",
+        "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
+        "cache_weight_formula_version": "2.0.0",
     }
 
     monkeypatch.setattr(analysis_module, "MAX_SCAN_WORK", analysis_module.MAX_SCAN_WORK + 1)
@@ -554,6 +558,32 @@ def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch
     assert second["request_sha256"] != first["request_sha256"]
     assert second["analysis"]["result_sha256"] != first["analysis"]["result_sha256"]
     assert second["result_sha256"] != first["result_sha256"]
+
+
+def test_complete_public_response_bound_rejects_wrapper_overflow_and_admits_exact_limit(
+    monkeypatch,
+) -> None:
+    client = _client(_authority())
+    baseline = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+    assert baseline.status_code == 200
+    public_document = baseline.json()
+    inner_bytes = rfc8785.dumps(public_document["analysis"])
+    complete_bytes = rfc8785.dumps(public_document)
+    assert len(inner_bytes) < len(complete_bytes)
+
+    monkeypatch.setattr(molbio_restriction, "MAX_RESPONSE_BYTES", len(complete_bytes) - 1)
+    rejected = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+    assert rejected.status_code == 413
+    assert rejected.json() == {"detail": {
+        "code": "request_too_large",
+        "message": "restriction analysis request is too large",
+    }}
+
+    monkeypatch.setattr(molbio_restriction, "MAX_RESPONSE_BYTES", len(complete_bytes))
+    admitted = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+    assert admitted.status_code == 200
+    assert admitted.json() == public_document
+    assert len(rfc8785.dumps(admitted.json())) == len(complete_bytes)
 
 
 @pytest.mark.asyncio
@@ -656,6 +686,141 @@ async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> No
     assert maximum_active == 2
 
 
+@pytest.mark.asyncio
+async def test_worker_timeout_retains_capacity_until_both_underlying_futures_finish(
+    monkeypatch,
+) -> None:
+    original = molbio_restriction.analyze_sequence
+    release = threading.Event()
+    both_started = threading.Event()
+    both_released = threading.Event()
+    lock = threading.Lock()
+    started = 0
+
+    class TrackingCapacity:
+        def __init__(self) -> None:
+            self.semaphore = threading.BoundedSemaphore(2)
+            self.releases = 0
+
+        def acquire(self, *, blocking: bool) -> bool:
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self) -> None:
+            self.semaphore.release()
+            with lock:
+                self.releases += 1
+                if self.releases == 2:
+                    both_released.set()
+
+    capacity = TrackingCapacity()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    def blocked_analysis(**kwargs):
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release.wait(2)
+        return original(**kwargs)
+
+    monkeypatch.setattr(molbio_restriction, "_analysis_executor", executor)
+    monkeypatch.setattr(molbio_restriction, "_analysis_capacity", capacity)
+    monkeypatch.setattr(molbio_restriction, "ANALYSIS_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    kwargs = {
+        "sequence": "TTGAATTCAA", "topology": "linear",
+        "catalog": _authority().require(),
+        "records": (_authority().require().by_id["EcoRI"],),
+        "include_possible_sites": True, "regions": (),
+    }
+    try:
+        first = asyncio.create_task(molbio_restriction._run_analysis(**kwargs))
+        second = asyncio.create_task(molbio_restriction._run_analysis(**kwargs))
+        assert await asyncio.to_thread(both_started.wait, 2)
+        with pytest.raises(molbio_restriction.AnalysisTimeoutError):
+            await first
+        with pytest.raises(molbio_restriction.AnalysisTimeoutError):
+            await second
+        with pytest.raises(molbio_restriction.AnalysisBusyError):
+            await molbio_restriction._run_analysis(**kwargs)
+        release.set()
+        assert await asyncio.to_thread(both_released.wait, 2)
+        recovered = await molbio_restriction._run_analysis(**kwargs)
+        assert recovered.counts.double_strand_break_count == 1
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_retains_capacity_until_underlying_futures_finish(
+    monkeypatch,
+) -> None:
+    original = molbio_restriction.analyze_sequence
+    release = threading.Event()
+    both_started = threading.Event()
+    both_released = threading.Event()
+    lock = threading.Lock()
+    started = 0
+    releases = 0
+
+    class TrackingCapacity:
+        def __init__(self) -> None:
+            self.semaphore = threading.BoundedSemaphore(2)
+
+        def acquire(self, *, blocking: bool) -> bool:
+            return self.semaphore.acquire(blocking=blocking)
+
+        def release(self) -> None:
+            nonlocal releases
+            self.semaphore.release()
+            with lock:
+                releases += 1
+                if releases == 2:
+                    both_released.set()
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    def blocked_analysis(**kwargs):
+        nonlocal started
+        with lock:
+            started += 1
+            if started == 2:
+                both_started.set()
+        assert release.wait(2)
+        return original(**kwargs)
+
+    monkeypatch.setattr(molbio_restriction, "_analysis_executor", executor)
+    monkeypatch.setattr(molbio_restriction, "_analysis_capacity", TrackingCapacity())
+    monkeypatch.setattr(molbio_restriction, "ANALYSIS_TIMEOUT_SECONDS", 60)
+    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    view = _authority().require()
+    kwargs = {
+        "sequence": "TTGAATTCAA", "topology": "linear", "catalog": view,
+        "records": (view.by_id["EcoRI"],), "include_possible_sites": True, "regions": (),
+    }
+    try:
+        first = asyncio.create_task(molbio_restriction._run_analysis(**kwargs))
+        second = asyncio.create_task(molbio_restriction._run_analysis(**kwargs))
+        assert await asyncio.to_thread(both_started.wait, 2)
+        first.cancel()
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        with pytest.raises(molbio_restriction.AnalysisBusyError):
+            await molbio_restriction._run_analysis(**kwargs)
+        release.set()
+        assert await asyncio.to_thread(both_released.wait, 2)
+        recovered = await molbio_restriction._run_analysis(**kwargs)
+        assert recovered.counts.double_strand_break_count == 1
+    finally:
+        release.set()
+        executor.shutdown(wait=True)
+
+
 def test_analyze_rejects_hostile_geometry_fields_stale_catalog_unknown_enzyme_and_products() -> None:
     client = _client(_authority())
     hostile = _inline_request()
@@ -726,6 +891,119 @@ def test_analyze_binds_exact_immutable_revision_and_rejects_stale_digest() -> No
     stale = client.post("/api/molbio/restriction/analyze", json=request)
     assert stale.status_code == 409
     assert stale.json()["detail"]["code"] == "source_revision_digest_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_inline_and_revision_analysis_are_read_only_against_real_sqlite_dependency(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "restriction-analysis.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    sequence = "TTGAATTCAA"
+    digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+
+    async with engine.begin() as connection:
+        await connection.run_sync(MolBioBase.metadata.create_all)
+        await connection.execute(MolecularDocument.__table__.insert().values(
+            id="sequence-1", document_kind="dna", name="saved",
+            current_revision_id=None,
+        ))
+        await connection.execute(MolecularRevision.__table__.insert().values(
+            id="revision-1", document_id="sequence-1", revision_number=1,
+            change_kind="created", content_sha256=digest, content_length=len(sequence),
+            snapshot={"sequence_type": "dna", "sequence": sequence, "is_circular": False},
+            provenance={}, operation_id=None, created_by="test",
+        ))
+        await connection.execute(
+            MolecularDocument.__table__.update()
+            .where(MolecularDocument.id == "sequence-1")
+            .values(current_revision_id="revision-1")
+        )
+
+    async def logical_snapshot() -> tuple[tuple[object, ...], tuple[object, ...]]:
+        async with engine.connect() as connection:
+            documents = tuple(
+                tuple(row) for row in (
+                    await connection.execute(text(
+                        "SELECT id, document_kind, name, current_revision_id, deleted_at "
+                        "FROM molecular_documents ORDER BY id"
+                    ))
+                ).all()
+            )
+            revisions = tuple(
+                tuple(row) for row in (
+                    await connection.execute(text(
+                        "SELECT id, document_id, revision_number, change_kind, content_sha256, "
+                        "content_length, snapshot, provenance, operation_id, created_by "
+                        "FROM molecular_revisions ORDER BY id"
+                    ))
+                ).all()
+            )
+            return documents, revisions
+
+    before = await logical_snapshot()
+    dml: list[str] = []
+
+    def reject_dml(_conn, _cursor, statement, _parameters, _context, _executemany) -> None:
+        operation = statement.lstrip().split(None, 1)[0].upper()
+        if operation in {"INSERT", "UPDATE", "DELETE", "REPLACE"}:
+            dml.append(operation)
+            raise AssertionError(f"analysis emitted forbidden DML: {operation}")
+
+    def reject_flush(*_args, **_kwargs) -> None:
+        raise AssertionError("analysis invoked ORM flush")
+
+    class ReadOnlyRequestSession(AsyncSession):
+        def add(self, *_args, **_kwargs) -> None:
+            raise AssertionError("analysis invoked ORM add")
+
+        async def delete(self, *_args, **_kwargs) -> None:
+            raise AssertionError("analysis invoked ORM delete")
+
+        async def flush(self, *_args, **_kwargs) -> None:
+            raise AssertionError("analysis invoked ORM flush")
+
+        async def commit(self) -> None:
+            raise AssertionError("analysis invoked ORM commit")
+
+    sessions = async_sessionmaker(
+        engine, class_=ReadOnlyRequestSession, expire_on_commit=False,
+    )
+
+    async def real_session_dependency():
+        async with sessions() as session:
+            yield session
+
+    event.listen(engine.sync_engine, "before_cursor_execute", reject_dml)
+    event.listen(ReadOnlyRequestSession.sync_session_class, "before_flush", reject_flush)
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = _authority
+    app.dependency_overrides[
+        molbio_restriction.get_molbio_session
+    ] = real_session_dependency
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            inline = await client.post(
+                "/api/molbio/restriction/analyze", json=_inline_request()
+            )
+            revision_request = _inline_request()
+            revision_request["source"] = {
+                "kind": "molecular_revision", "sequence_id": "sequence-1",
+                "revision_id": "revision-1", "expected_content_sha256": digest,
+            }
+            revision = await client.post(
+                "/api/molbio/restriction/analyze", json=revision_request
+            )
+        assert inline.status_code == revision.status_code == 200
+        assert revision.json()["source"]["revision_id"] == "revision-1"
+        assert dml == []
+        assert await logical_snapshot() == before
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", reject_dml)
+        event.remove(ReadOnlyRequestSession.sync_session_class, "before_flush", reject_flush)
+        await engine.dispose()
 
 
 def test_analyze_rejects_u_without_normalizing_source_receipt_or_request_hash() -> None:

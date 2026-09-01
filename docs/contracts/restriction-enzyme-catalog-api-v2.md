@@ -57,6 +57,6 @@ Readiness, OpenAPI, and every result publish `bms.molbio.restriction-analysis-re
 - `candidate-starts-times-motif-width` version `1.0.0`, charging `max(L-m+1, 0) × m` for each linear job and `L × m` for each circular job when `m <= L`; circular `m > L` jobs charge zero and produce the typed unsupported limitation without scanning;
 - 32,000,000 charged motif comparisons, 25,000 occurrences, 50,000 events, and a 32 MiB encoded response;
 - two process-wide analysis worker threads, no queue (`reject_when_all_workers_busy`), a 60-second request wait timeout, and capacity retained until the CPU future completes after timeout or caller cancellation;
-- a 32-entry LRU cache with a 64 MiB total retained-object weight bound and an 8 MiB per-result cacheability threshold, measured by `recursive-sys-getsizeof-object-graph` version `1.0.0`.
+- a 32-entry LRU cache with a 64 MiB complete retained-container-graph bound and an 8 MiB complete retained-entry cacheability threshold, measured by `canonical-json-entry-and-complete-cache-graph` version `2.0.0`; entries retain immutable canonical JSON bytes and exact keys, and hits strictly reconstruct fresh result models.
 
 Admission builds one exact immutable scanner-job plan before `_scan`; execution consumes only that admitted plan. Matching and result construction remain incremental and fail closed. Final serialization is a backstop rather than the first resource gate. Phase 2 performs analysis only: it does not construct or persist fragments.

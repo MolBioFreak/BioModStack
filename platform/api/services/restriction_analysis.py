@@ -6,6 +6,7 @@ import sys
 import threading
 from collections import OrderedDict, defaultdict
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Sequence
 
@@ -186,7 +187,7 @@ class GroupedCleavage(StrictModel):
 
 _RESOURCE_POLICY_OPENAPI_EXAMPLE = {
     "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
-    "policy_version": "1.0.0",
+    "policy_version": "1.1.0",
     "scan_work_formula_id": "candidate-starts-times-motif-width",
     "scan_work_formula_version": "1.0.0",
     "sequence_length_maximum": 5_000_000,
@@ -207,8 +208,8 @@ _RESOURCE_POLICY_OPENAPI_EXAMPLE = {
     "cache_entry_maximum": 32,
     "cache_total_weight_maximum_bytes": 64 * 1024 * 1024,
     "cache_result_weight_maximum_bytes": 8 * 1024 * 1024,
-    "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
-    "cache_weight_formula_version": "1.0.0",
+    "cache_weight_formula_id": "canonical-json-entry-and-complete-cache-graph",
+    "cache_weight_formula_version": "2.0.0",
 }
 
 
@@ -218,7 +219,7 @@ class ResourcePolicyReceipt(StrictModel):
         json_schema_extra={"examples": [_RESOURCE_POLICY_OPENAPI_EXAMPLE]},
     )
     schema_: Literal["bms.molbio.restriction-analysis-resource-policy.v1"] = Field(alias="schema")
-    policy_version: Literal["1.0.0"]
+    policy_version: Literal["1.1.0"]
     scan_work_formula_id: Literal["candidate-starts-times-motif-width"]
     scan_work_formula_version: Literal["1.0.0"]
     sequence_length_maximum: int
@@ -239,14 +240,14 @@ class ResourcePolicyReceipt(StrictModel):
     cache_entry_maximum: int
     cache_total_weight_maximum_bytes: int
     cache_result_weight_maximum_bytes: int
-    cache_weight_formula_id: Literal["recursive-sys-getsizeof-object-graph"]
-    cache_weight_formula_version: Literal["1.0.0"]
+    cache_weight_formula_id: Literal["canonical-json-entry-and-complete-cache-graph"]
+    cache_weight_formula_version: Literal["2.0.0"]
 
 
 def resource_policy_receipt() -> ResourcePolicyReceipt:
     return ResourcePolicyReceipt(
         schema="bms.molbio.restriction-analysis-resource-policy.v1",
-        policy_version="1.0.0",
+        policy_version="1.1.0",
         scan_work_formula_id=SCAN_WORK_FORMULA_ID,
         scan_work_formula_version=SCAN_WORK_FORMULA_VERSION,
         sequence_length_maximum=MAX_INLINE_SEQUENCE_LENGTH,
@@ -267,8 +268,8 @@ def resource_policy_receipt() -> ResourcePolicyReceipt:
         cache_entry_maximum=CACHE_MAX_ENTRIES,
         cache_total_weight_maximum_bytes=CACHE_MAX_TOTAL_WEIGHT_BYTES,
         cache_result_weight_maximum_bytes=CACHE_MAX_RESULT_WEIGHT_BYTES,
-        cache_weight_formula_id="recursive-sys-getsizeof-object-graph",
-        cache_weight_formula_version="1.0.0",
+        cache_weight_formula_id="canonical-json-entry-and-complete-cache-graph",
+        cache_weight_formula_version="2.0.0",
     )
 
 
@@ -297,9 +298,14 @@ class AnalysisResult(StrictModel):
         return rfc8785.dumps(payload)
 
 
+@dataclass(frozen=True, slots=True)
+class _CacheEntry:
+    key: tuple[str, ...]
+    canonical_result: bytes
+
+
 _cache_lock = threading.RLock()
-_cache: OrderedDict[tuple[str, ...], tuple[AnalysisResult, int]] = OrderedDict()
-_cache_total_weight = 0
+_cache: OrderedDict[tuple[str, ...], _CacheEntry] = OrderedDict()
 _compiled_lock = threading.Lock()
 _compiled: dict[str, tuple[frozenset[str], ...]] = {}
 
@@ -309,7 +315,7 @@ def reverse_complement(sequence: str) -> str:
 
 
 def _retained_weight(value: object, seen: set[int] | None = None) -> int:
-    """Conservatively count the retained Python object graph once by identity."""
+    """Count the complete supported retained graph once by object identity."""
     if seen is None:
         seen = set()
     identity = id(value)
@@ -326,19 +332,24 @@ def _retained_weight(value: object, seen: set[int] | None = None) -> int:
         )
     if isinstance(value, (tuple, list, set, frozenset)):
         return size + sum(_retained_weight(item, seen) for item in value)
-    return size
+    slots = getattr(type(value), "__slots__", ())
+    if isinstance(slots, str):
+        slots = (slots,)
+    return size + sum(
+        _retained_weight(getattr(value, slot), seen)
+        for slot in slots
+        if slot not in {"__weakref__", "__dict__"} and hasattr(value, slot)
+    )
 
 
 def _clear_cache_for_testing() -> None:
-    global _cache_total_weight
     with _cache_lock:
         _cache.clear()
-        _cache_total_weight = 0
 
 
 def _cache_snapshot_for_testing() -> tuple[int, int]:
     with _cache_lock:
-        return len(_cache), _cache_total_weight
+        return len(_cache), _retained_weight(_cache)
 
 
 def normalize_dna(sequence: str) -> str:
@@ -609,7 +620,7 @@ def analyze_sequence(
         cached = _cache.get(cache_key)
         if cached is not None:
             _cache.move_to_end(cache_key)
-            return cached[0]
+            return AnalysisResult.model_validate_json(cached.canonical_result, strict=True)
 
     typed_limitations = tuple(
         AnalysisLimitation(
@@ -797,25 +808,25 @@ def analyze_sequence(
         **payload,
         "result_sha256": hashlib.sha256(digest_payload.canonical_result_bytes()).hexdigest(),
     })
-    if len(rfc8785.dumps(result.model_dump(mode="json"))) > MAX_RESPONSE_BYTES:
+    canonical_result = rfc8785.dumps(result.model_dump(mode="json", by_alias=True))
+    if len(canonical_result) > MAX_RESPONSE_BYTES:
         raise AnalysisLimitError("analysis response exceeds byte limit")
-    weight = _retained_weight(result)
-    if weight <= CACHE_MAX_RESULT_WEIGHT_BYTES:
-        global _cache_total_weight
+    entry = _CacheEntry(key=cache_key, canonical_result=canonical_result)
+    if _retained_weight(entry) <= CACHE_MAX_RESULT_WEIGHT_BYTES:
         with _cache_lock:
             concurrent = _cache.get(cache_key)
             if concurrent is not None:
                 _cache.move_to_end(cache_key)
-                return concurrent[0]
-            _cache[cache_key] = (result, weight)
-            _cache_total_weight += weight
+                return AnalysisResult.model_validate_json(
+                    concurrent.canonical_result, strict=True
+                )
+            _cache[cache_key] = entry
             _cache.move_to_end(cache_key)
             while (
                 len(_cache) > CACHE_MAX_ENTRIES
-                or _cache_total_weight > CACHE_MAX_TOTAL_WEIGHT_BYTES
+                or _retained_weight(_cache) > CACHE_MAX_TOTAL_WEIGHT_BYTES
             ):
-                _old_key, (_old_result, old_weight) = _cache.popitem(last=False)
-                _cache_total_weight -= old_weight
+                _cache.popitem(last=False)
     return result
 
 
