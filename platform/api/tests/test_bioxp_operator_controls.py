@@ -1137,15 +1137,13 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
 
     assert [response.status_code for response in responses] == [200, 200, 202, 200, 200, 200, 202, 200, 200, 200]
     assert responses[0].json()["dashboard"]["y_axis"]["active_board_epoch"] == 2
-    assert responses[0].json()["dashboard"]["telemetry"]["schema_version"] == "bioxp.operator_dashboard.v1"
+
     assert responses[2].json()["command_id"] == "cmd-1"
     assert responses[5].json()["canonical_inputs"] == {"steps": 20}
     assert responses[6].json()["method_id"] == "method-1"
     assert [call[0] for call in runtime.connection.client.calls] == [
         "operator_control_catalog_v2",
-        "operator_dashboard",
         "operator_dashboard_v2",
-        "operator_dashboard",
         "invoke_operator_action_v2",
         "operator_action_history_v2",
         "operator_action_receipt_v2",
@@ -1155,8 +1153,8 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
         "operator_command_status_v2",
         "operator_command_status_v2_detail",
     ]
-    assert "expected_connection_generation" not in runtime.connection.client.calls[4][1]["json_data"]
-    assert "expected_connection_generation" not in runtime.connection.client.calls[8][1]["json_data"]
+    assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
+    assert "expected_connection_generation" not in runtime.connection.client.calls[6][1]["json_data"]
 
 
 def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatch):

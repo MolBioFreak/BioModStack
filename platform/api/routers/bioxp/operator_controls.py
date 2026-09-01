@@ -501,18 +501,6 @@ def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
     )
 
 
-async def _cached_operator_telemetry(
-    runtime: BioXpRuntime,
-    generation: int,
-) -> OperatorDashboard:
-    payload = await runtime.connection.request_active_v2_query(
-        "operator_dashboard",
-        expected_generation=generation,
-        params={"schema_version": "bioxp.operator_dashboard.v1"},
-    )
-    return _validate(OperatorDashboard, payload)
-
-
 @router.get("/operator-controls/v2/catalog", response_model=OperatorControlCatalogV2)
 async def operator_control_catalog_v2(
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
@@ -526,8 +514,7 @@ async def operator_control_catalog_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    catalog = _validate(OperatorControlCatalogV2, payload)
-    return catalog.model_copy(update={"dashboard": catalog.dashboard.model_copy(update={"telemetry": await _cached_operator_telemetry(runtime, snapshot.generation)})})
+    return _validate(OperatorControlCatalogV2, payload)
 
 
 @router.get("/operator-controls/v2/dashboard", response_model=OperatorDashboardV2)
@@ -543,8 +530,7 @@ async def operator_dashboard_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    dashboard = _validate(OperatorDashboardV2, payload)
-    return dashboard.model_copy(update={"telemetry": await _cached_operator_telemetry(runtime, snapshot.generation)})
+    return _validate(OperatorDashboardV2, payload)
 
 
 @router.post(
