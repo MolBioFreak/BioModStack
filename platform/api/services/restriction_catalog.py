@@ -1,15 +1,17 @@
 """Bounded, fail-closed loader for the checked-in restriction catalog."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
 import threading
+from collections.abc import Callable, Hashable, Iterable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal, Mapping, TypeVar
 
 import rfc8785
 from jsonschema import Draft202012Validator
@@ -23,6 +25,10 @@ ACTIVE_CATALOG_PATH = API_ROOT / "config/molbio/restriction/restriction_enzyme_c
 ACTIVE_MANIFEST_PATH = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
 CATALOG_SCHEMA_PATH = REPO_ROOT / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json"
 ACTIVE_CATALOG_ID = "biopython-rebase-404-bms-v1"
+APPROVED_CATALOG_CONTENT_SHA256 = "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+APPROVED_CATALOG_RAW_SHA256 = "afa440bbbf47d9368e85f300e5abcb4f630b5cb3828e832feaa9e13f71d520c8"
+APPROVED_MANIFEST_RAW_SHA256 = "f79eb4a611b8e6bc28e906afafc24c7e38723b4d0b8aeb40dbc541ea8c19e983"
+APPROVED_SCHEMA_RAW_SHA256 = "7bdbd4d1bd7206eba5b5efdf1da050580ac73a5f0d4014233c3394eabfe2d346"
 CATALOG_MAX_BYTES = 2 * 1024 * 1024
 MANIFEST_MAX_BYTES = 256 * 1024
 SCHEMA_MAX_BYTES = 512 * 1024
@@ -206,6 +212,8 @@ class CatalogView:
     source_release: str
     counts: Mapping[str, int]
     records: tuple[RestrictionRecord, ...]
+    ordered_records: tuple[RestrictionRecord, ...]
+    order_rank: Mapping[str, int]
     by_id: Mapping[str, RestrictionRecord]
     by_name_casefold: Mapping[str, RestrictionRecord]
     by_motif: Mapping[str, tuple[RestrictionRecord, ...]]
@@ -215,6 +223,7 @@ class CatalogView:
     by_capability: Mapping[str, tuple[RestrictionRecord, ...]]
     by_overhang_kind: Mapping[str, tuple[RestrictionRecord, ...]]
     by_palindromic: Mapping[bool, tuple[RestrictionRecord, ...]]
+    by_commercial: Mapping[bool, tuple[RestrictionRecord, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,8 +295,14 @@ def _json_object(raw: bytes) -> dict[str, object]:
     return value
 
 
-def _group(records: tuple[RestrictionRecord, ...], keys) -> Mapping[object, tuple[RestrictionRecord, ...]]:
-    grouped: dict[object, list[RestrictionRecord]] = {}
+IndexKey = TypeVar("IndexKey", bound=Hashable)
+
+
+def _group(
+    records: tuple[RestrictionRecord, ...],
+    keys: Callable[[RestrictionRecord], Iterable[IndexKey]],
+) -> Mapping[IndexKey, tuple[RestrictionRecord, ...]]:
+    grouped: dict[IndexKey, list[RestrictionRecord]] = {}
     for record in records:
         for key in keys(record):
             grouped.setdefault(key, []).append(record)
@@ -309,6 +324,9 @@ def _public_counts(counts: Mapping[str, int], records: tuple[RestrictionRecord, 
 
 def _build_view(catalog: dict[str, object]) -> CatalogView:
     records = tuple(RestrictionRecord.model_validate(row) for row in catalog["records"])  # type: ignore[arg-type]
+    ordered_records = tuple(
+        sorted(records, key=lambda row: (row.canonical_name.casefold(), row.enzyme_id.casefold()))
+    )
     raw_counts = catalog["counts"]
     assert isinstance(raw_counts, dict)
     counts = _public_counts({str(key): int(value) for key, value in raw_counts.items()}, records)
@@ -320,15 +338,22 @@ def _build_view(catalog: dict[str, object]) -> CatalogView:
         source_release=SOURCE_RELEASE,
         counts=counts,
         records=records,
+        ordered_records=ordered_records,
+        order_rank=MappingProxyType(
+            {record.enzyme_id: rank for rank, record in enumerate(ordered_records)}
+        ),
         by_id=by_id,
         by_name_casefold=by_name,
-        by_motif=_group(records, lambda row: row.recognition.site_alternatives_iupac),
-        by_supplier_code=_group(records, lambda row: (code.upper() for code in row.supplier_provenance.historical_supplier_codes)),
-        by_kind=_group(records, lambda row: (row.enzyme_kind,)),
-        by_geometry_status=_group(records, lambda row: ("unknown" if row.cleavage.status == "unknown" else "known",)),
-        by_capability=_group(records, lambda row: (row.analysis_capability,)),
-        by_overhang_kind=_group(records, lambda row: {event.overhang_kind for event in row.cleavage.events}),
-        by_palindromic=_group(records, lambda row: (row.recognition.palindromic,)),
+        by_motif=_group(ordered_records, lambda row: row.recognition.site_alternatives_iupac),
+        by_supplier_code=_group(ordered_records, lambda row: (code.upper() for code in row.supplier_provenance.historical_supplier_codes)),
+        by_kind=_group(ordered_records, lambda row: (row.enzyme_kind,)),
+        by_geometry_status=_group(ordered_records, lambda row: ("unknown" if row.cleavage.status == "unknown" else "known",)),
+        by_capability=_group(ordered_records, lambda row: (row.analysis_capability,)),
+        by_overhang_kind=_group(ordered_records, lambda row: {event.overhang_kind for event in row.cleavage.events}),
+        by_palindromic=_group(ordered_records, lambda row: (row.recognition.palindromic,)),
+        by_commercial=_group(
+            ordered_records, lambda row: (row.supplier_provenance.reported_commercial,)
+        ),
     )
 
 
@@ -388,6 +413,14 @@ def _load(
     manifest = _json_object(manifest_raw)
     schema = _json_object(schema_raw)
     try:
+        if (
+            hashlib.sha256(catalog_raw).hexdigest() != APPROVED_CATALOG_RAW_SHA256
+            or hashlib.sha256(manifest_raw).hexdigest() != APPROVED_MANIFEST_RAW_SHA256
+            or hashlib.sha256(schema_raw).hexdigest() != APPROVED_SCHEMA_RAW_SHA256
+            or catalog.get("catalog_id") != ACTIVE_CATALOG_ID
+            or catalog.get("content_sha256") != APPROVED_CATALOG_CONTENT_SHA256
+        ):
+            raise CatalogUnavailable()
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(catalog)
         validate_catalog_integrity(catalog, manifest)  # type: ignore[arg-type]

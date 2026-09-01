@@ -359,7 +359,29 @@ def list_catalog(
             return False
         return palindromic_value is None or record.recognition.palindromic is palindromic_value
 
-    ordered = sorted(view.records, key=lambda row: (row.canonical_name.casefold(), row.enzyme_id.casefold()))
+    indexed_groups: list[tuple[RestrictionRecord, ...]] = []
+    if geometry_status != "all":
+        indexed_groups.append(view.by_geometry_status.get(geometry_status, ()))
+    if commercial != "all":
+        indexed_groups.append(view.by_commercial.get(commercial == "reported", ()))
+    if supplier_upper:
+        indexed_groups.append(view.by_supplier_code.get(supplier_upper, ()))
+    if enzyme_kind:
+        indexed_groups.append(view.by_kind.get(enzyme_kind, ()))
+    if overhang_kind:
+        indexed_groups.append(view.by_overhang_kind.get(overhang_kind, ()))
+    if palindromic_value is not None:
+        indexed_groups.append(view.by_palindromic.get(palindromic_value, ()))
+    if indexed_groups:
+        candidate_ids = set.intersection(
+            *({record.enzyme_id for record in group} for group in indexed_groups)
+        )
+        ordered = tuple(
+            view.by_id[enzyme_id]
+            for enzyme_id in sorted(candidate_ids, key=view.order_rank.__getitem__)
+        )
+    else:
+        ordered = view.ordered_records
     selected = [
         record
         for record in ordered

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -167,7 +168,7 @@ def test_cursor_rejects_one_bit_tampering_foreign_process_key_and_oversize(monke
         assert token not in response.text
 
 
-def test_cursor_rejects_unknown_key_version_and_stale_catalog() -> None:
+def test_cursor_rejects_correctly_signed_unknown_key_version_and_stale_catalog() -> None:
     authority = _authority()
     view = authority.require()
     filters = {
@@ -188,20 +189,15 @@ def test_cursor_rejects_unknown_key_version_and_stale_catalog() -> None:
         replace(view, content_sha256="0" * 64), fingerprint, 2, record
     )
     current = molbio_restriction._encode_cursor(view, fingerprint, 2, record)
-    if "." in current:
-        payload, _signature = current.split(".", 1)
-        document = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        document["v"] = 99
-        raw = rfc8785.dumps(document)
-        unknown_version = _legacy_public_forgery(query="A", limit=2)
-        public_signature = hashlib.sha256(view.content_sha256.encode("ascii") + b":" + raw).hexdigest()
-        unknown_version = (
-            base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") + "." + public_signature
-        )
-    else:
-        envelope = bytearray(base64.urlsafe_b64decode(current + "=" * (-len(current) % 4)))
-        envelope[0] = 99
-        unknown_version = base64.urlsafe_b64encode(envelope).decode("ascii").rstrip("=")
+    envelope = base64.urlsafe_b64decode(current + "=" * (-len(current) % 4))
+    authenticated = bytearray(envelope[:-32])
+    authenticated[1] = 99
+    signature = hmac.new(
+        molbio_restriction._CURSOR_SIGNING_KEY, bytes(authenticated), hashlib.sha256
+    ).digest()
+    unknown_version = base64.urlsafe_b64encode(bytes(authenticated) + signature).decode(
+        "ascii"
+    ).rstrip("=")
 
     client = _client(authority)
     for token in (unknown_version, stale):
@@ -211,6 +207,63 @@ def test_cursor_rejects_unknown_key_version_and_stale_catalog() -> None:
         )
         assert response.status_code == 422
         assert response.json()["detail"]["code"] == "cursor_invalid"
+
+
+def _all_catalog_ids(client: TestClient, params: dict[str, object]) -> list[str]:
+    ids: list[str] = []
+    cursor = None
+    while True:
+        request_params = {**params, "limit": 37}
+        if cursor is not None:
+            request_params["cursor"] = cursor
+        response = client.get("/api/molbio/restriction/catalog", params=request_params)
+        assert response.status_code == 200, response.text
+        page = response.json()
+        ids.extend(row["enzyme_id"] for row in page["items"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return ids
+
+
+def test_real_cursor_full_pagination_matches_raw_catalog_predicates_without_gaps() -> None:
+    raw_records = json.loads(CATALOG.read_bytes())["records"]
+    cases = [
+        ({"geometry_status": "unknown"}, lambda row: row["cleavage"]["status"] == "unknown"),
+        (
+            {"supplier_code": "N"},
+            lambda row: "N" in row["supplier_provenance"]["historical_supplier_codes"],
+        ),
+        ({"palindromic": "false"}, lambda row: row["recognition"]["palindromic"] is False),
+        (
+            {
+                "geometry_status": "known",
+                "commercial": "reported",
+                "overhang_kind": "five_prime",
+                "palindromic": "true",
+            },
+            lambda row: (
+                row["cleavage"]["status"] != "unknown"
+                and row["supplier_provenance"]["reported_commercial"]
+                and any(
+                    event["overhang_kind"] == "five_prime"
+                    for event in row["cleavage"]["events"]
+                )
+                and row["recognition"]["palindromic"] is True
+            ),
+        ),
+    ]
+    client = _client(_authority())
+    for params, predicate in cases:
+        expected = [
+            row["enzyme_id"]
+            for row in sorted(
+                (row for row in raw_records if predicate(row)),
+                key=lambda row: (row["canonical_name"].casefold(), row["enzyme_id"].casefold()),
+            )
+        ]
+        actual = _all_catalog_ids(client, params)
+        assert actual == expected, params
+        assert len(actual) == len(set(actual)), params
 
 
 def test_detail_returns_complete_record_and_exact_receipt_or_stable_404() -> None:

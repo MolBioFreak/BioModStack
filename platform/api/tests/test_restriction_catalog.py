@@ -532,6 +532,61 @@ def _rewrite_bound_assets(catalog_path: Path, manifest_path: Path, mutate) -> No
     manifest_path.write_bytes(rfc8785.dumps(manifest))
 
 
+def test_phase1_loader_rejects_self_consistent_scientific_release_replacement(
+    tmp_path: Path,
+) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, catalog_path, manifest_path, _schema = _phase1_authority(tmp_path)
+
+    def add_valid_alias(catalog, _manifest) -> None:
+        record = next(row for row in catalog["records"] if row["canonical_name"] == "EcoRI")
+        record["aliases"] = ["EcoRI-approved-replacement"]
+
+    _rewrite_bound_assets(catalog_path, manifest_path, add_valid_alias)
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_phase1_loader_rejects_valid_but_altered_schema_release(tmp_path: Path) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, _catalog, _manifest, schema_path = _phase1_authority(tmp_path)
+    schema = json.loads(schema_path.read_bytes())
+    schema["title"] = "Valid hostile replacement schema"
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(_load(CATALOG))
+    schema_path.write_bytes(rfc8785.dumps(schema))
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_phase1_loader_rejects_fully_self_consistent_manifest_replacement(
+    tmp_path: Path,
+) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, catalog_path, manifest_path, _schema = _phase1_authority(tmp_path)
+
+    def replace_valid_record_field(catalog, _manifest) -> None:
+        record = next(row for row in catalog["records"] if row["canonical_name"] == "BamHI")
+        record["aliases"] = ["BamHI-approved-replacement"]
+
+    _rewrite_bound_assets(catalog_path, manifest_path, replace_valid_record_field)
+    replacement_manifest = json.loads(manifest_path.read_bytes())
+    assert replacement_manifest["content_sha256"] == _canonical_digest(
+        replacement_manifest, "content_sha256"
+    )
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+
+
 def test_phase1_loader_publishes_frozen_typed_projection_and_indexes(tmp_path: Path) -> None:
     from pydantic import ValidationError
 
@@ -540,6 +595,9 @@ def test_phase1_loader_publishes_frozen_typed_projection_and_indexes(tmp_path: P
     assert view.catalog_id == "biopython-rebase-404-bms-v1"
     assert view.content_sha256 == "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
     assert len(view.records) == 1092
+    assert view.ordered_records == tuple(
+        sorted(view.records, key=lambda row: (row.canonical_name.casefold(), row.enzyme_id.casefold()))
+    )
     assert view.by_id["EcoRI"].canonical_name == "EcoRI"
     assert view.by_name_casefold["ecori"].enzyme_id == "EcoRI"
     assert "EcoRI" in {row.enzyme_id for row in view.by_motif["GAATTC"]}
