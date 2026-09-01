@@ -67,6 +67,11 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "platform/api/services/restriction_products.py",
         "platform/api/services/sqlite_schema_attestation.py",
         "platform/api/services/assembly/golden_gate.py",
+        "platform/api/services/assembly/common.py",
+        "platform/api/services/assembly/ligation.py",
+        "platform/api/services/assembly/types.py",
+        "platform/api/services/nucleotide_validation.py",
+        "platform/api/services/molbio_persistence.py",
         "platform/api/services/molbio_ops.py",
         "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
         "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
@@ -75,6 +80,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "platform/frontend/src/components/MolBioToolkit/hooks/useSequenceOperations.ts",
         "platform/frontend/src/components/MolBioToolkit/types.ts",
         "platform/frontend/src/lib/restrictionAnalysis.ts",
+        "platform/frontend/src/lib/goldenGateAuthority.ts",
         "packages/sequence-utils/src/index.js",
         "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
         "schemas/molbio/restriction_enzyme_products_v1.schema.json",
@@ -83,7 +89,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "scripts/build_restriction_enzyme_catalog.py",
     }
     assert required <= set(denominator["paths"])
-    assert len(denominator["paths"]) == 252
+    assert len(denominator["paths"]) == 258
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:

@@ -2957,7 +2957,7 @@ export interface GibsonDesignResponse {
 export interface GoldenGateAssemblyRequest {
     fragments: AssemblyFragmentInput[];
     circular?: boolean;
-    enzyme_id?: string;
+    enzyme_id: string;
     new_name?: string;
     save_description?: string;
 }

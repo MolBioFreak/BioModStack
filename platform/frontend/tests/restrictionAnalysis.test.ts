@@ -88,7 +88,7 @@ const RECORD = {
     enzyme_id: 'EcoRI', id_policy: 'canonical_name_v1_casefold_unique', canonical_name: 'EcoRI', aliases: [],
     recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], source_notation: 'G^AATTC', reverse_complement_iupac: 'GAATTC', reverse_complement_alternatives_iupac: ['GAATTC'], length_bp: 6, palindromic: true },
     cleavage: { status: 'known_double_strand', events: [{ top_offset: 1, bottom_offset: 5, overhang_kind: 'five_prime', overhang_length_nt: 4 }], nick: null, source_fields: { fst5: 1, fst3: -5, scd5: null, scd3: null } },
-    enzyme_kind: 'double_strand_endonuclease', analysis_capability: 'digest_simulation', exclusion_reason: null,
+    enzyme_kind: 'double_strand_endonuclease', analysis_capability: 'digest_simulation', golden_gate_compatible: false, exclusion_reason: null,
     supplier_provenance: { reported_commercial: true, historical_supplier_codes: ['N'], availability_claim: 'not_evaluated' },
     relationships: { isoschizomer_group_id: 'iso:EcoRI', equischizomer_group_id: null, equischizomer_ids: [], neoschizomer_ids: [] },
     source: { kind: 'biopython_restriction_dictionary', record_id: 1, canonical_name: 'EcoRI', uri: null, package: 'biopython', package_version: '1.87', embedded_rebase_release: '404', dictionary_sha256: H, page_sha256: null, retrieved_on: null, record_modified_on: null, source_notation: 'G^AATTC' },

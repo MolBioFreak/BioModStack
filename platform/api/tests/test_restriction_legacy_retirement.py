@@ -91,6 +91,7 @@ def test_governed_contracts_publish_backend_owned_restriction_operations() -> No
     assert "enzyme_id" in golden_gate["properties"]
     assert "enzyme_name" not in golden_gate["properties"]
     assert "enzyme_id" in golden_gate["required"]
+    assert {"catalog_id", "catalog_sha256"} <= set(golden_gate["required"])
 
     registry = json.loads(
         (ROOT / "platform/api/config/ngs_molbio/schema_registry_v2.json").read_text(
@@ -107,6 +108,10 @@ def test_governed_contracts_publish_backend_owned_restriction_operations() -> No
     )
     capabilities = {row["capability_id"]: row for row in inventory["capabilities"]}
     digest = capabilities["molbio.restriction_digest"]
+    golden_gate_capability = capabilities["molbio.assembly.golden_gate"]
+    assert golden_gate_capability["native_mapping"]["native_request_compatibility"] == "partial_native_mapping"
+    assert "fragments" in golden_gate_capability["classified_parameter_keys"]
+    assert golden_gate_capability["unclassified_parameter_keys"] == []
     assert digest["native_mapping"]["source"] == "POST /api/molbio/restriction/digests"
     assert "enzyme_ids" in digest["classified_parameter_keys"]
     assert not {"site", "recognition_site", "cut_index", "cut_offset"}.intersection(

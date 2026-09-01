@@ -3,6 +3,39 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "catalog_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "catalog_id",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_utf8_or_enum",
+      "x-bms-reproducibility-effect": "changes_authority",
+      "x-bms-scientific-meaning": "immutable restriction catalog identity",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
+    "catalog_sha256": {
+      "maxLength": 64,
+      "minLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string",
+      "x-bms-applicability": "always",
+      "x-bms-default-policy": "required_explicit_or_authority_bound",
+      "x-bms-incompatibilities": [],
+      "x-bms-native-key": "catalog_sha256",
+      "x-bms-persisted-representation": "requested_and_effective",
+      "x-bms-precision": "exact_lowercase_sha256",
+      "x-bms-reproducibility-effect": "changes_authority",
+      "x-bms-scientific-meaning": "immutable restriction catalog content SHA-256",
+      "x-bms-supported-runtime-range": "native_molbio_route; biomodstack_source=d2fc413d6d0224fe9fbecb1cb1797e0456ca1517",
+      "x-bms-ui-control": "typed_control",
+      "x-bms-units": "not_applicable"
+    },
     "change_summary": {
       "maxLength": 1024,
       "minLength": 1,
@@ -95,11 +128,13 @@
     }
   },
   "required": [
-    "fragment_revision_ids",
-    "orientations",
+    "catalog_id",
+    "catalog_sha256",
+    "change_summary",
     "circular",
     "enzyme_id",
-    "change_summary"
+    "fragment_revision_ids",
+    "orientations"
   ],
   "title": "molbio.assembly.golden_gate operation v1",
   "type": "object",

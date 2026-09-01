@@ -56,7 +56,8 @@ from services.molbio_sequence_import import (
 from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
-    get_type_iis_enzyme,
+    GoldenGateAnalysisLimitError,
+    GoldenGateInvalidDNAError,
     golden_gate_options as catalog_golden_gate_options,
     simulate_golden_gate,
 )
@@ -1007,9 +1008,15 @@ class GibsonDesignResponse(BaseModel):
 
 
 class GoldenGateAssemblyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     fragments: List[AssemblyFragmentSchema]
     circular: bool = True
-    enzyme_id: str = "BsaI"
+    enzyme_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$",
+    )
     new_name: Optional[str] = None
     save_description: Optional[str] = None
 
@@ -2728,13 +2735,19 @@ async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
             enzyme_id=request.enzyme_id,
             circular=request.circular,
         )
+    except GoldenGateInvalidDNAError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GoldenGateAnalysisLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
 
-    enzyme = get_type_iis_enzyme(request.enzyme_id)
+    authority = product.golden_gate_authority
+    if authority is None:
+        raise HTTPException(status_code=500, detail="Golden Gate authority is unavailable")
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        message=f"Validated {enzyme.name} Golden Gate assembly across {len(product.fragments)} fragments",
+        message=f"Validated {authority.enzyme_id} Golden Gate assembly across {len(product.fragments)} fragments",
     )
 
 
@@ -2749,14 +2762,26 @@ async def save_golden_gate_assembly(
             enzyme_id=request.enzyme_id,
             circular=request.circular,
         )
+    except GoldenGateInvalidDNAError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GoldenGateAnalysisLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
 
+    authority = product.golden_gate_authority
+    if authority is None:
+        raise HTTPException(status_code=500, detail="Golden Gate authority is unavailable")
     saved = await persist_assembly_product(
         session,
         product=product,
         name=request.new_name,
         save_description=request.save_description,
+        extra_operation_params={
+            "enzyme_id": authority.enzyme_id,
+            "catalog_id": authority.catalog_id,
+            "catalog_sha256": authority.catalog_sha256,
+        },
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
