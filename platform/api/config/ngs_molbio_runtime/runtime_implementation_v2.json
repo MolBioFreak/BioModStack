@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "3cc93f9cf11e98e211895b86af241254879754ddcfb67578cd1eb02659c3bf0e",
+  "content_sha256": "de9c089d81c688257663607e9b13f965c4864cc348484100e90afe9e5abf0f98",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -114,8 +114,8 @@
     },
     {
       "path": "docs/Lab_Automation_MolBio_and_Sequencing.md",
-      "sha256": "c8315f9ab5c7b13f411c1889ce453688f273566eddfadd9290c5c0321b66deb7",
-      "size_bytes": 6833
+      "sha256": "037dfce6ed271f676914bf96545052d587be46de4afcee544593d0858c62ba47",
+      "size_bytes": 6867
     },
     {
       "path": "docs/Model_Configuration_Operator_Control_and_Agent_Parity.md",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "b5909d0430087d7a64026cd486a325d82c5bf9cd",
-  "successor_source_tree": "d56e29d57e58f751004331de2df0d2b118eb3f15",
+  "successor_source_commit": "9bbabe20b9b8eca7aeda33bf33a3435a5277a877",
+  "successor_source_tree": "41489bcac9563f8adfb869236d7fef1d2fcf8089",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
