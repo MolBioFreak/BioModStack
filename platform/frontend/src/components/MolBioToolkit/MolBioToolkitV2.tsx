@@ -8,6 +8,16 @@ import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent a
 import { useLocation } from 'react-router-dom';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
+import {
+    fetchRestrictionAnalysis,
+    fetchRestrictionCatalog,
+    simulateRestrictionDigest,
+    type RestrictionAnalysisResponse,
+    type RestrictionCatalogReceipt,
+    type RestrictionDigestSimulation,
+    type RestrictionRecord,
+    type RestrictionSource,
+} from '../../lib/restrictionAnalysis';
 import { anyToJson } from '@teselagen/bio-parsers';
 import { SequenceViewer, type ColorPaletteName } from './SequenceViewer';
 import { DEFAULT_VISIBILITY } from './sequenceViewerConstants';
@@ -859,6 +869,127 @@ export function MolBioToolkitV2() {
         () => sourceDisplayStrandForSequenceData(sequenceData),
         [sequenceData.moleculeOrientation, sequenceData.sequenceType],
     );
+
+    const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
+    const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
+    const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisResponse | null>(null);
+    const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
+    const [restrictionAuthorityError, setRestrictionAuthorityError] = useState<string | null>(null);
+    const [restrictionDigest, setRestrictionDigest] = useState<RestrictionDigestSimulation | null>(null);
+    const [restrictionDigestLoading, setRestrictionDigestLoading] = useState(false);
+    const [restrictionDigestError, setRestrictionDigestError] = useState<string | null>(null);
+
+    const restrictionAuthorityControllerRef = useRef(createLatestAsyncResourceController());
+    const restrictionDigestControllerRef = useRef(createLatestAsyncResourceController());
+    const restrictionSource = useMemo<RestrictionSource | null>(() => {
+        if (!sequenceData.sequence || sequenceData.sequenceType !== 'dna') return null;
+        if (selectedExactMolecularRevision) {
+            return {
+                kind: 'molecular_revision',
+                sequence_id: selectedExactMolecularRevision.sequence_id,
+                revision_id: selectedExactMolecularRevision.revision_id,
+                expected_content_sha256: selectedExactMolecularRevision.content_sha256,
+                topology: sequenceData.circular ? 'circular' : 'linear',
+            };
+        }
+        return {
+            kind: 'inline_dna',
+            name: sequenceData.name,
+            dna: sequenceData.sequence,
+            topology: sequenceData.circular ? 'circular' : 'linear',
+        };
+    }, [selectedExactMolecularRevision, sequenceData.circular, sequenceData.name, sequenceData.sequence, sequenceData.sequenceType]);
+    const restrictionSelectionKey = useMemo(() => JSON.stringify([...selectedEnzymes].sort()), [selectedEnzymes]);
+
+    useEffect(() => {
+        const authorityController = restrictionAuthorityControllerRef.current;
+        const digestController = restrictionDigestControllerRef.current;
+        const token = authorityController.begin();
+        digestController.begin();
+        setRestrictionCatalog(null);
+        setRestrictionCatalogRecords([]);
+        setRestrictionAnalysis(null);
+        setRestrictionDigest(null);
+
+        setRestrictionDigestError(null);
+        setRestrictionAuthorityError(null);
+        if (!restrictionSource) {
+            setRestrictionAuthorityLoading(false);
+            return;
+        }
+        const abort = new AbortController();
+        setRestrictionAuthorityLoading(true);
+        void (async () => {
+            try {
+                const catalogResult = await fetchRestrictionCatalog({ signal: abort.signal });
+                if (!authorityController.isCurrent(token)) return;
+                const analysisResult = await fetchRestrictionAnalysis({
+                    source: restrictionSource,
+                    catalog: {
+                        catalog_id: catalogResult.catalog.catalog_id,
+                        expected_catalog_sha256: catalogResult.catalog.catalog_sha256,
+                    },
+                    signal: abort.signal,
+                });
+                if (!authorityController.isCurrent(token)) return;
+                setRestrictionCatalog(catalogResult.catalog);
+                setRestrictionCatalogRecords(catalogResult.items);
+                setRestrictionAnalysis(analysisResult);
+                setRestrictionAuthorityError(null);
+            } catch (error) {
+                if (!authorityController.isCurrent(token)) return;
+                setRestrictionCatalog(null);
+                setRestrictionCatalogRecords([]);
+                setRestrictionAnalysis(null);
+                setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
+            } finally {
+                if (authorityController.isCurrent(token)) setRestrictionAuthorityLoading(false);
+            }
+        })();
+        return () => abort.abort();
+    }, [restrictionSelectionKey, restrictionSource]);
+
+    useEffect(() => () => {
+        restrictionAuthorityControllerRef.current.dispose();
+        restrictionDigestControllerRef.current.dispose();
+    }, []);
+
+    const runRestrictionDigest = useCallback((enzymeIds: string[]) => {
+        const controller = restrictionDigestControllerRef.current;
+        const token = controller.begin();
+        setRestrictionDigest(null);
+        setRestrictionDigestError(null);
+        if (!restrictionSource || !restrictionCatalog || enzymeIds.length === 0) {
+            setRestrictionDigestLoading(false);
+            return;
+        }
+        setRestrictionDigestLoading(true);
+        const expectedSource = restrictionSource;
+        const expectedCatalog = restrictionCatalog;
+        void simulateRestrictionDigest({
+            source: expectedSource,
+            catalog: { catalog_id: expectedCatalog.catalog_id, expected_catalog_sha256: expectedCatalog.catalog_sha256 },
+            enzymeIds,
+        }).then((result) => {
+            if (!controller.isCurrent(token)) return;
+            setRestrictionDigest(result);
+        }).catch((error) => {
+            if (!controller.isCurrent(token)) return;
+            setRestrictionDigest(null);
+            setRestrictionDigestError(error instanceof Error ? error.message : 'Restriction digest is unavailable.');
+        }).finally(() => {
+            if (controller.isCurrent(token)) setRestrictionDigestLoading(false);
+        });
+    }, [restrictionCatalog, restrictionSource]);
+
+    const handleRestrictionDigestSelection = useCallback((enzymeIds: string[]) => {
+        void enzymeIds;
+        restrictionDigestControllerRef.current.begin();
+
+        setRestrictionDigest(null);
+        setRestrictionDigestError(null);
+        setRestrictionDigestLoading(false);
+    }, []);
 
     const handleDisplayStrandChange = useCallback((strand: NucleotideDisplayStrand) => {
         setActiveDisplayStrand(strand);
@@ -2827,6 +2958,7 @@ export function MolBioToolkitV2() {
                     sequenceData={viewerSequenceData}
                     visibility={visibility}
                     selectedEnzymes={selectedEnzymes}
+                    restrictionAnalysis={restrictionAnalysis}
                     selection={selection}
                     onSelection={handleSelection}
                     highlightedRegions={highlightedRegions}
@@ -2891,6 +3023,16 @@ export function MolBioToolkitV2() {
                         selectedEnzymes={selectedEnzymes}
                         onEnzymesChange={setSelectedEnzymes}
                         onMapVisibilityRequest={ensureCutSitesVisible}
+                        catalog={restrictionCatalog}
+                        catalogRecords={restrictionCatalogRecords}
+                        analysis={restrictionAnalysis}
+                        authorityLoading={restrictionAuthorityLoading}
+                        authorityError={restrictionAuthorityError}
+                        digestSimulation={restrictionDigest}
+                        digestLoading={restrictionDigestLoading}
+                        digestError={restrictionDigestError}
+                        onDigestSelectionChange={handleRestrictionDigestSelection}
+                        onSimulateDigest={runRestrictionDigest}
                     />
                 )}
                 qc={(
@@ -3162,6 +3304,7 @@ export function MolBioToolkitV2() {
                                         reverseCoordinates={sourceDisplayStrand !== activeDisplayStrand}
                                         circular={sequenceData.circular}
                                         selectedEnzymes={selectedEnzymes}
+                                        restrictionOccurrences={restrictionAnalysis?.analysis.occurrences ?? []}
                                         selection={selection}
                                         onSelectionChange={handleSelection}
                                         onClearSelection={() => setSelection(null)}
@@ -3178,6 +3321,7 @@ export function MolBioToolkitV2() {
                                                 sequenceData={viewerSequenceData}
                                                 visibility={visibility}
                                                 selectedEnzymes={selectedEnzymes}
+                    restrictionAnalysis={restrictionAnalysis}
                                                 selection={selection}
                                                 onSelection={handleSelection}
                                                 onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3204,6 +3348,7 @@ export function MolBioToolkitV2() {
                                             sequenceData={viewerSequenceData}
                                             visibility={visibility}
                                             selectedEnzymes={selectedEnzymes}
+                    restrictionAnalysis={restrictionAnalysis}
                                             selection={selection}
                                             onSelection={handleSelection}
                                             onContextMenu={isExactMolecularAuthority ? undefined : handleViewerContextMenu}
@@ -3395,6 +3540,16 @@ export function MolBioToolkitV2() {
                                 selectedEnzymes={selectedEnzymes}
                                 onEnzymesChange={setSelectedEnzymes}
                                 onMapVisibilityRequest={ensureCutSitesVisible}
+                        catalog={restrictionCatalog}
+                        catalogRecords={restrictionCatalogRecords}
+                        analysis={restrictionAnalysis}
+                        authorityLoading={restrictionAuthorityLoading}
+                        authorityError={restrictionAuthorityError}
+                        digestSimulation={restrictionDigest}
+                        digestLoading={restrictionDigestLoading}
+                        digestError={restrictionDigestError}
+                        onDigestSelectionChange={handleRestrictionDigestSelection}
+                        onSimulateDigest={runRestrictionDigest}
                             />
                         )}
                         {!isExactMolecularAuthority && activePanel === 'pcr' && (
