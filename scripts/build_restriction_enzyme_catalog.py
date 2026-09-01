@@ -36,8 +36,7 @@ NICKASE_SUPPLEMENT: tuple[dict[str, Any], ...] = (
         "name": "Nt.BbvCI",
         "site": "CCTCAGC",
         "strand": "top",
-        "top_offset": 2,
-        "bottom_offset": None,
+        "boundary_offset": 2,
         "source_notation": "CCTCAGC (-5/none)",
         "record_id": "5790",
         "uri": "https://rebase.neb.com/rebase/enz/Nt.BbvCI.html",
@@ -48,8 +47,7 @@ NICKASE_SUPPLEMENT: tuple[dict[str, Any], ...] = (
         "name": "Nb.BbvCI",
         "site": "CCTCAGC",
         "strand": "bottom",
-        "top_offset": None,
-        "bottom_offset": 5,
+        "boundary_offset": 5,
         "source_notation": "CCTCAGC (none/-2)",
         "record_id": "5789",
         "uri": "https://rebase.neb.com/rebase/enz/Nb.BbvCI.html",
@@ -60,8 +58,7 @@ NICKASE_SUPPLEMENT: tuple[dict[str, Any], ...] = (
         "name": "Nt.BspQI",
         "site": "GCTCTTC",
         "strand": "top",
-        "top_offset": 8,
-        "bottom_offset": None,
+        "boundary_offset": 8,
         "source_notation": "GCTCTTC (1/none)",
         "record_id": "16997",
         "uri": "https://rebase.neb.com/rebase/enz/Nt.BspQI.html",
@@ -72,8 +69,7 @@ NICKASE_SUPPLEMENT: tuple[dict[str, Any], ...] = (
         "name": "Nb.BssSI",
         "site": "CACGAG",
         "strand": "bottom",
-        "top_offset": None,
-        "bottom_offset": 5,
+        "boundary_offset": 5,
         "source_notation": "CACGAG (none/-1)",
         "record_id": "140982",
         "uri": "https://rebase.neb.com/rebase/enz/Nb.BssSI.html",
@@ -210,6 +206,8 @@ def base_record(name: str, source: dict[str, Any], enzyme_id: str) -> dict[str, 
 def nickase_record(source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
     name = source["name"]
     site = source["site"]
+    strand = source["strand"]
+    boundary_offset = source["boundary_offset"]
     return {
         "enzyme_id": enzyme_id,
         "id_policy": "canonical_name_with_deterministic_collision_suffix",
@@ -220,9 +218,12 @@ def nickase_record(source: dict[str, Any], enzyme_id: str) -> dict[str, Any]:
             "status": "known_single_strand_nick",
             "events": [],
             "nick": {
-                "strand": source["strand"],
-                "top_offset": source["top_offset"],
-                "bottom_offset": source["bottom_offset"],
+                "strand": strand,
+                "boundary_offset": boundary_offset,
+                "reverse_orientation": {
+                    "strand": "bottom" if strand == "top" else "top",
+                    "boundary_offset": len(site) - boundary_offset,
+                },
             },
             "source_fields": {"fst5": None, "fst3": None, "scd5": None, "scd3": None},
         },
@@ -261,7 +262,13 @@ def geometry_key(record: dict[str, Any]) -> Any:
         ]
     if cleavage["status"] == "known_single_strand_nick":
         nick = cleavage["nick"]
-        return ["nick", nick["strand"], nick["top_offset"], nick["bottom_offset"]]
+        return [
+            "nick",
+            nick["strand"],
+            nick["boundary_offset"],
+            nick["reverse_orientation"]["strand"],
+            nick["reverse_orientation"]["boundary_offset"],
+        ]
     return ["unknown"]
 
 

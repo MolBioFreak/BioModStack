@@ -133,8 +133,9 @@ def test_catalog_records_are_unique_sorted_digest_bound_and_fail_closed() -> Non
             assert cleavage["status"] == "known_single_strand_nick"
             assert cleavage["events"] == []
             assert cleavage["nick"] is not None
-            assert (cleavage["nick"]["top_offset"] is None) != (
-                cleavage["nick"]["bottom_offset"] is None
+            assert cleavage["nick"]["reverse_orientation"]["strand"] != cleavage["nick"]["strand"]
+            assert cleavage["nick"]["reverse_orientation"]["boundary_offset"] == (
+                row["recognition"]["length_bp"] - cleavage["nick"]["boundary_offset"]
             )
             assert row["exclusion_reason"] == "nicking_enzyme_not_digestible"
         else:
@@ -175,12 +176,20 @@ def test_generator_converts_primary_and_secondary_geometry_to_interbase_offsets(
 def test_curated_nickases_bind_exact_rebase_receipts_and_one_strand_cut() -> None:
     records = {row["canonical_name"]: row for row in _load(CATALOG)["records"]}
     expected = {
-        "Nt.BbvCI": ("top", 2, "5790", "2017-08-10", "b592320c5331e8c12f397fbd1040109848acdec219b98382523f22db554fed82"),
-        "Nb.BbvCI": ("bottom", 5, "5789", "2017-08-10", "9c19e7dddb53bc46f41a26ad93dda5369fd44ee16a36e205f9ce18729806b658"),
-        "Nt.BspQI": ("top", 8, "16997", "2011-06-29", "b5d368dbadb89844ac4b4fc1c1883f8b2297294b28ba18dd37b90b0a5c957fc9"),
-        "Nb.BssSI": ("bottom", 5, "140982", "2018-02-21", "96b295677ebf2535b3687a2dc47cc26017db7f758ee9809abdafe6510c542bbd"),
+        "Nt.BbvCI": ("top", 2, "bottom", 5, "5790", "2017-08-10", "b592320c5331e8c12f397fbd1040109848acdec219b98382523f22db554fed82"),
+        "Nb.BbvCI": ("bottom", 5, "top", 2, "5789", "2017-08-10", "9c19e7dddb53bc46f41a26ad93dda5369fd44ee16a36e205f9ce18729806b658"),
+        "Nt.BspQI": ("top", 8, "bottom", -1, "16997", "2011-06-29", "b5d368dbadb89844ac4b4fc1c1883f8b2297294b28ba18dd37b90b0a5c957fc9"),
+        "Nb.BssSI": ("bottom", 5, "top", 1, "140982", "2018-02-21", "96b295677ebf2535b3687a2dc47cc26017db7f758ee9809abdafe6510c542bbd"),
     }
-    for name, (strand, offset, record_id, modified, page_sha256) in expected.items():
+    for name, (
+        strand,
+        boundary_offset,
+        reverse_strand,
+        reverse_boundary_offset,
+        record_id,
+        modified,
+        page_sha256,
+    ) in expected.items():
         row = records[name]
         assert row["source"]["kind"] == "bms_curated_rebase_nickase"
         assert row["source"]["record_id"] == record_id
@@ -189,8 +198,12 @@ def test_curated_nickases_bind_exact_rebase_receipts_and_one_strand_cut() -> Non
         assert row["source"]["page_sha256"] == page_sha256
         nick = row["cleavage"]["nick"]
         assert nick["strand"] == strand
-        assert nick[f"{strand}_offset"] == offset
-        assert nick[f"{'bottom' if strand == 'top' else 'top'}_offset"] is None
+        assert nick["boundary_offset"] == boundary_offset
+        assert nick["reverse_orientation"] == {
+            "strand": reverse_strand,
+            "boundary_offset": reverse_boundary_offset,
+        }
+        assert reverse_boundary_offset == row["recognition"]["length_bp"] - boundary_offset
         assert row["analysis_capability"] == "nicking_analysis"
         assert row["exclusion_reason"] == "nicking_enzyme_not_digestible"
 
@@ -307,8 +320,16 @@ def test_catalog_schema_rejects_every_scientific_state_contradiction() -> None:
     validator = Draft202012Validator(record_schema)
     records = {row["canonical_name"]: row for row in _load(CATALOG)["records"]}
     event = copy.deepcopy(records["EcoRI"]["cleavage"]["events"][0])
-    top_nick = {"strand": "top", "top_offset": 1, "bottom_offset": None}
-    bottom_nick = {"strand": "bottom", "top_offset": None, "bottom_offset": 1}
+    top_nick = {
+        "strand": "top",
+        "boundary_offset": 1,
+        "reverse_orientation": {"strand": "bottom", "boundary_offset": 5},
+    }
+    bottom_nick = {
+        "strand": "bottom",
+        "boundary_offset": 1,
+        "reverse_orientation": {"strand": "top", "boundary_offset": 5},
+    }
     cases = [
         ("known_status", records["EcoRI"], ("cleavage", "status"), "unknown"),
         ("known_event_cardinality", records["EcoRI"], ("cleavage", "events"), []),
@@ -327,7 +348,7 @@ def test_catalog_schema_rejects_every_scientific_state_contradiction() -> None:
         ("unknown_exclusion", records["Aba13301I"], ("exclusion_reason",), None),
         ("nick_status", records["Nt.BbvCI"], ("cleavage", "status"), "unknown"),
         ("nick_event_cardinality", records["Nt.BbvCI"], ("cleavage", "events"), [event]),
-        ("nick_shape", records["Nt.BbvCI"], ("cleavage", "nick", "bottom_offset"), 5),
+        ("nick_shape", records["Nt.BbvCI"], ("cleavage", "nick", "boundary_offset"), None),
         ("nick_kind", records["Nt.BbvCI"], ("enzyme_kind",), "double_strand_endonuclease"),
         ("nick_capability", records["Nt.BbvCI"], ("analysis_capability",), "digest_simulation"),
         ("nick_source_fields", records["Nt.BbvCI"], ("cleavage", "source_fields", "fst5"), 1),
@@ -341,6 +362,30 @@ def test_catalog_schema_rejects_every_scientific_state_contradiction() -> None:
             target = target[key]
         target[path[-1]] = replacement
         assert list(validator.iter_errors(invalid)), label
+
+
+def test_catalog_schema_rejects_missing_or_same_strand_nick_reverse_orientation() -> None:
+    catalog_schema = _load(CATALOG_SCHEMA)
+    record_schema = {
+        "$schema": catalog_schema["$schema"],
+        "$defs": catalog_schema["$defs"],
+        "$ref": "#/$defs/record",
+    }
+    validator = Draft202012Validator(record_schema)
+    record = next(
+        row for row in _load(CATALOG)["records"] if row["canonical_name"] == "Nt.BbvCI"
+    )
+
+    missing = copy.deepcopy(record)
+    missing["cleavage"]["nick"].pop("reverse_orientation", None)
+    assert list(validator.iter_errors(missing))
+
+    same_strand = copy.deepcopy(record)
+    same_strand["cleavage"]["nick"]["reverse_orientation"] = {
+        "strand": same_strand["cleavage"]["nick"]["strand"],
+        "boundary_offset": 5,
+    }
+    assert list(validator.iter_errors(same_strand))
 
 
 def test_v2_operation_contract_requires_exact_authorities_and_rejects_browser_geometry() -> None:
