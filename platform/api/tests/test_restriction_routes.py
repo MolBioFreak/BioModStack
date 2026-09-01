@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import json
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import rfc8785
+import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -55,12 +59,14 @@ def test_catalog_page_publishes_exact_receipt_bounds_and_historical_notice() -> 
         "analysis_inline_sequence_max_length": 5_000_000,
         "analysis_explicit_enzyme_maximum": 256,
         "analysis_region_maximum": 128,
-        "analysis_pattern_maximum": 619,
-        "analysis_scan_work_maximum": 100_000_000,
+        "analysis_scan_pattern_maximum": 1_056,
+        "analysis_scan_work_maximum": 32_000_000,
         "analysis_occurrence_maximum": 25_000,
         "analysis_event_maximum": 50_000,
         "analysis_response_maximum_bytes": 32 * 1024 * 1024,
         "analysis_cache_maximum_entries": 32,
+        "analysis_cache_maximum_total_weight_bytes": 64 * 1024 * 1024,
+        "analysis_cache_maximum_result_weight_bytes": 8 * 1024 * 1024,
     }
     assert body["catalog"]["analysis_enabled"] is True
     assert body["catalog"]["source_year"] == 2024
@@ -457,6 +463,10 @@ def test_main_application_mounts_phase2_analyze_but_not_digest_routes() -> None:
     assert "/api/molbio/restriction/digests/simulate" not in paths
 
 
+def test_router_description_names_phase1_and_phase2_scope() -> None:
+    assert "Phase 1+2" in (molbio_restriction.__doc__ or "")
+
+
 def _inline_request(**updates):
     payload = {
         "schema": "bms.molbio.restriction-analysis-request.v1",
@@ -475,7 +485,23 @@ def _inline_request(**updates):
 
 
 def test_analyze_inline_contract_is_strict_deterministic_and_has_no_db_write() -> None:
-    client = _client(_authority())
+    class FailOnWriteSession:
+        def add(self, *args, **kwargs):
+            raise AssertionError("inline analysis must not add database rows")
+
+        def delete(self, *args, **kwargs):
+            raise AssertionError("inline analysis must not delete database rows")
+
+        async def flush(self, *args, **kwargs):
+            raise AssertionError("inline analysis must not flush database writes")
+
+        async def commit(self, *args, **kwargs):
+            raise AssertionError("inline analysis must not commit database writes")
+
+        async def execute(self, *args, **kwargs):
+            raise AssertionError("inline analysis must not execute database DML")
+
+    client = _client(_authority(), FailOnWriteSession())
     first = client.post("/api/molbio/restriction/analyze", json=_inline_request())
     second = client.post("/api/molbio/restriction/analyze", json=_inline_request())
     assert first.status_code == second.status_code == 200, first.text
@@ -486,6 +512,148 @@ def test_analyze_inline_contract_is_strict_deterministic_and_has_no_db_write() -
     assert body["source"]["content_sha256"] == hashlib.sha256(b"TTGAATTCAA").hexdigest()
     assert body["analysis"]["counts"]["double_strand_break_count"] == 1
     assert len(body["request_sha256"]) == len(body["result_sha256"]) == 64
+
+
+def test_public_request_and_result_hashes_bind_exact_resource_policy(monkeypatch) -> None:
+    import services.restriction_analysis as analysis_module
+
+    client = _client(_authority())
+    first = client.post("/api/molbio/restriction/analyze", json=_inline_request()).json()
+    receipt = first["analysis"]["resource_policy_receipt"]
+    policy_sha = hashlib.sha256(rfc8785.dumps(receipt)).hexdigest()
+    assert first["analysis"]["resource_policy_sha256"] == policy_sha
+    assert receipt == {
+        "schema": "bms.molbio.restriction-analysis-resource-policy.v1",
+        "policy_version": "1.0.0",
+        "scan_work_formula_id": "candidate-starts-times-motif-width",
+        "scan_work_formula_version": "1.0.0",
+        "sequence_length_maximum": 5_000_000,
+        "explicit_enzyme_maximum": 256,
+        "region_maximum": 128,
+        "actual_scan_pattern_maximum": 1_056,
+        "scan_work_maximum": 32_000_000,
+        "occurrence_maximum": 25_000,
+        "event_maximum": 50_000,
+        "response_maximum_bytes": 32 * 1024 * 1024,
+        "response_base_budget_bytes": 64 * 1024,
+        "response_occurrence_budget_bytes": 2_048,
+        "response_event_budget_bytes": 1_024,
+        "worker_concurrency": 2,
+        "queue_policy": "reject_when_all_workers_busy",
+        "timeout_seconds": 60,
+        "cancellation_policy": "worker_continues_and_capacity_is_retained_until_completion",
+        "cache_entry_maximum": 32,
+        "cache_total_weight_maximum_bytes": 64 * 1024 * 1024,
+        "cache_result_weight_maximum_bytes": 8 * 1024 * 1024,
+        "cache_weight_formula_id": "recursive-sys-getsizeof-object-graph",
+        "cache_weight_formula_version": "1.0.0",
+    }
+
+    monkeypatch.setattr(analysis_module, "MAX_SCAN_WORK", analysis_module.MAX_SCAN_WORK + 1)
+    second = client.post("/api/molbio/restriction/analyze", json=_inline_request()).json()
+    assert second["request_sha256"] != first["request_sha256"]
+    assert second["analysis"]["result_sha256"] != first["analysis"]["result_sha256"]
+    assert second["result_sha256"] != first["result_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_cpu_analysis_does_not_block_event_loop(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    authority = _authority()
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
+    original = molbio_restriction.analyze_sequence
+    started = threading.Event()
+    lightweight_completed = threading.Event()
+    release = threading.Event()
+    observed: list[bool] = []
+    event_loop_thread = threading.get_ident()
+
+    def blocked_analysis(**kwargs):
+        started.set()
+        assert threading.get_ident() != event_loop_thread
+        assert release.wait(2)
+        return original(**kwargs)
+
+    def controller() -> None:
+        assert started.wait(2)
+        observed.append(lightweight_completed.wait(1))
+        release.set()
+
+    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    control = threading.Thread(target=controller)
+    control.start()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        analysis_task = asyncio.create_task(
+            client.post("/api/molbio/restriction/analyze", json=_inline_request())
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        lightweight = await client.get("/api/molbio/restriction/catalog?limit=1")
+        lightweight_completed.set()
+        analysis = await analysis_task
+    control.join(timeout=2)
+    assert observed == [True]
+    assert lightweight.status_code == analysis.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_analysis_worker_concurrency_is_process_bounded(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(molbio_restriction.router)
+    authority = _authority()
+    app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: object()
+    original = molbio_restriction.analyze_sequence
+    release = threading.Event()
+    first_started = threading.Event()
+    both_started = threading.Event()
+    observed: list[bool] = []
+    lock = threading.Lock()
+    active = 0
+    maximum_active = 0
+
+    def blocked_analysis(**kwargs):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            first_started.set()
+            if active == 2:
+                both_started.set()
+        try:
+            assert release.wait(2)
+            return original(**kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    def controller() -> None:
+        assert first_started.wait(2)
+        observed.append(both_started.wait(1))
+        if not observed[-1]:
+            release.set()
+
+    monkeypatch.setattr(molbio_restriction, "analyze_sequence", blocked_analysis)
+    control = threading.Thread(target=controller)
+    control.start()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=_inline_request()))
+        second_payload = _inline_request()
+        second_payload["source"]["name"] = "second"
+        second = asyncio.create_task(client.post("/api/molbio/restriction/analyze", json=second_payload))
+        assert await asyncio.to_thread(both_started.wait, 2)
+        rejected = await client.post("/api/molbio/restriction/analyze", json=_inline_request())
+        assert rejected.status_code == 503
+        assert rejected.json()["detail"]["code"] == "analysis_busy"
+        release.set()
+        completed = await asyncio.gather(first, second)
+    control.join(timeout=2)
+    assert observed == [True]
+    assert [response.status_code for response in completed] == [200, 200]
+    assert maximum_active == 2
 
 
 def test_analyze_rejects_hostile_geometry_fields_stale_catalog_unknown_enzyme_and_products() -> None:
@@ -600,12 +768,17 @@ def test_analyze_openapi_response_is_strict_and_publishes_all_resource_bounds() 
     assert schemas["AnalysisResponse"]["additionalProperties"] is False
     assert schemas["AnalysisResult"]["additionalProperties"] is False
     assert schemas["DoubleStrandEvent"]["additionalProperties"] is False
+    policy_example = schemas["ResourcePolicyReceipt"]["examples"][0]
+    catalog_policy = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]["resource_policy"]
+    assert policy_example == catalog_policy
     bounds = client.get("/api/molbio/restriction/catalog?limit=1").json()["catalog"]["bounds"]
     assert set(bounds) == {
         "default_limit", "maximum_limit", "query_max_length",
         "analysis_inline_sequence_max_length", "analysis_explicit_enzyme_maximum",
-        "analysis_region_maximum", "analysis_pattern_maximum",
+        "analysis_region_maximum", "analysis_scan_pattern_maximum",
         "analysis_scan_work_maximum", "analysis_occurrence_maximum",
         "analysis_event_maximum", "analysis_cache_maximum_entries",
+        "analysis_cache_maximum_total_weight_bytes",
+        "analysis_cache_maximum_result_weight_bytes",
         "analysis_response_maximum_bytes",
     }

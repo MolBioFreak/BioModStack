@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -246,6 +247,73 @@ def test_analysis_is_deterministic_and_cache_separates_authorities() -> None:
     assert first.result_sha256 == hashlib.sha256(first.canonical_result_bytes()).hexdigest()
 
 
+def test_policy_identity_is_hash_bound_and_prevents_cross_policy_cache_reuse(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    module._clear_cache_for_testing()
+    first = _analyze("GAATTC", ["EcoRI"])
+    first_policy = first.resource_policy_sha256
+    monkeypatch.setattr(module, "MAX_SCAN_WORK", module.MAX_SCAN_WORK + 1)
+    second = _analyze("GAATTC", ["EcoRI"])
+    assert second is not first
+    assert second.resource_policy_sha256 != first_policy
+    assert second.resource_policy_receipt.scan_work_maximum == module.MAX_SCAN_WORK
+    assert second.result_sha256 != first.result_sha256
+    assert second.result_sha256 == hashlib.sha256(second.canonical_result_bytes()).hexdigest()
+
+
+def test_cache_evicts_by_retained_weight_and_entry_lru(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    module._clear_cache_for_testing()
+    sample = _analyze("AAAAAA", ["EcoRI"])
+    weight = module._retained_weight(sample)
+    module._clear_cache_for_testing()
+    monkeypatch.setattr(module, "CACHE_MAX_ENTRIES", 32)
+    monkeypatch.setattr(module, "CACHE_MAX_TOTAL_WEIGHT_BYTES", weight * 2 - 1)
+    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", weight * 2)
+    first = _analyze("AAAAAA", ["EcoRI"])
+    _analyze("AAAAAAA", ["EcoRI"])
+    _analyze("AAAAAAAA", ["EcoRI"])
+    entries, retained_weight = module._cache_snapshot_for_testing()
+    assert entries <= 2
+    assert retained_weight <= weight * 2 - 1
+    assert _analyze("AAAAAA", ["EcoRI"]) is not first
+
+
+def test_oversized_result_bypasses_cache(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    module._clear_cache_for_testing()
+    sample = _analyze("CCCCCC", ["EcoRI"])
+    weight = module._retained_weight(sample)
+    module._clear_cache_for_testing()
+    monkeypatch.setattr(module, "CACHE_MAX_RESULT_WEIGHT_BYTES", weight - 1)
+    first = _analyze("CCCCCC", ["EcoRI"])
+    second = _analyze("CCCCCC", ["EcoRI"])
+    assert first == second
+    assert first is not second
+    assert module._cache_snapshot_for_testing() == (0, 0)
+
+
+def test_cache_exact_key_identity_and_thread_safety() -> None:
+    import services.restriction_analysis as module
+
+    module._clear_cache_for_testing()
+    first = _analyze("TTGAATTCAA", ["EcoRI"])
+    assert _analyze("TTGAATTCAA", ["EcoRI"]) is first
+    assert _analyze("TTGAATTCAAA", ["EcoRI"]) is not first
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(
+            lambda length: _analyze("C" * length, ["EcoRI"]),
+            range(20, 84),
+        ))
+    assert len(results) == 64
+    entries, retained_weight = module._cache_snapshot_for_testing()
+    assert entries <= module.CACHE_MAX_ENTRIES
+    assert retained_weight <= module.CACHE_MAX_TOTAL_WEIGHT_BYTES
+
+
 def test_enzyme_summaries_are_complete_ordered_and_separate_counts() -> None:
     result = _analyze("GATCGAATTC", ["MboI", "EcoRI"])
     assert [summary.enzyme_id for summary in result.enzyme_summaries] == ["EcoRI", "MboI"]
@@ -255,6 +323,84 @@ def test_enzyme_summaries_are_complete_ordered_and_separate_counts() -> None:
         "recognition_site_count_definite": 1, "recognition_site_count_possible": 0,
         "double_strand_break_count": 1, "nick_count": 0, "limitations": (),
     }
+
+
+def test_nonpalindromic_reverse_jobs_cannot_bypass_pattern_or_work_admission(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    view = catalog_authority.require()
+    record = view.by_id["BsaI"]
+    scanned = 0
+
+    def forbidden_scan(*args, **kwargs):
+        nonlocal scanned
+        scanned += 1
+        raise AssertionError("scanner must not run before exact admission")
+
+    monkeypatch.setattr(module, "_scan", forbidden_scan)
+    monkeypatch.setattr(module, "MAX_ANALYSIS_PATTERNS", 1)
+    with pytest.raises(AnalysisLimitError, match="pattern count"):
+        analyze_sequence(
+            sequence="GGTCTCA", topology="linear", catalog=view, records=(record,),
+        )
+    assert scanned == 0
+
+    monkeypatch.setattr(module, "MAX_ANALYSIS_PATTERNS", 2)
+    monkeypatch.setattr(module, "MAX_SCAN_WORK", 20)
+    with pytest.raises(AnalysisLimitError, match="scan work"):
+        analyze_sequence(
+            sequence="GGTCTCA", topology="linear", catalog=view, records=(record,),
+        )
+    assert scanned == 0
+
+
+def test_all_analysis_capable_rejects_actual_work_before_scan(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    view = catalog_authority.require()
+    scanned = 0
+
+    def forbidden_scan(*args, **kwargs):
+        nonlocal scanned
+        scanned += 1
+        raise AssertionError("scanner must consume only an admitted plan")
+
+    monkeypatch.setattr(module, "_scan", forbidden_scan)
+    monkeypatch.setattr(module, "MAX_SCAN_WORK", 1)
+    with pytest.raises(AnalysisLimitError, match="scan work"):
+        analyze_sequence(
+            sequence="ACGTACGTACGT", topology="linear", catalog=view,
+            records=view.ordered_records,
+        )
+    assert scanned == 0
+
+
+def test_scanner_consumes_each_exact_admitted_job_once(monkeypatch) -> None:
+    import services.restriction_analysis as module
+
+    view = catalog_authority.require()
+    all_plan, _all_long, _all_work = module._build_scan_plan(
+        view.ordered_records, 100, "linear",
+    )
+    geometry_plan, _geometry_long, _geometry_work = module._build_scan_plan(
+        view.by_capability["digest_simulation"], 100, "linear",
+    )
+    assert len(all_plan) == module.MAX_ANALYSIS_PATTERNS == 1_056
+    assert len(geometry_plan) == 408
+    record = view.by_id["BsaI"]
+    calls: list[str] = []
+    original_scan = module._scan
+
+    def counted_scan(sequence, pattern, topology):
+        calls.append(pattern)
+        return original_scan(sequence, pattern, topology)
+
+    monkeypatch.setattr(module, "_scan", counted_scan)
+    result = analyze_sequence(
+        sequence="GGTCTCAGAGACC", topology="linear", catalog=view, records=(record,),
+    )
+    assert {row.orientation for row in result.occurrences} == {"forward", "reverse"}
+    assert calls == ["GAGACC", "GGTCTC"]
 
 
 def test_resource_admission_rejects_before_scan_or_excess_models(monkeypatch) -> None:
@@ -409,6 +555,55 @@ def test_every_geometry_ready_enzyme_matches_independent_biopython_cut_oracle() 
                 if event.status == "complete"
             ]
             assert sorted(actual_pairs) == sorted(expected_pairs), (record.enzyme_id, lane)
+
+
+def test_every_catalog_recognition_alternative_matches_and_same_start_is_deduplicated() -> None:
+    view = catalog_authority.require()
+    choices = {
+        "A": "A", "C": "C", "G": "G", "T": "T", "R": "A", "Y": "C",
+        "S": "C", "W": "A", "K": "G", "M": "A", "B": "C",
+        "D": "A", "H": "A", "V": "A", "N": "A",
+    }
+    covered: set[tuple[str, str]] = set()
+    for record in view.ordered_records:
+        for motif in record.recognition.site_alternatives_iupac:
+            concrete = "".join(choices[symbol] for symbol in motif)
+            for orientation, inserted in (
+                ("forward", concrete),
+                ("reverse", reverse_complement(concrete)),
+            ):
+                if orientation == "reverse" and record.recognition.palindromic:
+                    continue
+                result = analyze_sequence(
+                    sequence="C" * 20 + inserted + "C" * 20,
+                    topology="linear", catalog=view, records=(record,),
+                    include_possible_sites=False,
+                )
+                assert any(
+                    row.site_start == 20 and row.orientation == orientation
+                    for row in result.occurrences
+                ), (record.enzyme_id, motif, orientation)
+            covered.add((record.enzyme_id, motif))
+    assert covered == {
+        (record.enzyme_id, motif)
+        for record in view.ordered_records
+        for motif in record.recognition.site_alternatives_iupac
+    }
+    assert ("HpyUM037X", "GTGGNAG") in covered
+
+    hpy = view.by_id["HpyUM037X"]
+    recognition = hpy.recognition.model_copy(update={
+        "site_iupac": "TNGGNAG",
+        "site_alternatives_iupac": ("TNGGNAG", "TTGGNAG"),
+        "reverse_complement_iupac": "CTNCCNA",
+        "reverse_complement_alternatives_iupac": ("CTNCCNA", "CTNCCAA"),
+    })
+    overlapping = hpy.model_copy(update={"recognition": recognition})
+    same_start = analyze_sequence(
+        sequence="TTGGAAG", topology="linear", catalog=view, records=(overlapping,),
+        include_possible_sites=False,
+    )
+    assert [(row.site_start, row.orientation) for row in same_start.occurrences] == [(0, "forward")]
 
 
 def test_independent_circular_winding_and_target_derived_overhang_oracle() -> None:

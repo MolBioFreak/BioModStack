@@ -1,12 +1,15 @@
-"""Read-only restriction-enzyme catalog API (Phase 1 only)."""
+"""Read-only restriction catalog and sequence-analysis API (Phase 1+2)."""
 from __future__ import annotations
 
+import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import json
 import re
 import secrets
+import threading
 from collections.abc import Callable
 from typing import Annotated, Any, Coroutine, Literal, Union
 
@@ -26,9 +29,11 @@ from services.restriction_analysis import (
     MAX_REGIONS,
     AnalysisLimitError,
     AnalysisResult,
+    ResourcePolicyReceipt,
     InvalidDNAError,
     analyze_sequence,
     normalize_dna,
+    resource_policy_receipt,
 )
 
 from services.restriction_catalog import (
@@ -40,6 +45,10 @@ from services.restriction_catalog import (
     CatalogUnavailable,
     CatalogView,
     RestrictionRecord,
+    ANALYSIS_CANCELLATION_POLICY,
+    ANALYSIS_QUEUE_POLICY,
+    ANALYSIS_TIMEOUT_SECONDS,
+    ANALYSIS_WORKER_CONCURRENCY,
     catalog_authority,
 )
 
@@ -63,6 +72,38 @@ _CURSOR_KEY_VERSION = 1
 # Development/API cursors intentionally expire whenever this process restarts.
 _CURSOR_SIGNING_KEY = secrets.token_bytes(32)
 _CURSOR_KEY_EPOCH = secrets.token_bytes(8)
+_analysis_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=ANALYSIS_WORKER_CONCURRENCY,
+    thread_name_prefix="restriction-analysis",
+)
+_analysis_capacity = threading.BoundedSemaphore(ANALYSIS_WORKER_CONCURRENCY)
+
+
+class AnalysisBusyError(RuntimeError):
+    pass
+
+
+class AnalysisTimeoutError(RuntimeError):
+    pass
+
+
+async def _run_analysis(**kwargs: Any) -> AnalysisResult:
+    """Run CPU analysis in the bounded process-wide lane without blocking asyncio."""
+    if not _analysis_capacity.acquire(blocking=False):
+        raise AnalysisBusyError
+    try:
+        future = _analysis_executor.submit(analyze_sequence, **kwargs)
+    except BaseException:
+        _analysis_capacity.release()
+        raise
+    future.add_done_callback(lambda _done: _analysis_capacity.release())
+    wrapped = asyncio.wrap_future(future)
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(wrapped), timeout=ANALYSIS_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise AnalysisTimeoutError from exc
 
 
 class CatalogRoute(APIRoute):
@@ -144,12 +185,14 @@ class CatalogBounds(StrictResponse):
     analysis_inline_sequence_max_length: int
     analysis_explicit_enzyme_maximum: int
     analysis_region_maximum: int
-    analysis_pattern_maximum: int
+    analysis_scan_pattern_maximum: int
     analysis_scan_work_maximum: int
     analysis_occurrence_maximum: int
     analysis_event_maximum: int
     analysis_response_maximum_bytes: int
     analysis_cache_maximum_entries: int
+    analysis_cache_maximum_total_weight_bytes: int
+    analysis_cache_maximum_result_weight_bytes: int
 
 
 class CatalogReceipt(StrictResponse):
@@ -162,6 +205,7 @@ class CatalogReceipt(StrictResponse):
     source_age_notice: str
     supplier_code_notice: str
     bounds: CatalogBounds
+    resource_policy: ResourcePolicyReceipt
     analysis_enabled: Literal[True]
     digest_enabled: Literal[False]
 
@@ -680,9 +724,16 @@ async def analyze_restriction_sites(
     if isinstance(payload.scope, ExplicitAnalysisScope):
         normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
     normalized_request["regions"] = sorted(normalized_request["regions"], key=lambda row: (row["start"], row["end"]))
-    request_sha256 = hashlib.sha256(rfc8785.dumps(normalized_request)).hexdigest()
+    policy_receipt = resource_policy_receipt()
+    policy_sha256 = hashlib.sha256(
+        rfc8785.dumps(policy_receipt.model_dump(mode="json", by_alias=True))
+    ).hexdigest()
+    request_sha256 = hashlib.sha256(rfc8785.dumps({
+        "request": normalized_request,
+        "resource_policy_sha256": policy_sha256,
+    })).hexdigest()
     try:
-        analysis = analyze_sequence(
+        analysis = await _run_analysis(
             sequence=sequence,
             topology=topology,
             catalog=view,
@@ -694,13 +745,17 @@ async def analyze_restriction_sites(
         raise _error(422, "invalid_dna", "DNA input or regions are invalid") from exc
     except AnalysisLimitError as exc:
         raise _error(413, "request_too_large", "restriction analysis request is too large") from exc
+    except AnalysisBusyError as exc:
+        raise _error(503, "analysis_busy", "restriction analysis capacity is busy") from exc
+    except AnalysisTimeoutError as exc:
+        raise _error(504, "analysis_timeout", "restriction analysis exceeded its wait timeout") from exc
     catalog_receipt = _receipt(authority)
     result_preimage = {
         "source": source_receipt.model_dump(mode="json"),
         "catalog_id": view.catalog_id,
         "catalog_sha256": view.content_sha256,
         "request_sha256": request_sha256,
-        "analysis": analysis.model_dump(mode="json"),
+        "analysis": analysis.model_dump(mode="json", by_alias=True),
     }
     result_sha256 = hashlib.sha256(rfc8785.dumps(result_preimage)).hexdigest()
     return AnalysisResponse(
