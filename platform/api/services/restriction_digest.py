@@ -504,7 +504,7 @@ def _construct_fragments(sequence: str, topology: str, cuts: tuple[PhysicalCleav
     return tuple(fragments)
 
 
-def simulate_digest(
+def simulate_digest_canonical(
     *,
     sequence: str,
     topology: Literal["linear", "circular"],
@@ -513,7 +513,7 @@ def simulate_digest(
     selected_enzyme_ids: Sequence[str],
     source_receipt: dict[str, Any],
     catalog_receipt: dict[str, Any],
-) -> DigestSimulation:
+) -> tuple[DigestSimulation, bytes]:
     selected_ids = tuple(selected_enzyme_ids)
     if not selected_ids or len(selected_ids) > MAX_SELECTED_ENZYMES or len(set(selected_ids)) != len(selected_ids):
         raise DigestLimitError("selected enzyme list is empty, duplicate, or oversized")
@@ -573,8 +573,31 @@ def simulate_digest(
         **payload,
         "simulation_sha256": hashlib.sha256(unsigned.canonical_unsigned_bytes()).hexdigest(),
     })
-    if len(result.canonical_bytes()) > MAX_SIMULATION_RESPONSE_BYTES:
+    canonical = result.canonical_bytes()
+    if len(canonical) > MAX_SIMULATION_RESPONSE_BYTES:
         raise DigestLimitError("simulation response exceeds digest byte limit")
+    return result, canonical
+
+
+def simulate_digest(
+    *,
+    sequence: str,
+    topology: Literal["linear", "circular"],
+    catalog: CatalogView,
+    records: Sequence[RestrictionRecord],
+    selected_enzyme_ids: Sequence[str],
+    source_receipt: dict[str, Any],
+    catalog_receipt: dict[str, Any],
+) -> DigestSimulation:
+    result, _canonical = simulate_digest_canonical(
+        sequence=sequence,
+        topology=topology,
+        catalog=catalog,
+        records=records,
+        selected_enzyme_ids=selected_enzyme_ids,
+        source_receipt=source_receipt,
+        catalog_receipt=catalog_receipt,
+    )
     return result
 
 
@@ -582,5 +605,5 @@ __all__ = [
     "DIGEST_ALGORITHM_ID", "DIGEST_ALGORITHM_VERSION", "DigestGeometryError",
     "DigestLimitError", "DigestSimulation", "MAX_FRAGMENTS", "MAX_PHYSICAL_CUTS",
     "MAX_SAVED_OUTPUTS", "MAX_SELECTED_ENZYMES", "MAX_SIMULATION_RESPONSE_BYTES",
-    "MAX_TOTAL_FRAGMENT_BASES", "simulate_digest",
+    "MAX_TOTAL_FRAGMENT_BASES", "simulate_digest", "simulate_digest_canonical",
 ]

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -372,11 +375,11 @@ def test_simulation_authority_receipts_are_closed_against_fully_rehashed_extra_f
 
 async def _store(
     tmp_path: Path, *, source_snapshot: dict[str, object] | None = None,
+    sequence: str = "TTGAATTCAA",
 ):
     engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'digest.db'}")
     await init_molbio_db(engine=engine)
     sessions = make_molbio_session_factory(engine)
-    sequence = "TTGAATTCAA"
     digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
     async with sessions.begin() as session:
         session.add(MolecularDocument(
@@ -629,6 +632,281 @@ async def test_preview_has_no_database_effect_and_save_is_atomic_idempotent(tmp_
                 )
         assert before[:4] == [(table, 0) for table, _count in before[:4]]
         assert [count for _table, count in after_preview_and_save] == [1, 1, 2, 1, 3, 3]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_exact_post_replay_uses_immutable_result_before_mutable_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, sessions, digest = await _store(tmp_path)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "immutable-post-replay",
+                "persistence_mode": "operation_and_fragments",
+            }
+            first = await client.post("/api/molbio/restriction/digests", json=save)
+            assert first.status_code == 200, first.text
+
+            async with engine.begin() as connection:
+                await connection.execute(text(
+                    "UPDATE molecular_documents SET name='renamed after save' "
+                    "WHERE id='source-document'"
+                ))
+            replay_after_rename = await client.post(
+                "/api/molbio/restriction/digests", json=save,
+            )
+            assert replay_after_rename.status_code == 200, replay_after_rename.text
+            assert replay_after_rename.content == first.content
+            async with sessions() as session:
+                counts_before = {
+                    table: await session.scalar(select(func.count()).select_from(table))
+                    for table in (
+                        MolecularOperation, MolecularOperationInput, MolecularOperationOutput,
+                        RestrictionDigestResult, MolecularDocument, MolecularRevision,
+                    )
+                }
+
+            async def forbidden_resolver(*_args, **_kwargs):
+                raise AssertionError("replay resolved mutable source")
+
+            def forbidden_pipeline(**_kwargs):
+                raise AssertionError("replay loaded catalog or simulated")
+
+            monkeypatch.setattr(molbio_restriction, "_resolve_revision_source", forbidden_resolver)
+            monkeypatch.setattr(molbio_restriction, "_complete_digest_pipeline", forbidden_pipeline)
+            replay = await client.post("/api/molbio/restriction/digests", json=save)
+            assert replay.status_code == 200, replay.text
+            assert replay.content == first.content
+            assert replay.json()["operation_id"] == first.json()["operation_id"]
+            assert replay.json()["outputs"] == first.json()["outputs"]
+
+        async with sessions() as session:
+            counts_after = {
+                table: await session.scalar(select(func.count()).select_from(table))
+                for table in counts_before
+            }
+        assert counts_after == counts_before
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_many_output_save_and_reload_have_bounded_database_boundaries(
+    tmp_path: Path,
+) -> None:
+    sequence = "GAATTC" * 64
+    engine, sessions, digest = await _store(tmp_path, sequence=sequence)
+    flushes = 0
+    selects = 0
+
+    from sqlalchemy.orm import Session
+
+    def before_flush(session, _context, _instances):
+        nonlocal flushes
+        if session.bind is engine.sync_engine:
+            flushes += 1
+
+    def before_cursor_execute(_conn, _cursor, statement, _parameters, _context, _many):
+        nonlocal selects
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects += 1
+
+    event.listen(Session, "before_flush", before_flush)
+    event.listen(engine.sync_engine, "before_cursor_execute", before_cursor_execute)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            assert preview.status_code == 200, preview.text
+            assert len(preview.json()["fragments"]) == 65
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "bounded-many-output-save",
+                "persistence_mode": "operation_and_fragments",
+            }
+            flushes = 0
+            saved = await client.post("/api/molbio/restriction/digests", json=save)
+            assert saved.status_code == 200, saved.text
+            assert flushes <= 5
+
+            selects = 0
+            loaded = await client.get(
+                f"/api/molbio/restriction/digests/{saved.json()['operation_id']}"
+            )
+            assert loaded.status_code == 200, loaded.text
+            assert loaded.content == saved.content
+            assert selects <= 10
+    finally:
+        event.remove(Session, "before_flush", before_flush)
+        event.remove(engine.sync_engine, "before_cursor_execute", before_cursor_execute)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sequence", "persistence_mode", "expected_outputs"),
+    (
+        ("ACGTACGT", "operation_only", 0),
+        ("ACGTACGT", "operation_and_fragments", 1),
+        ("TTGAATTCAA", "operation_and_fragments", 2),
+    ),
+)
+async def test_saved_digest_reload_supports_zero_one_and_many_outputs(
+    tmp_path: Path, sequence: str, persistence_mode: str, expected_outputs: int,
+) -> None:
+    engine, sessions, digest = await _store(tmp_path, sequence=sequence)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": f"reload-cardinality-{expected_outputs}",
+                "persistence_mode": persistence_mode,
+            }
+            saved = await client.post("/api/molbio/restriction/digests", json=save)
+            assert saved.status_code == 200, saved.text
+            assert len(saved.json()["outputs"]) == expected_outputs
+            loaded = await client.get(
+                f"/api/molbio/restriction/digests/{saved.json()['operation_id']}"
+            )
+            assert loaded.status_code == 200, loaded.text
+            assert loaded.content == saved.content
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_saved_response_byte_limit_is_sanitized_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, sessions, digest = await _store(tmp_path)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            monkeypatch.setattr(molbio_restriction, "MAX_SIMULATION_RESPONSE_BYTES", 1)
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "saved-response-limit",
+                "persistence_mode": "operation_and_fragments",
+            }
+            rejected = await client.post("/api/molbio/restriction/digests", json=save)
+            assert rejected.status_code == 413
+            assert rejected.json() == {"detail": {
+                "code": "request_too_large",
+                "message": "restriction digest request is too large",
+            }}
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(MolecularOperation)) == 0
+            assert await session.scalar(select(func.count()).select_from(RestrictionDigestResult)) == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_digest_canonical_cpu_work_stays_off_event_loop_and_reuses_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from services.restriction_digest import DigestSimulation
+
+    engine, sessions, digest = await _store(tmp_path, sequence="GAATTC" * 32)
+    event_loop_thread = threading.get_ident()
+    observed: list[tuple[str, int]] = []
+    canonical_active = threading.Event()
+    original_simulation_bytes = DigestSimulation.canonical_bytes
+    original_unsigned_bytes = DigestSimulation.canonical_unsigned_bytes
+    original_saved_validate = molbio_restriction.SavedDigestResponse.model_validate_json
+    original_saved_dump = molbio_restriction.SavedDigestResponse.model_dump
+
+    def simulation_bytes(self):
+        observed.append(("simulation_bytes", threading.get_ident()))
+        time.sleep(0.002)
+        return original_simulation_bytes(self)
+
+    def unsigned_bytes(self):
+        observed.append(("unsigned_bytes", threading.get_ident()))
+        return original_unsigned_bytes(self)
+
+    def saved_validate(value, *args, **kwargs):
+        observed.append(("saved_validate", threading.get_ident()))
+        canonical_active.set()
+        try:
+            time.sleep(0.02)
+            return original_saved_validate(value, *args, **kwargs)
+        finally:
+            canonical_active.clear()
+
+    def saved_dump(self, *args, **kwargs):
+        observed.append(("saved_dump", threading.get_ident()))
+        time.sleep(0.002)
+        return original_saved_dump(self, *args, **kwargs)
+
+    monkeypatch.setattr(DigestSimulation, "canonical_bytes", simulation_bytes)
+    monkeypatch.setattr(DigestSimulation, "canonical_unsigned_bytes", unsigned_bytes)
+    monkeypatch.setattr(
+        molbio_restriction.SavedDigestResponse, "model_validate_json", saved_validate,
+    )
+    monkeypatch.setattr(molbio_restriction.SavedDigestResponse, "model_dump", saved_dump)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            assert preview.status_code == 200, preview.text
+            save = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "worker-canonical-boundary",
+                "persistence_mode": "operation_and_fragments",
+            }
+            saved = await client.post("/api/molbio/restriction/digests", json=save)
+            assert saved.status_code == 200, saved.text
+            replay = await client.post("/api/molbio/restriction/digests", json=save)
+            responsive_ticks = 0
+            stop_ticker = False
+
+            async def ticker() -> None:
+                nonlocal responsive_ticks
+                while not stop_ticker:
+                    if canonical_active.is_set():
+                        responsive_ticks += 1
+                    await asyncio.sleep(0)
+
+            ticker_task = asyncio.create_task(ticker())
+            await asyncio.sleep(0)
+            loaded = await client.get(
+                f"/api/molbio/restriction/digests/{saved.json()['operation_id']}"
+            )
+            stop_ticker = True
+            await ticker_task
+            assert replay.content == loaded.content == saved.content
+            assert responsive_ticks > 0
+
+        assert observed
+        assert {name for name, _thread in observed} >= {
+            "simulation_bytes", "unsigned_bytes", "saved_validate", "saved_dump",
+        }
+        assert all(thread != event_loop_thread for _name, thread in observed)
     finally:
         await engine.dispose()
 
