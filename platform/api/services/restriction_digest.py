@@ -294,15 +294,47 @@ def _physical_cuts(analysis, sequence_length: int, topology: str) -> tuple[Physi
             row.enzyme_id.casefold(), row.occurrence_id, row.event_ordinal,
         )))
         first = ordered[0]
+        first_unwrapped = (
+            int(first.top_boundary_unwrapped), int(first.bottom_boundary_unwrapped),
+        )
+        if any(
+            (
+                int(event.top_boundary_unwrapped),
+                int(event.bottom_boundary_unwrapped),
+            ) != first_unwrapped
+            for event in ordered[1:]
+        ):
+            raise DigestGeometryError(
+                "unsupported_crossing_cleavage_geometry",
+                "deduplicated cleavage contributors disagree on unwrapped geometry",
+            )
         if topology == "linear":
-            top = int(first.top_boundary_unwrapped)
-            bottom = int(first.bottom_boundary_unwrapped)
+            top, bottom = first_unwrapped
             top_normal = top
             bottom_normal = bottom
         else:
             top_normal = int(first.top_boundary)
             bottom_normal = int(first.bottom_boundary)
-            delta = int(first.bottom_boundary_unwrapped) - int(first.top_boundary_unwrapped)
+            if any(
+                int(event.top_boundary) != int(event.top_boundary_unwrapped) % sequence_length
+                or int(event.bottom_boundary)
+                != int(event.bottom_boundary_unwrapped) % sequence_length
+                or int(event.top_winding)
+                != int(event.top_boundary_unwrapped) // sequence_length
+                or int(event.bottom_winding)
+                != int(event.bottom_boundary_unwrapped) // sequence_length
+                for event in ordered
+            ):
+                raise DigestGeometryError(
+                    "unsupported_crossing_cleavage_geometry",
+                    "circular cleavage normalization or winding disagrees with unwrapped geometry",
+                )
+            delta = first_unwrapped[1] - first_unwrapped[0]
+            if abs(delta) >= sequence_length:
+                raise DigestGeometryError(
+                    "unsupported_crossing_cleavage_geometry",
+                    "circular cleavage stagger self-spans or crosses multiple windings",
+                )
             top = top_normal
             bottom = top + delta
         raw.append((top_normal, bottom_normal, top, bottom, group_id, ordered))
@@ -310,32 +342,48 @@ def _physical_cuts(analysis, sequence_length: int, topology: str) -> tuple[Physi
     if len(raw) > MAX_PHYSICAL_CUTS:
         raise DigestLimitError("physical cut count exceeds digest limit")
 
-    for left, right in zip(raw, raw[1:]):
-        if left[0] == right[0] or left[1] == right[1]:
+    if topology == "circular":
+        if len({row[0] for row in raw}) != len(raw) or len({row[1] for row in raw}) != len(raw):
             raise DigestGeometryError(
                 "unsupported_crossing_cleavage_geometry",
                 "selected cleavages share one strand boundary without an identical duplex cut",
             )
-        if left[1] > right[1]:
-            raise DigestGeometryError(
-                "unsupported_crossing_cleavage_geometry",
-                "selected top- and bottom-strand cut orders cross",
-            )
-        left_interval = (min(left[2], left[3]), max(left[2], left[3]))
-        right_interval = (min(right[2], right[3]), max(right[2], right[3]))
-        if max(left_interval[0], right_interval[0]) < min(left_interval[1], right_interval[1]):
-            raise DigestGeometryError(
-                "overlapping_cleavage_geometry",
-                "selected stagger intervals overlap",
-            )
-    if topology == "circular" and len(raw) > 1:
-        bottoms = [row[1] for row in raw]
-        rotations = sum(bottoms[index] > bottoms[(index + 1) % len(bottoms)] for index in range(len(bottoms)))
-        if rotations != 1:
-            raise DigestGeometryError(
-                "unsupported_crossing_cleavage_geometry",
-                "selected circular cleavages have no consistent duplex cycle",
-            )
+        for index, left in enumerate(raw):
+            right = raw[(index + 1) % len(raw)]
+            shift = sequence_length if index == len(raw) - 1 else 0
+            right_top = right[2] + shift
+            right_bottom = right[3] + shift
+            left_interval = (min(left[2], left[3]), max(left[2], left[3]))
+            right_interval = (min(right_top, right_bottom), max(right_top, right_bottom))
+            if max(left_interval[0], right_interval[0]) < min(left_interval[1], right_interval[1]):
+                raise DigestGeometryError(
+                    "overlapping_cleavage_geometry",
+                    "selected circular stagger intervals overlap",
+                )
+            if left[2] >= right_top or left[3] >= right_bottom:
+                raise DigestGeometryError(
+                    "unsupported_crossing_cleavage_geometry",
+                    "selected circular cleavages have no consistent duplex cycle",
+                )
+    else:
+        for left, right in zip(raw, raw[1:]):
+            if left[0] == right[0] or left[1] == right[1]:
+                raise DigestGeometryError(
+                    "unsupported_crossing_cleavage_geometry",
+                    "selected cleavages share one strand boundary without an identical duplex cut",
+                )
+            if left[1] > right[1]:
+                raise DigestGeometryError(
+                    "unsupported_crossing_cleavage_geometry",
+                    "selected top- and bottom-strand cut orders cross",
+                )
+            left_interval = (min(left[2], left[3]), max(left[2], left[3]))
+            right_interval = (min(right[2], right[3]), max(right[2], right[3]))
+            if max(left_interval[0], right_interval[0]) < min(left_interval[1], right_interval[1]):
+                raise DigestGeometryError(
+                    "overlapping_cleavage_geometry",
+                    "selected stagger intervals overlap",
+                )
 
     cuts = []
     for index, (top_normal, bottom_normal, top, bottom, group_id, events) in enumerate(raw):

@@ -166,7 +166,10 @@ def _molbio_schema_issues_sync(sync_connection) -> list[str]:  # noqa: ANN001
                 f"required unique constraint differs or is missing: {table_name} {sorted(missing_unique)}"
             )
 
-    from molbio_migrations import restriction_digest_integrity_trigger_sql
+    from molbio_migrations import (
+        restriction_digest_integrity_trigger_sql,
+        restriction_digest_physical_schema_issues,
+    )
 
     digest_trigger = sync_connection.exec_driver_sql(
         "SELECT sql FROM sqlite_master WHERE type='trigger' "
@@ -178,6 +181,10 @@ def _molbio_schema_issues_sync(sync_connection) -> list[str]:  # noqa: ANN001
         != _normalize_sql(restriction_digest_integrity_trigger_sql())
     ):
         issues.append("restriction digest integrity trigger differs or is missing")
+    issues.extend(
+        f"restriction digest physical schema: {issue}"
+        for issue in restriction_digest_physical_schema_issues(sync_connection)
+    )
     return issues
 
 
@@ -387,11 +394,18 @@ def create_molbio_engine(database_url: str | None = None) -> AsyncEngine:
 
     @event.listens_for(engine.sync_engine, "connect")
     def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
-        from molbio_migrations import validate_restriction_digest_result
+        from molbio_migrations import (
+            restriction_digest_json_equal,
+            validate_restriction_digest_result,
+        )
 
         dbapi_connection.create_function(
             "bms_restriction_digest_result_valid", 7,
             validate_restriction_digest_result, deterministic=True,
+        )
+        dbapi_connection.create_function(
+            "bms_restriction_digest_json_equal", 2,
+            restriction_digest_json_equal, deterministic=True,
         )
         cursor = dbapi_connection.cursor()
         try:
