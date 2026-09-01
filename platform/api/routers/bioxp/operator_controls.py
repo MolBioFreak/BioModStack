@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -360,6 +360,22 @@ def _validate(model: type[Any], payload: Any) -> Any:
         raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
 
 
+def _normalize_operator_dashboard_v2_payload(payload: Any) -> Any:
+    """Fill the optional queue projection omitted by the current robot reader."""
+    if not isinstance(payload, dict) or "command_queue" in payload:
+        return payload
+    generated_at = payload.get("generated_at")
+    if type(generated_at) not in {int, float}:
+        return payload
+    normalized = dict(payload)
+    normalized["command_queue"] = {
+        "schema_version": "bioxp.oem_command_queue.v1",
+        "generated_at": float(cast(float, generated_at)),
+        "items": [],
+    }
+    return normalized
+
+
 async def _legacy_command_report_context(
     runtime: BioXpRuntime,
     command_id: str,
@@ -514,6 +530,9 @@ async def operator_control_catalog_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
+    if isinstance(payload, dict) and isinstance(payload.get("dashboard"), dict):
+        payload = dict(payload)
+        payload["dashboard"] = _normalize_operator_dashboard_v2_payload(payload["dashboard"])
     return _validate(OperatorControlCatalogV2, payload)
 
 
@@ -530,7 +549,7 @@ async def operator_dashboard_v2(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(OperatorDashboardV2, payload)
+    return _validate(OperatorDashboardV2, _normalize_operator_dashboard_v2_payload(payload))
 
 
 @router.post(
