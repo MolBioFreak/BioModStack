@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+from dataclasses import replace
 from pathlib import Path
 
+import rfc8785
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -89,14 +93,124 @@ def test_keyset_cursor_is_bounded_and_rejects_malformed_cross_query_and_stale() 
     ):
         response = client.get("/api/molbio/restriction/catalog", params=params)
         assert response.status_code == 422
-        assert response.json()["detail"]["code"] == "invalid_cursor"
+        assert response.json()["detail"]["code"] == "cursor_invalid"
 
-    payload, signature = cursor.split(".")
-    decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)).decode()
-    stale_payload = base64.urlsafe_b64encode(decoded.replace("e9a1e9ec", "00000000").encode()).decode().rstrip("=")
-    response = client.get("/api/molbio/restriction/catalog", params={"query": "A", "limit": 2, "cursor": f"{stale_payload}.{signature}"})
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_cursor"
+
+def _legacy_public_forgery(*, query: str, limit: int, last_name: str = "", last_id: str = "") -> str:
+    view = _authority().require()
+    filters = {
+        "query": query,
+        "geometry_status": "all",
+        "commercial": "all",
+        "supplier_code": None,
+        "enzyme_kind": None,
+        "overhang_kind": None,
+        "palindromic": None,
+        "limit": limit,
+    }
+    document = {
+        "v": 1,
+        "catalog_sha256": view.content_sha256,
+        "fingerprint": molbio_restriction._fingerprint(filters),
+        "last_name": last_name,
+        "last_id": last_id,
+    }
+    raw = rfc8785.dumps(document)
+    payload = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    public_signature = hashlib.sha256(view.content_sha256.encode("ascii") + b":" + raw).hexdigest()
+    return f"{payload}.{public_signature}"
+
+
+def test_caller_cannot_forge_cursor_keyset_fingerprint_or_limit_from_public_data() -> None:
+    client = _client(_authority())
+    for query, limit, last_name, last_id in (
+        ("A", 2, "zzzz", "zzzz"),
+        ("B", 2, "", ""),
+        ("A", 3, "", ""),
+    ):
+        forged = _legacy_public_forgery(
+            query=query, limit=limit, last_name=last_name, last_id=last_id
+        )
+        response = client.get(
+            "/api/molbio/restriction/catalog",
+            params={"query": query, "limit": limit, "cursor": forged},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "cursor_invalid"
+
+
+def test_cursor_rejects_one_bit_tampering_foreign_process_key_and_oversize(monkeypatch) -> None:
+    authority = _authority()
+    client = _client(authority)
+    cursor = client.get("/api/molbio/restriction/catalog?query=A&limit=2").json()["next_cursor"]
+    replacement = "A" if cursor[-1] != "A" else "B"
+    tampered = cursor[:-1] + replacement
+    oversized = "A" * 4097
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(molbio_restriction, "_CURSOR_SIGNING_KEY", b"f" * 32, raising=False)
+        scoped.setattr(molbio_restriction, "_CURSOR_KEY_EPOCH", b"foreign!", raising=False)
+        foreign = _client(authority).get(
+            "/api/molbio/restriction/catalog?query=A&limit=2"
+        ).json()["next_cursor"]
+
+    for token in (tampered, foreign, oversized):
+        response = client.get(
+            "/api/molbio/restriction/catalog",
+            params={"query": "A", "limit": 2, "cursor": token},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"] == {
+            "code": "cursor_invalid",
+            "message": "catalog cursor is invalid for this request",
+        }
+        assert token not in response.text
+
+
+def test_cursor_rejects_unknown_key_version_and_stale_catalog() -> None:
+    authority = _authority()
+    view = authority.require()
+    filters = {
+        "query": "A",
+        "geometry_status": "all",
+        "commercial": "all",
+        "supplier_code": None,
+        "enzyme_kind": None,
+        "overhang_kind": None,
+        "palindromic": None,
+        "limit": 2,
+    }
+    fingerprint = molbio_restriction._fingerprint(filters)
+    record = sorted(
+        view.records, key=lambda row: (row.canonical_name.casefold(), row.enzyme_id.casefold())
+    )[1]
+    stale = molbio_restriction._encode_cursor(
+        replace(view, content_sha256="0" * 64), fingerprint, 2, record
+    )
+    current = molbio_restriction._encode_cursor(view, fingerprint, 2, record)
+    if "." in current:
+        payload, _signature = current.split(".", 1)
+        document = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        document["v"] = 99
+        raw = rfc8785.dumps(document)
+        unknown_version = _legacy_public_forgery(query="A", limit=2)
+        public_signature = hashlib.sha256(view.content_sha256.encode("ascii") + b":" + raw).hexdigest()
+        unknown_version = (
+            base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") + "." + public_signature
+        )
+    else:
+        envelope = bytearray(base64.urlsafe_b64decode(current + "=" * (-len(current) % 4)))
+        envelope[0] = 99
+        unknown_version = base64.urlsafe_b64encode(envelope).decode("ascii").rstrip("=")
+
+    client = _client(authority)
+    for token in (unknown_version, stale):
+        response = client.get(
+            "/api/molbio/restriction/catalog",
+            params={"query": "A", "limit": 2, "cursor": token},
+        )
+        assert response.status_code == 422
+        assert response.json()["detail"]["code"] == "cursor_invalid"
 
 
 def test_detail_returns_complete_record_and_exact_receipt_or_stable_404() -> None:

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 from typing import Annotated, Literal
 
 import rfc8785
@@ -37,7 +38,12 @@ _ALLOWED_QUERY_FIELDS = {
     "cursor",
 }
 _SUPPLIER_CODE = re.compile(r"^[A-Za-z0-9._-]{1,16}$")
-_CURSOR = re.compile(r"^[A-Za-z0-9_-]+\.[0-9a-f]{64}$")
+_CURSOR = re.compile(r"^[A-Za-z0-9_-]+$")
+_CURSOR_VERSION = 1
+_CURSOR_KEY_VERSION = 1
+# Development/API cursors intentionally expire whenever this process restarts.
+_CURSOR_SIGNING_KEY = secrets.token_bytes(32)
+_CURSOR_KEY_EPOCH = secrets.token_bytes(8)
 
 
 class StrictResponse(BaseModel):
@@ -121,45 +127,82 @@ def _fingerprint(filters: dict[str, object]) -> str:
     return hashlib.sha256(rfc8785.dumps(filters)).hexdigest()
 
 
-def _encode_cursor(view: CatalogView, fingerprint: str, record: RestrictionRecord) -> str:
+def _encode_cursor(
+    view: CatalogView, fingerprint: str, limit: int, record: RestrictionRecord
+) -> str:
+    epoch = base64.urlsafe_b64encode(_CURSOR_KEY_EPOCH).decode("ascii").rstrip("=")
     document = {
-        "v": 1,
+        "v": _CURSOR_VERSION,
+        "key_version": _CURSOR_KEY_VERSION,
+        "key_epoch": epoch,
         "catalog_sha256": view.content_sha256,
         "fingerprint": fingerprint,
+        "limit": limit,
         "last_name": record.canonical_name.casefold(),
         "last_id": record.enzyme_id.casefold(),
     }
     raw = rfc8785.dumps(document)
-    payload = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-    signature = hashlib.sha256(view.content_sha256.encode("ascii") + b":" + raw).hexdigest()
-    return f"{payload}.{signature}"
+    authenticated = bytes((_CURSOR_VERSION, _CURSOR_KEY_VERSION)) + _CURSOR_KEY_EPOCH + raw
+    signature = hmac.new(_CURSOR_SIGNING_KEY, authenticated, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(authenticated + signature).decode("ascii").rstrip("=")
 
 
-def _decode_cursor(view: CatalogView, cursor: str, fingerprint: str) -> tuple[str, str]:
+def _decode_cursor(
+    view: CatalogView, cursor: str, fingerprint: str, limit: int
+) -> tuple[str, str]:
     try:
         if len(cursor) > CURSOR_MAX_LENGTH or not _CURSOR.fullmatch(cursor):
             raise ValueError
-        payload, signature = cursor.split(".", 1)
-        raw = base64.b64decode(payload + "=" * (-len(payload) % 4), altchars=b"-_", validate=True)
-        expected = hashlib.sha256(view.content_sha256.encode("ascii") + b":" + raw).hexdigest()
-        if not hmac.compare_digest(signature, expected):
+        envelope = base64.b64decode(
+            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
+        )
+        if base64.urlsafe_b64encode(envelope).decode("ascii").rstrip("=") != cursor:
             raise ValueError
-        document = json.loads(raw)
-        if raw != rfc8785.dumps(document):
+        if len(envelope) <= 2 + 8 + 32:
             raise ValueError
-        if set(document) != {"v", "catalog_sha256", "fingerprint", "last_name", "last_id"}:
+        authenticated, signature = envelope[:-32], envelope[-32:]
+        if not hmac.compare_digest(
+            signature, hmac.new(_CURSOR_SIGNING_KEY, authenticated, hashlib.sha256).digest()
+        ):
             raise ValueError
+        version, key_version = authenticated[0], authenticated[1]
+        epoch = authenticated[2:10]
         if (
-            document["v"] != 1
+            version != _CURSOR_VERSION
+            or key_version != _CURSOR_KEY_VERSION
+            or not hmac.compare_digest(epoch, _CURSOR_KEY_EPOCH)
+        ):
+            raise ValueError
+        raw = authenticated[10:]
+        document = json.loads(raw)
+        if not isinstance(document, dict) or raw != rfc8785.dumps(document):
+            raise ValueError
+        if set(document) != {
+            "v",
+            "key_version",
+            "key_epoch",
+            "catalog_sha256",
+            "fingerprint",
+            "limit",
+            "last_name",
+            "last_id",
+        }:
+            raise ValueError
+        expected_epoch = base64.urlsafe_b64encode(_CURSOR_KEY_EPOCH).decode("ascii").rstrip("=")
+        if (
+            document["v"] != _CURSOR_VERSION
+            or document["key_version"] != _CURSOR_KEY_VERSION
+            or document["key_epoch"] != expected_epoch
             or document["catalog_sha256"] != view.content_sha256
             or document["fingerprint"] != fingerprint
+            or document["limit"] != limit
             or not isinstance(document["last_name"], str)
             or not isinstance(document["last_id"], str)
         ):
             raise ValueError
         return document["last_name"], document["last_id"]
     except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _error(422, "invalid_cursor", "catalog cursor is invalid for this request") from exc
+        raise _error(422, "cursor_invalid", "catalog cursor is invalid for this request") from exc
 
 
 def _require_view(authority: CatalogAuthority) -> CatalogView:
@@ -213,7 +256,7 @@ def list_catalog(
     if not 1 <= page_limit <= MAX_PAGE_LIMIT or (limit is not None and str(page_limit) != limit):
         raise _invalid_query("limit is invalid")
     if cursor is not None and len(cursor) > CURSOR_MAX_LENGTH:
-        raise _error(422, "invalid_cursor", "catalog cursor is invalid for this request")
+        raise _error(422, "cursor_invalid", "catalog cursor is invalid for this request")
 
     view = _require_view(authority)
     filters = {
@@ -227,7 +270,7 @@ def list_catalog(
         "limit": page_limit,
     }
     fingerprint = _fingerprint(filters)
-    after = _decode_cursor(view, cursor, fingerprint) if cursor is not None else None
+    after = _decode_cursor(view, cursor, fingerprint, page_limit) if cursor is not None else None
     query_folded = query.casefold() if query else None
     supplier_upper = supplier_code.upper() if supplier_code else None
 
@@ -264,7 +307,11 @@ def list_catalog(
         and (after is None or (record.canonical_name.casefold(), record.enzyme_id.casefold()) > after)
     ]
     items = selected[:page_limit]
-    next_cursor = _encode_cursor(view, fingerprint, items[-1]) if len(selected) > page_limit else None
+    next_cursor = (
+        _encode_cursor(view, fingerprint, page_limit, items[-1])
+        if len(selected) > page_limit
+        else None
+    )
     return CatalogPage(
         schema="bms.molbio.restriction-catalog-page.v1",
         catalog=_receipt(authority),

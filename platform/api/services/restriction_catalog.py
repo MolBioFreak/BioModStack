@@ -13,7 +13,7 @@ from typing import Literal, Mapping
 
 import rfc8785
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from restriction_catalog_integrity import validate_catalog_integrity
 
@@ -49,10 +49,64 @@ SOURCE_AGE_NOTICE = (
     "The catalog derives from Biopython 1.87 and REBASE EMBOSS release 404 (2024); "
     "review a newer checked-in release before treating it as up-to-date source coverage."
 )
+EXPECTED_MANIFEST_NOTICES = (
+    "Biopython 1.87 Restriction_Dictionary data are derived from REBASE EMBOSS release 404 (2024).",
+    "Biopython copyright and permission notices are retained in docs/scientific-sources/restriction-enzyme-catalog-attribution.md.",
+    "Four BMS-curated nickase records are bound to separately reviewed official REBASE page receipts retrieved 2026-08-31.",
+    "Historical supplier codes are provenance only and do not claim current product availability.",
+)
 
 
 class StrictFrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class StrictManifestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
+class ManifestSource(StrictManifestModel):
+    package: Literal["biopython"]
+    module: Literal["Bio.Restriction.Restriction_Dictionary"]
+    package_version: Literal["1.87"]
+    embedded_rebase_release: Literal["REBASE_EMBOSS_404_2024"]
+    dictionary_sha256: Literal[
+        "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"
+    ]
+    supplement_policy: Literal["reviewed_static_rebase_page_receipts_only"]
+
+
+class ManifestCounts(StrictManifestModel):
+    biopython_source_records: Literal[1088]
+    curated_nickase_supplement_records: Literal[4]
+    total_discoverable: Literal[1092]
+    geometry_ready_double_strand: Literal[754]
+    commercial_geometry_ready_double_strand: Literal[623]
+    recognition_only: Literal[334]
+    nicking_analysis_only: Literal[4]
+
+
+class ManifestRecord(StrictManifestModel):
+    enzyme_id: str
+    record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CatalogManifest(StrictManifestModel):
+    schema_: Literal["bms.molbio.restriction-enzyme-catalog-manifest.v1"] = Field(alias="schema")
+    schema_version: Literal[1]
+    catalog_schema: Literal["bms.molbio.restriction-enzyme-catalog.v1"]
+    catalog_id: Literal["biopython-rebase-404-bms-v1"]
+    catalog_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    generator_version: Literal["bms-restriction-catalog-generator-v1"]
+    canonicalization: Literal["RFC_8785_JCS"]
+    digest_semantics: Literal["sha256(rfc8785(document_without_content_sha256))"]
+    generated_timestamp: None
+    generated_timestamp_policy: Literal["omitted_for_deterministic_release_bytes"]
+    source: ManifestSource
+    counts: ManifestCounts
+    records: list[ManifestRecord]
+    notices: list[str]
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class Recognition(StrictFrozenModel):
@@ -177,15 +231,28 @@ class CatalogUnavailable(RuntimeError):
         super().__init__("restriction catalog is unavailable")
 
 
-def _bounded_regular_file(path: Path, maximum: int) -> bytes:
-    flags = os.O_RDONLY | os.O_NONBLOCK
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
+def _bounded_regular_file(root_descriptor: int, relative_path: str, maximum: int) -> bytes:
+    components = relative_path.split("/")
+    if (
+        not relative_path
+        or relative_path.startswith("/")
+        or any(component in {"", ".", ".."} for component in components)
+    ):
+        raise CatalogUnavailable()
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY
+    directory_flags |= getattr(os, "O_CLOEXEC", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | os.O_NONBLOCK
+    file_flags |= getattr(os, "O_CLOEXEC", 0)
+    file_flags |= getattr(os, "O_NOFOLLOW", 0)
+    current = os.dup(root_descriptor)
+    descriptor: int | None = None
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise CatalogUnavailable() from exc
-    try:
+        for component in components[:-1]:
+            parent = os.open(component, directory_flags, dir_fd=current)
+            os.close(current)
+            current = parent
+        descriptor = os.open(components[-1], file_flags, dir_fd=current)
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size <= 0 or info.st_size > maximum:
             raise CatalogUnavailable()
@@ -204,7 +271,9 @@ def _bounded_regular_file(path: Path, maximum: int) -> bytes:
     except OSError as exc:
         raise CatalogUnavailable() from exc
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(current)
 
 
 def _json_object(raw: bytes) -> dict[str, object]:
@@ -264,30 +333,57 @@ def _build_view(catalog: dict[str, object]) -> CatalogView:
 
 
 def _validate_source_authority(catalog: dict[str, object], manifest: dict[str, object]) -> None:
+    validated_manifest = CatalogManifest.model_validate(manifest)
     source = catalog.get("source")
-    manifest_source = manifest.get("source")
-    if not isinstance(source, dict) or not isinstance(manifest_source, dict):
+    if not isinstance(source, dict):
         raise CatalogUnavailable()
-    expected = {
-        "package": "biopython",
-        "package_version": "1.87",
-        "embedded_rebase_release": SOURCE_RELEASE,
-        "dictionary_sha256": SOURCE_DICTIONARY_SHA256,
-    }
-    if any(source.get(key) != value for key, value in expected.items()):
-        raise CatalogUnavailable()
-    if any(manifest_source.get(key) != value for key, value in expected.items() if key in manifest_source):
-        raise CatalogUnavailable()
-    if catalog.get("catalog_id") != ACTIVE_CATALOG_ID or manifest.get("catalog_id") != ACTIVE_CATALOG_ID:
-        raise CatalogUnavailable()
-    if catalog.get("counts") != EXPECTED_COUNTS or manifest.get("counts") != EXPECTED_COUNTS:
+    ManifestSource.model_validate(source)
+    if (
+        catalog.get("schema") != "bms.molbio.restriction-enzyme-catalog.v1"
+        or catalog.get("catalog_id") != ACTIVE_CATALOG_ID
+        or catalog.get("generator_version") != "bms-restriction-catalog-generator-v1"
+        or catalog.get("supplier_metadata_policy")
+        != "historical_codes_are_provenance_not_current_availability"
+        or catalog.get("counts") != EXPECTED_COUNTS
+        or validated_manifest.catalog_id != ACTIVE_CATALOG_ID
+        or validated_manifest.counts.model_dump() != EXPECTED_COUNTS
+        or tuple(validated_manifest.notices) != EXPECTED_MANIFEST_NOTICES
+    ):
         raise CatalogUnavailable()
 
 
-def _load(catalog_path: Path, manifest_path: Path, schema_path: Path) -> CatalogView:
-    catalog_raw = _bounded_regular_file(catalog_path, CATALOG_MAX_BYTES)
-    manifest_raw = _bounded_regular_file(manifest_path, MANIFEST_MAX_BYTES)
-    schema_raw = _bounded_regular_file(schema_path, SCHEMA_MAX_BYTES)
+def _asset_relative_path(trusted_root: Path, path: Path) -> str:
+    try:
+        relative = path.relative_to(trusted_root)
+    except ValueError as exc:
+        raise CatalogUnavailable() from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise CatalogUnavailable()
+    return "/".join(relative.parts)
+
+
+def _load(
+    trusted_root: Path, catalog_path: Path, manifest_path: Path, schema_path: Path
+) -> CatalogView:
+    root_flags = os.O_RDONLY | os.O_DIRECTORY
+    root_flags |= getattr(os, "O_CLOEXEC", 0)
+    root_flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_descriptor = os.open(trusted_root, root_flags)
+    except OSError as exc:
+        raise CatalogUnavailable() from exc
+    try:
+        catalog_raw = _bounded_regular_file(
+            root_descriptor, _asset_relative_path(trusted_root, catalog_path), CATALOG_MAX_BYTES
+        )
+        manifest_raw = _bounded_regular_file(
+            root_descriptor, _asset_relative_path(trusted_root, manifest_path), MANIFEST_MAX_BYTES
+        )
+        schema_raw = _bounded_regular_file(
+            root_descriptor, _asset_relative_path(trusted_root, schema_path), SCHEMA_MAX_BYTES
+        )
+    finally:
+        os.close(root_descriptor)
     catalog = _json_object(catalog_raw)
     manifest = _json_object(manifest_raw)
     schema = _json_object(schema_raw)
@@ -308,10 +404,26 @@ def _load(catalog_path: Path, manifest_path: Path, schema_path: Path) -> Catalog
 class CatalogAuthority:
     """Load one immutable catalog view once; success and failure are both sticky."""
 
-    def __init__(self, catalog_path: Path, manifest_path: Path, schema_path: Path) -> None:
+    def __init__(
+        self,
+        catalog_path: Path,
+        manifest_path: Path,
+        schema_path: Path,
+        *,
+        trusted_root: Path | None = None,
+    ) -> None:
         self._catalog_path = catalog_path
         self._manifest_path = manifest_path
         self._schema_path = schema_path
+        self._trusted_root = trusted_root or Path(
+            os.path.commonpath(
+                [
+                    os.fspath(catalog_path.parent),
+                    os.fspath(manifest_path.parent),
+                    os.fspath(schema_path.parent),
+                ]
+            )
+        )
         self._lock = threading.Lock()
         self._attempted = False
         self._view: CatalogView | None = None
@@ -323,7 +435,12 @@ class CatalogAuthority:
             if self._attempted:
                 return
             try:
-                self._view = _load(self._catalog_path, self._manifest_path, self._schema_path)
+                self._view = _load(
+                    self._trusted_root,
+                    self._catalog_path,
+                    self._manifest_path,
+                    self._schema_path,
+                )
             except CatalogUnavailable:
                 self._view = None
             finally:
@@ -372,7 +489,12 @@ class CatalogAuthority:
         )
 
 
-catalog_authority = CatalogAuthority(ACTIVE_CATALOG_PATH, ACTIVE_MANIFEST_PATH, CATALOG_SCHEMA_PATH)
+catalog_authority = CatalogAuthority(
+    ACTIVE_CATALOG_PATH,
+    ACTIVE_MANIFEST_PATH,
+    CATALOG_SCHEMA_PATH,
+    trusted_root=REPO_ROOT,
+)
 
 
 __all__ = [

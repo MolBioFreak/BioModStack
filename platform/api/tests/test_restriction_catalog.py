@@ -643,6 +643,151 @@ def test_phase1_loader_fails_closed_for_hostile_assets(tmp_path: Path, case: str
     assert case not in str(error.value)
 
 
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("missing source module", lambda manifest: manifest["source"].pop("module")),
+        ("altered generator", lambda manifest: manifest.update(generator_version="hostile-generator")),
+        ("altered canonicalization", lambda manifest: manifest.update(canonicalization="hostile-canonicalization")),
+        ("wrong schema version type", lambda manifest: manifest.update(schema_version="1")),
+        ("altered notice identity", lambda manifest: manifest["notices"].__setitem__(0, "hostile notice")),
+        ("unknown field", lambda manifest: manifest.update(attacker_controlled=True)),
+        ("missing supplement policy", lambda manifest: manifest["source"].pop("supplement_policy")),
+        (
+            "missing supplement count",
+            lambda manifest: manifest["counts"].pop("curated_nickase_supplement_records"),
+        ),
+    ],
+)
+def test_phase1_loader_rejects_self_consistent_hostile_manifest_authority(
+    tmp_path: Path, label: str, mutate
+) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, _catalog, manifest_path, _schema = _phase1_authority(tmp_path)
+    manifest = json.loads(manifest_path.read_bytes())
+    mutate(manifest)
+    manifest["content_sha256"] = _canonical_digest(manifest, "content_sha256")
+    manifest_path.write_bytes(rfc8785.dumps(manifest))
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+    assert label not in str(error.value)
+
+
+def test_phase1_loader_rejects_missing_supplement_record_receipt_with_recomputed_digest(
+    tmp_path: Path,
+) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, catalog_path, manifest_path, _schema = _phase1_authority(tmp_path)
+    catalog = json.loads(catalog_path.read_bytes())
+    nickase_ids = {
+        row["enzyme_id"]
+        for row in catalog["records"]
+        if row["source"]["kind"] == "bms_curated_rebase_nickase"
+    }
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["records"] = [
+        receipt for receipt in manifest["records"] if receipt["enzyme_id"] not in nickase_ids
+    ]
+    manifest["content_sha256"] = _canonical_digest(manifest, "content_sha256")
+    manifest_path.write_bytes(rfc8785.dumps(manifest))
+
+    with pytest.raises(CatalogUnavailable):
+        authority.require()
+
+
+def _nested_phase1_authority(tmp_path: Path):
+    from services.restriction_catalog import CatalogAuthority
+
+    trusted = tmp_path / "trusted"
+    paths = {
+        "catalog": trusted / "catalog-assets" / "catalog.json",
+        "manifest": trusted / "manifest-assets" / "manifest.json",
+        "schema": trusted / "schema-assets" / "schema.json",
+    }
+    sources = {"catalog": CATALOG, "manifest": MANIFEST, "schema": CATALOG_SCHEMA}
+    for name, path in paths.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(sources[name].read_bytes())
+    authority = CatalogAuthority(
+        paths["catalog"], paths["manifest"], paths["schema"], trusted_root=trusted
+    )
+    return authority, trusted, paths, sources
+
+
+@pytest.mark.parametrize("asset", ["catalog", "manifest", "schema"])
+def test_phase1_loader_rejects_symlinked_parent_component(tmp_path: Path, asset: str) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, _trusted, paths, sources = _nested_phase1_authority(tmp_path)
+    asset_path = paths[asset]
+    outside = tmp_path / f"outside-{asset}"
+    outside.mkdir()
+    (outside / asset_path.name).write_bytes(sources[asset].read_bytes())
+    asset_path.unlink()
+    asset_path.parent.rmdir()
+    asset_path.parent.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+
+
+@pytest.mark.parametrize("asset", ["catalog", "manifest", "schema"])
+@pytest.mark.parametrize("hostile_kind", ["symlink", "special"])
+def test_phase1_loader_rejects_hostile_final_asset_components(
+    tmp_path: Path, asset: str, hostile_kind: str
+) -> None:
+    from services.restriction_catalog import CatalogUnavailable
+
+    authority, _trusted, paths, sources = _nested_phase1_authority(tmp_path)
+    asset_path = paths[asset]
+    asset_path.unlink()
+    if hostile_kind == "symlink":
+        target = tmp_path / f"outside-{asset}.json"
+        target.write_bytes(sources[asset].read_bytes())
+        asset_path.symlink_to(target)
+    else:
+        os.mkfifo(asset_path)
+
+    with pytest.raises(CatalogUnavailable) as error:
+        authority.require()
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_phase1_loader_rejects_absolute_and_parent_path_escapes(tmp_path: Path) -> None:
+    from services.restriction_catalog import CatalogAuthority, CatalogUnavailable
+
+    _authority, trusted, paths, _sources = _nested_phase1_authority(tmp_path)
+    outside_catalog = tmp_path / "escaped-catalog.json"
+    outside_catalog.write_bytes(CATALOG.read_bytes())
+    escaped = trusted / ".." / outside_catalog.name
+    for candidate in (outside_catalog, escaped):
+        authority = CatalogAuthority(
+            candidate,
+            paths["manifest"],
+            paths["schema"],
+            trusted_root=trusted,
+        )
+        with pytest.raises(CatalogUnavailable):
+            authority.require()
+
+
+def test_component_walker_rejects_absolute_empty_dot_and_parent_components(tmp_path: Path) -> None:
+    from services.restriction_catalog import CatalogUnavailable, _bounded_regular_file
+
+    root_descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for hostile in ("", ".", "..", "/absolute", "../escape", "a//b", "a/./b", "a/../b"):
+            with pytest.raises(CatalogUnavailable):
+                _bounded_regular_file(root_descriptor, hostile, 1024)
+    finally:
+        os.close(root_descriptor)
+
+
 def test_phase1_loader_unavailable_state_is_sticky_and_never_partially_recovers(tmp_path: Path) -> None:
     from services.restriction_catalog import CatalogUnavailable
 
