@@ -8,14 +8,28 @@ import json
 import re
 import secrets
 from collections.abc import Callable
-from typing import Annotated, Any, Coroutine, Literal
+from typing import Annotated, Any, Coroutine, Literal, Union
 
 import rfc8785
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from molbio_database import get_molbio_session
+from molbio_models import MolecularDocument, MolecularRevision
+from services.restriction_analysis import (
+    MAX_EXPLICIT_ENZYME_IDS,
+    MAX_INLINE_SEQUENCE_LENGTH,
+    MAX_REGIONS,
+    AnalysisLimitError,
+    AnalysisResult,
+    InvalidDNAError,
+    analyze_sequence,
+    normalize_dna,
+)
 
 from services.restriction_catalog import (
     CURSOR_MAX_LENGTH,
@@ -61,6 +75,28 @@ class CatalogRoute(APIRoute):
             try:
                 return await route_handler(request)
             except RequestValidationError as exc:
+                if request.method == "POST" and request.url.path.endswith("/analyze"):
+                    oversized_locations = {
+                        ("body", "source", "inline_dna", "dna"),
+                        ("body", "scope", "explicit", "enzyme_ids"),
+                        ("body", "regions"),
+                    }
+                    request_too_large = any(
+                        tuple(error.get("loc", ())) in oversized_locations
+                        and error.get("type") in {"too_long", "string_too_long"}
+                        for error in exc.errors()
+                    )
+                    return JSONResponse(
+                        status_code=413 if request_too_large else 422,
+                        content={"detail": {
+                            "code": "request_too_large" if request_too_large else "invalid_analysis_request",
+                            "message": (
+                                "restriction analysis request is too large"
+                                if request_too_large
+                                else "restriction analysis request is invalid"
+                            ),
+                        }},
+                    )
                 cursor_error = any(
                     len(error.get("loc", ())) >= 2 and error["loc"][:2] == ("query", "cursor")
                     for error in exc.errors()
@@ -105,6 +141,12 @@ class CatalogBounds(StrictResponse):
     default_limit: int
     maximum_limit: int
     query_max_length: int
+    analysis_inline_sequence_max_length: int
+    analysis_explicit_enzyme_maximum: int
+    analysis_region_maximum: int
+    analysis_occurrence_maximum: int
+    analysis_event_maximum: int
+    analysis_response_maximum_bytes: int
 
 
 class CatalogReceipt(StrictResponse):
@@ -117,7 +159,7 @@ class CatalogReceipt(StrictResponse):
     source_age_notice: str
     supplier_code_notice: str
     bounds: CatalogBounds
-    analysis_enabled: Literal[False]
+    analysis_enabled: Literal[True]
     digest_enabled: Literal[False]
 
 
@@ -132,6 +174,119 @@ class CatalogRecordResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-catalog-record.v1"] = Field(alias="schema")
     catalog: CatalogReceipt
     record: RestrictionRecord
+
+
+class InlineDNASource(StrictResponse):
+    kind: Literal["inline_dna"]
+    name: str = Field(min_length=1, max_length=128, pattern=r".*\S.*")
+    dna: str = Field(min_length=1, max_length=MAX_INLINE_SEQUENCE_LENGTH)
+    topology: Literal["linear", "circular"]
+
+
+class MolecularRevisionSource(StrictResponse):
+    kind: Literal["molecular_revision"]
+    sequence_id: str = Field(min_length=1, max_length=128)
+    revision_id: str = Field(min_length=1, max_length=128)
+    expected_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    topology: Literal["linear", "circular"] | None = None
+
+
+AnalysisSource = Annotated[
+    Union[InlineDNASource, MolecularRevisionSource], Field(discriminator="kind")
+]
+
+
+class AnalysisCatalogBinding(StrictResponse):
+    catalog_id: str = Field(min_length=1, max_length=128)
+    expected_catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class AllGeometryReadyScope(StrictResponse):
+    mode: Literal["all_geometry_ready"]
+    commercial_only: bool = False
+
+
+class AllAnalysisCapableScope(StrictResponse):
+    mode: Literal["all_analysis_capable"]
+    commercial_only: bool = False
+
+
+class ExplicitAnalysisScope(StrictResponse):
+    mode: Literal["explicit"]
+    enzyme_ids: list[str] = Field(
+        min_length=1, max_length=MAX_EXPLICIT_ENZYME_IDS,
+        json_schema_extra={"maxItems": MAX_EXPLICIT_ENZYME_IDS},
+    )
+    commercial_only: bool = False
+
+    @field_validator("enzyme_ids")
+    @classmethod
+    def unique_bounded_ids(cls, value: list[str]) -> list[str]:
+        if any(not item or len(item) > 128 for item in value) or len(set(value)) != len(value):
+            raise ValueError("enzyme IDs must be unique bounded nonempty strings")
+        return value
+
+
+AnalysisScope = Annotated[
+    Union[AllGeometryReadyScope, AllAnalysisCapableScope, ExplicitAnalysisScope],
+    Field(discriminator="mode"),
+]
+
+
+class AnalysisRegion(StrictResponse):
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def ordered(self) -> "AnalysisRegion":
+        if self.end <= self.start:
+            raise ValueError("region end must be greater than start")
+        return self
+
+
+class AnalysisRequest(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-analysis-request.v1"] = Field(alias="schema")
+    source: AnalysisSource
+    catalog: AnalysisCatalogBinding
+    scope: AnalysisScope
+    regions: list[AnalysisRegion] = Field(default_factory=list, max_length=MAX_REGIONS)
+    include_possible_sites: bool = True
+    methylation_policy: Literal["report_only", "require_known"] = "report_only"
+
+
+class AnalysisSourceReceipt(StrictResponse):
+    kind: Literal["inline_dna", "molecular_revision"]
+    name: str | None
+    sequence_id: str | None
+    revision_id: str | None
+    revision_number: int | None
+    content_sha256: str
+    content_length: int
+    topology: Literal["linear", "circular"]
+
+
+class AnalysisResponse(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-analysis-response.v1"] = Field(alias="schema")
+    source: AnalysisSourceReceipt
+    catalog: CatalogReceipt
+    request_sha256: str
+    result_sha256: str
+    analysis: AnalysisResult
+
+
+_ANALYZE_EXAMPLE = {
+    "schema": "bms.molbio.restriction-analysis-request.v1",
+    "source": {
+        "kind": "inline_dna", "name": "EcoRI example",
+        "dna": "TTGAATTCAA", "topology": "linear",
+    },
+    "catalog": {
+        "catalog_id": "biopython-rebase-404-bms-v1",
+        "expected_catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f",
+    },
+    "scope": {"mode": "explicit", "enzyme_ids": ["EcoRI"], "commercial_only": False},
+    "regions": [], "include_possible_sites": True, "methylation_policy": "report_only",
+}
 
 
 def get_catalog_authority() -> CatalogAuthority:
@@ -422,4 +577,134 @@ def catalog_detail(
         schema="bms.molbio.restriction-catalog-record.v1",
         catalog=_receipt(authority),
         record=record,
+    )
+
+
+def _analysis_records(view: CatalogView, scope: AnalysisScope) -> tuple[RestrictionRecord, ...]:
+    if isinstance(scope, ExplicitAnalysisScope):
+        missing = [enzyme_id for enzyme_id in scope.enzyme_ids if enzyme_id not in view.by_id]
+        if missing:
+            raise _error(404, "enzyme_not_found", "restriction enzyme was not found")
+        records = tuple(view.by_id[enzyme_id] for enzyme_id in scope.enzyme_ids)
+    elif isinstance(scope, AllGeometryReadyScope):
+        records = view.by_capability.get("digest_simulation", ())
+    else:
+        records = view.ordered_records
+    if scope.commercial_only:
+        records = tuple(row for row in records if row.supplier_provenance.reported_commercial)
+    return tuple(sorted(records, key=lambda row: (
+        row.canonical_name.casefold(), row.enzyme_id.casefold()
+    )))
+
+
+async def _analysis_source(
+    source: AnalysisSource, session: AsyncSession
+) -> tuple[str, Literal["linear", "circular"], AnalysisSourceReceipt]:
+    if isinstance(source, InlineDNASource):
+        try:
+            sequence = normalize_dna(source.dna)
+        except InvalidDNAError as exc:
+            raise _error(422, "invalid_dna", "DNA input is invalid") from exc
+        digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+        return sequence, source.topology, AnalysisSourceReceipt(
+            kind="inline_dna", name=source.name.strip(), sequence_id=None, revision_id=None,
+            revision_number=None, content_sha256=digest, content_length=len(sequence),
+            topology=source.topology,
+        )
+
+    document = await session.get(MolecularDocument, source.sequence_id)
+    revision = await session.get(MolecularRevision, source.revision_id)
+    if document is None or revision is None or revision.document_id != document.id:
+        raise _error(404, "source_revision_not_found", "molecular revision was not found")
+    snapshot = revision.snapshot if isinstance(revision.snapshot, dict) else {}
+    if str(snapshot.get("sequence_type") or "").lower() != "dna":
+        raise _error(422, "invalid_dna", "molecular revision is not DNA")
+    try:
+        sequence = normalize_dna(str(snapshot.get("sequence") or ""))
+    except InvalidDNAError as exc:
+        raise _error(422, "invalid_dna", "molecular revision DNA is invalid") from exc
+    digest = hashlib.sha256(sequence.encode("ascii")).hexdigest()
+    if (
+        revision.content_sha256 != source.expected_content_sha256
+        or digest != revision.content_sha256
+        or revision.content_length != len(sequence)
+    ):
+        raise _error(
+            409, "source_revision_digest_mismatch",
+            "molecular revision content digest or length does not match",
+        )
+    owned_topology: Literal["linear", "circular"] | None = None
+    if isinstance(snapshot.get("is_circular"), bool):
+        owned_topology = "circular" if snapshot["is_circular"] else "linear"
+    elif snapshot.get("topology") in {"linear", "circular"}:
+        owned_topology = snapshot["topology"]
+    topology = owned_topology or source.topology
+    if topology is None or (owned_topology is not None and source.topology not in {None, owned_topology}):
+        raise _error(422, "invalid_dna", "molecular revision topology authority is invalid")
+    return sequence, topology, AnalysisSourceReceipt(
+        kind="molecular_revision", name=document.name, sequence_id=document.id,
+        revision_id=revision.id, revision_number=revision.revision_number,
+        content_sha256=digest, content_length=len(sequence), topology=topology,
+    )
+
+
+@router.post("/analyze", response_model=AnalysisResponse)
+async def analyze_restriction_sites(
+    payload: Annotated[
+        AnalysisRequest,
+        Body(openapi_examples={"inline_dna": {"summary": "Inline DNA", "value": _ANALYZE_EXAMPLE}}),
+    ],
+    authority: CatalogAuthority = Depends(get_catalog_authority),
+    molbio_session: AsyncSession = Depends(get_molbio_session),
+) -> AnalysisResponse:
+    view = _require_view(authority)
+    if payload.catalog.catalog_id != view.catalog_id:
+        raise _error(404, "catalog_not_found", "restriction catalog was not found")
+    if payload.catalog.expected_catalog_sha256 != view.content_sha256:
+        raise _error(409, "catalog_digest_mismatch", "restriction catalog digest does not match")
+    if payload.methylation_policy == "require_known":
+        raise _error(
+            409, "product_evidence_unavailable",
+            "approved product evidence is unavailable in Phase 2",
+        )
+    sequence, topology, source_receipt = await _analysis_source(payload.source, molbio_session)
+    records = _analysis_records(view, payload.scope)
+    normalized_request = payload.model_dump(mode="json", by_alias=True)
+    normalized_request["source"] = {
+        **normalized_request["source"],
+        **({"dna": sequence, "name": source_receipt.name} if source_receipt.kind == "inline_dna" else {}),
+    }
+    if isinstance(payload.scope, ExplicitAnalysisScope):
+        normalized_request["scope"]["enzyme_ids"] = sorted(payload.scope.enzyme_ids)
+    normalized_request["regions"] = sorted(normalized_request["regions"], key=lambda row: (row["start"], row["end"]))
+    request_sha256 = hashlib.sha256(rfc8785.dumps(normalized_request)).hexdigest()
+    try:
+        analysis = analyze_sequence(
+            sequence=sequence,
+            topology=topology,
+            catalog=view,
+            records=records,
+            include_possible_sites=payload.include_possible_sites,
+            regions=tuple((region.start, region.end) for region in payload.regions),
+        )
+    except InvalidDNAError as exc:
+        raise _error(422, "invalid_dna", "DNA input or regions are invalid") from exc
+    except AnalysisLimitError as exc:
+        raise _error(413, "request_too_large", "restriction analysis request is too large") from exc
+    catalog_receipt = _receipt(authority)
+    result_preimage = {
+        "source": source_receipt.model_dump(mode="json"),
+        "catalog_id": view.catalog_id,
+        "catalog_sha256": view.content_sha256,
+        "request_sha256": request_sha256,
+        "analysis": analysis.model_dump(mode="json"),
+    }
+    result_sha256 = hashlib.sha256(rfc8785.dumps(result_preimage)).hexdigest()
+    return AnalysisResponse(
+        schema="bms.molbio.restriction-analysis-response.v1",
+        source=source_receipt,
+        catalog=catalog_receipt,
+        request_sha256=request_sha256,
+        result_sha256=result_sha256,
+        analysis=analysis,
     )

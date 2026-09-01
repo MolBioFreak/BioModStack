@@ -20,11 +20,13 @@ MANIFEST = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_mani
 SCHEMA = API_ROOT.parents[1] / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json"
 
 
-def _client(authority: CatalogAuthority | None = None) -> TestClient:
+def _client(authority: CatalogAuthority | None = None, session=None) -> TestClient:
     app = FastAPI()
     app.include_router(molbio_restriction.router)
     if authority is not None:
         app.dependency_overrides[molbio_restriction.get_catalog_authority] = lambda: authority
+    if session is not None:
+        app.dependency_overrides[molbio_restriction.get_molbio_session] = lambda: session
     return TestClient(app)
 
 
@@ -48,7 +50,16 @@ def test_catalog_page_publishes_exact_receipt_bounds_and_historical_notice() -> 
         "nicking": 4,
         "two_event_double_strand": 25,
     }
-    assert body["catalog"]["bounds"] == {"default_limit": 50, "maximum_limit": 250, "query_max_length": 128}
+    assert body["catalog"]["bounds"] == {
+        "default_limit": 50, "maximum_limit": 250, "query_max_length": 128,
+        "analysis_inline_sequence_max_length": 5_000_000,
+        "analysis_explicit_enzyme_maximum": 256,
+        "analysis_region_maximum": 128,
+        "analysis_occurrence_maximum": 25_000,
+        "analysis_event_maximum": 50_000,
+        "analysis_response_maximum_bytes": 32 * 1024 * 1024,
+    }
+    assert body["catalog"]["analysis_enabled"] is True
     assert body["catalog"]["source_year"] == 2024
     assert "historical" in body["catalog"]["supplier_code_notice"].lower()
     assert "current" not in body["catalog"]["supplier_code_notice"].lower().replace("not current", "")
@@ -404,15 +415,16 @@ def test_catalog_openapi_query_parameters_publish_exact_runtime_constraints() ->
     }
 
 
-def test_openapi_examples_execute_and_only_phase1_public_routes_are_mounted() -> None:
+def test_openapi_examples_execute_and_phase2_analyze_is_mounted() -> None:
     client = _client(_authority())
     document = client.app.openapi()
     paths = document["paths"]
     assert set(paths) == {
         "/api/molbio/restriction/catalog",
         "/api/molbio/restriction/catalog/{enzyme_id}",
+        "/api/molbio/restriction/analyze",
     }
-    assert not any("analy" in path or "digest" in path for path in paths)
+    assert not any("digest" in path for path in paths)
     parameters = paths["/api/molbio/restriction/catalog"]["get"]["parameters"]
     for parameter in parameters:
         values = [parameter["example"]] if "example" in parameter else parameter.get("schema", {}).get("examples", [])
@@ -432,11 +444,114 @@ def test_openapi_examples_execute_and_only_phase1_public_routes_are_mounted() ->
     assert cursor_response.status_code == 200, cursor_response.text
 
 
-def test_main_application_mounts_catalog_routes_but_not_phase2_routes() -> None:
+def test_main_application_mounts_phase2_analyze_but_not_digest_routes() -> None:
     import main
 
     paths = main.app.openapi()["paths"]
     assert "/api/molbio/restriction/catalog" in paths
     assert "/api/molbio/restriction/catalog/{enzyme_id}" in paths
-    assert "/api/molbio/restriction/analyze" not in paths
+    assert "/api/molbio/restriction/analyze" in paths
     assert "/api/molbio/restriction/digests/simulate" not in paths
+
+
+def _inline_request(**updates):
+    payload = {
+        "schema": "bms.molbio.restriction-analysis-request.v1",
+        "source": {"kind": "inline_dna", "name": "example", "dna": "TTGAATTCAA", "topology": "linear"},
+        "catalog": {
+            "catalog_id": "biopython-rebase-404-bms-v1",
+            "expected_catalog_sha256": "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f",
+        },
+        "scope": {"mode": "explicit", "enzyme_ids": ["EcoRI"], "commercial_only": False},
+        "regions": [],
+        "include_possible_sites": True,
+        "methylation_policy": "report_only",
+    }
+    payload.update(updates)
+    return payload
+
+
+def test_analyze_inline_contract_is_strict_deterministic_and_has_no_db_write() -> None:
+    client = _client(_authority())
+    first = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+    second = client.post("/api/molbio/restriction/analyze", json=_inline_request())
+    assert first.status_code == second.status_code == 200, first.text
+    body = first.json()
+    assert body == second.json()
+    assert body["schema"] == "bms.molbio.restriction-analysis-response.v1"
+    assert body["source"]["kind"] == "inline_dna"
+    assert body["source"]["content_sha256"] == hashlib.sha256(b"TTGAATTCAA").hexdigest()
+    assert body["analysis"]["counts"]["double_strand_break_count"] == 1
+    assert len(body["request_sha256"]) == len(body["result_sha256"]) == 64
+
+
+def test_analyze_rejects_hostile_geometry_fields_stale_catalog_unknown_enzyme_and_products() -> None:
+    client = _client(_authority())
+    hostile = _inline_request()
+    hostile["scope"]["site"] = "GAATTC"
+    hostile["scope"]["cut_index"] = 3
+    hostile["chemistry"] = {"buffer": "client-controlled"}
+    response = client.post("/api/molbio/restriction/analyze", json=hostile)
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_analysis_request"
+
+    stale = _inline_request(catalog={
+        "catalog_id": "biopython-rebase-404-bms-v1", "expected_catalog_sha256": "0" * 64
+    })
+    assert client.post("/api/molbio/restriction/analyze", json=stale).json()["detail"]["code"] == "catalog_digest_mismatch"
+
+    unknown = _inline_request()
+    unknown["scope"]["enzyme_ids"] = ["not-an-enzyme"]
+    assert client.post("/api/molbio/restriction/analyze", json=unknown).json()["detail"]["code"] == "enzyme_not_found"
+
+    products = _inline_request(methylation_policy="require_known")
+    assert client.post("/api/molbio/restriction/analyze", json=products).json()["detail"]["code"] == "product_evidence_unavailable"
+
+    oversized = _inline_request()
+    oversized["scope"]["enzyme_ids"] = [f"E{index}" for index in range(257)]
+    too_large = client.post("/api/molbio/restriction/analyze", json=oversized)
+    assert too_large.status_code == 413
+    assert too_large.json()["detail"]["code"] == "request_too_large"
+
+
+def test_analyze_openapi_request_example_executes_and_constraints_match_runtime() -> None:
+    client = _client(_authority())
+    operation = client.app.openapi()["paths"]["/api/molbio/restriction/analyze"]["post"]
+    example = operation["requestBody"]["content"]["application/json"]["examples"]["inline_dna"]["value"]
+    assert client.post("/api/molbio/restriction/analyze", json=example).status_code == 200
+    schemas = client.app.openapi()["components"]["schemas"]
+    assert schemas["InlineDNASource"]["properties"]["dna"]["maxLength"] == 5_000_000
+    assert schemas["ExplicitAnalysisScope"]["properties"]["enzyme_ids"]["maxItems"] == 256
+
+
+def test_analyze_binds_exact_immutable_revision_and_rejects_stale_digest() -> None:
+    from types import SimpleNamespace
+
+    sequence = "TTGAATTCAA"
+    digest = hashlib.sha256(sequence.encode()).hexdigest()
+    document = SimpleNamespace(id="sequence-1", name="saved", current_revision_id="newer")
+    revision = SimpleNamespace(
+        id="revision-1", document_id="sequence-1", revision_number=1,
+        content_sha256=digest, content_length=len(sequence),
+        snapshot={"sequence_type": "dna", "sequence": sequence, "is_circular": False},
+    )
+
+    class Session:
+        async def get(self, model, identity):
+            return document if identity == "sequence-1" else revision if identity == "revision-1" else None
+
+    request = _inline_request()
+    request["source"] = {
+        "kind": "molecular_revision", "sequence_id": "sequence-1",
+        "revision_id": "revision-1", "expected_content_sha256": digest,
+    }
+    client = _client(_authority(), Session())
+    response = client.post("/api/molbio/restriction/analyze", json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["source"]["revision_id"] == "revision-1"
+    assert response.json()["source"]["topology"] == "linear"
+
+    request["source"]["expected_content_sha256"] = "0" * 64
+    stale = client.post("/api/molbio/restriction/analyze", json=request)
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "source_revision_digest_mismatch"

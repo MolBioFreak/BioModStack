@@ -514,9 +514,15 @@ class CatalogAuthority:
                         "default_limit": DEFAULT_PAGE_LIMIT,
                         "maximum_limit": MAX_PAGE_LIMIT,
                         "query_max_length": QUERY_MAX_LENGTH,
+                        "analysis_inline_sequence_max_length": 5_000_000,
+                        "analysis_explicit_enzyme_maximum": 256,
+                        "analysis_region_maximum": 128,
+                        "analysis_occurrence_maximum": 25_000,
+                        "analysis_event_maximum": 50_000,
+                        "analysis_response_maximum_bytes": 32 * 1024 * 1024,
                     }
                 ),
-                "analysis_enabled": False,
+                "analysis_enabled": True,
                 "digest_enabled": False,
             }
         )
