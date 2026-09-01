@@ -7,9 +7,11 @@ import {
     fetchSchedulerConfig,
     fetchSystemStatus,
     fetchTelemetryChartHistory,
+    refreshVastExecutionTargets,
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
+    VAST_DISCOVERY_QUERY_KEY,
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import {
@@ -1664,6 +1666,13 @@ export function InfraLiveTelemetry({
             queryClient.invalidateQueries({ queryKey: SHARED_FAN_CONTROL_QUERY_KEY });
         },
     });
+    const vastDiscoverMutation = useMutation({
+        mutationFn: refreshVastExecutionTargets,
+        onSuccess: (response) => {
+            queryClient.setQueryData(VAST_DISCOVERY_QUERY_KEY, response);
+            queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
+        },
+    });
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
@@ -1732,15 +1741,26 @@ export function InfraLiveTelemetry({
                         >
                             Discovery
                         </div>
-                        <button
-                            type="button"
-                            onClick={() => discoverMutation.mutate()}
-                            disabled={discoverMutation.isPending}
-                            className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
-                            title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
-                        >
-                            {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
-                        </button>
+                        <div className={`flex flex-wrap ${compact ? 'gap-1' : 'gap-2'}`}>
+                            <button
+                                type="button"
+                                onClick={() => discoverMutation.mutate()}
+                                disabled={discoverMutation.isPending}
+                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
+                            >
+                                {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => vastDiscoverMutation.mutate()}
+                                disabled={vastDiscoverMutation.isPending}
+                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                title="Query Vast for running instances without creating, starting, stopping, or destroying provider resources"
+                            >
+                                {vastDiscoverMutation.isPending ? 'Discovering Vast...' : 'Discover running Vast'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1748,6 +1768,11 @@ export function InfraLiveTelemetry({
             {discoverMutation.isError && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
                     Hardware discovery failed: {discoverMutation.error instanceof Error ? discoverMutation.error.message : 'unknown error'}
+                </div>
+            )}
+            {vastDiscoverMutation.isError && (
+                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+                    Vast discovery failed: {vastDiscoverMutation.error instanceof Error ? vastDiscoverMutation.error.message : 'unknown error'}
                 </div>
             )}
 

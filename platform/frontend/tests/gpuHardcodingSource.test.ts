@@ -108,6 +108,7 @@ test('infra telemetry keeps unavailable CPU power as null instead of false zero 
 
 test('dashboard telemetry exposes a hardware discovery refresh action', () => {
     const source = readSource('src/components/InfraLiveTelemetry.tsx');
+    const picker = readSource('src/components/ExecutionTargetPicker.tsx');
     const apiTypes = readSource('src/lib/api.ts');
 
     assert.match(apiTypes, /discoverHardware/u, 'API client should expose dashboard-wide hardware discovery');
@@ -116,4 +117,9 @@ test('dashboard telemetry exposes a hardware discovery refresh action', () => {
     assert.match(source, /SHARED_FAN_CONTROL_QUERY_KEY/u, 'Discovery action should refresh fan controls');
     assert.match(source, /SHARED_POWER_CONTROL_QUERY_KEY/u, 'Discovery action should refresh power controls');
     assert.match(source, /INFRA_LIVE_SHARED_QUERY_KEY/u, 'Discovery action should refresh system telemetry');
+    assert.match(source, /Discover running Vast/u, 'Dashboard telemetry should render Vast discovery beside local hardware discovery');
+    assert.match(source, /refreshVastExecutionTargets/u, 'Dashboard Vast discovery should call the provider refresh API');
+    assert.match(source, /VAST_DISCOVERY_QUERY_KEY/u, 'Dashboard Vast discovery should preserve inventory for Job Launcher attachment');
+    assert.doesNotMatch(picker, /Discover running Vast/u, 'Job Launcher should not duplicate the Dashboard discovery button');
+    assert.match(picker, /VAST_DISCOVERY_QUERY_KEY/u, 'Job Launcher should consume the Dashboard-discovered Vast inventory');
 });
