@@ -628,6 +628,10 @@ test('NGS viewer opens compactly with primary controls and split scientific view
     const openStart = source.indexOf('const openIgvModal');
     const closeStart = source.indexOf('const closeIgvModal');
     const openBody = source.slice(openStart, closeStart);
+    const viewOptionsStart = source.indexOf('<details data-igv-view-options');
+    const viewOptionsOpenEnd = source.indexOf('>', viewOptionsStart);
+    const viewOptionsEnd = source.indexOf('</details>', viewOptionsStart);
+    const optionalTrackStatus = source.indexOf('data-igv-optional-track-status', viewOptionsStart);
 
     assert.ok(openStart >= 0 && closeStart > openStart);
     assert.doesNotMatch(openBody, /requestDocumentFullscreen/u);
@@ -636,6 +640,11 @@ test('NGS viewer opens compactly with primary controls and split scientific view
     assert.match(source, /parseLocalIgvRange\(/u);
     assert.match(source, /\? 'Exit fullscreen' : 'Fullscreen'/u);
     assert.match(source, /View options/u);
+    assert.ok(viewOptionsStart >= 0 && viewOptionsOpenEnd > viewOptionsStart);
+    assert.ok(optionalTrackStatus > viewOptionsOpenEnd && optionalTrackStatus < viewOptionsEnd);
+    assert.doesNotMatch(source.slice(viewOptionsStart, viewOptionsOpenEnd + 1), /\bopen=/u);
+    assert.doesNotMatch(source.slice(viewOptionsEnd), /data-igv-optional-track-status/u);
+    assert.doesNotMatch(source, /Missing optional tracks:/u);
     assert.match(source, /Load locus reads/u);
     assert.match(source, /lg:right-\[560px\]/u);
     assert.match(source, /lg:right-\[600px\]/u);

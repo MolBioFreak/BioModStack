@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "a8159ce694d90208a3fc303055616a4936612f30a6150f4b03dd7482b295b239",
+  "content_sha256": "be8507b5faf3d9f66079b2bb2e57afb71735f4524dc71fb997694ab357c6f524",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
@@ -799,8 +799,8 @@
     },
     {
       "path": "platform/frontend/src/components/NGSToolkit.tsx",
-      "sha256": "e104c13187614e909f1a216b67b9d56b1af97a90b62cb6ac9732bc8ec4563a28",
-      "size_bytes": 328506
+      "sha256": "02223a42475455cadd6b4aab41fad177ba411b796e311624454c830f271a0ccf",
+      "size_bytes": 327901
     },
     {
       "path": "platform/frontend/src/components/NanoporeTemplate.tsx",
@@ -954,8 +954,8 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "5423a6da2b151c78be716a500d57cafa4f0345c3eff59c2ee41ff68790e12023",
-      "size_bytes": 34217
+      "sha256": "c5195eb1c92b9fc99f0551db5b231e20c45cfc93422d691d0a8ac28814171cc0",
+      "size_bytes": 34962
     },
     {
       "path": "platform/frontend/tests/ngsFullscreenOwner.test.ts",
@@ -1172,8 +1172,8 @@
     "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "55a9efa0aad877a816fe7be8514e9a962a1ed317",
-  "successor_source_tree": "36c45d0e1d842d91e189f074ee6679bdca58fab1",
+  "successor_source_commit": "d8185f3d1e63c7a09cd5cbfc19f603c2f58526e7",
+  "successor_source_tree": "10af8092dc183396ee239b6a0355561f9ab8642f",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

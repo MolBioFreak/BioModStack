@@ -5692,7 +5692,7 @@ export function NGSToolkit() {
                                         Read bases
                                     </button>
                                 </form>
-                                <details className="relative">
+                                <details data-igv-view-options className="relative">
                                     <summary className="cursor-pointer list-none rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-primary)]">View options</summary>
                                     <div className="absolute right-0 top-full z-40 mt-1 flex w-[min(520px,90vw)] flex-wrap gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-xl">
                                 <select
@@ -5747,6 +5747,11 @@ export function NGSToolkit() {
                                 >
                                     Download BAM
                                 </a>
+                            )}
+                            {igvReadsTrackLoaded && (missingIgvAuxTracks.length > 0 || igvAuxTrackFailures.length > 0) && (
+                                <div data-igv-optional-track-status className="basis-full text-[10px] text-amber-200">
+                                    Optional tracks unavailable
+                                </div>
                             )}
                                     </div>
                                 </details>
@@ -5832,16 +5837,7 @@ export function NGSToolkit() {
                                         {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
-                                {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (
-                                    <div className="absolute bottom-2 left-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
-                                        Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
-                                    </div>
-                                )}
-                                {!igvLoading && !igvError && igvReadsTrackLoaded && igvAuxTrackFailures.length > 0 && (
-                                    <div role="status" className="absolute bottom-2 right-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
-                                        Optional tracks unavailable: {igvAuxTrackFailures.join(' · ')}
-                                    </div>
-                                )}
+
                                 {signalWorkbenchRequested ? (
                                     requestedViewerSessionReopenFailed ? (
                                         <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
