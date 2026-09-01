@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ GENERATOR = REPO_ROOT / "scripts/build_restriction_enzyme_catalog.py"
 CATALOG_SCHEMA = REPO_ROOT / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json"
 CATALOG = REPO_ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json"
 MANIFEST = REPO_ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
+CHANGE_REPORT = REPO_ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_change_report_v1.json"
 DIGEST_V2_SCHEMA = REPO_ROOT / "schemas/ngs_molbio/molbio-restriction_digest-v2.schema.json"
 SCHEMA_REGISTRY = REPO_ROOT / "platform/api/config/ngs_molbio/schema_registry_v2.json"
 CAPABILITY_INVENTORY = REPO_ROOT / "platform/api/config/ngs_molbio/capability_inventory_v2.json"
@@ -34,7 +36,7 @@ def _canonical_digest(document: dict[str, object], field: str) -> str:
     return hashlib.sha256(rfc8785.dumps(preimage)).hexdigest()
 
 
-def _run_generator(catalog: Path, manifest: Path) -> None:
+def _run_generator(catalog: Path, manifest: Path, change_report: Path) -> None:
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     subprocess.run(
@@ -45,6 +47,8 @@ def _run_generator(catalog: Path, manifest: Path) -> None:
             str(catalog),
             "--manifest-output",
             str(manifest),
+            "--change-report-output",
+            str(change_report),
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -54,12 +58,21 @@ def _run_generator(catalog: Path, manifest: Path) -> None:
     )
 
 
+def _load_generator():
+    specification = importlib.util.spec_from_file_location("restriction_catalog_generator_test", GENERATOR)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 def test_phase0_source_contract_assets_exist() -> None:
     for path in (
         GENERATOR,
         CATALOG_SCHEMA,
         CATALOG,
         MANIFEST,
+        CHANGE_REPORT,
         DIGEST_V2_SCHEMA,
         ATTRIBUTION,
         COORDINATE_CONTRACT,
@@ -206,12 +219,68 @@ def test_manifest_binds_sorted_records_and_deterministic_timestamp_policy() -> N
 def test_generator_is_byte_deterministic_across_two_clean_outputs(tmp_path: Path) -> None:
     first_catalog = tmp_path / "first-catalog.json"
     first_manifest = tmp_path / "first-manifest.json"
+    first_report = tmp_path / "first-change-report.json"
     second_catalog = tmp_path / "second-catalog.json"
     second_manifest = tmp_path / "second-manifest.json"
-    _run_generator(first_catalog, first_manifest)
-    _run_generator(second_catalog, second_manifest)
+    second_report = tmp_path / "second-change-report.json"
+    _run_generator(first_catalog, first_manifest, first_report)
+    _run_generator(second_catalog, second_manifest, second_report)
     assert first_catalog.read_bytes() == second_catalog.read_bytes() == CATALOG.read_bytes()
     assert first_manifest.read_bytes() == second_manifest.read_bytes() == MANIFEST.read_bytes()
+    assert first_report.read_bytes() == second_report.read_bytes() == CHANGE_REPORT.read_bytes()
+
+
+def test_change_report_discriminates_every_review_class() -> None:
+    generator = _load_generator()
+    current = _load(CATALOG)
+    templates = {row["enzyme_id"]: row for row in current["records"]}
+    old_records = [copy.deepcopy(templates[name]) for name in ("EcoRI", "BsaI", "FokI", "BcgI", "AarI")]
+    new_records = copy.deepcopy(old_records)
+    new_records.pop(0)
+    new_records.append(copy.deepcopy(templates["BamHI"]))
+    new_records[0]["cleavage"]["events"][0]["top_offset"] += 1
+    new_records[1]["relationships"]["neoschizomer_ids"] = ["synthetic-peer"]
+    new_records[2]["supplier_provenance"]["historical_supplier_codes"] = ["SYNTHETIC"]
+
+    old = {"catalog_id": "old", "content_sha256": "a" * 64, "records": old_records}
+    new = {"catalog_id": "new", "content_sha256": "b" * 64, "records": new_records}
+    report = generator.build_change_report(old, new)
+
+    assert report["changes"]["additions"] == ["BamHI"]
+    assert report["changes"]["removals"] == ["EcoRI"]
+    assert report["changes"]["cleavage_geometry_changes"] == ["BsaI"]
+    assert report["changes"]["relationship_changes"] == ["FokI"]
+    assert report["changes"]["historical_supplier_code_changes"] == ["BcgI"]
+
+
+def test_checked_initial_release_change_report_is_canonical_and_truthful() -> None:
+    catalog = _load(CATALOG)
+    report = _load(CHANGE_REPORT)
+    assert report["prior_catalog"] is None
+    assert report["current_catalog"] == {
+        "catalog_id": catalog["catalog_id"],
+        "content_sha256": catalog["content_sha256"],
+        "biopython_source_records": 1088,
+        "curated_nickase_supplement_records": 4,
+        "total_discoverable": 1092,
+    }
+    assert report["summary"] == {
+        "additions": 1092,
+        "removals": 0,
+        "cleavage_geometry_changes": 0,
+        "relationship_changes": 0,
+        "historical_supplier_code_changes": 0,
+    }
+    assert len(report["changes"]["additions"]) == 1092
+    for change_class in (
+        "removals",
+        "cleavage_geometry_changes",
+        "relationship_changes",
+        "historical_supplier_code_changes",
+    ):
+        assert report["changes"][change_class] == []
+    assert report["content_sha256"] == _canonical_digest(report, "content_sha256")
+    assert CHANGE_REPORT.read_bytes() == rfc8785.dumps(report)
 
 
 def test_catalog_and_v2_operation_schemas_are_closed_and_valid() -> None:
@@ -226,6 +295,52 @@ def test_catalog_and_v2_operation_schemas_are_closed_and_valid() -> None:
     assert operation_schema["$id"] == "bms.operation-parameters.molbio.restriction_digest.v2"
     for authority in ("source", "catalog", "simulation_policy", "result_binding"):
         assert operation_schema["properties"][authority]["additionalProperties"] is False
+
+
+def test_catalog_schema_rejects_every_scientific_state_contradiction() -> None:
+    catalog_schema = _load(CATALOG_SCHEMA)
+    record_schema = {
+        "$schema": catalog_schema["$schema"],
+        "$defs": catalog_schema["$defs"],
+        "$ref": "#/$defs/record",
+    }
+    validator = Draft202012Validator(record_schema)
+    records = {row["canonical_name"]: row for row in _load(CATALOG)["records"]}
+    event = copy.deepcopy(records["EcoRI"]["cleavage"]["events"][0])
+    top_nick = {"strand": "top", "top_offset": 1, "bottom_offset": None}
+    bottom_nick = {"strand": "bottom", "top_offset": None, "bottom_offset": 1}
+    cases = [
+        ("known_status", records["EcoRI"], ("cleavage", "status"), "unknown"),
+        ("known_event_cardinality", records["EcoRI"], ("cleavage", "events"), []),
+        ("known_nick", records["EcoRI"], ("cleavage", "nick"), top_nick),
+        ("known_kind", records["EcoRI"], ("enzyme_kind",), "nicking_endonuclease"),
+        ("known_capability", records["EcoRI"], ("analysis_capability",), "recognition_only"),
+        ("known_primary_source_pair", records["EcoRI"], ("cleavage", "source_fields", "fst3"), None),
+        ("known_secondary_source_pair", records["EcoRI"], ("cleavage", "source_fields", "scd5"), 1),
+        ("known_exclusion", records["EcoRI"], ("exclusion_reason",), "primary_cut_geometry_incomplete"),
+        ("unknown_status", records["Aba13301I"], ("cleavage", "status"), "known_double_strand"),
+        ("unknown_event_cardinality", records["Aba13301I"], ("cleavage", "events"), [event]),
+        ("unknown_nick", records["Aba13301I"], ("cleavage", "nick"), bottom_nick),
+        ("unknown_kind", records["Aba13301I"], ("enzyme_kind",), "double_strand_endonuclease"),
+        ("unknown_capability", records["Aba13301I"], ("analysis_capability",), "digest_simulation"),
+        ("unknown_source_pair", records["Aba13301I"], ("cleavage", "source_fields", "fst5"), 1),
+        ("unknown_exclusion", records["Aba13301I"], ("exclusion_reason",), None),
+        ("nick_status", records["Nt.BbvCI"], ("cleavage", "status"), "unknown"),
+        ("nick_event_cardinality", records["Nt.BbvCI"], ("cleavage", "events"), [event]),
+        ("nick_shape", records["Nt.BbvCI"], ("cleavage", "nick", "bottom_offset"), 5),
+        ("nick_kind", records["Nt.BbvCI"], ("enzyme_kind",), "double_strand_endonuclease"),
+        ("nick_capability", records["Nt.BbvCI"], ("analysis_capability",), "digest_simulation"),
+        ("nick_source_fields", records["Nt.BbvCI"], ("cleavage", "source_fields", "fst5"), 1),
+        ("nick_exclusion", records["Nt.BbvCI"], ("exclusion_reason",), None),
+        ("nick_source_receipt", records["Nt.BbvCI"], ("source", "page_sha256"), None),
+    ]
+    for label, source, path, replacement in cases:
+        invalid = copy.deepcopy(source)
+        target = invalid
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = replacement
+        assert list(validator.iter_errors(invalid)), label
 
 
 def test_v2_operation_contract_requires_exact_authorities_and_rejects_browser_geometry() -> None:

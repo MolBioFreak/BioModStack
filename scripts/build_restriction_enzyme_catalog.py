@@ -24,6 +24,7 @@ from Bio.Restriction import Restriction_Dictionary as restriction_dictionary
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json"
 DEFAULT_MANIFEST = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json"
+DEFAULT_CHANGE_REPORT = ROOT / "platform/api/config/molbio/restriction/restriction_enzyme_catalog_change_report_v1.json"
 PACKAGE_VERSION = "1.87"
 DICTIONARY_SHA256 = "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"
 CATALOG_ID = "biopython-rebase-404-bms-v1"
@@ -296,6 +297,80 @@ def apply_relationships(records: list[dict[str, Any]]) -> None:
             }
 
 
+def _catalog_identity(catalog: dict[str, Any]) -> dict[str, Any]:
+    identity: dict[str, Any] = {
+        "catalog_id": catalog["catalog_id"],
+        "content_sha256": catalog["content_sha256"],
+    }
+    counts = catalog.get("counts")
+    if isinstance(counts, dict):
+        for field in (
+            "biopython_source_records",
+            "curated_nickase_supplement_records",
+            "total_discoverable",
+        ):
+            identity[field] = counts[field]
+    return identity
+
+
+def build_change_report(
+    prior_catalog: dict[str, Any] | None,
+    current_catalog: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a canonical review report for one exact catalog transition."""
+    prior_records = {
+        row["enzyme_id"]: row for row in (prior_catalog or {}).get("records", [])
+    }
+    current_records = {
+        row["enzyme_id"]: row for row in current_catalog["records"]
+    }
+    prior_ids = set(prior_records)
+    current_ids = set(current_records)
+    shared_ids = prior_ids & current_ids
+    changes = {
+        "additions": sorted(current_ids - prior_ids, key=str.casefold),
+        "removals": sorted(prior_ids - current_ids, key=str.casefold),
+        "cleavage_geometry_changes": sorted(
+            (
+                enzyme_id
+                for enzyme_id in shared_ids
+                if prior_records[enzyme_id]["cleavage"]
+                != current_records[enzyme_id]["cleavage"]
+            ),
+            key=str.casefold,
+        ),
+        "relationship_changes": sorted(
+            (
+                enzyme_id
+                for enzyme_id in shared_ids
+                if prior_records[enzyme_id]["relationships"]
+                != current_records[enzyme_id]["relationships"]
+            ),
+            key=str.casefold,
+        ),
+        "historical_supplier_code_changes": sorted(
+            (
+                enzyme_id
+                for enzyme_id in shared_ids
+                if prior_records[enzyme_id]["supplier_provenance"]["historical_supplier_codes"]
+                != current_records[enzyme_id]["supplier_provenance"]["historical_supplier_codes"]
+            ),
+            key=str.casefold,
+        ),
+    }
+    return with_digest(
+        {
+            "schema": "bms.molbio.restriction-enzyme-catalog-change-report.v1",
+            "comparison_policy": "exact_enzyme_id_and_canonical_scientific_fields",
+            "prior_catalog": _catalog_identity(prior_catalog) if prior_catalog is not None else None,
+            "current_catalog": _catalog_identity(current_catalog),
+            "summary": {name: len(enzyme_ids) for name, enzyme_ids in changes.items()},
+            "changes": changes,
+        },
+        "content_sha256",
+    )
+
+
 def verify_source() -> Path:
     version = importlib.metadata.version("biopython")
     if version != PACKAGE_VERSION:
@@ -419,10 +494,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog-output", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--manifest-output", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--change-report-output", type=Path, default=DEFAULT_CHANGE_REPORT)
+    parser.add_argument(
+        "--prior-catalog",
+        type=Path,
+        default=None,
+        help="Optional prior canonical catalog; omission denotes the initial release.",
+    )
     arguments = parser.parse_args()
     catalog, manifest = build_documents()
+    prior_catalog = (
+        json.loads(arguments.prior_catalog.read_text(encoding="utf-8"))
+        if arguments.prior_catalog is not None
+        else None
+    )
+    change_report = build_change_report(prior_catalog, catalog)
     write_exact(arguments.catalog_output, rfc8785.dumps(catalog))
     write_exact(arguments.manifest_output, rfc8785.dumps(manifest))
+    write_exact(arguments.change_report_output, rfc8785.dumps(change_report))
     print(
         json.dumps(
             {
@@ -430,6 +519,8 @@ def main() -> int:
                 "catalog_content_sha256": catalog["content_sha256"],
                 "manifest": str(arguments.manifest_output),
                 "manifest_content_sha256": manifest["content_sha256"],
+                "change_report": str(arguments.change_report_output),
+                "change_report_content_sha256": change_report["content_sha256"],
                 "counts": catalog["counts"],
             },
             sort_keys=True,

@@ -183,7 +183,91 @@
         "source": {"$ref": "#/$defs/recordSource"},
         "record_sha256": {"$ref": "#/$defs/sha256"}
       },
-      "required": ["enzyme_id", "id_policy", "canonical_name", "aliases", "recognition", "cleavage", "enzyme_kind", "analysis_capability", "exclusion_reason", "supplier_provenance", "relationships", "source", "record_sha256"]
+      "required": ["enzyme_id", "id_policy", "canonical_name", "aliases", "recognition", "cleavage", "enzyme_kind", "analysis_capability", "exclusion_reason", "supplier_provenance", "relationships", "source", "record_sha256"],
+      "oneOf": [
+        {
+          "title": "Known double-strand cutter",
+          "properties": {
+            "enzyme_kind": {"const": "double_strand_endonuclease"},
+            "analysis_capability": {"const": "digest_simulation"},
+            "exclusion_reason": {"type": "null"},
+            "cleavage": {
+              "properties": {
+                "status": {"const": "known_double_strand"},
+                "nick": {"type": "null"},
+                "source_fields": {"properties": {"fst5": {"type": "integer"}, "fst3": {"type": "integer"}}}
+              },
+              "oneOf": [
+                {"properties": {"events": {"minItems": 1, "maxItems": 1}, "source_fields": {"properties": {"scd5": {"type": "null"}, "scd3": {"type": "null"}}}}},
+                {"properties": {"events": {"minItems": 2, "maxItems": 2}, "source_fields": {"properties": {"scd5": {"type": "integer"}, "scd3": {"type": "integer"}}}}}
+              ]
+            },
+            "source": {"properties": {
+              "kind": {"const": "biopython_restriction_dictionary"},
+              "package": {"const": "biopython"},
+              "package_version": {"const": "1.87"},
+              "embedded_rebase_release": {"const": "REBASE_EMBOSS_404_2024"},
+              "dictionary_sha256": {"const": "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"},
+              "page_sha256": {"type": "null"},
+              "retrieved_on": {"type": "null"},
+              "record_modified_on": {"type": "null"},
+              "source_notation": {"type": "null"}
+            }}
+          }
+        },
+        {
+          "title": "Recognition-only enzyme with unavailable geometry",
+          "properties": {
+            "enzyme_kind": {"const": "restriction_enzyme_geometry_unresolved"},
+            "analysis_capability": {"const": "recognition_only"},
+            "exclusion_reason": {"const": "primary_cut_geometry_incomplete"},
+            "cleavage": {"properties": {
+              "status": {"const": "unknown"},
+              "events": {"maxItems": 0},
+              "nick": {"type": "null"},
+              "source_fields": {"properties": {"fst5": {"type": "null"}, "fst3": {"type": "null"}, "scd5": {"type": "null"}, "scd3": {"type": "null"}}}
+            }},
+            "source": {"properties": {
+              "kind": {"const": "biopython_restriction_dictionary"},
+              "package": {"const": "biopython"},
+              "package_version": {"const": "1.87"},
+              "embedded_rebase_release": {"const": "REBASE_EMBOSS_404_2024"},
+              "dictionary_sha256": {"const": "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"},
+              "page_sha256": {"type": "null"},
+              "retrieved_on": {"type": "null"},
+              "record_modified_on": {"type": "null"},
+              "source_notation": {"type": "null"}
+            }}
+          }
+        },
+        {
+          "title": "Curated nickase supplement",
+          "properties": {
+            "enzyme_kind": {"const": "nicking_endonuclease"},
+            "analysis_capability": {"const": "nicking_analysis"},
+            "exclusion_reason": {"const": "nicking_enzyme_not_digestible"},
+            "cleavage": {"properties": {
+              "status": {"const": "known_single_strand_nick"},
+              "events": {"maxItems": 0},
+              "nick": {"$ref": "#/$defs/nick"},
+              "source_fields": {"properties": {"fst5": {"type": "null"}, "fst3": {"type": "null"}, "scd5": {"type": "null"}, "scd3": {"type": "null"}}}
+            }},
+            "source": {"properties": {
+              "kind": {"const": "bms_curated_rebase_nickase"},
+              "record_id": {"type": "string", "minLength": 1},
+              "uri": {"type": "string", "pattern": "^https://rebase\\.neb\\.com/"},
+              "package": {"type": "null"},
+              "package_version": {"type": "null"},
+              "embedded_rebase_release": {"type": "null"},
+              "dictionary_sha256": {"type": "null"},
+              "page_sha256": {"$ref": "#/$defs/sha256"},
+              "retrieved_on": {"type": "string", "format": "date"},
+              "record_modified_on": {"type": "string", "format": "date"},
+              "source_notation": {"type": "string", "minLength": 1}
+            }}
+          }
+        }
+      ]
     }
   }
 }
