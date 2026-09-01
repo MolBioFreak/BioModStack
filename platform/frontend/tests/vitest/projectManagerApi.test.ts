@@ -73,7 +73,7 @@ const resultSurface = {
 };
 
 describe('Project Manager API contract', () => {
-    it('parses the bounded six-row picker and exact create/detail setup representations', async () => {
+    it('parses a dynamic Project-ready workflow picker and exact create/detail setup representations', async () => {
         const contract = projectManagerContract as unknown as {
             listProteinProjectCapabilities: () => Promise<unknown>;
             createProjectWorkflowSetup: (projectId: string, request: unknown) => Promise<unknown>;
@@ -86,8 +86,9 @@ describe('Project Manager API contract', () => {
             source_requirements: ['protein_sequence_receipt'],
             follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
         };
-        transport.get.mockResolvedValueOnce({ data: { schema: 'bms.protein-project-workflow-picker.v1', capabilities: Array.from({ length: 6 }, (_, index) => ({ ...row, capability_id: `${row.capability_id}.${index}` })) } });
-        await expect(contract.listProteinProjectCapabilities()).resolves.toMatchObject({ capabilities: expect.any(Array) });
+        const publishedRows = Array.from({ length: 8 }, (_, index) => ({ ...row, capability_id: `${row.capability_id}.${index}` }));
+        transport.get.mockResolvedValueOnce({ data: { schema: 'bms.protein-project-workflow-picker.v1', capabilities: publishedRows } });
+        await expect(contract.listProteinProjectCapabilities()).resolves.toMatchObject({ capabilities: publishedRows });
         const created = {
             schema: 'bms.project-workflow-setup.create-response.v1', setup_context_id: 'setup-1', project_id: 'project-1',
             global_experiment_id: 'global-1', domain_experiment_id: 'domain-1', relationship_kind: 'primary',

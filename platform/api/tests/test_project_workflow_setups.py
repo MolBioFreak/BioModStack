@@ -24,17 +24,8 @@ from experiment_models import (
 from experiment_services import RevisionConflict, ValidationFailure, create_project
 from services.global_experiments import workflow_setups
 from services.global_experiments.read_models import build_project_manager_read_model
+from services import protein_project_capabilities
 from services.protein_project_capabilities import protein_capability_inventory
-
-
-READY_CAPABILITIES = {
-    "protein.structure_prediction.boltz2",
-    "protein.structure_prediction.esmfold2",
-    "protein.structure_prediction.protenix_v2",
-    "protein.de_novo.local_redesign",
-    "protein.conformational_mapping.protenix_v2",
-    "protein.conformational_mapping.confornets",
-}
 
 
 def test_setup_context_service_module_is_registered() -> None:
@@ -98,11 +89,34 @@ def test_setup_context_persistence_authority_is_registered() -> None:
     } <= set(model.__table__.columns.keys())
 
 
-def test_project_picker_exposes_exactly_six_ready_capabilities() -> None:
-    inventory = protein_capability_inventory(project_ready_only=True)
+def test_project_picker_derives_from_active_published_project_compatible_workflows(monkeypatch) -> None:
+    existing_ids = {
+        item["capability_id"]
+        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
+    }
+    promoted = next(
+        record
+        for record in protein_project_capabilities._CAPABILITIES
+        if record["capability_id"] == "protein.simulation.gromacs_md"
+    )
+    monkeypatch.setitem(promoted, "exposure_state", "accepted")
+    monkeypatch.setitem(promoted, "availability", {"state": "operational", "reason": None})
+    monkeypatch.setitem(
+        promoted, "workflow_adapter_id", "bms.core-job.molecular-dynamics.adapter.v1"
+    )
+    monkeypatch.setitem(promoted, "launch_mode", "typed_launcher_handoff")
+    monkeypatch.setitem(
+        promoted, "project_setup_destination", "/submit?template=molecular_dynamics"
+    )
+
+    inventory = protein_project_capabilities.protein_capability_inventory(project_ready_only=True)
     assert set(inventory) == {"schema", "capabilities"}
     assert inventory["schema"] == "bms.protein-project-workflow-picker.v1"
-    assert {item["capability_id"] for item in inventory["capabilities"]} == READY_CAPABILITIES
+    ready_ids = {item["capability_id"] for item in inventory["capabilities"]}
+    assert ready_ids == existing_ids | {"protein.simulation.gromacs_md"}
+    assert protein_project_capabilities.protein_capability_record(
+        "protein.simulation.gromacs_md"
+    )["project_setup_state"] == "ready"
     for item in inventory["capabilities"]:
         assert set(item) == {
             "capability_id", "label", "state", "adapter_id", "setup_destination",
@@ -112,12 +126,16 @@ def test_project_picker_exposes_exactly_six_ready_capabilities() -> None:
         assert item["adapter_id"]
         assert item["setup_destination"].startswith("/submit?template=")
         assert isinstance(item["source_requirements"], list)
-        assert set(item["follow_up_compatible_capability_ids"]) <= READY_CAPABILITIES
+        assert set(item["follow_up_compatible_capability_ids"]) == ready_ids
 
 
 def test_unavailable_capabilities_remain_catalogued_but_hidden_from_project_picker() -> None:
     complete = protein_capability_inventory()
-    hidden = [item for item in complete["capabilities"] if item["capability_id"] not in READY_CAPABILITIES]
+    ready_ids = {
+        item["capability_id"]
+        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
+    }
+    hidden = [item for item in complete["capabilities"] if item["capability_id"] not in ready_ids]
     assert hidden
     assert all(item["project_setup_state"] != "ready" for item in hidden)
 
