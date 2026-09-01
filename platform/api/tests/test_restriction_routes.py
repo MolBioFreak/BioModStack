@@ -249,12 +249,106 @@ def test_unknown_or_invalid_query_values_have_stable_json_4xx() -> None:
         assert set(detail) == {"code", "message"}
 
 
+def test_typed_catalog_query_rejections_preserve_stable_public_errors() -> None:
+    client = _client(_authority())
+    cases = {
+        "query=": "invalid_catalog_query",
+        "query=%20%20": "invalid_catalog_query",
+        "enzyme_kind=unsupported": "invalid_catalog_query",
+        "overhang_kind=unsupported": "invalid_catalog_query",
+        "palindromic=1": "invalid_catalog_query",
+        "limit=1.0": "invalid_catalog_query",
+        "limit=01": "invalid_catalog_query",
+        "cursor=": "cursor_invalid",
+        "cursor=not%2Ba%2Furl-safe-token": "cursor_invalid",
+    }
+    for query_string, code in cases.items():
+        response = client.get(f"/api/molbio/restriction/catalog?{query_string}")
+        assert response.status_code == 422, (query_string, response.text)
+        assert response.json()["detail"]["code"] == code
+        assert set(response.json()["detail"]) == {"code", "message"}
+
+
 def test_catalog_unavailable_never_serves_partial_rows_or_public_paths() -> None:
     unavailable = CatalogAuthority(CATALOG.with_name("missing-private-name.json"), MANIFEST, SCHEMA)
     response = _client(unavailable).get("/api/molbio/restriction/catalog")
     assert response.status_code == 503
     assert response.json() == {"detail": {"code": "catalog_unavailable", "message": "restriction catalog is unavailable"}}
     assert str(CATALOG.parent) not in response.text
+
+
+def _non_null_parameter_schema(parameter: dict[str, object]) -> dict[str, object]:
+    schema = parameter["schema"]
+    assert isinstance(schema, dict)
+    variants = schema.get("anyOf")
+    if variants is None:
+        return schema
+    assert isinstance(variants, list)
+    non_null = [variant for variant in variants if variant != {"type": "null"}]
+    assert len(non_null) == 1
+    assert isinstance(non_null[0], dict)
+    return non_null[0]
+
+
+def test_catalog_openapi_query_parameters_publish_exact_runtime_constraints() -> None:
+    operation = _client(_authority()).app.openapi()["paths"]["/api/molbio/restriction/catalog"]["get"]
+    parameters = {parameter["name"]: parameter for parameter in operation["parameters"]}
+
+    assert set(parameters) == {
+        "query",
+        "geometry_status",
+        "commercial",
+        "supplier_code",
+        "enzyme_kind",
+        "overhang_kind",
+        "palindromic",
+        "limit",
+        "cursor",
+    }
+    assert _non_null_parameter_schema(parameters["query"]) == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r".*\S.*",
+    }
+    assert _non_null_parameter_schema(parameters["geometry_status"])["enum"] == [
+        "known",
+        "unknown",
+        "all",
+    ]
+    assert _non_null_parameter_schema(parameters["commercial"])["enum"] == [
+        "reported",
+        "not_reported",
+        "all",
+    ]
+    assert _non_null_parameter_schema(parameters["supplier_code"]) == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16,
+        "pattern": r"^[A-Za-z0-9._-]+$",
+    }
+    assert _non_null_parameter_schema(parameters["enzyme_kind"])["enum"] == [
+        "double_strand_endonuclease",
+        "nicking_endonuclease",
+        "restriction_enzyme_geometry_unresolved",
+    ]
+    assert _non_null_parameter_schema(parameters["overhang_kind"])["enum"] == [
+        "blunt",
+        "five_prime",
+        "three_prime",
+    ]
+    assert _non_null_parameter_schema(parameters["palindromic"])["enum"] == ["true", "false"]
+    assert _non_null_parameter_schema(parameters["limit"]) == {
+        "type": "integer",
+        "maximum": 250,
+        "minimum": 1,
+    }
+    assert _non_null_parameter_schema(parameters["cursor"]) == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096,
+        "pattern": r"^[A-Za-z0-9_-]+$",
+    }
 
 
 def test_openapi_examples_execute_and_only_phase1_public_routes_are_mounted() -> None:
@@ -266,12 +360,23 @@ def test_openapi_examples_execute_and_only_phase1_public_routes_are_mounted() ->
         "/api/molbio/restriction/catalog/{enzyme_id}",
     }
     assert not any("analy" in path or "digest" in path for path in paths)
-    examples = paths["/api/molbio/restriction/catalog"]["get"]["parameters"]
-    for parameter in examples:
+    parameters = paths["/api/molbio/restriction/catalog"]["get"]["parameters"]
+    for parameter in parameters:
         values = [parameter["example"]] if "example" in parameter else parameter.get("schema", {}).get("examples", [])
+        if parameter["name"] != "cursor":
+            assert values, f"missing executable OpenAPI example for {parameter['name']}"
         for value in values:
             response = client.get("/api/molbio/restriction/catalog", params={parameter["name"]: value})
             assert response.status_code == 200, (parameter["name"], response.text)
+
+    first_page = client.get("/api/molbio/restriction/catalog", params={"limit": 1})
+    assert first_page.status_code == 200
+    cursor = first_page.json()["next_cursor"]
+    cursor_response = client.get(
+        "/api/molbio/restriction/catalog",
+        params={"limit": 1, "cursor": cursor},
+    )
+    assert cursor_response.status_code == 200, cursor_response.text
 
 
 def test_main_application_mounts_catalog_routes_but_not_phase2_routes() -> None:

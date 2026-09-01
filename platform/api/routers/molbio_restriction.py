@@ -7,10 +7,14 @@ import hmac
 import json
 import re
 import secrets
-from typing import Annotated, Literal
+from collections.abc import Callable
+from typing import Annotated, Any, Coroutine, Literal
 
 import rfc8785
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from services.restriction_catalog import (
@@ -25,7 +29,6 @@ from services.restriction_catalog import (
     catalog_authority,
 )
 
-router = APIRouter(prefix="/api/molbio/restriction", tags=["molbio-restriction-catalog"])
 _ALLOWED_QUERY_FIELDS = {
     "query",
     "geometry_status",
@@ -37,13 +40,52 @@ _ALLOWED_QUERY_FIELDS = {
     "limit",
     "cursor",
 }
-_SUPPLIER_CODE = re.compile(r"^[A-Za-z0-9._-]{1,16}$")
-_CURSOR = re.compile(r"^[A-Za-z0-9_-]+$")
+_SUPPLIER_CODE_PATTERN = r"^[A-Za-z0-9._-]+$"
+_SUPPLIER_CODE_MAX_LENGTH = 16
+_CURSOR_PATTERN = r"^[A-Za-z0-9_-]+$"
+_CURSOR = re.compile(_CURSOR_PATTERN)
 _CURSOR_VERSION = 1
 _CURSOR_KEY_VERSION = 1
 # Development/API cursors intentionally expire whenever this process restarts.
 _CURSOR_SIGNING_KEY = secrets.token_bytes(32)
 _CURSOR_KEY_EPOCH = secrets.token_bytes(8)
+
+
+class CatalogRoute(APIRoute):
+    """Keep catalog query-validation failures on the stable public error contract."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        route_handler = super().get_route_handler()
+
+        async def stable_validation_handler(request: Request) -> Response:
+            try:
+                return await route_handler(request)
+            except RequestValidationError as exc:
+                cursor_error = any(
+                    len(error.get("loc", ())) >= 2 and error["loc"][:2] == ("query", "cursor")
+                    for error in exc.errors()
+                )
+                detail = (
+                    {
+                        "code": "cursor_invalid",
+                        "message": "catalog cursor is invalid for this request",
+                    }
+                    if cursor_error
+                    else {
+                        "code": "invalid_catalog_query",
+                        "message": "catalog query parameters are invalid",
+                    }
+                )
+                return JSONResponse(status_code=422, content={"detail": detail})
+
+        return stable_validation_handler
+
+
+router = APIRouter(
+    prefix="/api/molbio/restriction",
+    tags=["molbio-restriction-catalog"],
+    route_class=CatalogRoute,
+)
 
 
 class StrictResponse(BaseModel):
@@ -215,15 +257,53 @@ def _require_view(authority: CatalogAuthority) -> CatalogView:
 @router.get("/catalog", response_model=CatalogPage)
 def list_catalog(
     request: Request,
-    query: Annotated[str | None, Query(examples=["EcoRI"])] = None,
-    geometry_status: Annotated[str, Query(examples=["known"])] = "all",
-    commercial: Annotated[str, Query(examples=["reported"])] = "all",
-    supplier_code: Annotated[str | None, Query(examples=["N"])] = None,
-    enzyme_kind: Annotated[str | None, Query(examples=["double_strand_endonuclease"])] = None,
-    overhang_kind: Annotated[str | None, Query(examples=["five_prime"])] = None,
-    palindromic: Annotated[str | None, Query(examples=["true"])] = None,
-    limit: Annotated[str | None, Query(examples=["50"])] = None,
-    cursor: str | None = None,
+    query: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=QUERY_MAX_LENGTH,
+            pattern=r".*\S.*",
+            examples=["EcoRI"],
+        ),
+    ] = None,
+    geometry_status: Annotated[
+        Literal["known", "unknown", "all"], Query(examples=["known"])
+    ] = "all",
+    commercial: Annotated[
+        Literal["reported", "not_reported", "all"], Query(examples=["reported"])
+    ] = "all",
+    supplier_code: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=_SUPPLIER_CODE_MAX_LENGTH,
+            pattern=_SUPPLIER_CODE_PATTERN,
+            examples=["N"],
+        ),
+    ] = None,
+    enzyme_kind: Annotated[
+        Literal[
+            "double_strand_endonuclease",
+            "nicking_endonuclease",
+            "restriction_enzyme_geometry_unresolved",
+        ]
+        | None,
+        Query(examples=["double_strand_endonuclease"]),
+    ] = None,
+    overhang_kind: Annotated[
+        Literal["blunt", "five_prime", "three_prime"] | None,
+        Query(examples=["five_prime"]),
+    ] = None,
+    palindromic: Annotated[
+        Literal["true", "false"] | None, Query(examples=["true"])
+    ] = None,
+    limit: Annotated[
+        int | None, Query(ge=1, le=MAX_PAGE_LIMIT, examples=[DEFAULT_PAGE_LIMIT])
+    ] = None,
+    cursor: Annotated[
+        str | None,
+        Query(min_length=1, max_length=CURSOR_MAX_LENGTH, pattern=_CURSOR_PATTERN),
+    ] = None,
     authority: CatalogAuthority = Depends(get_catalog_authority),
 ) -> CatalogPage:
     unknown = set(request.query_params) - _ALLOWED_QUERY_FIELDS
@@ -231,32 +311,12 @@ def list_catalog(
         raise _invalid_query("unknown catalog query parameter")
     if any(len(request.query_params.getlist(key)) != 1 for key in request.query_params):
         raise _invalid_query("duplicate catalog query parameter")
-    if query is not None and (not query.strip() or len(query) > QUERY_MAX_LENGTH):
-        raise _invalid_query("query length is invalid")
     query = query.strip() if query is not None else None
-    if geometry_status not in {"known", "unknown", "all"}:
-        raise _invalid_query("geometry_status is invalid")
-    if commercial not in {"reported", "not_reported", "all"}:
-        raise _invalid_query("commercial is invalid")
-    if supplier_code is not None and not _SUPPLIER_CODE.fullmatch(supplier_code):
-        raise _invalid_query("supplier_code is invalid")
-    if enzyme_kind is not None and enzyme_kind not in {
-        "double_strand_endonuclease",
-        "nicking_endonuclease",
-        "restriction_enzyme_geometry_unresolved",
-    }:
-        raise _invalid_query("enzyme_kind is invalid")
-    if overhang_kind is not None and overhang_kind not in {"blunt", "five_prime", "three_prime"}:
-        raise _invalid_query("overhang_kind is invalid")
     palindromic_value = _parse_bool(palindromic)
-    try:
-        page_limit = DEFAULT_PAGE_LIMIT if limit is None else int(limit)
-    except ValueError as exc:
-        raise _invalid_query("limit is invalid") from exc
-    if not 1 <= page_limit <= MAX_PAGE_LIMIT or (limit is not None and str(page_limit) != limit):
+    page_limit = DEFAULT_PAGE_LIMIT if limit is None else limit
+    raw_limit = request.query_params.get("limit")
+    if raw_limit is not None and str(page_limit) != raw_limit:
         raise _invalid_query("limit is invalid")
-    if cursor is not None and len(cursor) > CURSOR_MAX_LENGTH:
-        raise _error(422, "cursor_invalid", "catalog cursor is invalid for this request")
 
     view = _require_view(authority)
     filters = {
