@@ -284,6 +284,20 @@ export type BioXpOperatorReceiptV2Status =
     | 'aborted'
     | 'cancelled';
 
+export interface BioXpOperatorReceiptFailureDetailV2 {
+    provider_failure: string;
+    failure: string;
+    axis: string;
+    board: number;
+    motor: number;
+    source_return_code: number;
+    controller_acknowledged: boolean;
+    controller_terminal_state_verified: boolean;
+    physical_effect_verified: boolean;
+    lifecycle_state: string;
+    reference_state: string;
+}
+
 export interface BioXpOperatorReceiptV2 {
     schema_version: 'bioxp.operator_action_receipt.v2';
     command_id: string;
@@ -303,7 +317,12 @@ export interface BioXpOperatorReceiptV2 {
     terminal_receipt_id: string | null;
     completion_class: string | null;
     physical_effect_verified: boolean;
-    error: { code: string; message: string; retryable: boolean } | null;
+    error: {
+        code: string;
+        message: string;
+        retryable: boolean;
+        detail?: BioXpOperatorReceiptFailureDetailV2 | null;
+    } | null;
 }
 
 export type BioXpReceiptScalarV2 = number | string | boolean | null;
@@ -1403,6 +1422,7 @@ interface BioXpOperatorActionV2Envelope {
 }
 
 export type BioXpOperatorActionV2Request =
+    | (BioXpOperatorActionV2Envelope & { action_id: 'meta.activate_motion' | 'meta.recover_motion_non_homing'; inputs: Record<string, never> })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_steps' | 'oem.z.move_steps'; inputs: { steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.move_absolute' | 'oem.z.move_absolute'; inputs: { position_steps: number } })
     | (BioXpOperatorActionV2Envelope & { action_id: 'oem.x.manual_panel_home' | 'oem.z.manual_home' | 'oem.z.clear' | 'oem.xy.home'; inputs: Record<string, never> })
@@ -2011,15 +2031,6 @@ export const useUpdateBioXpFreshness = () => useRefreshMutation(
     async (freshnessBudgetSeconds: number | null) => (
         await api.put<BioXpConnectionSnapshot>('/api/bioxp/settings/freshness', {
             freshness_budget_seconds: freshnessBudgetSeconds,
-        })
-    ).data,
-);
-
-export const useRecoverBioXpMotion = () => useRefreshMutation(
-    async ({ generation, reason }: { generation: number; reason: string }) => (
-        await api.post<Record<string, unknown>>('/api/bioxp/connection/recover-motion-non-homing', {
-            expected_generation: generation,
-            operator_reason: reason,
         })
     ).data,
 );

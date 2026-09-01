@@ -16,7 +16,8 @@ BioModStack owns only:
 
 - one persisted, policy-validated robot target profile;
 - one process-local connection generation;
-- connect, disconnect, probe, and typed non-homing recovery relays;
+- connect, disconnect, and probe connection management;
+- typed forwarding of robot-owned V2 operator actions;
 - private-ingress mutation authorization;
 - presentation and typed translation of robot-owned operator contracts;
 - offline protocol validation and local job records.
@@ -47,7 +48,6 @@ The feature-gated router is mounted at `/api/bioxp` only when
 | POST | `/connection/connect` | Activate the saved Development target |
 | POST | `/connection/disconnect` | Close the active connection and advance generation |
 | POST | `/connection/probe` | Refresh robot status for the active generation |
-| POST | `/connection/recover-motion-non-homing` | Thin typed relay to the robot's exact non-homing recovery route |
 
 ### Robot-owned operator plane
 
@@ -57,6 +57,8 @@ The feature-gated router is mounted at `/api/bioxp` only when
 | GET | `/operator-controls/dashboard` | Robot-owned dashboard projection |
 | POST | `/operator-controls/actions/{action_id}/admission` | Re-evaluate one action against current robot state |
 | POST | `/operator-controls/actions/{action_id}` | Invoke one robot action with both connection and ownership generations |
+| GET | `/operator-controls/v2/catalog` | Compact robot-owned canonical action and admission catalog |
+| POST | `/operator-controls/v2/actions/{action_id}` | Invoke one closed-schema canonical robot action |
 | GET | `/operator-controls/history` | Robot-owned action receipts |
 | GET | `/operator-controls/receipts/{command_id}` | Read one robot receipt |
 | POST | `/operator-controls/receipts/{command_id}/assessment` | Persist an operator assessment on the robot receipt |
@@ -69,6 +71,7 @@ The retired routes are absent:
 - `/commands`;
 - `/commands/{command_id}`;
 - `/emergency-stop`;
+- `/connection/recover-motion-non-homing`;
 - `/logs` as BMS-local command history.
 
 ## Connection and generation truth
@@ -120,9 +123,10 @@ Robot-facing mutations require `BMS_BIOXP_MUTATIONS_ENABLED=1`. Connection-only
 management additionally follows `BMS_BIOXP_CONNECTION_ENABLED`. Deterministic
 offline protocol compile remains non-mutating.
 
-The typed non-homing recovery relay supplies the robot's exact recovery
-acknowledgement and operator reason. BMS does not determine whether recovery is
-admissible or complete; the robot route does.
+Canonical activation and non-homing recovery use the closed V2 action IDs
+`meta.activate_motion` and `meta.recover_motion_non_homing`. The robot supplies
+the exact route payload, admission result, and durable receipt. BMS does not
+determine whether either action is admissible or complete.
 
 ## Operator surface
 
@@ -135,7 +139,8 @@ admissible or complete; the robot route does.
 - full advanced action catalog access;
 - robot-owned recent receipts.
 
-The cockpit's recovery button uses the single typed connection recovery relay.
+The cockpit's activation and recovery buttons use the single robot-owned V2
+operator action plane.
 No UI control reads BMS-local command availability or BMS-local command history.
 
 ## Verification boundary

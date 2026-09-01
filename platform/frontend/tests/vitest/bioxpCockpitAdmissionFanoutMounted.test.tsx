@@ -1,4 +1,5 @@
 import React, { act } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -102,11 +103,16 @@ const state = vi.hoisted(() => ({
         error: null,
     },
     historyCalls: [] as number[],
+    lifecycleInvokeCalls: [] as Array<Record<string, unknown>>,
     yInvokeCalls: [] as Array<Record<string, unknown>>,
     deckInvokeCalls: [] as Array<Record<string, unknown>>,
     yInterruptCalls: [] as Array<Record<string, unknown>>,
     methodCalls: [] as Array<Record<string, unknown>>,
     yInvokeError: null as unknown,
+    lifecycleInvokeError: null as unknown,
+    lifecycleInvokeData: undefined as Record<string, unknown> | undefined,
+    lifecycleInvokePending: false,
+    v2MutationHookCalls: 0,
     deckInvokeError: null as unknown,
     deckInvokePending: false,
     deckDeferred: false,
@@ -114,8 +120,11 @@ const state = vi.hoisted(() => ({
     receiptHookCalls: [] as Array<{ commandId: string | null; generation: number; enabled: boolean }>,
     yInterruptError: null as unknown,
     yInvokeData: undefined as Record<string, unknown> | undefined,
+    normalQueuedReceipt: undefined as Record<string, unknown> | undefined,
     yInterruptData: undefined as Record<string, unknown> | undefined,
     yReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
+    zReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
+    lifecycleReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
     deckReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown, isStale: false },
     v2Dashboard: {
         data: {
@@ -313,7 +322,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
-        return commandId?.startsWith('deck-command-') ? state.deckReceipt : state.yReceipt;
+        if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
+        if (commandId?.startsWith('lifecycle-command-')) return state.lifecycleReceipt;
+        if (commandId?.startsWith('z-command-')) return state.zReceipt;
+        return state.yReceipt;
     },
     useBioXpOperatorActionHistory: (...args: unknown[]) => {
         state.historyCalls.push(args[2] as number);
@@ -341,13 +353,45 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         mutate: (payload: Record<string, unknown>) => state.invokeCalls.push(payload),
         reset: state.stableReset,
     }),
-    useInvokeBioXpOperatorActionV2: () => ({
-        data: state.yInvokeData,
-        error: state.yInvokeError,
-        isPending: false,
-        mutate: (payload: Record<string, unknown>) => state.yInvokeCalls.push(payload),
-        reset: state.stableReset,
-    }),
+    useInvokeBioXpOperatorActionV2: () => {
+        const lifecycle = state.v2MutationHookCalls % 2 === 0;
+        state.v2MutationHookCalls += 1;
+        return lifecycle
+            ? {
+                data: state.lifecycleInvokeData,
+                error: state.lifecycleInvokeError,
+                isPending: state.lifecycleInvokePending,
+                mutate: (
+                    payload: Record<string, unknown>,
+                    callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void },
+                ) => {
+                    state.lifecycleInvokeCalls.push(payload);
+                    const actionId = (payload.request as Record<string, unknown>).action_id as string;
+                    const receipt = {
+                        command_id: `lifecycle-command-${state.lifecycleInvokeCalls.length}`,
+                        action_id: actionId,
+                        status: 'completed',
+                        terminal: true,
+                    };
+                    state.lifecycleReceipt.data = receipt;
+                    callbacks?.onSuccess?.(receipt);
+                },
+                reset: state.stableReset,
+            }
+            : {
+                data: state.yInvokeData,
+                error: state.yInvokeError,
+                isPending: false,
+                mutate: (
+                    payload: Record<string, unknown>,
+                    callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
+                ) => {
+                    state.yInvokeCalls.push(payload);
+                    if (state.normalQueuedReceipt !== undefined) callbacks?.onSuccess?.(state.normalQueuedReceipt);
+                },
+                reset: state.stableReset,
+            };
+    },
     useInvokeBioXpDeckActionV2: () => ({
         data: undefined,
         error: state.deckInvokeError,
@@ -386,7 +430,6 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     useDisconnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
-    useRecoverBioXpMotion: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn(), reset: state.stableReset }),
     useUpdateBioXpFreshness: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
     bioXpErrorText: (error: unknown) => String(error),
     bioXpErrorPresentation: (error: unknown) => {
@@ -477,11 +520,16 @@ beforeEach(() => {
     state.invokeCalls = [];
     state.invokePending = false;
     state.historyCalls = [];
+    state.lifecycleInvokeCalls = [];
     state.yInvokeCalls = [];
     state.deckInvokeCalls = [];
     state.yInterruptCalls = [];
     state.methodCalls = [];
     state.yInvokeError = null;
+    state.lifecycleInvokeError = null;
+    state.lifecycleInvokeData = undefined;
+    state.lifecycleInvokePending = false;
+    state.v2MutationHookCalls = 0;
     state.deckInvokeError = null;
     state.deckInvokePending = false;
     state.deckDeferred = false;
@@ -489,9 +537,14 @@ beforeEach(() => {
     state.receiptHookCalls = [];
     state.yInterruptError = null;
     state.yInvokeData = undefined;
+    state.normalQueuedReceipt = undefined;
     state.yInterruptData = undefined;
     state.yReceipt.data = undefined;
     state.yReceipt.error = null;
+    state.zReceipt.data = undefined;
+    state.zReceipt.error = null;
+    state.lifecycleReceipt.data = undefined;
+    state.lifecycleReceipt.error = null;
     state.deckReceipt.data = undefined;
     state.deckReceipt.error = null;
     state.v2Dashboard.error = null;
@@ -667,6 +720,217 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
+    it('uses the always-loaded v2 catalog for OEM activation and non-homing recovery', async () => {
+        state.catalog.data.actions = [];
+        (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push(
+            {
+                action_id: 'meta.activate_motion',
+                request_schema_version: 'bioxp.operator_action_request.v2',
+                response_schema_version: 'bioxp.operator_action_receipt.v2',
+                interrupt: false,
+                enabled: true,
+                disabled_reason: null,
+            },
+            {
+                action_id: 'meta.recover_motion_non_homing',
+                request_schema_version: 'bioxp.operator_action_request.v2',
+                response_schema_version: 'bioxp.operator_action_receipt.v2',
+                interrupt: false,
+                enabled: true,
+                disabled_reason: null,
+            },
+        );
+
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find(
+            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+        ) as HTMLElement;
+        const activate = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Activate 24 V / Prepare Motion',
+        ) as HTMLButtonElement;
+        const recover = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Non-homing Recovery',
+        ) as HTMLButtonElement;
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
+
+        await act(async () => {
+            activate.click();
+            recover.click();
+            await Promise.resolve();
+        });
+        expect(state.lifecycleInvokeCalls).toHaveLength(2);
+        expect((state.lifecycleInvokeCalls[0].request as Record<string, unknown>).action_id).toBe('meta.activate_motion');
+        expect((state.lifecycleInvokeCalls[1].request as Record<string, unknown>).action_id).toBe('meta.recover_motion_non_homing');
+        expect(state.yInvokeCalls).toHaveLength(0);
+        expect(state.invokeCalls).toHaveLength(0);
+        expect(panel.textContent).toContain('meta.recover_motion_non_homing');
+        expect(panel.textContent).toContain('lifecycle-command-2');
+        expect(panel.textContent).toContain('completed');
+        expect(state.receiptHookCalls.some((call) => call.commandId === 'lifecycle-command-2')).toBe(true);
+    });
+
+    it('renders the bounded robot failure detail from a terminal lifecycle receipt', async () => {
+        (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push({
+            action_id: 'meta.recover_motion_non_homing',
+            request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2',
+            interrupt: false,
+            enabled: true,
+            disabled_reason: null,
+        });
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find(
+            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+        ) as HTMLElement;
+        const recover = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Non-homing Recovery',
+        ) as HTMLButtonElement;
+        await act(async () => {
+            recover.click();
+            await Promise.resolve();
+        });
+        state.lifecycleReceipt.data = {
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'lifecycle-command-1',
+            action_id: 'meta.recover_motion_non_homing',
+            status: 'failed',
+            terminal: true,
+            error: {
+                code: 'robot route returned HTTP 409',
+                message: 'robot route returned HTTP 409',
+                retryable: false,
+                detail: {
+                    provider_failure: 'z_manual_home_evidence_not_verified',
+                    failure: 'board_not_initialized',
+                    axis: 'z',
+                    board: 4,
+                    motor: 1,
+                    source_return_code: 1,
+                    controller_acknowledged: false,
+                    controller_terminal_state_verified: false,
+                    physical_effect_verified: false,
+                    lifecycle_state: 'failed_latched',
+                    reference_state: 'desynced',
+                },
+            },
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('board_not_initialized');
+        expect(panel.textContent).toContain('z_manual_home_evidence_not_verified');
+        expect(panel.textContent).toContain('Axis z · Board 4 · Motor 1 · Source return 1');
+        expect(panel.textContent).toContain('Controller acknowledged: no');
+        expect(panel.textContent).toContain('Terminal state verified: no');
+        expect(panel.textContent).toContain('Physical effect verified: no');
+        expect(panel.textContent).toContain('Lifecycle: failed_latched · Reference: desynced');
+    });
+
+    it('polls a queued Home Z command and renders its bounded terminal failure detail in the Z card', async () => {
+        state.normalQueuedReceipt = {
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'z-command-1',
+            action_id: 'oem.z.manual_home',
+            status: 'queued',
+            terminal: false,
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const zArticle = [...container.querySelectorAll('article')].find(
+            (node) => node.textContent?.includes('Z Axis'),
+        ) as HTMLElement;
+        const home = [...zArticle.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Home',
+        ) as HTMLButtonElement;
+        await act(async () => {
+            home.click();
+            await Promise.resolve();
+        });
+        expect(state.receiptHookCalls.some((call) => call.commandId === 'z-command-1')).toBe(true);
+
+        state.zReceipt.data = {
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'z-command-1',
+            action_id: 'oem.z.manual_home',
+            status: 'failed',
+            terminal: true,
+            error: {
+                code: 'robot route returned HTTP 409',
+                message: 'robot route returned HTTP 409',
+                retryable: false,
+                detail: {
+                    provider_failure: 'z_manual_home_evidence_not_verified',
+                    failure: 'board_not_initialized',
+                    axis: 'z',
+                    board: 4,
+                    motor: 1,
+                    source_return_code: 1,
+                    controller_acknowledged: false,
+                    controller_terminal_state_verified: false,
+                    physical_effect_verified: false,
+                    lifecycle_state: 'failed_latched',
+                    reference_state: 'desynced',
+                },
+            },
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(zArticle.textContent).toContain('board_not_initialized');
+        expect(zArticle.textContent).toContain('z_manual_home_evidence_not_verified');
+        expect(zArticle.textContent).toContain('Axis z · Board 4 · Motor 1 · Source return 1');
+        expect(zArticle.textContent).toContain('Controller acknowledged: no');
+        expect(zArticle.textContent).toContain('Terminal state verified: no');
+        expect(zArticle.textContent).toContain('Physical effect verified: no');
+        expect(zArticle.textContent).toContain('Lifecycle: failed_latched · Reference: desynced');
+    });
+
+    it('hides lifecycle command and receipt state during a connection generation transition', async () => {
+        (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push({
+            action_id: 'meta.recover_motion_non_homing',
+            request_schema_version: 'bioxp.operator_action_request.v2',
+            response_schema_version: 'bioxp.operator_action_receipt.v2',
+            interrupt: false,
+            enabled: true,
+            disabled_reason: null,
+        });
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find(
+            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+        ) as HTMLElement;
+        const recover = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Non-homing Recovery',
+        ) as HTMLButtonElement;
+        await act(async () => {
+            recover.click();
+            await Promise.resolve();
+        });
+        expect(panel.textContent).toContain('lifecycle-command-1');
+
+        state.connectionGeneration = 2;
+        act(() => {
+            flushSync(() => root.render(<BioXpCockpit />));
+            expect(panel.textContent).not.toContain('lifecycle-command-1');
+            expect(panel.textContent).not.toContain('meta.recover_motion_non_homing');
+        });
+    });
+
     it('renders finite deck movement and submits exactly one semantic enqueue', async () => {
         await act(async () => {
             root.render(<BioXpCockpit />);

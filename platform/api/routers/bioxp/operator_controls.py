@@ -320,6 +320,8 @@ def _translate_robot_error(exc: Exception) -> HTTPException:
 
 
 _V2_NORMAL_INPUT_TYPES = {
+    "meta.activate_motion": OperatorEmptyInputsV2,
+    "meta.recover_motion_non_homing": OperatorEmptyInputsV2,
     "oem.x.manual_panel_home": OperatorEmptyInputsV2,
     "oem.x.move_steps": OperatorMoveStepsInputsV2,
     "oem.x.move_absolute": OperatorMoveAbsoluteInputsV2,

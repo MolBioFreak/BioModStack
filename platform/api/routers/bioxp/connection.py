@@ -3,13 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
 
 from services.bioxp.errors import (
     ConnectionStateError,
     ProfileStoreError,
-    RobotResponseError,
-    RobotTransportError,
     TargetPolicyError,
 )
 from services.bioxp.connection import mask_target_url
@@ -19,13 +16,6 @@ from services.bioxp.runtime import BioXpRuntime, bioxp_connection_enabled
 from .dependencies import get_bioxp_runtime, mutations_enabled, require_bioxp_mutation_access
 
 router = APIRouter(dependencies=[Depends(require_bioxp_mutation_access)])
-
-
-class RecoverMotionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    expected_generation: int = Field(ge=1)
-    operator_reason: str = Field(min_length=1, max_length=2000)
 
 
 def _public_snapshot(snapshot: Any) -> dict[str, Any]:
@@ -145,31 +135,3 @@ async def probe(runtime: BioXpRuntime = Depends(get_bioxp_runtime)) -> dict[str,
     except (ConnectionStateError, TargetPolicyError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _public_snapshot(snapshot)
-
-
-@router.post("/connection/recover-motion-non-homing")
-async def recover_motion_non_homing(
-    request: RecoverMotionRequest,
-    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> dict[str, Any]:
-    """Typed thin relay; the robot remains the sole recovery authority."""
-    try:
-        result = await runtime.connection.request_active(
-            "recover_motion_non_homing",
-            expected_generation=request.expected_generation,
-            require_fresh=True,
-            json_data={
-                "run_homing": False,
-                "operator_ack": "RECOVER_MOTION",
-                "operator_reason": request.operator_reason,
-            },
-        )
-        await runtime.connection.probe_status_only()
-    except RobotResponseError as exc:
-        status = exc.status_code if 400 <= exc.status_code < 500 else 502
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
-    except ConnectionStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (RobotTransportError, TargetPolicyError) as exc:
-        raise HTTPException(status_code=502, detail=str(exc) or exc.__class__.__name__) from exc
-    return result
