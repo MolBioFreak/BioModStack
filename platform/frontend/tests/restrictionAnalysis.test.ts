@@ -4,9 +4,11 @@ import './vitest/setup';
 import {
     fetchRestrictionAnalysis,
     fetchRestrictionCatalog,
+    fetchRestrictionProducts,
     parseRestrictionAnalysis,
     parseRestrictionCatalogPage,
     parseRestrictionDigestSimulation,
+    parseRestrictionProducts,
     simulateRestrictionDigest,
 } from '../src/lib/restrictionAnalysis';
 import { createLatestAsyncResourceController } from '../src/lib/latestAsyncResource';
@@ -41,6 +43,16 @@ const RECEIPT = {
     supplier_code_notice: 'provenance only', bounds: BOUNDS, resource_policy: POLICY,
     resource_policy_sha256: H, analysis_enabled: true, digest_enabled: true,
 };
+const PRODUCT_RELEASE = {
+    release_id: 'bms-restriction-products-permission-pending-v1', release_version: '1.0.0',
+    content_sha256: 'b'.repeat(64), raw_sha256: 'c'.repeat(64), schema_raw_sha256: 'd'.repeat(64),
+    created_at: null, created_at_policy: 'omitted_until_permissioned_evidence_release',
+    source_policy: 'no_runtime_scraping_written_redistribution_permission_required',
+    redistribution_permission_state: 'unavailable', permission_receipt: null,
+    product_evidence_available: false, record_count: 0, active_claim_count: 0,
+    core_catalog_digest_binding: 'independent_no_binding',
+};
+const PRODUCTS = { schema: 'bms.molbio.restriction-products-page.v1', product_release: PRODUCT_RELEASE, items: [], next_cursor: null };
 const RECORD = {
     enzyme_id: 'EcoRI', id_policy: 'canonical_name_v1_casefold_unique', canonical_name: 'EcoRI', aliases: [],
     recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], source_notation: 'G^AATTC', reverse_complement_iupac: 'GAATTC', reverse_complement_alternatives_iupac: ['GAATTC'], length_bp: 6, palindromic: true },
@@ -71,6 +83,37 @@ describe('restriction API boundary', () => {
         expect(page.items[0]).toBe(RECORD);
         expect(parseRestrictionAnalysis(ANALYSIS).analysis.occurrences[0]).toBe(OCCURRENCE);
         expect(parseRestrictionDigestSimulation(DIGEST).fragments[0]).toBe(DIGEST.fragments[0]);
+    });
+
+    it('accepts exact empty product evidence and rejects contradictory or ungoverned claims', () => {
+        expect(parseRestrictionProducts(PRODUCTS).product_release).toBe(PRODUCT_RELEASE);
+        const contradictions = [
+            { product_evidence_available: true }, { record_count: 1 }, { active_claim_count: 1 },
+            { redistribution_permission_state: 'approved' }, { content_sha256: 'bad' },
+        ];
+        for (const change of contradictions) {
+            const value = clone(PRODUCTS);
+            Object.assign(value.product_release, change);
+            expect(() => parseRestrictionProducts(value)).toThrow();
+        }
+        const record = clone(PRODUCTS);
+        record.items = [{ product_id: 'fake' }];
+        expect(() => parseRestrictionProducts(record)).toThrow();
+    });
+
+    it('keeps only the newest product evidence completion and sanitizes backend details', async () => {
+        const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; };
+        const older = deferred<Response>(); const newer = deferred<Response>(); let call = 0;
+        const transport = vi.fn(() => [older, newer][call++].promise);
+        const controller = createLatestAsyncResourceController(); const commits: string[] = [];
+        const run = async (label: string) => { const token = controller.begin(); try { await fetchRestrictionProducts({ transport }); if (controller.isCurrent(token)) commits.push(label); } catch { if (controller.isCurrent(token)) commits.push(`${label}:error`); } };
+        const oldRun = run('old'); const newRun = run('new');
+        newer.resolve(new Response(JSON.stringify(PRODUCTS))); await newRun;
+        older.resolve(new Response(JSON.stringify({ detail: { code: 'product_evidence_unavailable', message: '/srv/private/products.json' } }), { status: 503 })); await oldRun;
+        expect(commits).toEqual(['new']);
+        const failing = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'product_evidence_unavailable', message: '/srv/private/products.json' } }), { status: 503 }));
+        await expect(fetchRestrictionProducts({ transport: failing })).rejects.toThrow('Required restriction evidence is unavailable.');
+        await expect(fetchRestrictionProducts({ transport: failing })).rejects.not.toThrow('/srv/private');
     });
 
     it.each([

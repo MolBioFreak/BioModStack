@@ -11,10 +11,12 @@ import { createLatestAsyncResourceController } from '../../lib/latestAsyncResour
 import {
     fetchRestrictionAnalysis,
     fetchRestrictionCatalog,
+    fetchRestrictionProducts,
     simulateRestrictionDigest,
     type RestrictionAnalysisResponse,
     type RestrictionCatalogReceipt,
     type RestrictionDigestSimulation,
+    type RestrictionProductReleaseReceipt,
     type RestrictionRecord,
     type RestrictionSource,
 } from '../../lib/restrictionAnalysis';
@@ -872,6 +874,7 @@ export function MolBioToolkitV2() {
 
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
     const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
+    const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
     const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisResponse | null>(null);
     const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
     const [restrictionAuthorityError, setRestrictionAuthorityError] = useState<string | null>(null);
@@ -907,6 +910,7 @@ export function MolBioToolkitV2() {
         digestController.begin();
         setRestrictionCatalog(null);
         setRestrictionCatalogRecords([]);
+        setRestrictionProductEvidence(null);
         setRestrictionAnalysis(null);
         setRestrictionDigest(null);
 
@@ -920,7 +924,10 @@ export function MolBioToolkitV2() {
         setRestrictionAuthorityLoading(true);
         void (async () => {
             try {
-                const catalogResult = await fetchRestrictionCatalog({ signal: abort.signal });
+                const [catalogResult, productsResult] = await Promise.all([
+                    fetchRestrictionCatalog({ signal: abort.signal }),
+                    fetchRestrictionProducts({ signal: abort.signal }),
+                ]);
                 if (!authorityController.isCurrent(token)) return;
                 const analysisResult = await fetchRestrictionAnalysis({
                     source: restrictionSource,
@@ -933,12 +940,14 @@ export function MolBioToolkitV2() {
                 if (!authorityController.isCurrent(token)) return;
                 setRestrictionCatalog(catalogResult.catalog);
                 setRestrictionCatalogRecords(catalogResult.items);
+                setRestrictionProductEvidence(productsResult.product_release);
                 setRestrictionAnalysis(analysisResult);
                 setRestrictionAuthorityError(null);
             } catch (error) {
                 if (!authorityController.isCurrent(token)) return;
                 setRestrictionCatalog(null);
                 setRestrictionCatalogRecords([]);
+                setRestrictionProductEvidence(null);
                 setRestrictionAnalysis(null);
                 setRestrictionAuthorityError(error instanceof Error ? error.message : 'Restriction analysis is unavailable.');
             } finally {
@@ -3023,6 +3032,7 @@ export function MolBioToolkitV2() {
                         onEnzymesChange={setSelectedEnzymes}
                         onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
+                        productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}
@@ -3540,6 +3550,7 @@ export function MolBioToolkitV2() {
                                 onEnzymesChange={setSelectedEnzymes}
                                 onMapVisibilityRequest={ensureCutSitesVisible}
                         catalog={restrictionCatalog}
+                        productEvidence={restrictionProductEvidence}
                         catalogRecords={restrictionCatalogRecords}
                         analysis={restrictionAnalysis}
                         authorityLoading={restrictionAuthorityLoading}

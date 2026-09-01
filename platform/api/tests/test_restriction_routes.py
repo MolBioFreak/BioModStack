@@ -435,12 +435,13 @@ def test_catalog_openapi_query_parameters_publish_exact_runtime_constraints() ->
     }
 
 
-def test_openapi_examples_execute_and_phase3_routes_are_mounted() -> None:
+def test_openapi_examples_execute_and_phase5_routes_are_mounted() -> None:
     client = _client(_authority())
     document = client.app.openapi()
     paths = document["paths"]
     assert set(paths) == {
         "/api/molbio/restriction/catalog",
+        "/api/molbio/restriction/products",
         "/api/molbio/restriction/catalog/{enzyme_id}",
         "/api/molbio/restriction/analyze",
         "/api/molbio/restriction/digests/simulate",

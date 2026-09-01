@@ -78,6 +78,19 @@ from services.restriction_catalog import (
     resource_policy_sha256,
 )
 
+from services.restriction_products import (
+    DEFAULT_PRODUCT_LIMIT,
+    MAX_PRODUCT_LIMIT,
+    PRODUCT_CURSOR_MAX_LENGTH,
+    PRODUCT_QUERY_MAX_LENGTH,
+    ProductAuthority,
+    ProductEvidenceUnavailable,
+    product_authority,
+)
+
+_ALLOWED_PRODUCT_QUERY_FIELDS = {"enzyme_id", "supplier", "operational_status", "limit", "cursor"}
+_PRODUCT_QUERY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:+ -]{0,127}$"
+
 _ALLOWED_QUERY_FIELDS = {
     "query",
     "geometry_status",
@@ -188,19 +201,26 @@ class CatalogRoute(APIRoute):
                             ),
                         }},
                     )
+                is_products = request.url.path.endswith("/products")
                 cursor_error = any(
                     len(error.get("loc", ())) >= 2 and error["loc"][:2] == ("query", "cursor")
                     for error in exc.errors()
                 )
                 detail = (
                     {
-                        "code": "cursor_invalid",
-                        "message": "catalog cursor is invalid for this request",
+                        "code": "product_cursor_invalid" if is_products else "cursor_invalid",
+                        "message": (
+                            "product cursor is invalid for this release"
+                            if is_products else "catalog cursor is invalid for this request"
+                        ),
                     }
                     if cursor_error
                     else {
-                        "code": "invalid_catalog_query",
-                        "message": "catalog query parameters are invalid",
+                        "code": "invalid_product_query" if is_products else "invalid_catalog_query",
+                        "message": (
+                            "product query parameters are invalid"
+                            if is_products else "catalog query parameters are invalid"
+                        ),
                     }
                 )
                 return JSONResponse(status_code=422, content={"detail": detail})
@@ -272,6 +292,98 @@ class CatalogRecordResponse(StrictResponse):
     schema_: Literal["bms.molbio.restriction-catalog-record.v1"] = Field(alias="schema")
     catalog: CatalogReceipt
     record: RestrictionRecord
+
+
+class ProductReleaseReceipt(StrictResponse):
+    release_id: str
+    release_version: str
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: None
+    created_at_policy: Literal["omitted_until_permissioned_evidence_release"]
+    source_policy: Literal["no_runtime_scraping_written_redistribution_permission_required"]
+    redistribution_permission_state: Literal["unavailable", "approved"]
+    permission_receipt: None
+    product_evidence_available: bool
+    record_count: int = Field(ge=0)
+    active_claim_count: int = Field(ge=0)
+    core_catalog_digest_binding: Literal["independent_no_binding"]
+
+
+class ProductClaimEvidence(StrictResponse):
+    source_id: str = Field(min_length=1, max_length=128)
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class ProductScalarClaim(StrictResponse):
+    state: Literal["available", "unavailable", "stale"]
+    value: str | float | bool | None
+    evidence: ProductClaimEvidence | None
+
+
+class ProductSupplier(StrictResponse):
+    supplier_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+
+
+class ProductSource(StrictResponse):
+    url: str = Field(min_length=1, max_length=2048)
+    retrieved_at: str
+    content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    manual_receipt_id: str | None = Field(default=None, max_length=128)
+    manual_receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class ProductPermission(StrictResponse):
+    state: Literal["approved", "unavailable"]
+    receipt_id: str | None = Field(default=None, max_length=128)
+    receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    decided_on: str | None = None
+
+
+class ProductAvailability(StrictResponse):
+    state: Literal["available", "unavailable", "stale", "unknown"]
+    as_of: str | None
+    evidence: ProductClaimEvidence | None
+
+
+class ProductReactionConditions(StrictResponse):
+    temperature: ProductScalarClaim
+    heat_inactivation: ProductScalarClaim
+    buffer_activity: list[ProductScalarClaim]
+
+
+class ProductUnitConcentration(StrictResponse):
+    state: Literal["available", "unavailable", "stale"]
+    units: str | None = Field(default=None, max_length=128)
+    concentration: str | None = Field(default=None, max_length=128)
+    evidence: ProductClaimEvidence | None
+
+
+class ProductRecordResponse(StrictResponse):
+    product_id: str = Field(min_length=1, max_length=128)
+    enzyme_id: str = Field(min_length=1, max_length=128)
+    supplier: ProductSupplier
+    catalog_number: str = Field(min_length=1, max_length=128)
+    product_name: str = Field(min_length=1, max_length=256)
+    source: ProductSource
+    redistribution_permission: ProductPermission
+    availability: ProductAvailability
+    reaction_conditions: ProductReactionConditions
+    methylation_effects: list[ProductScalarClaim]
+    star_activity_warnings: list[ProductScalarClaim]
+    unit_concentration: ProductUnitConcentration
+    operational_status: Literal["available", "unavailable", "stale"]
+    record_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ProductPage(StrictResponse):
+    schema_: Literal["bms.molbio.restriction-products-page.v1"] = Field(alias="schema")
+    product_release: ProductReleaseReceipt
+    items: list[ProductRecordResponse]
+    next_cursor: None
 
 
 class InlineDNASource(StrictResponse):
@@ -457,6 +569,10 @@ def get_catalog_authority() -> CatalogAuthority:
     return catalog_authority
 
 
+def get_product_authority() -> ProductAuthority:
+    return product_authority
+
+
 def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
@@ -571,6 +687,40 @@ def _require_view(authority: CatalogAuthority) -> CatalogView:
         return authority.require()
     except CatalogUnavailable as exc:
         raise _error(503, "catalog_unavailable", "restriction catalog is unavailable") from exc
+
+
+def _require_product_view(authority: ProductAuthority):
+    try:
+        return authority.require()
+    except ProductEvidenceUnavailable as exc:
+        raise _error(503, "product_evidence_unavailable", "approved supplier product evidence is unavailable") from exc
+
+
+@router.get("/products", response_model=ProductPage)
+def list_products(
+    request: Request,
+    enzyme_id: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_QUERY_MAX_LENGTH, pattern=_PRODUCT_QUERY_PATTERN)] = None,
+    supplier: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_QUERY_MAX_LENGTH, pattern=_PRODUCT_QUERY_PATTERN)] = None,
+    operational_status: Annotated[Literal["unavailable", "stale"] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PRODUCT_LIMIT)] = DEFAULT_PRODUCT_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_CURSOR_MAX_LENGTH, pattern=_CURSOR_PATTERN)] = None,
+    authority: ProductAuthority = Depends(get_product_authority),
+) -> ProductPage:
+    unknown = set(request.query_params) - _ALLOWED_PRODUCT_QUERY_FIELDS
+    duplicate = any(len(request.query_params.getlist(key)) != 1 for key in request.query_params)
+    if unknown or duplicate:
+        raise _error(422, "invalid_product_query", "product query parameters are invalid")
+    if cursor is not None:
+        raise _error(422, "product_cursor_invalid", "product cursor is invalid for this release")
+    view = _require_product_view(authority)
+    if view.records or view.record_count or view.active_claim_count or view.product_evidence_available:
+        raise _error(503, "product_evidence_unavailable", "approved supplier product evidence is unavailable")
+    return ProductPage.model_validate({
+        "schema": "bms.molbio.restriction-products-page.v1",
+        "product_release": view.receipt(),
+        "items": [],
+        "next_cursor": None,
+    })
 
 
 @router.get("/catalog", response_model=CatalogPage)
@@ -970,7 +1120,7 @@ def _complete_analysis_pipeline(
     if payload.methylation_policy == "require_known":
         raise _error(
             409, "product_evidence_unavailable",
-            "approved product evidence is unavailable in Phase 2",
+            "approved supplier product evidence is unavailable",
         )
     sequence, topology, source_receipt = _analysis_source(payload.source, resolved_revision)
     records = _analysis_records(view, payload.scope)
