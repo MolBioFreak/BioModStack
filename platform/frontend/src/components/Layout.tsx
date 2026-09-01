@@ -627,18 +627,6 @@ export function Layout({ children }: LayoutProps) {
                                     Stats Toolkit
                                 </Link>
 
-                                <Link
-                                    to="/infra"
-                                    data-bms-primary-nav-active={isActive('/infra') ? 'true' : undefined}
-                                    className={TOPBAR_NAV_ITEM_CLASSNAME}
-                                    style={{
-                                        backgroundColor: isActive('/infra') ? 'color-mix(in srgb, var(--accent-primary) 20%, transparent)' : 'transparent',
-                                        color: isActive('/infra') ? 'var(--accent-primary)' : 'var(--text-secondary)'
-                                    }}
-                                    title="System Analytics"
-                                >
-                                    System Analytics
-                                </Link>
                                 {showBioXpDevFeature && (
                                     <Link
                                         to="/bioxp"

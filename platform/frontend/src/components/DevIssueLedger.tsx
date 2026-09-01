@@ -57,7 +57,6 @@ const PAGE_SCOPES: Array<[RegExp, string, string]> = [
     [/^\/designer$/, 'module:molbio-toolkit', 'Mol Bio Toolkit'],
     [/^\/ngs$/, 'module:ngs-toolkit', 'NGS Toolkit'],
     [/^\/stats$/, 'module:stats-toolkit', 'Stats Toolkit'],
-    [/^\/infra$/, 'page:system-analytics', 'System Analytics'],
     [/^\/bioxp$/, 'module:bioxp', 'BioXP Handler'],
 ];
 
