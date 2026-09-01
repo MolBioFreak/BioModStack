@@ -85,11 +85,13 @@ from services.restriction_products import (
     PRODUCT_QUERY_MAX_LENGTH,
     ProductAuthority,
     ProductEvidenceUnavailable,
+    _normalized_identity,
+    product_order_key,
     product_authority,
 )
 
 _ALLOWED_PRODUCT_QUERY_FIELDS = {"enzyme_id", "supplier", "operational_status", "limit", "cursor"}
-_PRODUCT_QUERY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:+ -]{0,127}$"
+_PRODUCT_QUERY_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9._:+ -]{0,126}[A-Za-z0-9._:+-])?$"
 
 _ALLOWED_QUERY_FIELDS = {
     "query",
@@ -294,23 +296,28 @@ class CatalogRecordResponse(StrictResponse):
     record: RestrictionRecord
 
 
+class ProductPermissionReceipt(StrictResponse):
+    receipt_id: str = Field(min_length=1, max_length=128)
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decided_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
 class ProductReleaseReceipt(StrictResponse):
     release_id: str
     release_version: str
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     schema_raw_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    created_at: None
-    created_at_policy: Literal["omitted_until_permissioned_evidence_release"]
+    created_at: str | None
+    created_at_policy: Literal["omitted_until_permissioned_evidence_release", "permissioned_evidence_release_timestamp"]
     source_policy: Literal["no_runtime_scraping_written_redistribution_permission_required"]
     redistribution_permission_state: Literal["unavailable", "approved"]
-    permission_receipt: None
+    permission_receipt: ProductPermissionReceipt | None
     product_evidence_available: bool
     record_count: int = Field(ge=0)
     active_claim_count: int = Field(ge=0)
     core_catalog_digest_binding: Literal["independent_no_binding"]
-
-
+    product_identity_policy: Literal["supplier_id_and_catalog_number_nfkc_casefold_trim_v1"]
 class ProductClaimEvidence(StrictResponse):
     source_id: str = Field(min_length=1, max_length=128)
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -337,14 +344,14 @@ class ProductSource(StrictResponse):
 
 
 class ProductPermission(StrictResponse):
-    state: Literal["approved", "unavailable"]
-    receipt_id: str | None = Field(default=None, max_length=128)
-    receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    decided_on: str | None = None
+    state: Literal["approved"]
+    receipt_id: str = Field(min_length=1, max_length=128)
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decided_on: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class ProductAvailability(StrictResponse):
-    state: Literal["available", "unavailable", "stale", "unknown"]
+    state: Literal["available", "unavailable", "stale"]
     as_of: str | None
     evidence: ProductClaimEvidence | None
 
@@ -383,7 +390,7 @@ class ProductPage(StrictResponse):
     schema_: Literal["bms.molbio.restriction-products-page.v1"] = Field(alias="schema")
     product_release: ProductReleaseReceipt
     items: list[ProductRecordResponse]
-    next_cursor: None
+    next_cursor: str | None
 
 
 class InlineDNASource(StrictResponse):
@@ -696,12 +703,84 @@ def _require_product_view(authority: ProductAuthority):
         raise _error(503, "product_evidence_unavailable", "approved supplier product evidence is unavailable") from exc
 
 
+def _encode_product_cursor(view, fingerprint: str, limit: int, record: Mapping[str, Any]) -> str:
+    epoch = base64.urlsafe_b64encode(_CURSOR_KEY_EPOCH).decode("ascii").rstrip("=")
+    document = {
+        "v": _CURSOR_VERSION,
+        "key_version": _CURSOR_KEY_VERSION,
+        "key_epoch": epoch,
+        "kind": "restriction_products",
+        "release_id": view.release_id,
+        "content_sha256": view.content_sha256,
+        "fingerprint": fingerprint,
+        "limit": limit,
+        "last_key": list(product_order_key(record)),
+    }
+    raw = rfc8785.dumps(document)
+    authenticated = bytes((_CURSOR_VERSION, _CURSOR_KEY_VERSION)) + _CURSOR_KEY_EPOCH + raw
+    signature = hmac.new(_CURSOR_SIGNING_KEY, authenticated, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(authenticated + signature).decode("ascii").rstrip("=")
+
+
+def _decode_product_cursor(view, cursor: str, fingerprint: str, limit: int) -> tuple[str, ...]:
+    try:
+        if len(cursor) > PRODUCT_CURSOR_MAX_LENGTH or not _CURSOR.fullmatch(cursor):
+            raise ValueError
+        envelope = base64.b64decode(
+            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True,
+        )
+        if base64.urlsafe_b64encode(envelope).decode("ascii").rstrip("=") != cursor:
+            raise ValueError
+        if len(envelope) <= 2 + 8 + 32:
+            raise ValueError
+        authenticated, signature = envelope[:-32], envelope[-32:]
+        expected = hmac.new(_CURSOR_SIGNING_KEY, authenticated, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError
+        version, key_version = authenticated[0], authenticated[1]
+        epoch = authenticated[2:10]
+        if (
+            version != _CURSOR_VERSION
+            or key_version != _CURSOR_KEY_VERSION
+            or not hmac.compare_digest(epoch, _CURSOR_KEY_EPOCH)
+        ):
+            raise ValueError
+        raw = authenticated[10:]
+        document = json.loads(raw)
+        if not isinstance(document, dict) or raw != rfc8785.dumps(document):
+            raise ValueError
+        if set(document) != {
+            "v", "key_version", "key_epoch", "kind", "release_id",
+            "content_sha256", "fingerprint", "limit", "last_key",
+        }:
+            raise ValueError
+        expected_epoch = base64.urlsafe_b64encode(_CURSOR_KEY_EPOCH).decode("ascii").rstrip("=")
+        last_key = document["last_key"]
+        if (
+            document["v"] != _CURSOR_VERSION
+            or document["key_version"] != _CURSOR_KEY_VERSION
+            or document["key_epoch"] != expected_epoch
+            or document["kind"] != "restriction_products"
+            or document["release_id"] != view.release_id
+            or document["content_sha256"] != view.content_sha256
+            or document["fingerprint"] != fingerprint
+            or document["limit"] != limit
+            or not isinstance(last_key, list)
+            or len(last_key) != 6
+            or any(not isinstance(value, str) for value in last_key)
+        ):
+            raise ValueError
+        return tuple(last_key)
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _error(422, "product_cursor_invalid", "product cursor is invalid for this release") from exc
+
+
 @router.get("/products", response_model=ProductPage)
 def list_products(
     request: Request,
     enzyme_id: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_QUERY_MAX_LENGTH, pattern=_PRODUCT_QUERY_PATTERN)] = None,
     supplier: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_QUERY_MAX_LENGTH, pattern=_PRODUCT_QUERY_PATTERN)] = None,
-    operational_status: Annotated[Literal["unavailable", "stale"] | None, Query()] = None,
+    operational_status: Annotated[Literal["available", "unavailable", "stale"] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PRODUCT_LIMIT)] = DEFAULT_PRODUCT_LIMIT,
     cursor: Annotated[str | None, Query(min_length=1, max_length=PRODUCT_CURSOR_MAX_LENGTH, pattern=_CURSOR_PATTERN)] = None,
     authority: ProductAuthority = Depends(get_product_authority),
@@ -710,16 +789,47 @@ def list_products(
     duplicate = any(len(request.query_params.getlist(key)) != 1 for key in request.query_params)
     if unknown or duplicate:
         raise _error(422, "invalid_product_query", "product query parameters are invalid")
-    if cursor is not None:
-        raise _error(422, "product_cursor_invalid", "product cursor is invalid for this release")
     view = _require_product_view(authority)
-    if view.records or view.record_count or view.active_claim_count or view.product_evidence_available:
-        raise _error(503, "product_evidence_unavailable", "approved supplier product evidence is unavailable")
+    raw_limit = request.query_params.get("limit")
+    if raw_limit is not None and str(limit) != raw_limit:
+        raise _error(422, "invalid_product_query", "product query parameters are invalid")
+    filters = {
+        "enzyme_id": enzyme_id,
+        "supplier": _normalized_identity(supplier) if supplier is not None else None,
+        "operational_status": operational_status,
+    }
+    fingerprint = _fingerprint(filters)
+    after = _decode_product_cursor(view, cursor, fingerprint, limit) if cursor is not None else None
+    selected: list[Mapping[str, Any]] = []
+    for record in view.records:
+        key = product_order_key(record)
+        if after is not None and key <= after:
+            continue
+        if enzyme_id is not None and record["enzyme_id"] != enzyme_id:
+            continue
+        if supplier is not None:
+            supplier_row = record["supplier"]
+            supplier_filter = filters["supplier"]
+            if supplier_filter not in {
+                _normalized_identity(supplier_row["supplier_id"]),
+                _normalized_identity(supplier_row["name"]),
+            }:
+                continue
+        if operational_status is not None and record["operational_status"] != operational_status:
+            continue
+        selected.append(record)
+        if len(selected) > limit:
+            break
+    items = selected[:limit]
+    next_cursor = (
+        _encode_product_cursor(view, fingerprint, limit, items[-1])
+        if len(selected) > limit else None
+    )
     return ProductPage.model_validate({
         "schema": "bms.molbio.restriction-products-page.v1",
         "product_release": view.receipt(),
-        "items": [],
-        "next_cursor": None,
+        "items": items,
+        "next_cursor": next_cursor,
     })
 
 

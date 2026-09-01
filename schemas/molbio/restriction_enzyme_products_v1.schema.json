@@ -4,14 +4,14 @@
   "title": "BioModStack restriction enzyme supplier product evidence release v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "schema_version", "release_id", "release_version", "created_at", "created_at_policy", "source_policy", "redistribution_permission_state", "permission_receipt", "product_evidence_available", "record_count", "active_claim_count", "core_catalog_digest_binding", "canonicalization", "digest_semantics", "schema_raw_sha256", "records", "content_sha256"],
+  "required": ["schema", "schema_version", "release_id", "release_version", "created_at", "created_at_policy", "source_policy", "redistribution_permission_state", "permission_receipt", "product_evidence_available", "record_count", "active_claim_count", "core_catalog_digest_binding", "product_identity_policy", "canonicalization", "digest_semantics", "schema_raw_sha256", "records", "content_sha256"],
   "properties": {
     "schema": {"const": "bms.molbio.restriction-enzyme-products.v1"},
     "schema_version": {"const": 1},
     "release_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
     "release_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-    "created_at": {"type": "null"},
-    "created_at_policy": {"const": "omitted_until_permissioned_evidence_release"},
+    "created_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "created_at_policy": {"enum": ["omitted_until_permissioned_evidence_release", "permissioned_evidence_release_timestamp"]},
     "source_policy": {"const": "no_runtime_scraping_written_redistribution_permission_required"},
     "redistribution_permission_state": {"enum": ["unavailable", "approved"]},
     "permission_receipt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/permission_receipt"}]},
@@ -19,12 +19,23 @@
     "record_count": {"type": "integer", "minimum": 0},
     "active_claim_count": {"type": "integer", "minimum": 0},
     "core_catalog_digest_binding": {"const": "independent_no_binding"},
+    "product_identity_policy": {"const": "supplier_id_and_catalog_number_nfkc_casefold_trim_v1", "$comment": "Product authority is the normalized (supplier_id, catalog_number) tuple. Normalize both with Unicode NFKC, trim leading/trailing whitespace, then casefold. Product names are display/scientific text and never identity."},
     "canonicalization": {"const": "RFC_8785_JCS"},
     "digest_semantics": {"const": "sha256(rfc8785(document_without_content_sha256))"},
     "schema_raw_sha256": {"$ref": "#/$defs/sha256"},
     "records": {"type": "array", "items": {"$ref": "#/$defs/product_record"}},
     "content_sha256": {"$ref": "#/$defs/sha256"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"redistribution_permission_state": {"const": "unavailable"}}, "required": ["redistribution_permission_state"]},
+      "then": {"properties": {"created_at": {"type": "null"}, "created_at_policy": {"const": "omitted_until_permissioned_evidence_release"}, "permission_receipt": {"type": "null"}, "product_evidence_available": {"const": false}, "record_count": {"const": 0}, "active_claim_count": {"const": 0}, "records": {"maxItems": 0}}}
+    },
+    {
+      "if": {"properties": {"redistribution_permission_state": {"const": "approved"}}, "required": ["redistribution_permission_state"]},
+      "then": {"properties": {"created_at": {"$ref": "#/$defs/timestamp"}, "created_at_policy": {"const": "permissioned_evidence_release_timestamp"}, "permission_receipt": {"$ref": "#/$defs/permission_receipt"}, "product_evidence_available": {"const": true}, "record_count": {"minimum": 1}, "active_claim_count": {"minimum": 1}, "records": {"minItems": 1}}}
+    }
+  ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "date": {"type": "string", "format": "date"},
@@ -42,7 +53,11 @@
     "typed_scalar_claim": {
       "type": "object", "additionalProperties": false,
       "required": ["state", "value", "evidence"],
-      "properties": {"state": {"enum": ["available", "unavailable", "stale"]}, "value": {"type": ["string", "number", "boolean", "null"]}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}}
+      "properties": {"state": {"enum": ["available", "unavailable", "stale"]}, "value": {"type": ["string", "number", "boolean", "null"]}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}},
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "unavailable"}}, "required": ["state"]}, "then": {"properties": {"value": {"type": "null"}, "evidence": {"type": "null"}}}},
+        {"if": {"properties": {"state": {"enum": ["available", "stale"]}}, "required": ["state"]}, "then": {"properties": {"value": {"type": ["string", "number", "boolean"]}, "evidence": {"$ref": "#/$defs/claim_evidence"}}}}
+      ]
     },
     "product_record": {
       "type": "object", "additionalProperties": false,
@@ -50,16 +65,16 @@
       "properties": {
         "product_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
         "enzyme_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
-        "supplier": {"type": "object", "additionalProperties": false, "required": ["supplier_id", "name"], "properties": {"supplier_id": {"type": "string", "minLength": 1, "maxLength": 128}, "name": {"type": "string", "minLength": 1, "maxLength": 256}}},
-        "catalog_number": {"type": "string", "minLength": 1, "maxLength": 128},
+        "supplier": {"type": "object", "additionalProperties": false, "$comment": "supplier_id is canonical authority; name is exact display text and must agree across records sharing one normalized supplier_id.", "required": ["supplier_id", "name"], "properties": {"supplier_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+ -]{0,127}$"}, "name": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^\\S(?:.*\\S)?$"}}},
+        "catalog_number": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+ /-]{0,127}$"},
         "product_name": {"type": "string", "minLength": 1, "maxLength": 256},
-        "source": {"type": "object", "additionalProperties": false, "required": ["url", "retrieved_at", "content_sha256", "manual_receipt_id", "manual_receipt_sha256"], "properties": {"url": {"type": "string", "format": "uri", "maxLength": 2048}, "retrieved_at": {"$ref": "#/$defs/timestamp"}, "content_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "manual_receipt_id": {"type": ["string", "null"], "maxLength": 128}, "manual_receipt_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}}},
-        "redistribution_permission": {"type": "object", "additionalProperties": false, "required": ["state", "receipt_id", "receipt_sha256", "decided_on"], "properties": {"state": {"enum": ["approved", "unavailable"]}, "receipt_id": {"type": ["string", "null"], "maxLength": 128}, "receipt_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "decided_on": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/date"}]}}},
-        "availability": {"type": "object", "additionalProperties": false, "required": ["state", "as_of", "evidence"], "properties": {"state": {"enum": ["available", "unavailable", "stale", "unknown"]}, "as_of": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/date"}]}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}}},
+        "source": {"type": "object", "additionalProperties": false, "required": ["url", "retrieved_at", "content_sha256", "manual_receipt_id", "manual_receipt_sha256"], "properties": {"url": {"type": "string", "format": "uri", "maxLength": 2048}, "retrieved_at": {"$ref": "#/$defs/timestamp"}, "content_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}, "manual_receipt_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}, "manual_receipt_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}}, "anyOf": [{"properties": {"content_sha256": {"$ref": "#/$defs/sha256"}}}, {"properties": {"manual_receipt_sha256": {"$ref": "#/$defs/sha256"}}}], "allOf": [{"if": {"properties": {"manual_receipt_id": {"type": "null"}}, "required": ["manual_receipt_id"]}, "then": {"properties": {"manual_receipt_sha256": {"type": "null"}}}}, {"if": {"properties": {"manual_receipt_id": {"type": "string"}}, "required": ["manual_receipt_id"]}, "then": {"properties": {"manual_receipt_sha256": {"$ref": "#/$defs/sha256"}}}}]},
+        "redistribution_permission": {"type": "object", "additionalProperties": false, "required": ["state", "receipt_id", "receipt_sha256", "decided_on"], "properties": {"state": {"const": "approved"}, "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128}, "receipt_sha256": {"$ref": "#/$defs/sha256"}, "decided_on": {"$ref": "#/$defs/date"}}},
+        "availability": {"type": "object", "additionalProperties": false, "required": ["state", "as_of", "evidence"], "properties": {"state": {"enum": ["available", "unavailable", "stale"]}, "as_of": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/date"}]}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}}, "allOf": [{"if": {"properties": {"state": {"const": "unavailable"}}, "required": ["state"]}, "then": {"properties": {"as_of": {"type": "null"}, "evidence": {"type": "null"}}}}, {"if": {"properties": {"state": {"enum": ["available", "stale"]}}, "required": ["state"]}, "then": {"properties": {"as_of": {"$ref": "#/$defs/date"}, "evidence": {"$ref": "#/$defs/claim_evidence"}}}}]},
         "reaction_conditions": {"type": "object", "additionalProperties": false, "required": ["temperature", "heat_inactivation", "buffer_activity"], "properties": {"temperature": {"$ref": "#/$defs/typed_scalar_claim"}, "heat_inactivation": {"$ref": "#/$defs/typed_scalar_claim"}, "buffer_activity": {"type": "array", "items": {"$ref": "#/$defs/typed_scalar_claim"}}}},
         "methylation_effects": {"type": "array", "items": {"$ref": "#/$defs/typed_scalar_claim"}},
         "star_activity_warnings": {"type": "array", "items": {"$ref": "#/$defs/typed_scalar_claim"}},
-        "unit_concentration": {"type": "object", "additionalProperties": false, "required": ["state", "units", "concentration", "evidence"], "properties": {"state": {"enum": ["available", "unavailable", "stale"]}, "units": {"type": ["string", "null"], "maxLength": 128}, "concentration": {"type": ["string", "null"], "maxLength": 128}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}}},
+        "unit_concentration": {"type": "object", "additionalProperties": false, "required": ["state", "units", "concentration", "evidence"], "properties": {"state": {"enum": ["available", "unavailable", "stale"]}, "units": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}, "concentration": {"type": ["string", "null"], "minLength": 1, "maxLength": 128}, "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/claim_evidence"}]}}, "allOf": [{"if": {"properties": {"state": {"const": "unavailable"}}, "required": ["state"]}, "then": {"properties": {"units": {"type": "null"}, "concentration": {"type": "null"}, "evidence": {"type": "null"}}}}, {"if": {"properties": {"state": {"enum": ["available", "stale"]}}, "required": ["state"]}, "then": {"properties": {"units": {"type": "string"}, "concentration": {"type": "string"}, "evidence": {"$ref": "#/$defs/claim_evidence"}}}}]},
         "operational_status": {"enum": ["available", "unavailable", "stale"]},
         "record_sha256": {"$ref": "#/$defs/sha256"}
       }

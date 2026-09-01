@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -22,9 +23,9 @@ ACTIVE_PRODUCT_PATH = API_ROOT / "config/molbio/restriction/restriction_enzyme_p
 PRODUCT_SCHEMA_PATH = REPO_ROOT / "schemas/molbio/restriction_enzyme_products_v1.schema.json"
 ACTIVE_RELEASE_ID = "bms-restriction-products-permission-pending-v1"
 ACTIVE_RELEASE_VERSION = "1.0.0"
-APPROVED_PRODUCT_CONTENT_SHA256 = "0eae6ebcb225d8ac89248943244671cb42bdbd706723668cd1bf6650081105bf"
-APPROVED_PRODUCT_RAW_SHA256 = "8a2aca86f4aea1d3fc89e8abcc2a7bf52b4d73ec8c32f3c9c43b8189a39df47a"
-APPROVED_PRODUCT_SCHEMA_RAW_SHA256 = "93b4c5957552a18adbcce5731925d3c46f76236d80317a6000aad72419f77eaf"
+APPROVED_PRODUCT_CONTENT_SHA256 = "fa6541d1ddd992a7d98dac9e696e299e8741ac06ff05969ba301502172276b94"
+APPROVED_PRODUCT_RAW_SHA256 = "9aadcbf2c64a3a64713de7ee5aa4aa0d9ccbd2c91b37fb388b18a889a2ace711"
+APPROVED_PRODUCT_SCHEMA_RAW_SHA256 = "49255d6f1408a1478bd666811c784df331ec22a7c5055530e3031380d6741e59"
 PRODUCT_MAX_BYTES = 512 * 1024
 PRODUCT_SCHEMA_MAX_BYTES = 512 * 1024
 DEFAULT_PRODUCT_LIMIT = 50
@@ -48,15 +49,16 @@ class ProductView:
     content_sha256: str
     raw_sha256: str
     schema_raw_sha256: str
-    created_at: None
+    created_at: str | None
     created_at_policy: str
     source_policy: str
     redistribution_permission_state: str
-    permission_receipt: None
+    permission_receipt: Mapping[str, Any] | None
     product_evidence_available: bool
     record_count: int
     active_claim_count: int
     core_catalog_digest_binding: str
+    product_identity_policy: str
     records: tuple[Mapping[str, Any], ...]
 
     def receipt(self) -> dict[str, object]:
@@ -75,6 +77,7 @@ class ProductView:
             "record_count": self.record_count,
             "active_claim_count": self.active_claim_count,
             "core_catalog_digest_binding": self.core_catalog_digest_binding,
+            "product_identity_policy": self.product_identity_policy,
         }
 
 
@@ -98,15 +101,49 @@ def _object(raw: bytes) -> dict[str, Any]:
     return value
 
 
-def _claim_is_governed(claim: Mapping[str, Any]) -> bool:
+def _normalized_identity(value: object) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ProductEvidenceUnavailable()
+    return unicodedata.normalize("NFKC", value).strip().casefold()
+
+
+def product_order_key(record: Mapping[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """Stable full product identity key; product display/scientific name is excluded."""
+    return (
+        _normalized_identity(record["supplier"]["supplier_id"]),
+        _normalized_identity(record["catalog_number"]),
+        str(record["enzyme_id"]).casefold(), str(record["enzyme_id"]),
+        str(record["product_id"]).casefold(), str(record["product_id"]),
+    )
+
+
+def _evidence_is_bound(
+    evidence: object, source_bindings: set[tuple[str, str]],
+) -> bool:
+    return (
+        isinstance(evidence, dict)
+        and all(evidence.get(key) for key in ("source_id", "source_sha256", "observed_on"))
+        and (evidence["source_id"], evidence["source_sha256"]) in source_bindings
+    )
+
+
+def _claim_is_governed(
+    claim: Mapping[str, Any], source_bindings: set[tuple[str, str]],
+) -> bool:
     state = claim.get("state")
     evidence = claim.get("evidence")
-    if state == "available":
-        return isinstance(evidence, dict) and all(evidence.get(key) for key in ("source_id", "source_sha256", "observed_on"))
-    return state in {"unavailable", "stale"} and (state != "stale" or isinstance(evidence, dict))
+    if state == "unavailable":
+        return claim.get("value") is None and evidence is None
+    return (
+        state in {"available", "stale"}
+        and claim.get("value") is not None
+        and _evidence_is_bound(evidence, source_bindings)
+    )
 
 
-def _validate_record_semantics(record: Mapping[str, Any], core_ids: set[str]) -> int:
+def _validate_record_semantics(
+    record: Mapping[str, Any], core_ids: set[str], permission_receipt: Mapping[str, Any],
+) -> int:
     if record.get("enzyme_id") not in core_ids:
         raise ProductEvidenceUnavailable()
     source = record.get("source")
@@ -116,18 +153,38 @@ def _validate_record_semantics(record: Mapping[str, Any], core_ids: set[str]) ->
     has_exact_source = bool(source.get("content_sha256")) or bool(source.get("manual_receipt_sha256"))
     if not source.get("url") or not source.get("retrieved_at") or not has_exact_source:
         raise ProductEvidenceUnavailable()
+    if bool(source.get("manual_receipt_id")) is not bool(source.get("manual_receipt_sha256")):
+        raise ProductEvidenceUnavailable()
     if permission.get("state") != "approved" or not all(
         permission.get(key) for key in ("receipt_id", "receipt_sha256", "decided_on")
     ):
         raise ProductEvidenceUnavailable()
+    if any(permission.get(key) != permission_receipt.get(key) for key in ("receipt_id", "receipt_sha256", "decided_on")):
+        raise ProductEvidenceUnavailable()
+    source_bindings: set[tuple[str, str]] = set()
+    if source.get("content_sha256"):
+        source_bindings.add((source["url"], source["content_sha256"]))
+    if source.get("manual_receipt_id") and source.get("manual_receipt_sha256"):
+        source_bindings.add((source["manual_receipt_id"], source["manual_receipt_sha256"]))
+
     claims: list[Mapping[str, Any]] = []
     availability = record.get("availability")
     if not isinstance(availability, dict):
         raise ProductEvidenceUnavailable()
-    if availability.get("state") in {"available", "stale"}:
-        if not availability.get("as_of") or not isinstance(availability.get("evidence"), dict):
+    availability_state = availability.get("state")
+    if availability_state in {"available", "stale"}:
+        evidence = availability.get("evidence")
+        if (
+            not availability.get("as_of")
+            or not _evidence_is_bound(evidence, source_bindings)
+            or not isinstance(evidence, dict)
+            or evidence.get("observed_on") != availability.get("as_of")
+        ):
             raise ProductEvidenceUnavailable()
         claims.append(availability)
+    elif availability_state != "unavailable" or availability.get("as_of") is not None or availability.get("evidence") is not None:
+        raise ProductEvidenceUnavailable()
+
     reaction = record.get("reaction_conditions")
     if not isinstance(reaction, dict):
         raise ProductEvidenceUnavailable()
@@ -136,21 +193,34 @@ def _validate_record_semantics(record: Mapping[str, Any], core_ids: set[str]) ->
         if not isinstance(value, dict):
             raise ProductEvidenceUnavailable()
         claims.append(value)
-    for key in ("buffer_activity",):
-        values = reaction.get(key)
-        if not isinstance(values, list):
-            raise ProductEvidenceUnavailable()
-        claims.extend(value for value in values if isinstance(value, dict))
+    values = reaction.get("buffer_activity")
+    if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
+        raise ProductEvidenceUnavailable()
+    claims.extend(values)
     for key in ("methylation_effects", "star_activity_warnings"):
         values = record.get(key)
-        if not isinstance(values, list):
+        if not isinstance(values, list) or any(not isinstance(value, dict) for value in values):
             raise ProductEvidenceUnavailable()
-        claims.extend(value for value in values if isinstance(value, dict))
+        claims.extend(values)
+
     unit = record.get("unit_concentration")
     if not isinstance(unit, dict):
         raise ProductEvidenceUnavailable()
+    unit_state = unit.get("state")
+    if unit_state == "unavailable":
+        if unit.get("units") is not None or unit.get("concentration") is not None or unit.get("evidence") is not None:
+            raise ProductEvidenceUnavailable()
+    elif unit_state in {"available", "stale"}:
+        if not unit.get("units") or not unit.get("concentration") or not _evidence_is_bound(unit.get("evidence"), source_bindings):
+            raise ProductEvidenceUnavailable()
+    else:
+        raise ProductEvidenceUnavailable()
     claims.append(unit)
-    if not all(_claim_is_governed(claim) for claim in claims):
+
+    scalar_claims = [claim for claim in claims if "value" in claim]
+    if not all(_claim_is_governed(claim, source_bindings) for claim in scalar_claims):
+        raise ProductEvidenceUnavailable()
+    if record.get("operational_status") != availability_state:
         raise ProductEvidenceUnavailable()
     unsigned = dict(record)
     record_digest = unsigned.pop("record_sha256", None)
@@ -205,8 +275,44 @@ def _load(
         product_ids = [record.get("product_id") for record in records if isinstance(record, dict)]
         if len(product_ids) != len(records) or len(set(product_ids)) != len(product_ids):
             raise ProductEvidenceUnavailable()
+        if document.get("product_identity_policy") != "supplier_id_and_catalog_number_nfkc_casefold_trim_v1":
+            raise ProductEvidenceUnavailable()
+        permission_receipt = document.get("permission_receipt")
+        if records and (
+            document.get("redistribution_permission_state") != "approved"
+            or not isinstance(permission_receipt, dict)
+        ):
+            raise ProductEvidenceUnavailable()
+
+        supplier_names: dict[str, str] = {}
+        supplier_name_catalogs: dict[tuple[str, str], str] = {}
+        product_tuples: set[tuple[str, str]] = set()
+        for record in records:
+            supplier = record.get("supplier")
+            if not isinstance(supplier, dict):
+                raise ProductEvidenceUnavailable()
+            supplier_id = _normalized_identity(supplier.get("supplier_id"))
+            catalog_number = _normalized_identity(record.get("catalog_number"))
+            supplier_name = supplier.get("name")
+            if not isinstance(supplier_name, str) or supplier_name != supplier_name.strip():
+                raise ProductEvidenceUnavailable()
+            if supplier_id in supplier_names and supplier_names[supplier_id] != supplier_name:
+                raise ProductEvidenceUnavailable()
+            supplier_names[supplier_id] = supplier_name
+            name_catalog = (_normalized_identity(supplier_name), catalog_number)
+            if name_catalog in supplier_name_catalogs and supplier_name_catalogs[name_catalog] != supplier_id:
+                raise ProductEvidenceUnavailable()
+            supplier_name_catalogs[name_catalog] = supplier_id
+            product_tuple = (supplier_id, catalog_number)
+            if product_tuple in product_tuples:
+                raise ProductEvidenceUnavailable()
+            product_tuples.add(product_tuple)
+
         core_ids = set(core_authority.require().by_id)
-        active_claims = sum(_validate_record_semantics(record, core_ids) for record in records)
+        active_claims = sum(
+            _validate_record_semantics(record, core_ids, permission_receipt)
+            for record in records
+        ) if isinstance(permission_receipt, dict) else 0
         if document["active_claim_count"] != active_claims:
             raise ProductEvidenceUnavailable()
         if document["release_id"] == ACTIVE_RELEASE_ID:
@@ -222,6 +328,7 @@ def _load(
                 raise ProductEvidenceUnavailable()
         elif document["product_evidence_available"] is not bool(records and active_claims):
             raise ProductEvidenceUnavailable()
+        ordered_records = sorted(records, key=product_order_key)
         return ProductView(
             release_id=document["release_id"], release_version=document["release_version"],
             content_sha256=content_digest, raw_sha256=expected_raw_sha256,
@@ -232,7 +339,8 @@ def _load(
             product_evidence_available=document["product_evidence_available"],
             record_count=document["record_count"], active_claim_count=document["active_claim_count"],
             core_catalog_digest_binding=document["core_catalog_digest_binding"],
-            records=tuple(MappingProxyType(record) for record in records),
+            product_identity_policy=document["product_identity_policy"],
+            records=tuple(MappingProxyType(record) for record in ordered_records),
         )
     except ProductEvidenceUnavailable:
         raise
@@ -298,10 +406,15 @@ class ProductAuthority:
             view = self.require()
         except ProductEvidenceUnavailable:
             return {"required": True, "ready": False, "status": "product_loader_unavailable", "loader_healthy": False}
+        available = view.product_evidence_available
         return {
-            "required": True, "ready": True, "status": "evidence_unavailable",
+            "required": True, "ready": True,
+            "status": "evidence_available" if available else "evidence_unavailable",
             "loader_healthy": True, **view.receipt(),
-            "require_known_policy": "fail_closed_product_evidence_unavailable",
+            "require_known_policy": (
+                "governed_product_evidence_loaded_phase5_analysis_not_enabled"
+                if available else "fail_closed_product_evidence_unavailable"
+            ),
             "full_restriction_runtime_ready": False,
             "phase6_denominator_status": "stale",
         }
@@ -312,4 +425,7 @@ product_authority = ProductAuthority(
     trusted_root=REPO_ROOT,
 )
 
-__all__ = ["ProductAuthority", "ProductEvidenceUnavailable", "ProductView", "product_authority"]
+__all__ = [
+    "ProductAuthority", "ProductEvidenceUnavailable", "ProductView",
+    "product_authority", "product_order_key", "_normalized_identity",
+]
