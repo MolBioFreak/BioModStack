@@ -21,6 +21,7 @@ from migrations.add_frustrampnn_reviews import (
 from migrations.runner import MIGRATIONS
 from runtime_policy import core_runtime_mode_enabled, workflow_launches_allowed
 from services.workflow_adapter import workflow_adapter_base_url
+from services.restriction_catalog import catalog_authority
 from telemetry_store import (
     TELEMETRY_FRESHNESS_STALE_AFTER_MS,
     TelemetryStore,
@@ -207,6 +208,7 @@ async def collect_runtime_readiness(
         frontend_required = False
 
     launch_allowed = workflow_launches_allowed() and adapter_ready
+    restriction_catalog = catalog_authority.readiness()
     checks = {
         "process_liveness": _check(required=True, ready=True, status="alive"),
         "core_database": _check(required=True, ready=core_ready, status=core_status),
@@ -227,6 +229,7 @@ async def collect_runtime_readiness(
             ready=molbio_ready,
             status="ready" if molbio_ready else str(molbio.get("status", "unavailable")),
         ),
+        "restriction_catalog": restriction_catalog,
         "molbio_ngs_database": _check(
             required=molbio_ngs_required,
             ready=molbio_ngs_ready if molbio_ngs_required else True,
