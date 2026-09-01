@@ -3,13 +3,17 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
 import experiment_migrations
+import yaml
 
+import httpx
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 from sqlalchemy import func, select
 
 import experiment_models
@@ -22,10 +26,12 @@ from experiment_models import (
     ExperimentWorkflowSetupContext,
 )
 from experiment_services import RevisionConflict, ValidationFailure, create_project
+from routers.project_manager import router as project_manager_router
 from services.global_experiments import workflow_setups
 from services.global_experiments.read_models import build_project_manager_read_model
 from services import protein_project_capabilities
 from services.protein_project_capabilities import protein_capability_inventory
+from template_registry import TemplateRegistry
 
 
 def test_setup_context_service_module_is_registered() -> None:
@@ -89,44 +95,224 @@ def test_setup_context_persistence_authority_is_registered() -> None:
     } <= set(model.__table__.columns.keys())
 
 
-def test_project_picker_derives_from_active_published_project_compatible_workflows(monkeypatch) -> None:
-    existing_ids = {
-        item["capability_id"]
-        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
-    }
-    promoted = next(
+def _de_novo_capabilities() -> tuple[dict, dict, Path]:
+    rfd3_mode = next(
         record
         for record in protein_project_capabilities._CAPABILITIES
-        if record["capability_id"] == "protein.simulation.gromacs_md"
+        if record["capability_id"] == "protein.de_novo.rfd3"
     )
-    monkeypatch.setitem(promoted, "exposure_state", "accepted")
-    monkeypatch.setitem(promoted, "availability", {"state": "operational", "reason": None})
-    monkeypatch.setitem(
-        promoted, "workflow_adapter_id", "bms.core-job.molecular-dynamics.adapter.v1"
+    local_redesign = next(
+        record
+        for record in protein_project_capabilities._CAPABILITIES
+        if record["capability_id"] == "protein.de_novo.local_redesign"
     )
-    monkeypatch.setitem(promoted, "launch_mode", "typed_launcher_handoff")
-    monkeypatch.setitem(
-        promoted, "project_setup_destination", "/submit?template=molecular_dynamics"
-    )
+    return rfd3_mode, local_redesign, Path(__file__).resolve().parents[1] / "config" / "templates"
 
-    inventory = protein_project_capabilities.protein_capability_inventory(project_ready_only=True)
+
+async def _project_capability_api() -> dict:
+    app = FastAPI()
+    app.include_router(project_manager_router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/protein-project-capabilities")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _configure_legacy_protein_cad_catalog(
+    monkeypatch, tmp_path: Path, *, enabled: bool = True, experimental: bool = False
+) -> None:
+    _, _, templates_dir = _de_novo_capabilities()
+    promoted_templates_dir = tmp_path / "templates"
+    shutil.copytree(templates_dir, promoted_templates_dir)
+    promoted_yaml = promoted_templates_dir / "protein_cad_experimental.yaml"
+    source_metadata = yaml.safe_load(
+        (templates_dir / "protein_cad_experimental.yaml").read_text()
+    )
+    promoted_metadata = yaml.safe_load(promoted_yaml.read_text())
+    promoted_metadata["enabled"] = enabled
+    promoted_metadata["experimental"] = experimental
+    assert promoted_metadata == {
+        **source_metadata,
+        "enabled": enabled,
+        "experimental": experimental,
+    }
+    promoted_yaml.write_text(yaml.safe_dump(promoted_metadata, sort_keys=False))
+    registry = TemplateRegistry(promoted_templates_dir)
+    publication = registry.get_template("protein_cad_experimental")
+    assert publication is not None and publication.enabled is enabled
+    assert publication.experimental is experimental
+    monkeypatch.setattr(protein_project_capabilities, "get_template_registry", lambda: registry)
+
+
+@pytest.mark.asyncio
+async def test_project_picker_never_promotes_a_de_novo_child_as_a_workflow(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rfd3_mode, local_redesign, templates_dir = _de_novo_capabilities()
+    assert rfd3_mode["label"] == "RFD3 de novo design"
+    assert rfd3_mode["product_taxonomy"]["workflow_id"] == "protein_modification_experimental"
+    assert rfd3_mode["product_taxonomy"]["parent_capability_id"] is None
+    assert rfd3_mode["exposure_state"] == "integrated_component"
+    assert rfd3_mode["availability"]["state"] == "operational_as_child"
+    assert rfd3_mode["canonical_source_destination"] == "/submit?template=protein_modification_experimental"
+    assert rfd3_mode["workflow_adapter_id"] is None
+    assert rfd3_mode["allowed_model_modes"] == []
+    assert rfd3_mode["project_setup_destination"] is None
+    assert rfd3_mode["project_native_owner_id"] is None
+    assert rfd3_mode["publication_template_id"] is None
+    assert local_redesign["product_taxonomy"]["workflow_id"] == "protein_modification_experimental"
+    assert local_redesign["product_taxonomy"]["parent_capability_id"] is None
+    assert local_redesign["exposure_state"] == "integrated_component"
+    assert local_redesign["availability"]["state"] == "operational_as_child"
+    assert local_redesign["project_setup_destination"] is None
+    assert local_redesign["project_native_owner_id"] is None
+    assert local_redesign["publication_template_id"] is None
+    assert protein_project_capabilities._PARAMETER_SCHEMAS[
+        "protein.de_novo.local_redesign"
+    ]["x-bms-executable-authority"] == "typed_core_job_outside_project_manager"
+    baseline_registry = TemplateRegistry(templates_dir)
+    monkeypatch.setattr(
+        protein_project_capabilities, "get_template_registry", lambda: baseline_registry
+    )
+    existing_inventory = await _project_capability_api()
+    existing_ids = {
+        item["capability_id"]
+        for item in existing_inventory["capabilities"]
+    }
+    assert "protein.de_novo.local_redesign" not in existing_ids
+    _configure_legacy_protein_cad_catalog(monkeypatch, tmp_path)
+
+    inventory = await _project_capability_api()
     assert set(inventory) == {"schema", "capabilities"}
     assert inventory["schema"] == "bms.protein-project-workflow-picker.v1"
     ready_ids = {item["capability_id"] for item in inventory["capabilities"]}
-    assert ready_ids == existing_ids | {"protein.simulation.gromacs_md"}
+    assert ready_ids == existing_ids
     assert protein_project_capabilities.protein_capability_record(
-        "protein.simulation.gromacs_md"
-    )["project_setup_state"] == "ready"
+        "protein.de_novo.local_redesign"
+    )["project_setup_state"] == "unavailable"
     for item in inventory["capabilities"]:
         assert set(item) == {
-            "capability_id", "label", "state", "adapter_id", "setup_destination",
-            "source_requirements", "follow_up_compatible_capability_ids",
+            "capability_id", "label", "state", "adapter_id", "native_owner_id",
+            "setup_destination", "source_requirements", "follow_up_compatible_capability_ids",
         }
         assert item["state"] == "ready"
-        assert item["adapter_id"]
-        assert item["setup_destination"].startswith("/submit?template=")
+        assert item["adapter_id"].strip()
+        assert item["native_owner_id"].strip()
+        assert item["setup_destination"].startswith(
+            f"/submit?template={item['native_owner_id']}"
+        )
         assert isinstance(item["source_requirements"], list)
         assert set(item["follow_up_compatible_capability_ids"]) == ready_ids
+
+
+def _ready_esmfold2_capability() -> dict:
+    return next(
+        record
+        for record in protein_project_capabilities._CAPABILITIES
+        if record["capability_id"] == "protein.structure_prediction.esmfold2"
+    )
+
+
+@pytest.mark.parametrize(
+    "invalid_updates",
+    [
+        {"exposure_state": "integrated_component"},
+        {"availability": {"state": "operational_outside_project_manager", "reason": "outside"}},
+        {"availability": {"state": "operationally_disabled", "reason": "disabled"}},
+        {"publication_template_id": "   "},
+        {"publication_template_id": "does_not_exist"},
+        {"workflow_adapter_id": "   "},
+        {
+            "workflow_adapter_id": " bms.core-job.esmfold2.adapter.v1 ",
+            "result_adapter_ids": [" bms.core-job.esmfold2.adapter.v1 "],
+        },
+        {
+            "workflow_adapter_id": "bms.core-job.unregistered.adapter.v1",
+            "result_adapter_ids": ["bms.core-job.unregistered.adapter.v1"],
+        },
+        {"result_adapter_ids": []},
+        {"result_adapter_ids": ["   "]},
+        {"launch_mode": "scheduler_owned_child"},
+        {"allowed_model_modes": [{}]},
+        {
+            "allowed_model_modes": [
+                {"model_id": "esmfold2", "mode": "predict"},
+                {"model_id": "esmfold2", "mode": "validate"},
+            ],
+        },
+        {"project_setup_destination": "/submit?template="},
+        {"project_setup_destination": "/submit?template=does_not_exist"},
+        {
+            "project_setup_destination": (
+                "https://untrusted.invalid/submit?template=structure_prediction"
+            )
+        },
+        {"project_native_owner_id": None},
+        {"project_native_owner_id": " structure_prediction "},
+        {
+            "project_native_owner_id": "molecular_dynamics",
+            "project_setup_destination": "/submit?template=molecular_dynamics",
+        },
+        {"parameter_schema_id": "bms.workflow-parameters.unknown.v1"},
+        {
+            "parameter_schema_id": protein_project_capabilities._PARAMETER_SCHEMAS[
+                "protein.structure_prediction.boltz2"
+            ]["$id"]
+        },
+    ],
+)
+def test_project_picker_rejects_invalid_workflow_contracts(
+    monkeypatch, invalid_updates: dict
+) -> None:
+    capability = _ready_esmfold2_capability()
+    for key, value in invalid_updates.items():
+        monkeypatch.setitem(capability, key, value)
+
+    ready_ids = {
+        item["capability_id"]
+        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
+    }
+    assert capability["capability_id"] not in ready_ids
+
+
+def test_project_picker_rejects_schema_authority_outside_project_manager(
+    monkeypatch,
+) -> None:
+    capability = _ready_esmfold2_capability()
+    schema = protein_project_capabilities._PARAMETER_SCHEMAS[capability["capability_id"]]
+    monkeypatch.setitem(
+        schema, "x-bms-executable-authority", "typed_core_job_outside_project_manager"
+    )
+    ready_ids = {
+        item["capability_id"]
+        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
+    }
+    assert capability["capability_id"] not in ready_ids
+
+
+def test_project_picker_rejects_disabled_canonical_workflow_publication(
+    monkeypatch, tmp_path: Path
+) -> None:
+    capability = _ready_esmfold2_capability()
+    _, _, templates_dir = _de_novo_capabilities()
+    disabled_templates_dir = tmp_path / "templates"
+    shutil.copytree(templates_dir, disabled_templates_dir)
+    structure_yaml = disabled_templates_dir / "structure_prediction.yaml"
+    metadata = yaml.safe_load(structure_yaml.read_text())
+    metadata["enabled"] = False
+    structure_yaml.write_text(yaml.safe_dump(metadata, sort_keys=False))
+    registry = TemplateRegistry(disabled_templates_dir)
+    publication = registry.get_template("structure_prediction")
+    assert publication is not None and publication.enabled is False
+    monkeypatch.setattr(protein_project_capabilities, "get_template_registry", lambda: registry)
+
+    ready_ids = {
+        item["capability_id"]
+        for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
+    }
+    assert capability["capability_id"] not in ready_ids
 
 
 def test_unavailable_capabilities_remain_catalogued_but_hidden_from_project_picker() -> None:
@@ -135,9 +321,18 @@ def test_unavailable_capabilities_remain_catalogued_but_hidden_from_project_pick
         item["capability_id"]
         for item in protein_capability_inventory(project_ready_only=True)["capabilities"]
     }
-    hidden = [item for item in complete["capabilities"] if item["capability_id"] not in ready_ids]
-    assert hidden
-    assert all(item["project_setup_state"] != "ready" for item in hidden)
+    hidden_ids = {
+        "protein.de_novo.rfd3",
+        "protein.de_novo.local_redesign",
+        "protein.sequence_design.fampnn",
+        "protein.sequence_design.proteinmpnn",
+        "protein.simulation.gromacs_md",
+        "protein.analysis.frustrampnn",
+    }
+    assert hidden_ids.isdisjoint(ready_ids)
+    complete_by_id = {item["capability_id"]: item for item in complete["capabilities"]}
+    assert hidden_ids <= set(complete_by_id)
+    assert all(complete_by_id[item_id]["project_setup_state"] == "unavailable" for item_id in hidden_ids)
 
 
 @pytest_asyncio.fixture

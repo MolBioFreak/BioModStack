@@ -24,6 +24,13 @@ from services.protein_project_capabilities import (
     protein_capability_record,
     protein_parameter_schema,
 )
+from services.workflow_adapter_registry import (
+    PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS,
+    TYPED_CORE_JOB_ADAPTERS,
+    TYPED_CORE_JOB_MODELS,
+    WORKFLOW_ADAPTER_REGISTRY,
+    register_workflow_adapter,
+)
 from model_registry import get_registry
 from scripts.rfd3_local_redesign.contract import ContractError
 from services.rfd3_local_redesign import (
@@ -646,32 +653,6 @@ def scheduler_job_id_for_attempt(attempt_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"bms:global-experiment:core-job:{attempt_id}"))
 
 
-TYPED_CORE_JOB_MODELS = {
-    "boltz2",
-    "boltz_cp_experimental",
-    "boltzgen",
-    "esmfold2",
-    "molecular_dynamics",
-    "nanopore",
-    "ngs_alignment",
-    "oligo_builder",
-    "oligo_design",
-    "ont_fastq_qc",
-    "ppiflow",
-    "protein_local_redesign",
-    "protein_modification_experimental",
-    "protenix",
-    "rf3",
-    "sequence_qc",
-    "template_antibody_denovo",
-}
-TYPED_CORE_JOB_ADAPTERS = {
-    f"bms.core-job.{model_id}.adapter.v1": model_id
-    for model_id in sorted(TYPED_CORE_JOB_MODELS)
-}
-PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS = {"bms.ngs.job-reference.adapter.v1"}
-
-
 def scheduler_job_identity(attempt_id: str, scheduler: Mapping[str, Any]) -> str:
     """Keep CM attempt identity while giving typed core Jobs deterministic UUIDv5 identity."""
     params = scheduler.get("params")
@@ -682,21 +663,6 @@ def scheduler_job_identity(attempt_id: str, scheduler: Mapping[str, Any]) -> str
         or adapter_id in PROJECT_SCHEDULED_TYPED_CORE_ADAPTERS
         else attempt_id
     )
-
-
-WORKFLOW_ADAPTER_REGISTRY: dict[str, set[str]] = {
-    "generic_test": {"generic.test.adapter.v1"},
-    "typed_core_job": set(TYPED_CORE_JOB_ADAPTERS),
-    "conformational_mapping": {
-        "bms.cm.protenix_v2.adapter.v1",
-        "bms.cm.confornets.adapter.v1",
-    },
-}
-
-
-def register_workflow_adapter(workflow_family: str, adapter_id: str) -> None:
-    """Register a server-owned workflow adapter; callers cannot register via HTTP."""
-    WORKFLOW_ADAPTER_REGISTRY.setdefault(workflow_family, set()).add(adapter_id)
 
 
 def _cm_submission_source_ids(submission: dict[str, Any]) -> list[str]:

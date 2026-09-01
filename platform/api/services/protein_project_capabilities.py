@@ -11,6 +11,13 @@ import copy
 import hashlib
 import json
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
+
+from services.workflow_adapter_registry import (
+    is_project_native_owner_registered,
+    is_workflow_adapter_registered,
+)
+from template_registry import get_template_registry
 
 
 # Compatibility names imported by the existing ESMFold2 Workflow Plan path.
@@ -436,7 +443,7 @@ def _specialized_schemas() -> dict[str, dict[str, Any]]:
     schemas["protein.recipe.dna_polymerase_engineering"] = _schema("protein.recipe.dna_polymerase_engineering", "DNA Polymerase Engineering recipe", recipe_fields, list(recipe_fields), authority="typed_recipe_without_atomic_orchestration")
 
     unavailable = {
-        "protein.de_novo.rfd3": ("RFD3 general de novo design", "No Project-owned general RFD3 launcher is installed; local redesign is a separate child capability."),
+        "protein.de_novo.rfd3": ("RFD3 general de novo design", "RFD3 generation is one mode inside De Novo Design; the parent workflow has no complete Project-owned setup and preparation contract."),
         "protein.variant_exploration": ("Mutation and variant exploration", "No single typed variant exploration compiler and dispatch authority is installed."),
         "protein.design.antibody": ("Antibody design", "The installed antibody workflow remains experimental and is not an accepted Project validator pipeline."),
         "protein.design.nanobody": ("Nanobody design", "The installed nanobody workflow remains experimental and has no accepted Project launch contract."),
@@ -449,6 +456,9 @@ def _specialized_schemas() -> dict[str, dict[str, Any]]:
 
 
 _PARAMETER_SCHEMAS = {**_structure_prediction_schemas(), **_specialized_schemas()}
+_PARAMETER_SCHEMA_BY_ID = {
+    schema["$id"]: schema for schema in _PARAMETER_SCHEMAS.values()
+}
 
 
 def _capability(
@@ -473,8 +483,11 @@ def _capability(
     viewer_id: str | None,
     accepted_source_roles: list[str],
     receipt_contracts: list[str],
+    publication_template_id: str | None = None,
     project_setup_destination: str | None = None,
+    project_native_owner_id: str | None = None,
     parent_capability_id: str | None = None,
+    workflow_id: str | None = None,
     execution_owner: str = "biomodstack",
     allowed_as_validator: bool = False,
     validator_domain_modes: list[str] | None = None,
@@ -487,6 +500,7 @@ def _capability(
             "domain": "protein",
             "family": family,
             "category": category,
+            "workflow_id": workflow_id,
             "parent_capability_id": parent_capability_id,
         },
         "scientific_role": role,
@@ -501,7 +515,9 @@ def _capability(
         "workflow_adapter_id": workflow_adapter_id,
         "launch_mode": launch_mode,
         "canonical_source_destination": destination,
+        "publication_template_id": publication_template_id,
         "project_setup_destination": project_setup_destination,
+        "project_native_owner_id": project_native_owner_id,
         "parameter_schema_id": _PARAMETER_SCHEMAS[capability_id]["$id"],
         "allowed_model_modes": model_modes,
         "execution_owner": execution_owner,
@@ -514,20 +530,20 @@ def _capability(
 
 
 _CAPABILITIES = [
-    _capability("protein.structure_prediction.boltz2", label="Boltz-2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.boltz2.adapter.v1", launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=boltz", model_modes=[{"model_id": "boltz2", "mode": "predict"}], result_adapter_ids=["bms.core-job.boltz2.adapter.v1", "bms.core.protein-result-reference.adapter.v1"], result_contracts=["structure_prediction_v1", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
-    _capability("protein.structure_prediction.esmfold2", label="ESMFold2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id=ADAPTER_ID, launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=esmfold2", model_modes=[{"model_id": "esmfold2", "mode": "predict"}], result_adapter_ids=[ADAPTER_ID, "bms.core.protein-result-reference.adapter.v1"], result_contracts=["core_job_result", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
-    _capability("protein.structure_prediction.protenix_v2", label="Protenix V2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.protenix.adapter.v1", launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=protenix", model_modes=[{"model_id": "protenix", "mode": "predict"}], result_adapter_ids=["bms.core-job.protenix.adapter.v1", "bms.core.protein-result-reference.adapter.v1"], result_contracts=["structure_prediction_v1", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
-    _capability("protein.de_novo.rfd3", label="RFD3 de novo design", family="de_novo_design", category="generative_design", role="general_de_novo_generation", allowed_modes=["design"], plannable=False, exposure_state="unavailable", availability_state="unavailable", availability_reason="No Project-owned general RFD3 launcher is installed.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[], result_adapter_ids=[], result_contracts=["de_novo_generation_v1"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
-    _capability("protein.de_novo.local_redesign", label="RFD3 local redesign", family="de_novo_design", category="local_redesign", role="structure_conditioned_local_redesign", allowed_modes=["redesign", "design"], plannable=False, exposure_state="accepted", availability_state="operational_outside_project_manager", availability_reason="The native typed core Job and result adapter exist, but Project Plans cannot yet establish the server-owned GPU assignment or render the complete typed source/chain/residue selectors required by the immutable RFD3 request.", workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.protein_local_redesign.adapter.v1", launch_mode="typed_launcher_handoff", destination="/submit?template=protein_local_redesign", project_setup_destination="/submit?template=protein_local_redesign", model_modes=[{"model_id": "protein_local_redesign", "mode": "local_redesign"}], result_adapter_ids=["bms.core-job.protein_local_redesign.adapter.v1"], result_contracts=["rfd3_local_redesign_v1", "protein_local_redesign_validation_v1"], viewer_id="structure_viewer", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], parent_capability_id="protein.de_novo.rfd3"),
+    _capability("protein.structure_prediction.boltz2", label="Boltz-2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.boltz2.adapter.v1", launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=boltz", project_native_owner_id="structure_prediction", publication_template_id="structure_prediction", model_modes=[{"model_id": "boltz2", "mode": "predict"}], result_adapter_ids=["bms.core-job.boltz2.adapter.v1", "bms.core.protein-result-reference.adapter.v1"], result_contracts=["structure_prediction_v1", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
+    _capability("protein.structure_prediction.esmfold2", label="ESMFold2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id=ADAPTER_ID, launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=esmfold2", project_native_owner_id="structure_prediction", publication_template_id="structure_prediction", model_modes=[{"model_id": "esmfold2", "mode": "predict"}], result_adapter_ids=[ADAPTER_ID, "bms.core.protein-result-reference.adapter.v1"], result_contracts=["core_job_result", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
+    _capability("protein.structure_prediction.protenix_v2", label="Protenix V2 structure prediction", family="structure_prediction", category="structure_prediction", role="folding_structure_prediction", allowed_modes=["prediction", "validation", "design", "redesign", "exploration"], plannable=True, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.protenix.adapter.v1", launch_mode="typed_launcher_handoff", destination="/submit?template=structure_prediction", project_setup_destination="/submit?template=structure_prediction&pred_method=protenix", project_native_owner_id="structure_prediction", publication_template_id="structure_prediction", model_modes=[{"model_id": "protenix", "mode": "predict"}], result_adapter_ids=["bms.core-job.protenix.adapter.v1", "bms.core.protein-result-reference.adapter.v1"], result_contracts=["structure_prediction_v1", "typed_core_job_result"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], allowed_as_validator=True, validator_domain_modes=["design", "redesign", "exploration", "prediction", "validation"]),
+    _capability("protein.de_novo.rfd3", label="RFD3 de novo design", family="de_novo_design", category="generative_design", role="general_de_novo_generation", allowed_modes=["design"], plannable=False, exposure_state="integrated_component", availability_state="operational_as_child", availability_reason="RFD3 generation is a mode inside De Novo Design and is never advertised as a standalone Project workflow.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination="/submit?template=protein_modification_experimental", model_modes=[], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["de_novo_generation_v1"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], workflow_id="protein_modification_experimental"),
+    _capability("protein.de_novo.local_redesign", label="RFD3 Local Redesign", family="de_novo_design", category="local_redesign", role="structure_conditioned_local_redesign", allowed_modes=["redesign", "design"], plannable=False, exposure_state="integrated_component", availability_state="operational_as_child", availability_reason="RFD3 Local Redesign is a mode inside De Novo Design and is never advertised as a standalone Project workflow.", workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.protein_local_redesign.adapter.v1", launch_mode="scheduler_owned_child", destination="/submit?template=protein_local_redesign", model_modes=[{"model_id": "protein_local_redesign", "mode": "local_redesign"}], result_adapter_ids=["bms.core-job.protein_local_redesign.adapter.v1"], result_contracts=["rfd3_local_redesign_v1", "protein_local_redesign_validation_v1"], viewer_id="structure_viewer", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], workflow_id="protein_modification_experimental"),
     _capability("protein.variant_exploration", label="Mutation and variant exploration", family="variant_exploration", category="protein_engineering", role="mutation_variant_exploration", allowed_modes=["exploration", "redesign", "analysis"], plannable=False, exposure_state="unavailable", availability_state="unavailable", availability_reason="No closed variant compiler and dispatch authority is installed.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[], result_adapter_ids=[], result_contracts=[], viewer_id=None, accepted_source_roles=["source_structure_receipt", "source_sequence_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.sequence_design.fampnn", label="FA-MPNN sequence design", family="sequence_design", category="sequence_design", role="full_atom_sequence_design", allowed_modes=["design", "redesign"], plannable=False, exposure_state="catalogued", availability_state="unavailable", availability_reason="No Project-owned FA-MPNN workflow adapter is registered.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[{"model_id": "fampnn", "mode": "design"}, {"model_id": "fampnn", "mode": "fixed_backbone"}, {"model_id": "fampnn", "mode": "binder_design"}], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["sequence_design_v1"], viewer_id="structure_viewer", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.sequence_design.proteinmpnn", label="ProteinMPNN sequence design", family="sequence_design", category="sequence_design", role="backbone_conditioned_sequence_design", allowed_modes=["design", "redesign"], plannable=False, exposure_state="catalogued", availability_state="unavailable", availability_reason="No Project-owned ProteinMPNN workflow adapter is registered.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[{"model_id": "proteinmpnn", "mode": "design"}], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["sequence_design_v1"], viewer_id="structure_viewer", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.sequence_design.foundry_ligandmpnn", label="Foundry LigandMPNN sequence design", family="sequence_design", category="ligand_aware_sequence_design", role="ligand_aware_sequence_design", allowed_modes=["design", "redesign"], plannable=False, exposure_state="catalogued", availability_state="unavailable", availability_reason="Foundry owns LigandMPNN, but no Project-owned Foundry dispatch adapter is registered.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[{"model_id": "ligandmpnn", "mode": "ligand_aware"}, {"model_id": "ligandmpnn", "mode": "ntp_aware"}, {"model_id": "ligandmpnn", "mode": "metal_aware"}, {"model_id": "ligandmpnn", "mode": "dna_aware"}], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["sequence_design_v1"], viewer_id="structure_viewer", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"], execution_owner="foundry"),
     _capability("protein.design.antibody", label="Antibody design", family="antibody_nanobody_design", category="antibody_design", role="antibody_design", allowed_modes=["design", "redesign"], plannable=False, exposure_state="unavailable", availability_state="unavailable", availability_reason="The installed antibody pipeline remains experimental and is not an accepted Project launch authority.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["antibody_backbone_v1", "sequence_design_v1"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.design.nanobody", label="Nanobody design", family="antibody_nanobody_design", category="nanobody_design", role="nanobody_design", allowed_modes=["design", "redesign"], plannable=False, exposure_state="unavailable", availability_state="unavailable", availability_reason="The installed nanobody pipeline remains experimental and is not an accepted Project launch authority.", workflow_family=None, workflow_adapter_id=None, launch_mode="unavailable", destination=None, model_modes=[], result_adapter_ids=["bms.core.protein-result-reference.adapter.v1"], result_contracts=["antibody_backbone_v1", "sequence_design_v1"], viewer_id="structure_viewer", accepted_source_roles=["target_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
-    _capability("protein.conformational_mapping.protenix_v2", label="Protenix V2 conformational mapping", family="conformational_mapping", category="ensemble_generation", role="conformational_hypothesis_mapping", allowed_modes=["exploration", "analysis"], plannable=False, exposure_state="accepted", availability_state="operational_outside_project_manager", availability_reason="The dedicated Protenix CM adapter/materializer is operational, but Project Plans lack a first-class typed CM submission control and a preparation compiler that derives exact source IDs and cardinality without materializing the native request.", workflow_family="conformational_mapping", workflow_adapter_id="bms.cm.protenix_v2.adapter.v1", launch_mode="managed_materialization", destination="/api/conformational-mapping/requests", project_setup_destination="/submit?template=conformational_mapping&backend=protenix_v2", model_modes=[{"model_id": "conformational_mapping", "mode": "map"}], result_adapter_ids=["bms.cm.protenix_v2.adapter.v1"], result_contracts=["conformational_mapping_protenix_v1", "conformational_mapping_analysis_v1"], viewer_id="conformational_mapping_viewer", accepted_source_roles=["complete_complex_snapshot_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
-    _capability("protein.conformational_mapping.confornets", label="ConforNets conformational mapping", family="conformational_mapping", category="ensemble_generation", role="conformational_hypothesis_mapping", allowed_modes=["exploration", "analysis"], plannable=False, exposure_state="accepted", availability_state="operational_outside_project_manager", availability_reason="The dedicated Protenix CM adapter/materializer is operational, but Project Plans lack a first-class typed CM submission control and a preparation compiler that derives exact source IDs and cardinality without materializing the native request.", workflow_family="conformational_mapping", workflow_adapter_id="bms.cm.confornets.adapter.v1", launch_mode="managed_materialization", destination="/api/conformational-mapping/requests", project_setup_destination="/submit?template=conformational_mapping&backend=confornets", model_modes=[{"model_id": "conformational_mapping", "mode": "map"}], result_adapter_ids=["bms.cm.confornets.adapter.v1"], result_contracts=["conformational_mapping_confornets_v1", "conformational_mapping_analysis_v1"], viewer_id="conformational_mapping_viewer", accepted_source_roles=["protein_sequence_receipt", "confornets_checkpoint_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
-    _capability("protein.simulation.gromacs_md", label="GROMACS molecular dynamics", family="molecular_dynamics", category="simulation", role="molecular_dynamics", allowed_modes=["simulation"], plannable=False, exposure_state="experimental", availability_state="feature_gated", availability_reason="The dedicated GROMACS route can consume a prepared launch context, but the runtime is default-off and Project Plans do not mount the first-class typed bms.md.job.v2 preparation control; the nested object contract therefore remains closed.", workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.molecular_dynamics.adapter.v1", launch_mode="typed_launcher_handoff", destination="/api/molecular-dynamics/launch", model_modes=[{"model_id": "molecular_dynamics", "mode": "simulate"}], result_adapter_ids=["bms.md.result-reference.adapter.v1"], result_contracts=["md_run_v1", "md_analysis_v1"], viewer_id=None, accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
+    _capability("protein.conformational_mapping.protenix_v2", label="Protenix V2 conformational mapping", family="conformational_mapping", category="ensemble_generation", role="conformational_hypothesis_mapping", allowed_modes=["exploration", "analysis"], plannable=False, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="conformational_mapping", workflow_adapter_id="bms.cm.protenix_v2.adapter.v1", launch_mode="managed_materialization", destination="/api/conformational-mapping/requests", project_setup_destination="/submit?template=conformational_mapping&backend=protenix_v2", project_native_owner_id="conformational_mapping", publication_template_id="conformational_mapping", model_modes=[{"model_id": "conformational_mapping", "mode": "map"}], result_adapter_ids=["bms.cm.protenix_v2.adapter.v1"], result_contracts=["conformational_mapping_protenix_v1", "conformational_mapping_analysis_v1"], viewer_id="conformational_mapping_viewer", accepted_source_roles=["complete_complex_snapshot_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
+    _capability("protein.conformational_mapping.confornets", label="ConforNets conformational mapping", family="conformational_mapping", category="ensemble_generation", role="conformational_hypothesis_mapping", allowed_modes=["exploration", "analysis"], plannable=False, exposure_state="accepted", availability_state="operational", availability_reason=None, workflow_family="conformational_mapping", workflow_adapter_id="bms.cm.confornets.adapter.v1", launch_mode="managed_materialization", destination="/api/conformational-mapping/requests", project_setup_destination="/submit?template=conformational_mapping&backend=confornets", project_native_owner_id="conformational_mapping", publication_template_id="conformational_mapping", model_modes=[{"model_id": "conformational_mapping", "mode": "map"}], result_adapter_ids=["bms.cm.confornets.adapter.v1"], result_contracts=["conformational_mapping_confornets_v1", "conformational_mapping_analysis_v1"], viewer_id="conformational_mapping_viewer", accepted_source_roles=["protein_sequence_receipt", "confornets_checkpoint_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
+    _capability("protein.simulation.gromacs_md", label="GROMACS molecular dynamics", family="molecular_dynamics", category="simulation", role="molecular_dynamics", allowed_modes=["simulation"], plannable=False, exposure_state="experimental", availability_state="feature_gated", availability_reason="The dedicated GROMACS route can consume a prepared launch context, but the runtime is default-off and Project Plans do not mount the first-class typed bms.md.job.v2 preparation control; the nested object contract therefore remains closed.", workflow_family="typed_core_job", workflow_adapter_id="bms.core-job.molecular_dynamics.adapter.v1", launch_mode="typed_launcher_handoff", destination="/api/molecular-dynamics/launch", publication_template_id="molecular_dynamics", model_modes=[{"model_id": "molecular_dynamics", "mode": "simulate"}], result_adapter_ids=["bms.md.result-reference.adapter.v1"], result_contracts=["md_run_v1", "md_analysis_v1"], viewer_id=None, accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.analysis.frustrampnn", label="FrustraMPNN analysis", family="frustrampnn", category="analysis", role="structure_analysis", allowed_modes=["analysis", "exploration", "design", "redesign", "prediction", "validation"], plannable=False, exposure_state="integrated_component", availability_state="operational_as_child", availability_reason="FrustraMPNN is a scheduler-owned child component, not an independent structure generator or generic direct launch.", workflow_family=None, workflow_adapter_id=None, launch_mode="scheduler_owned_child", destination="/api/frustrampnn", model_modes=[{"model_id": "frustrampnn", "mode": "analyze"}], result_adapter_ids=["bms.frustrampnn.result-reference.adapter.v1"], result_contracts=["frustration_analysis_v1"], viewer_id="frustration_landscape", accepted_source_roles=["source_structure_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.analysis.frustrampnn_comparison", label="FrustraMPNN comparison", family="frustrampnn", category="comparison", role="frustration_landscape_comparison", allowed_modes=["comparison", "analysis"], plannable=False, exposure_state="result_action", availability_state="operational_from_results", availability_reason="Comparison is created from compatible immutable FrustraMPNN results, not launched as a Project workflow.", workflow_family=None, workflow_adapter_id=None, launch_mode="result_action", destination="/api/frustrampnn/comparisons", model_modes=[], result_adapter_ids=["bms.frustrampnn.comparison-reference.adapter.v1"], result_contracts=["frustrampnn_comparison_v1"], viewer_id="frustration_landscape", accepted_source_roles=["frustrampnn_result_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
     _capability("protein.analysis.frustrampnn_guidance", label="FrustraMPNN guidance", family="frustrampnn", category="guidance", role="mutagenesis_guidance", allowed_modes=["analysis", "exploration", "redesign"], plannable=False, exposure_state="result_action", availability_state="operational_from_results", availability_reason="Guidance is derived from an immutable FrustraMPNN result, not launched as a Project workflow.", workflow_family=None, workflow_adapter_id=None, launch_mode="result_action", destination="/api/frustrampnn/guidance", model_modes=[], result_adapter_ids=["bms.frustrampnn.guidance-reference.adapter.v1"], result_contracts=["frustrampnn_guidance_v1"], viewer_id="residue_mapping", accepted_source_roles=["frustrampnn_result_receipt"], receipt_contracts=["bms.global.external-entity-receipt.v1"]),
@@ -536,23 +552,120 @@ _CAPABILITIES = [
 ]
 
 _PROJECT_LAUNCH_MODES = frozenset({"typed_launcher_handoff", "managed_materialization"})
+_PROJECT_SCHEMA_AUTHORITIES = {
+    "typed_launcher_handoff": "project_manager_typed_launcher_handoff",
+    "managed_materialization": "dedicated_conformational_mapping_api",
+}
+
+
+def _has_active_canonical_publication(record: dict[str, Any]) -> bool:
+    publication_template_id = record.get("publication_template_id")
+    if (
+        not isinstance(publication_template_id, str)
+        or not publication_template_id
+        or publication_template_id != publication_template_id.strip()
+    ):
+        return False
+    try:
+        publication = get_template_registry().get_template(publication_template_id)
+    except Exception:
+        return False
+    return bool(
+        publication is not None
+        and publication.enabled is True
+        and publication.experimental is False
+    )
+
+
+def _has_safe_native_setup_destination(record: dict[str, Any]) -> bool:
+    destination = record.get("project_setup_destination")
+    native_owner_id = record.get("project_native_owner_id")
+    if not isinstance(destination, str) or not isinstance(native_owner_id, str):
+        return False
+    if not native_owner_id or native_owner_id != native_owner_id.strip():
+        return False
+    if not is_project_native_owner_registered(native_owner_id):
+        return False
+    try:
+        parsed = urlsplit(destination)
+        query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return False
+    return (
+        not parsed.scheme
+        and not parsed.netloc
+        and not parsed.fragment
+        and parsed.path == "/submit"
+        and query.get("template") == [native_owner_id]
+    )
+
+
+def _has_closed_parameter_schema(record: dict[str, Any]) -> bool:
+    capability_id = record.get("capability_id")
+    schema_id = record.get("parameter_schema_id")
+    if not isinstance(capability_id, str) or not isinstance(schema_id, str):
+        return False
+    expected_schema = _PARAMETER_SCHEMAS.get(capability_id)
+    launch_mode = record.get("launch_mode")
+    if not isinstance(launch_mode, str):
+        return False
+    expected_authority = _PROJECT_SCHEMA_AUTHORITIES.get(launch_mode)
+    schema = _PARAMETER_SCHEMA_BY_ID.get(schema_id)
+    return bool(
+        isinstance(schema, dict)
+        and schema is expected_schema
+        and schema.get("x-bms-executable-authority") == expected_authority
+        and schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and isinstance(schema.get("properties"), dict)
+    )
+
+
+def _has_exact_model_modes(record: dict[str, Any]) -> bool:
+    model_modes = record.get("allowed_model_modes")
+    return bool(
+        isinstance(model_modes, list)
+        and len(model_modes) == 1
+        and all(
+            isinstance(model_mode, dict)
+            and set(model_mode) == {"model_id", "mode"}
+            and isinstance(model_mode.get("model_id"), str)
+            and model_mode["model_id"] == model_mode["model_id"].strip()
+            and bool(model_mode["model_id"])
+            and isinstance(model_mode.get("mode"), str)
+            and model_mode["mode"] == model_mode["mode"].strip()
+            and bool(model_mode["mode"])
+            for model_mode in model_modes
+        )
+    )
 
 
 def _is_active_published_project_workflow(record: dict[str, Any]) -> bool:
     availability = record.get("availability")
     availability_state = availability.get("state") if isinstance(availability, dict) else None
+    workflow_family = record.get("workflow_family")
     adapter_id = record.get("workflow_adapter_id")
-    destination = record.get("project_setup_destination")
+    result_adapter_ids = record.get("result_adapter_ids")
     return (
         record.get("exposure_state") == "accepted"
-        and isinstance(availability_state, str)
-        and availability_state.startswith("operational")
+        and _has_active_canonical_publication(record)
+        and availability_state == "operational"
         and isinstance(adapter_id, str)
-        and bool(adapter_id)
+        and bool(adapter_id.strip())
+        and adapter_id == adapter_id.strip()
+        and is_workflow_adapter_registered(workflow_family, adapter_id)
+        and isinstance(result_adapter_ids, list)
+        and bool(result_adapter_ids)
+        and all(
+            isinstance(result_adapter_id, str)
+            and bool(result_adapter_id)
+            and result_adapter_id == result_adapter_id.strip()
+            for result_adapter_id in result_adapter_ids
+        )
         and record.get("launch_mode") in _PROJECT_LAUNCH_MODES
-        and isinstance(destination, str)
-        and destination.startswith("/submit?template=")
-        and not destination.startswith("//")
+        and _has_exact_model_modes(record)
+        and _has_closed_parameter_schema(record)
+        and _has_safe_native_setup_destination(record)
     )
 
 
@@ -598,6 +711,7 @@ def protein_capability_inventory(*, project_ready_only: bool = False) -> dict[st
                 "label": record["label"],
                 "state": "ready",
                 "adapter_id": record["project_setup_adapter_id"],
+                "native_owner_id": record["project_native_owner_id"],
                 "setup_destination": record["safe_setup_destination"],
                 "source_requirements": list(record["source_requirements"]),
                 "follow_up_compatible_capability_ids": list(record["follow_up_compatible_capability_ids"]),

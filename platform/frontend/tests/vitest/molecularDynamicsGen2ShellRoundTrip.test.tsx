@@ -14,7 +14,7 @@ const apiMocks = vi.hoisted(() => ({
     post: vi.fn(),
     getLaunchContext: vi.fn(),
     fetchModels: vi.fn(async () => ({ data: [] })),
-    fetchTemplates: vi.fn(async () => ({ data: [] })),
+    fetchTemplates: vi.fn(async () => ({ data: [] as Array<Record<string, unknown>> })),
     fetchInputPresets: vi.fn(async () => ({ data: [] })),
 }));
 
@@ -24,12 +24,18 @@ vi.mock('../../src/lib/projectManager', () => ({
 
 vi.mock('../../src/lib/api', () => ({
     api: { get: apiMocks.get, post: apiMocks.post },
+    EXECUTION_TARGET_STORAGE_KEY: 'bms.execution-target-id',
+    VAST_DISCOVERY_QUERY_KEY: ['execution-targets', 'providers', 'vast', 'inventory'],
+    activateExecutionTarget: vi.fn(),
     completeCurrentLaunchContext: vi.fn(async () => null),
+    deactivateExecutionTarget: vi.fn(),
+    fetchExecutionTargets: vi.fn(async () => ({ data: [] })),
     fetchModels: apiMocks.fetchModels,
     fetchTemplates: apiMocks.fetchTemplates,
     fetchInputPresets: apiMocks.fetchInputPresets,
     fetchFiles: vi.fn(async () => ({ data: { entries: [] } })),
     fetchTemplateById: vi.fn(async () => ({ data: null })),
+    refreshVastExecutionTargets: vi.fn(async () => ({ data: { instances: [] } })),
     submitJob: vi.fn(),
     uploadFile: vi.fn(),
 }));
@@ -108,6 +114,8 @@ beforeEach(() => {
     apiMocks.get.mockReset();
     apiMocks.post.mockReset();
     apiMocks.getLaunchContext.mockReset();
+    apiMocks.fetchTemplates.mockReset();
+    apiMocks.fetchTemplates.mockResolvedValue({ data: [] });
     apiMocks.get.mockImplementation(async (url: string) => {
         if (url === '/api/molecular-dynamics/chemistry-profiles') {
             return response({ schema: 'bms.md.chemistry-profile-inventory.v1', catalog_digest: hash('c'), profiles: [profile], selectable_profile_ids: [profile.id], count: 1, bounded: true });
@@ -144,17 +152,20 @@ afterEach(async () => {
     document.body.replaceChildren();
 });
 
-const renderShell = async () => {
+const renderShell = async (
+    entry = '/submit?template=molecular_dynamics',
+    expectedText = 'Molecular Dynamics',
+) => {
     await act(async () => {
         root.render(
             <QueryClientProvider client={client}>
-                <MemoryRouter initialEntries={['/submit?template=molecular_dynamics']}>
+                <MemoryRouter initialEntries={[entry]}>
                     <JobSubmission />
                 </MemoryRouter>
             </QueryClientProvider>,
         );
     });
-    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain('Molecular Dynamics')); });
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain(expectedText)); });
 };
 
 const click = async (label: string) => {
@@ -174,6 +185,30 @@ const completeRoundTrip = async () => {
 };
 
 describe('mounted JobSubmission same-route MD handoff ownership', () => {
+    it('shows exactly De Novo Design and Molecular Dynamics as Experimental workflows', async () => {
+        apiMocks.fetchTemplates.mockResolvedValueOnce({
+            data: [
+                { id: 'protein_cad_experimental', name: 'Protein CAD Experimental', experimental: true, stages: [] },
+                { id: 'protein_local_redesign', name: 'RFD3 Local Redesign', experimental: true, stages: [] },
+                { id: 'confornets_experimental', name: 'ConforNets Experimental', experimental: true, stages: [] },
+                { id: 'molecular_dynamics', name: 'Molecular Dynamics', experimental: true, stages: [] },
+            ],
+        });
+        await renderShell('/submit', 'New Experiment');
+        await click('Experimental');
+        await act(async () => {
+            await vi.waitFor(() => expect(container.textContent).toContain('Choose active alpha:'));
+        });
+
+        const cards = container.querySelector('.grid.grid-cols-2.gap-3');
+        expect(cards?.children).toHaveLength(2);
+        expect(cards?.textContent).toContain('De Novo Design');
+        expect(cards?.textContent).toContain('Molecular Dynamics');
+        expect(cards?.textContent).not.toContain('Protein CAD Experimental');
+        expect(cards?.textContent).not.toContain('RFD3 Local Redesign');
+        expect(cards?.textContent).not.toContain('ConforNets Experimental');
+    });
+
     it('proves the ResultsViewer Design in the supplied completed prediction Job before exact inspection', async () => {
         const jobId = '66666666-6666-4666-8666-666666666666';
         const designId = '77777777-7777-4777-8777-777777777777';
@@ -429,8 +464,8 @@ describe('mounted JobSubmission same-route MD handoff ownership', () => {
                 </QueryClientProvider>,
             );
         });
-        expect(container.textContent).toContain('Resolving Project launch destination…');
-        expect(container.querySelector<HTMLInputElement>('[data-md-setting="random_seed"]')?.value).toBe('20260717');
+        expect(container.textContent).toContain('Resolving immutable Project launch authority…');
+        expect(container.querySelector<HTMLInputElement>('[data-md-setting="random_seed"]')).toBeNull();
 
         await act(async () => contextRequest.resolve({
             schema: 'bms.launch-context.v2',

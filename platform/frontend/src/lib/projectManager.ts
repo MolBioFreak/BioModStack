@@ -1036,6 +1036,7 @@ export interface ProteinProjectSetupCapability {
     label: string;
     state: 'ready';
     adapter_id: string;
+    native_owner_id: string;
     setup_destination: string;
     source_requirements: string[];
     follow_up_compatible_capability_ids: string[];
@@ -1811,18 +1812,29 @@ export async function listDomainAdapters(signal?: AbortSignal): Promise<DomainAd
 
 function parseProteinProjectCapability(value: unknown, label: string): ProteinProjectSetupCapability {
     const record = exactRecord(value, label, [
-        'capability_id', 'label', 'state', 'adapter_id', 'setup_destination',
+        'capability_id', 'label', 'state', 'adapter_id', 'native_owner_id', 'setup_destination',
         'source_requirements', 'follow_up_compatible_capability_ids',
     ]);
     const destination = requireString(record.setup_destination, `${label}.setup_destination`);
+    const nativeOwnerId = requireString(record.native_owner_id, `${label}.native_owner_id`);
     if (!destination.startsWith('/') || destination.startsWith('//')) {
         throw new Error(`${label} is ready without a safe native setup destination and adapter.`);
+    }
+    const destinationUrl = new URL(destination, 'https://project-setup.invalid');
+    if (
+        destinationUrl.pathname !== '/submit'
+        || destinationUrl.hash
+        || destinationUrl.searchParams.getAll('template').length !== 1
+        || destinationUrl.searchParams.get('template') !== nativeOwnerId
+    ) {
+        throw new Error(`${label} native owner does not match its setup destination.`);
     }
     return {
         capability_id: requireString(record.capability_id, `${label}.capability_id`),
         label: requireString(record.label, `${label}.label`),
         state: requireLiteral(record.state, `${label}.state`, ['ready'] as const),
         adapter_id: requireString(record.adapter_id, `${label}.adapter_id`),
+        native_owner_id: nativeOwnerId,
         setup_destination: destination,
         source_requirements: requireStringArray(record.source_requirements, `${label}.source_requirements`),
         follow_up_compatible_capability_ids: requireStringArray(record.follow_up_compatible_capability_ids, `${label}.follow_up_compatible_capability_ids`),

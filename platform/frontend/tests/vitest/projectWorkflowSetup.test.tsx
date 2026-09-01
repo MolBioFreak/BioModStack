@@ -25,7 +25,8 @@ import {
 
 const ready = {
     capability_id: 'protein.structure_prediction.esmfold2', label: 'ESMFold2 structure prediction', state: 'ready',
-    adapter_id: 'bms.esmfold2.project-setup.v1', setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
+    adapter_id: 'bms.esmfold2.project-setup.v1', native_owner_id: 'structure_prediction',
+    setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
     source_requirements: ['protein_sequence_receipt'], follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
 };
 const setup = {
@@ -63,6 +64,7 @@ describe('Project workflow setup', () => {
     it('lists only server-ready workflows and creates a primary setup before navigating to its native destination', async () => {
         await render(<NewProjectExperimentDialog projectId="project-1" open onClose={() => undefined}/>);
         await waitUntil(() => expect(container.textContent).toContain(ready.label));
+        expect(container.textContent).not.toContain('RFD3 local redesign');
 
         const inputs = container.querySelectorAll<HTMLInputElement>('input');
         await act(async () => {

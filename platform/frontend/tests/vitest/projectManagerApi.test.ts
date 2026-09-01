@@ -82,6 +82,7 @@ describe('Project Manager API contract', () => {
         const row = {
             capability_id: 'protein.structure_prediction.esmfold2', label: 'ESMFold2 structure prediction',
             state: 'ready', adapter_id: 'bms.esmfold2.project-setup.v1',
+            native_owner_id: 'structure_prediction',
             setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
             source_requirements: ['protein_sequence_receipt'],
             follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
@@ -104,6 +105,30 @@ describe('Project Manager API contract', () => {
         transport.get.mockResolvedValueOnce({ data: detail });
         await expect(contract.getProjectWorkflowSetup('project-1', 'setup-1')).resolves.toEqual(detail);
     });
+
+    it('rejects a ready workflow whose destination does not match its native owner', async () => {
+        const contract = projectManagerContract as unknown as {
+            listProteinProjectCapabilities: () => Promise<unknown>;
+        };
+        transport.get.mockResolvedValueOnce({ data: {
+            schema: 'bms.protein-project-workflow-picker.v1',
+            capabilities: [{
+                capability_id: 'protein.structure_prediction.esmfold2',
+                label: 'ESMFold2 structure prediction',
+                state: 'ready',
+                adapter_id: 'bms.core-job.esmfold2.adapter.v1',
+                native_owner_id: 'molecular_dynamics',
+                setup_destination: '/submit?template=structure_prediction&pred_method=esmfold2',
+                source_requirements: ['protein_sequence_receipt'],
+                follow_up_compatible_capability_ids: ['protein.structure_prediction.esmfold2'],
+            }],
+        } });
+
+        await expect(contract.listProteinProjectCapabilities()).rejects.toThrow(
+            'native owner does not match its setup destination',
+        );
+    });
+
     it('reads a closed FrustraMPNN result scope from exact Project lineage', async () => {
         const contract = projectManagerContract as unknown as {
             fetchDomainFrustraMpnnResults?: (
