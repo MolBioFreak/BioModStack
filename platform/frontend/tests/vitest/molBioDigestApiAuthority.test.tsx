@@ -15,6 +15,8 @@ const record = { enzyme_id: 'EcoRI', canonical_name: 'EcoRI', aliases: [], recog
 const occurrence = { occurrence_id: 'occ:1', occurrence_ordinal: 0, enzyme_id: 'EcoRI', canonical_name: 'EcoRI', orientation: 'forward', certainty: 'definite', site_start: 2, site_end_unwrapped: 8, site_segments: [[2, 8]], wraps_origin: false, double_strand_events: [{ enzyme_id: 'EcoRI', occurrence_id: 'occ:1', event_ordinal: 0, orientation: 'forward', status: 'complete', top_boundary: 3, bottom_boundary: 7, top_boundary_unwrapped: 3, bottom_boundary_unwrapped: 7, contributor_group_id: 'cut:1' }], nicks: [], limitations: [] };
 const analysis = { authority_key: 'b'.repeat(64), chunks: [{ enzyme_ids: ['EcoRI'], request_sha256: 'a'.repeat(64), result_sha256: 'b'.repeat(64), analysis_result_sha256: 'b'.repeat(64) }], analysis: { counts: { recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 }, enzyme_summaries: [{ enzyme_id: 'EcoRI', canonical_name: 'EcoRI', analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0, limitations: [] }], occurrences: [occurrence] } } as unknown as RestrictionAnalysisBatch;
 const recognitionOnly = { ...record, enzyme_id: 'MysteryI', canonical_name: 'MysteryI', analysis_capability: 'recognition_only', cleavage: { status: 'unknown', events: [], nick: null } } as unknown as RestrictionRecord;
+const bamRecord = { ...record, enzyme_id: 'BamHI', canonical_name: 'BamHI', recognition: { ...record.recognition, site_iupac: 'GGATCC', site_alternatives_iupac: ['GGATCC'] } } as unknown as RestrictionRecord;
+const mixedAnalysis = { ...analysis, analysis: { ...analysis.analysis, counts: { ...analysis.analysis.counts, recognition_site_count_definite: 3, double_strand_break_count: 3 }, enzyme_summaries: [...analysis.analysis.enzyme_summaries, { enzyme_id: 'BamHI', canonical_name: 'BamHI', analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 2, recognition_site_count_possible: 0, double_strand_break_count: 2, nick_count: 0, limitations: [] }] } } as unknown as RestrictionAnalysisBatch;
 const end = (side: 'left' | 'right', kind: 'five_prime_overhang' | 'three_prime_overhang' | 'blunt') => ({ kind, enzyme_created: true, side, protruding_strand: kind === 'blunt' ? null : 'top', overhang_sequence_5to3: kind === 'blunt' ? null : 'AATT', length_nt: kind === 'blunt' ? 0 : 4, contributing_enzyme_ids: ['EcoRI'], contributor_group_id: 'cut:1' });
 const simulation = { fragments: [
     { fragment_index: 0, reference_span_bp: 3, source_segments: [[0, 3]], left_end: end('left', 'five_prime_overhang'), right_end: end('right', 'three_prime_overhang') },
@@ -70,15 +72,19 @@ describe('DigestPanel backend authority', () => {
         expect(highlight.mock.calls.at(-1)?.[0]).toEqual([]);
     });
 
-    it('keeps recognition, DSB and nick counts separate and submits only stable IDs', async () => {
+    it('shows aggregate match semantics without an unrelated supplier warning', async () => {
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const simulate = vi.fn();
         await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} productEvidence={products} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={simulation} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={simulate} />));
-        expect(container.textContent).toContain('1 recognition sites');
-        expect(container.textContent).toContain('1 DSBs');
+        expect(container.textContent).toContain('1 definite enzyme-site match');
+        expect(container.textContent).toContain('0 possible matches');
+        expect(container.textContent).toContain('1 predicted DSB');
+        expect(container.textContent).toContain('Each enzyme is counted separately');
+        expect(container.textContent).toContain('context-dependent enzymes may overlap at one sequence position');
         expect(container.textContent).toContain('0 nicks');
-        expect(container.textContent).toContain('Supplier product evidence unavailable');
-        expect(container.querySelector('[data-product-evidence-state="unavailable"]')).toBeTruthy();
+        expect(container.textContent).not.toContain('Supplier product evidence unavailable');
+        expect(container.querySelector('[data-product-evidence-state="unavailable"]')).toBeNull();
+        expect([...container.querySelectorAll('button')].some((button) => button.textContent === 'Commercial reported')).toBe(false);
         const add = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Digest');
         await act(async () => add?.click());
         const run = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('Run Digest'));
@@ -88,5 +94,76 @@ describe('DigestPanel backend authority', () => {
         expect(container.textContent).toContain('3′ AATT overhang');
         expect(container.textContent).toContain('blunt end');
         expect(container.textContent).not.toContain('top_strand_sequence');
+    });
+
+    it('maps every currently filtered enzyme in one action and clears the active map', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn();
+        const render = async (selectedEnzymes: string[]) => act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={selectedEnzymes} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
+        await render([]);
+        const search = container.querySelector('input[placeholder="Search enzyme or recognition site…"]') as HTMLInputElement;
+        const setSearch = async (value: string) => act(async () => {
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(search, value);
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await setSearch('missing');
+        expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Map filtered (0)')?.hasAttribute('disabled')).toBe(true);
+        await setSearch('EcoRI');
+        const mapFiltered = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Map filtered (1)');
+        await act(async () => mapFiltered?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI']);
+        await render(['EcoRI']);
+        const clearMapped = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Clear map (1)');
+        await act(async () => clearMapped?.click());
+        expect(mapChange).toHaveBeenLastCalledWith([]);
+    });
+
+    it('keeps externally supplied mappings when a quick-map group is turned off', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn();
+        const stableCallbacks = { onHighlight: vi.fn(), onDigestSelectionChange: vi.fn(), onSimulateDigest: vi.fn() };
+        const render = async (selectedEnzymes: string[]) => act(async () => root?.render(<DigestPanel {...stableCallbacks} sequenceData={sequence} sequenceId={null} selectedEnzymes={selectedEnzymes} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record, bamRecord]} analysis={mixedAnalysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} />));
+        await render(['EcoRI']);
+        const button = (label: string) => [...container!.querySelectorAll('button')].find((candidate) => candidate.textContent === label);
+        await act(async () => button('Map all 1x')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI']);
+        await render(['EcoRI']);
+        await act(async () => button('Map all 1x')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI']);
+    });
+
+    it('keeps a row-level manual mapping when a quick-map group is turned off', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn();
+        const stableCallbacks = { onHighlight: vi.fn(), onDigestSelectionChange: vi.fn(), onSimulateDigest: vi.fn() };
+        const render = async (selectedEnzymes: string[]) => act(async () => root?.render(<DigestPanel {...stableCallbacks} sequenceData={sequence} sequenceId={null} selectedEnzymes={selectedEnzymes} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record, bamRecord]} analysis={mixedAnalysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} />));
+        await render([]);
+        const button = (label: string) => [...container!.querySelectorAll('button')].find((candidate) => candidate.textContent === label);
+        await act(async () => button('Map all 1x')?.click());
+        await render(['EcoRI']);
+        await act(async () => button('2x')?.click());
+        await act(async () => button('Map')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI', 'BamHI']);
+        await render(['EcoRI', 'BamHI']);
+        await act(async () => button('Map all 1x')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['BamHI']);
+    });
+
+    it('keeps filtered manual mappings when a quick-map group is turned off', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        const mapChange = vi.fn();
+        const stableCallbacks = { onHighlight: vi.fn(), onDigestSelectionChange: vi.fn(), onSimulateDigest: vi.fn() };
+        const render = async (selectedEnzymes: string[]) => act(async () => root?.render(<DigestPanel {...stableCallbacks} sequenceData={sequence} sequenceId={null} selectedEnzymes={selectedEnzymes} onEnzymesChange={mapChange} catalog={catalog} productEvidence={products} catalogRecords={[record, bamRecord]} analysis={mixedAnalysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} />));
+        await render([]);
+        const button = (label: string) => [...container!.querySelectorAll('button')].find((candidate) => candidate.textContent === label);
+        await act(async () => button('Map all 1x')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI']);
+        await render(['EcoRI']);
+        await act(async () => button('2x')?.click());
+        await act(async () => button('Map filtered (1)')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['EcoRI', 'BamHI']);
+        await render(['EcoRI', 'BamHI']);
+        await act(async () => button('Map all 1x')?.click());
+        expect(mapChange).toHaveBeenLastCalledWith(['BamHI']);
     });
 });

@@ -76,6 +76,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
         "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
         "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
+        "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
         "platform/frontend/src/components/MolBioToolkit/panels/AssemblyPanel.tsx",
         "platform/frontend/src/components/MolBioToolkit/hooks/useSequenceOperations.ts",
         "platform/frontend/src/components/MolBioToolkit/types.ts",
@@ -89,7 +90,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "scripts/build_restriction_enzyme_catalog.py",
     }
     assert required <= set(denominator["paths"])
-    assert len(denominator["paths"]) == 258
+    assert len(denominator["paths"]) == 259
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:

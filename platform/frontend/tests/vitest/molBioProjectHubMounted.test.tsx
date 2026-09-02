@@ -182,7 +182,7 @@ describe('mounted MolBio project hub', () => {
         const shelf = projectHubDNASequencesToConstructShelf(readModel);
         expect(shelf.map((item) => item.name)).toEqual(['PL1480', 'PL2190']);
         expect(shelf.map((item) => item.name)).not.toContain('pGM12_pEb-HS2-fluc');
-        expect(shelf[0]?.revision_id).toBe('revision-pl1480');
+        expect(shelf[0]?.revision_id).toBeUndefined();
         expect(shelf[0]?.reopen_href).toContain('molbio_sequence_id=sequence-pl1480');
         expect(shelf[0]?.reopen_href).not.toContain('molbio_revision_id');
     });

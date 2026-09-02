@@ -1,5 +1,5 @@
 {
-  "content_sha256": "6919297a4ad62720a2cdad707c7ab28aef6f3e2a3fda1545a83c90df8f2322a6",
+  "content_sha256": "00c0abe01c3165e6a442e4e67798228d855b00a3b43ccf88d231275557b2eab9",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_services.py",
@@ -178,6 +178,7 @@
     "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
     "platform/frontend/src/components/MolBioToolkit/types.ts",
     "platform/frontend/src/components/MolBioToolkit/utils/molecularWorkspaceState.ts",
+    "platform/frontend/src/components/MolBioToolkit/utils/projectConstructShelf.ts",
     "platform/frontend/src/components/NGSToolkit.tsx",
     "platform/frontend/src/components/NanoporeTemplate.tsx",
     "platform/frontend/src/components/OligoDesignerTemplate.tsx",
