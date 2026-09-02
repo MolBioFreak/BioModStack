@@ -12,6 +12,7 @@ import pytest
 import rfc8785
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from jsonschema import Draft202012Validator
 from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -36,6 +37,8 @@ MANIFEST = API_ROOT / "config/molbio/restriction/restriction_enzyme_catalog_mani
 SCHEMA = API_ROOT.parents[1] / "schemas/molbio/restriction_enzyme_catalog_v1.schema.json"
 CATALOG_ID = "biopython-rebase-404-bms-v1"
 CATALOG_SHA = "e9a1e9ec8e5b1845f82fd613f7343722756c0ef8c5f487c704a151646317d73f"
+SCHEMA_REGISTRY = API_ROOT / "config/ngs_molbio/schema_registry_v2.json"
+CAPABILITY_INVENTORY = API_ROOT / "config/ngs_molbio/capability_inventory_v2.json"
 UNCUT_LINEAR_CANONICAL_FIXTURE = (
     Path(__file__).parent
     / "fixtures/restriction_digest/uncut_linear_ecori_unsigned.canonical.json"
@@ -425,6 +428,49 @@ async def _client(sessions):
 
     app.dependency_overrides[molbio_restriction.get_molbio_session] = session_dependency
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_advertised_digest_schema_valid_request_executes_exact_post_and_readback(
+    tmp_path: Path,
+) -> None:
+    registry = json.loads(SCHEMA_REGISTRY.read_text(encoding="utf-8"))
+    inventory = json.loads(CAPABILITY_INVENTORY.read_text(encoding="utf-8"))
+    capability = next(
+        row for row in inventory["capabilities"] if row["capability_id"] == "molbio.restriction_digest"
+    )
+    registry_row = next(
+        row for row in registry["entries"] if row["schema_id"] == capability["parameter_schema_id"]
+    )
+    schema = json.loads((API_ROOT.parents[1] / registry_row["path"]).read_text(encoding="utf-8"))
+    assert schema["$id"] == capability["parameter_schema_id"]
+    route = capability["native_mapping"]["source"].removeprefix("POST ")
+
+    engine, sessions, digest = await _store(tmp_path)
+    try:
+        async with await _client(sessions) as client:
+            preview = await client.post(
+                "/api/molbio/restriction/digests/simulate", json=_preview_request(digest)
+            )
+            assert preview.status_code == 200, preview.text
+            request = {
+                **_preview_request(digest),
+                "schema": "bms.molbio.restriction-digest-save-request.v1",
+                "simulation_sha256": preview.json()["simulation_sha256"],
+                "idempotency_key": "registered-schema-exact-route",
+                "persistence_mode": "operation_and_fragments",
+                "fragment_name_prefix": "Schema parity fragment",
+            }
+            assert not list(Draft202012Validator(schema).iter_errors(request))
+            saved = await client.post(route, json=request)
+            assert saved.status_code == 200, saved.text
+            readback = await client.get(f"{route}/{saved.json()['operation_id']}")
+            assert readback.status_code == 200, readback.text
+            assert readback.content == saved.content
+            assert readback.json()["source_revision_id"] == "source-revision"
+            assert len(readback.json()["outputs"]) == 2
+    finally:
+        await engine.dispose()
 
 
 async def _immutable_digest_rows(connection, operation_id: str) -> dict[str, tuple[tuple, ...]]:

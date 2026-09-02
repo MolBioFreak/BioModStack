@@ -1,71 +1,69 @@
 {
   "$id": "bms.operation-parameters.molbio.restriction_digest.v2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "molbio.restriction_digest operation v2",
+  "title": "molbio.restriction_digest exact public save request v2",
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "schema": {"const": "bms.molbio.restriction-digest-save-request.v1"},
     "source": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "kind": {"const": "molecular_revision"},
         "sequence_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "revision_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "expected_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "topology": {
+          "oneOf": [
+            {"enum": ["linear", "circular"]},
+            {"type": "null"}
+          ]
+        }
       },
-      "required": ["sequence_id", "revision_id", "content_sha256"]
+      "required": ["kind", "sequence_id", "revision_id", "expected_content_sha256"]
     },
     "catalog": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "catalog_id": {"const": "biopython-rebase-404-bms-v1"},
-        "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "catalog_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "expected_catalog_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       },
-      "required": ["catalog_id", "content_sha256"]
+      "required": ["catalog_id", "expected_catalog_sha256"]
     },
     "enzyme_ids": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 256,
+      "maxItems": 64,
       "uniqueItems": true,
       "items": {"type": "string", "minLength": 1, "maxLength": 128}
     },
-    "simulation_policy": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "algorithm_id": {"const": "bms-restriction-digest"},
-        "algorithm_version": {"const": "1"},
-        "topology": {"enum": ["linear", "circular"]},
-        "recognition_certainty": {"const": "definite_only"},
-        "unknown_geometry": {"const": "reject"},
-        "linear_out_of_bounds": {"const": "reject"},
-        "overlapping_geometry": {"const": "reject_non_identical"},
-        "circular_coordinates": {"const": "modulo_with_unwrapped_derivation"}
-      },
-      "required": ["algorithm_id", "algorithm_version", "topology", "recognition_certainty", "unknown_geometry", "linear_out_of_bounds", "overlapping_geometry", "circular_coordinates"]
+    "simulation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": ".*\\S.*"
     },
-    "result_binding": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "simulation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-      },
-      "required": ["request_sha256", "simulation_sha256"]
-    },
-    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 255},
     "persistence_mode": {"enum": ["operation_only", "operation_and_fragments"]},
     "fragment_name_prefix": {
       "oneOf": [
-        {"type": "string", "minLength": 1, "maxLength": 128},
+        {"type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*"},
         {"type": "null"}
       ]
     }
   },
-  "required": ["source", "catalog", "enzyme_ids", "simulation_policy", "result_binding", "idempotency_key", "persistence_mode", "fragment_name_prefix"],
-  "x-bms-authority-state": "new_write_authority_contract_frozen_runtime_not_yet_implemented",
+  "required": [
+    "schema",
+    "source",
+    "catalog",
+    "enzyme_ids",
+    "simulation_sha256",
+    "idempotency_key",
+    "persistence_mode"
+  ],
+  "x-bms-authority-state": "active_exact_public_save_request",
   "x-bms-coordinate-contract": "docs/contracts/restriction-enzyme-catalog-api-v2.md",
   "x-bms-predecessor": {
     "schema_id": "bms.operation-parameters.molbio.restriction_digest.v1",
@@ -73,5 +71,5 @@
     "new_writes_forbidden": true
   },
   "x-bms-browser-authority-forbidden": ["site", "cut_index", "chemistry", "recognition", "cleavage"],
-  "x-bms-unknown-fields": "reject_before_preparation"
+  "x-bms-unknown-fields": "reject_before_route_execution"
 }

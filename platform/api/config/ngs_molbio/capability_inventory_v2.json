@@ -959,13 +959,13 @@
         "fragment_name_prefix",
         "idempotency_key",
         "persistence_mode",
-        "result_binding",
-        "simulation_policy",
+        "schema",
+        "simulation_sha256",
         "source"
       ],
       "entrypoint_owner": null,
       "exposure_state": "internal",
-      "inventory_sha256": "19a16a4da2acc48947628a27dd66fc071a661a423b62ef5af536ae05e96a10e2",
+      "inventory_sha256": "3f3f4bea7f2acb0297cdf5b712be87a7b264eb74f23c2a7cff025793a33cf5a7",
       "label": "Restriction Digest",
       "launch_mode": "domain_operation",
       "materializer_owner": null,
@@ -981,20 +981,20 @@
         "fragment_name_prefix",
         "idempotency_key",
         "persistence_mode",
-        "result_binding",
-        "simulation_policy",
+        "schema",
+        "simulation_sha256",
         "source"
       ],
       "parameter_schema_id": "bms.operation-parameters.molbio.restriction_digest.v2",
-      "parameter_schema_sha256": "2a1b5f9027343c620190e76b9ad3a467ca4ba6d4aa29fd7f7179502e1418717f",
+      "parameter_schema_sha256": "470f0544b7a4df7673400ffd51f312bf6f24227991df77127db081a7ae4b9350",
       "parity_ledger": [
         {
-          "evidence": "The v2 immutable source/catalog/enzyme-ID contract is frozen; v1 is legacy/inexact read compatibility only.",
+          "evidence": "The registered v2 schema is the exact strict public DigestSaveRequest accepted by the advertised POST route; v1 is legacy/inexact read compatibility only.",
           "gate": "installed_inventory",
           "state": "pass"
         },
         {
-          "evidence": "Closed v2 schema bytes and digest are registered; caller-supplied site, cut_index, and chemistry are forbidden.",
+          "evidence": "Closed v2 save-request bytes and digest are registered; legacy aliases, simulation_policy, result_binding, and caller geometry are forbidden.",
           "gate": "global_schema",
           "state": "pass"
         },
@@ -2908,7 +2908,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "661468e1f9991b8fa01ed6db0106d2da7b70a35059477b8cf4d560070dad455f",
+  "content_sha256": "6ade70b8bafb6905cab443a4705103d8a773ad5c97bb6eba81c2369ddcaa4fb0",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2934,7 +2934,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v2",
-  "schema_registry_sha256": "4f1d98e9d898dcd0c5dab73b5c890c93e47cfd3629d12272ce59ee8dd7026d7c",
+  "schema_registry_sha256": "d6d22268a675a979a6537efb820dd404fa02d10cb7241a5d4a02d24c49fc7c0a",
   "schema_version": 2,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

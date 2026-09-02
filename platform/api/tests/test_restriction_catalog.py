@@ -324,7 +324,7 @@ def test_catalog_and_v2_operation_schemas_are_closed_and_valid() -> None:
     assert catalog_schema["$id"] == "bms.molbio.restriction-enzyme-catalog.v1"
     assert operation_schema["additionalProperties"] is False
     assert operation_schema["$id"] == "bms.operation-parameters.molbio.restriction_digest.v2"
-    for authority in ("source", "catalog", "simulation_policy", "result_binding"):
+    for authority in ("source", "catalog"):
         assert operation_schema["properties"][authority]["additionalProperties"] is False
 
 
@@ -406,49 +406,93 @@ def test_catalog_schema_rejects_missing_or_same_strand_nick_reverse_orientation(
     assert list(validator.iter_errors(same_strand))
 
 
-def test_v2_operation_contract_requires_exact_authorities_and_rejects_browser_geometry() -> None:
-    schema = _load(DIGEST_V2_SCHEMA)
+def test_registered_v2_schema_has_exact_digest_save_request_accept_reject_parity() -> None:
+    from pydantic import ValidationError
+    from routers.molbio_restriction import DigestSaveRequest
+
+    registry = _load(SCHEMA_REGISTRY)
+    inventory = _load(CAPABILITY_INVENTORY)
+    capability = next(
+        row for row in inventory["capabilities"] if row["capability_id"] == "molbio.restriction_digest"
+    )
+    schema_id = capability["parameter_schema_id"]
+    registry_row = next(row for row in registry["entries"] if row["schema_id"] == schema_id)
+    schema_path = REPO_ROOT / registry_row["path"]
+    schema = _load(schema_path)
+    assert schema["$id"] == schema_id
     validator = Draft202012Validator(schema)
+
     valid = {
+        "schema": "bms.molbio.restriction-digest-save-request.v1",
         "source": {
+            "kind": "molecular_revision",
             "sequence_id": "sequence-1",
             "revision_id": "revision-7",
-            "content_sha256": "a" * 64,
+            "expected_content_sha256": "a" * 64,
         },
         "catalog": {
             "catalog_id": "biopython-rebase-404-bms-v1",
-            "content_sha256": "b" * 64,
+            "expected_catalog_sha256": "b" * 64,
         },
         "enzyme_ids": ["EcoRI"],
-        "simulation_policy": {
-            "algorithm_id": "bms-restriction-digest",
-            "algorithm_version": "1",
-            "topology": "linear",
-            "recognition_certainty": "definite_only",
-            "unknown_geometry": "reject",
-            "linear_out_of_bounds": "reject",
-            "overlapping_geometry": "reject_non_identical",
-            "circular_coordinates": "modulo_with_unwrapped_derivation",
-        },
-        "result_binding": {
-            "request_sha256": "c" * 64,
-            "simulation_sha256": "d" * 64,
-        },
+        "simulation_sha256": "d" * 64,
         "idempotency_key": "digest-sequence-1-r7",
         "persistence_mode": "operation_only",
-        "fragment_name_prefix": None,
     }
-    assert not list(validator.iter_errors(valid))
-    for forbidden in (
-        {"site": "GAATTC"},
-        {"cut_index": 3},
-        {"chemistry": "invented"},
-    ):
-        invalid = copy.deepcopy(valid)
-        invalid["enzyme_ids"] = [{"enzyme_id": "EcoRI", **forbidden}]
-        assert list(validator.iter_errors(invalid)), forbidden
-    invalid_root = {**valid, "site": "GAATTC"}
-    assert list(validator.iter_errors(invalid_root))
+    accepted = [
+        valid,
+        {**valid, "fragment_name_prefix": None},
+        {**valid, "persistence_mode": "operation_and_fragments", "fragment_name_prefix": "EcoRI fragment"},
+        {**valid, "source": {**valid["source"], "topology": "linear"}},
+        {**valid, "source": {**valid["source"], "topology": "circular"}},
+        {**valid, "source": {**valid["source"], "topology": None}},
+        {**valid, "enzyme_ids": [f"enzyme-{index}" for index in range(64)]},
+    ]
+
+    legacy_policy = {
+        "algorithm_id": "bms-restriction-digest", "algorithm_version": "1", "topology": "linear",
+    }
+    rejected: dict[str, dict[str, object]] = {
+        "missing_discriminator": {key: value for key, value in valid.items() if key != "schema"},
+        "wrong_discriminator": {**valid, "schema": "bms.molbio.restriction-digest-simulation-request.v1"},
+        "missing_source_kind": {**valid, "source": {key: value for key, value in valid["source"].items() if key != "kind"}},
+        "inline_source": {**valid, "source": {"kind": "inline_dna", "name": "x", "dna": "ACGT", "topology": "linear"}},
+        "source_content_alias": {**valid, "source": {"kind": "molecular_revision", "sequence_id": "sequence-1", "revision_id": "revision-7", "content_sha256": "a" * 64}},
+        "catalog_content_alias": {**valid, "catalog": {"catalog_id": "biopython-rebase-404-bms-v1", "content_sha256": "b" * 64}},
+        "missing_catalog_digest": {**valid, "catalog": {"catalog_id": "biopython-rebase-404-bms-v1"}},
+        "simulation_policy": {**valid, "simulation_policy": legacy_policy},
+        "result_binding": {**valid, "result_binding": {"request_sha256": "c" * 64, "simulation_sha256": "d" * 64}},
+        "too_many_enzymes": {**valid, "enzyme_ids": [f"enzyme-{index}" for index in range(65)]},
+        "duplicate_enzyme": {**valid, "enzyme_ids": ["EcoRI", "EcoRI"]},
+        "unknown_root": {**valid, "site": "GAATTC"},
+        "unknown_source": {**valid, "source": {**valid["source"], "content_length": 10}},
+        "unknown_catalog": {**valid, "catalog": {**valid["catalog"], "catalog_version": "1"}},
+        "bad_topology": {**valid, "source": {**valid["source"], "topology": "plasmid"}},
+        "bad_simulation_sha": {**valid, "simulation_sha256": "D" * 64},
+        "blank_idempotency": {**valid, "idempotency_key": "   "},
+        "long_idempotency": {**valid, "idempotency_key": "x" * 256},
+        "bad_persistence_mode": {**valid, "persistence_mode": "fragments_only"},
+        "blank_fragment_name": {**valid, "fragment_name_prefix": "   "},
+    }
+
+    for label, payload in [(f"accepted-{index}", item) for index, item in enumerate(accepted)]:
+        DigestSaveRequest.model_validate(payload)
+        assert not list(validator.iter_errors(payload)), label
+    for label, payload in rejected.items():
+        with pytest.raises(ValidationError):
+            DigestSaveRequest.model_validate(payload)
+        assert list(validator.iter_errors(payload)), label
+
+    assert capability["accepted_source_roles"] == ["molecular_revision"]
+    expected_keys = {
+        "schema", "source", "catalog", "enzyme_ids", "simulation_sha256",
+        "idempotency_key", "persistence_mode", "fragment_name_prefix",
+    }
+    assert set(capability["observed_parameter_keys"]) == expected_keys
+    assert set(capability["classified_parameter_keys"]) == expected_keys
+    assert capability["native_mapping"]["native_request_compatibility"] == "exact"
+    assert capability["materializer_owner"] is None
+    assert schema["x-bms-authority-state"] == "active_exact_public_save_request"
 
 
 def test_active_registry_and_inventory_select_v2_without_geometry_authority() -> None:
