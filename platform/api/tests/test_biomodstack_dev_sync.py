@@ -299,6 +299,46 @@ def test_candidate_runtime_authority_accepts_exact_final_tree(monkeypatch) -> No
     }
 
 
+def test_candidate_runtime_authority_accepts_258_governed_paths(monkeypatch) -> None:
+    sync = load_module()
+    source_sha = hashlib.sha256(b"current source\n").hexdigest()
+    blobs = _authority_blobs(runtime_bytes=_runtime_record(source_sha=source_sha))
+    denominator = json.loads(blobs[sync.RUNTIME_DENOMINATOR_PATH])
+    runtime = json.loads(blobs[sync.RUNTIME_IMPLEMENTATION_PATH])
+    authorities = {row["path"]: row for row in runtime["source_authorities"]}
+
+    for index in range(256):
+        path = f"runtime/source_{index:03d}.py"
+        raw = f"governed source {index}\n".encode()
+        blobs[path] = raw
+        denominator["paths"].append(path)
+        authorities[path] = {
+            "path": path,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size_bytes": len(raw),
+        }
+
+    denominator["paths"] = sorted(denominator["paths"])
+    denominator["content_sha256"] = _content_sha256(denominator)
+    denominator_bytes = json.dumps(denominator).encode()
+    blobs[sync.RUNTIME_DENOMINATOR_PATH] = denominator_bytes
+    authorities[sync.RUNTIME_DENOMINATOR_PATH] = {
+        "path": sync.RUNTIME_DENOMINATOR_PATH,
+        "sha256": hashlib.sha256(denominator_bytes).hexdigest(),
+        "size_bytes": len(denominator_bytes),
+    }
+    runtime["source_denominator"]["content_sha256"] = denominator["content_sha256"]
+    runtime["source_authorities"] = sorted(authorities.values(), key=lambda row: row["path"])
+    runtime["content_sha256"] = _content_sha256(runtime)
+    blobs[sync.RUNTIME_IMPLEMENTATION_PATH] = json.dumps(runtime).encode()
+    monkeypatch.setattr(sync, "_git_blob", lambda _root, _revision, path: blobs[path])
+    monkeypatch.setattr(sync, "_candidate_tree_without_record", lambda _root, _revision: "3" * 40)
+
+    result = sync.validate_candidate_runtime_authority(Path("/repo"), "a" * 40)
+
+    assert result["runtime_source_count"] == 258
+
+
 def test_candidate_tree_forces_index_only_runtime_record_removal(monkeypatch, tmp_path: Path) -> None:
     sync = load_module()
     calls: list[tuple[str, ...]] = []
