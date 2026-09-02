@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const layoutSource = () => readFileSync(join(process.cwd(), 'src', 'components', 'Layout.tsx'), 'utf8');
+const appSource = () => readFileSync(join(process.cwd(), 'src', 'App.tsx'), 'utf8');
+const dashboardTelemetrySource = () => readFileSync(join(process.cwd(), 'src', 'components', 'dashboard', 'DashboardTelemetry.tsx'), 'utf8');
 
 test('mobile top bar collapses utility controls behind a Tools menu', () => {
     const source = layoutSource();
@@ -46,6 +48,21 @@ test('NGS primary navigation clears unrelated page query state', () => {
 
     assert.ok(ngsLink.includes('to="/ngs"'), 'NGS primary navigation must open the clean launcher route');
     assert.ok(!ngsLink.includes('location.search'), 'NGS primary navigation must not inherit stale job or result query state');
+});
+
+test('Dashboard owns local, Vast, and combined analytics without a separate navigation tab', () => {
+    const layout = layoutSource();
+    const app = appSource();
+    const telemetry = dashboardTelemetrySource();
+
+    assert.ok(!layout.includes('to="/infra"'), 'primary navigation must not expose a separate System Analytics tab');
+    assert.ok(!layout.includes('System Analytics'), 'obsolete System Analytics navigation copy must be removed');
+    assert.ok(app.includes('<Route path="/infra" element={<Navigate replace to="/" />} />'), 'historical analytics URLs must redirect to Dashboard');
+    assert.ok(!app.includes('InfraMonitorPage'), 'the separate analytics page must not remain in the application bundle');
+    assert.ok(telemetry.includes('aria-label="Telemetry source"'), 'Dashboard analytics must expose source tabs');
+    assert.ok(telemetry.includes('Vast · {activeVastLabel}'), 'Dashboard analytics must identify the active Vast instance');
+    assert.ok(telemetry.includes('Combined'), 'Dashboard analytics must expose a combined active-source view');
+    assert.ok(telemetry.includes('data-bms-telemetry-combined="true"'), 'combined view must mount local and remote telemetry together');
 });
 
 test('primary navigation rail is separate from utility menus so dropdowns are not clipped', () => {

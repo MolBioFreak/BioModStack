@@ -10,11 +10,10 @@ import {
     useBioXpStatus,
     useConnectBioXp,
     useDisconnectBioXp,
-    useUpdateBioXpFreshness,
+
 
     useBioXpOperatorActionHistory,
     useBioXpOperatorControlCatalog,
-    useBioXpOperatorDashboard,
     useBioXpOperatorDashboardV2,
     useBioXpOperatorControlCatalogV2,
     useBioXpOperatorReceiptV2,
@@ -23,7 +22,6 @@ import {
     useInvokeBioXpDeckActionV2,
     useInvokeBioXpOperatorAction,
     useSubmitBioXpOperatorMethodV1,
-    useRecoverBioXpMotion,
     type BioXpOperatorActionV2Request,
     type BioXpOperatorActionReceipt,
     type BioXpOperatorDashboardXAxis,
@@ -193,11 +191,15 @@ export function BioXpCockpit() {
         currentGenerationRef.current = generation;
     }, [generation]);
     const [historyLimit, setHistoryLimit] = useState<8 | 25 | 50 | 100>(25);
-    const dashboardQuery = useBioXpOperatorDashboard(generation, linkConnected);
-    const dashboardV2Query = useBioXpOperatorDashboardV2(generation, robotControlReady);
-    const currentDashboardV2 = robotControlReady && dashboardV2Query.error == null && !dashboardV2Query.isStale
-        ? dashboardV2Query.data
+    const [reportsOpen, setReportsOpen] = useState(false);
+    const [advancedOpen, setAdvancedOpen] = useState(false);
+    const [cameraOpen, setCameraOpen] = useState(false);
+    const [pipettesOpen, setPipettesOpen] = useState(false);
+    const dashboardQuery = useBioXpOperatorDashboardV2(generation, robotControlReady);
+    const currentDashboardV2 = robotControlReady && dashboardQuery.error == null && !dashboardQuery.isStale
+        ? dashboardQuery.data
         : undefined;
+    const currentTelemetry = currentDashboardV2?.telemetry ?? undefined;
     const dashboardAuthorityVersion = currentDashboardV2 === undefined ? null : 'fresh-v2-dashboard';
     const catalogV2Query = useBioXpOperatorControlCatalogV2(
         generation,
@@ -205,10 +207,20 @@ export function BioXpCockpit() {
         dashboardAuthorityVersion,
     );
     const [yCommandId, setYCommandId] = useState<string | null>(null);
+    const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
+    const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
+    const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.recover_motion_non_homing' | null>(null);
     const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
     const [deckCommandId, setDeckCommandId] = useState<string | null>(null);
     const [yMutationGeneration, setYMutationGeneration] = useState<number | null>(null);
+    const [zHomeMutationGeneration, setZHomeMutationGeneration] = useState<number | null>(null);
+    const [lifecycleMutationGeneration, setLifecycleMutationGeneration] = useState<number | null>(null);
     const [deckMutationGeneration, setDeckMutationGeneration] = useState<number | null>(null);
+    const lifecycleGenerationCurrent = lifecycleMutationGeneration === generation;
+    const zHomeGenerationCurrent = zHomeMutationGeneration === generation;
+    const currentZHomeCommandId = zHomeGenerationCurrent ? zHomeCommandId : null;
+    const currentLifecycleCommandId = lifecycleGenerationCurrent ? lifecycleCommandId : null;
+    const currentLifecycleActionId = lifecycleGenerationCurrent ? lifecycleActionId : null;
     const [deckTarget, setDeckTarget] = useState('');
     const [yStepInput, setYStepInput] = useState(1000);
     const [yTargetInput, setYTargetInput] = useState(0);
@@ -223,7 +235,10 @@ export function BioXpCockpit() {
         ?? yAxisV2?.latest_compact_receipt?.command_id
         ?? null;
     const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, robotControlReady);
+    const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, robotControlReady);
+    const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
     const deckReceiptQuery = useBioXpOperatorReceiptV2(deckCommandId, generation, robotControlReady);
+    const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const invokeDeckAction = useInvokeBioXpDeckActionV2();
     const interruptXStop = useInterruptBioXpOperatorActionV1();
@@ -232,22 +247,20 @@ export function BioXpCockpit() {
     const interruptZAbort = useInterruptBioXpOperatorActionV1();
     const interruptAggregateAbort = useInterruptBioXpOperatorActionV1();
     const invokeXYMethod = useSubmitBioXpOperatorMethodV1();
-    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
+    const historyQuery = useBioXpOperatorActionHistory(generation, false, historyLimit);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
     const operatorCatalog = useBioXpOperatorControlCatalog(
         generation,
-        linkConnected,
-        dashboardQuery.data?.x_axis?.provider?.lifecycle?.state ?? dashboardQuery.data?.x_axis?.provider?.state ?? null,
+        linkConnected && advancedOpen,
+        null,
     );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
     const emergencyAction = useInvokeBioXpOperatorAction();
 
-    const recoverMotion = useRecoverBioXpMotion();
-    const updateFreshness = useUpdateBioXpFreshness();
     const resetInvokeOperatorAction = invokeOperatorAction.reset;
     const resetEmergencyAction = emergencyAction.reset;
-    const resetRecoverMotion = recoverMotion.reset;
+    const resetInvokeLifecycleAction = invokeLifecycleActionMutation.reset;
     const resetInvokeYAction = invokeYAction.reset;
     const resetInvokeDeckAction = invokeDeckAction.reset;
     const resetInterruptXStop = interruptXStop.reset;
@@ -266,35 +279,16 @@ export function BioXpCockpit() {
         z: 65000,
         g: 0,
     });
-    const [freshnessMinutes, setFreshnessMinutes] = useState('30');
-    const [freshnessDisabled, setFreshnessDisabled] = useState(false);
+
     const catalog = !linkConnected || operatorCatalog.isError ? undefined : operatorCatalog.data;
-    const dashboard = !linkConnected || dashboardQuery.isError ? undefined : dashboardQuery.data;
+    const dashboard = !robotControlReady || dashboardQuery.isError ? undefined : currentTelemetry;
     const ownershipGeneration = catalog?.ownership_generation ?? 0;
-    useEffect(() => {
-        const budget = connection?.freshness_budget_seconds;
-        if (budget === undefined) return;
-        setFreshnessDisabled(budget === null);
-        if (budget !== null) setFreshnessMinutes(String(Number((budget / 60).toFixed(2))));
-    }, [connection?.freshness_budget_seconds]);
-    const saveFreshness = () => {
-        if (freshnessDisabled) {
-            updateFreshness.mutate(null);
-            return;
-        }
-        const minutes = Number(freshnessMinutes);
-        if (Number.isFinite(minutes) && minutes > 0) updateFreshness.mutate(minutes * 60);
-    };
-    const freshnessSummary = connection?.freshness_budget_seconds == null
-        ? 'Disabled — no BMS observation-age expiry'
-        : `${Math.round(connection.freshness_budget_seconds / 60)} minutes`;
 
     const ownership = connection?.ownership;
-    const maintenance = connection?.maintenance_state;
     const ownershipLabel = ownership
         ? `${ownership.transport ?? 'unknown'} / ${ownership.usb ?? 'unknown'} / ${ownership.router ?? 'unknown'}`
         : 'Unavailable';
-    const motionControlsAvailable = dashboard === undefined
+    const motionControlsAvailable = dashboard === undefined || connection?.hardware_fresh !== true
         ? undefined
         : dashboard.motion.enabled === true;
     const motionLabel = motionControlsAvailable === true
@@ -309,15 +303,20 @@ export function BioXpCockpit() {
     useEffect(() => {
         resetInvokeOperatorAction();
         resetEmergencyAction();
-        resetRecoverMotion();
-    }, [generation, linkConnected, resetEmergencyAction, resetInvokeOperatorAction, resetRecoverMotion]);
+    }, [generation, linkConnected, resetEmergencyAction, resetInvokeOperatorAction]);
     useEffect(() => {
         setYCommandId(null);
+        setZHomeCommandId(null);
+        setLifecycleCommandId(null);
+        setLifecycleActionId(null);
         setYPendingActionId(null);
         setDeckCommandId(null);
         setYMutationGeneration(null);
+        setZHomeMutationGeneration(null);
+        setLifecycleMutationGeneration(null);
         setDeckMutationGeneration(null);
         resetInvokeYAction();
+        resetInvokeLifecycleAction();
         resetInvokeDeckAction();
         resetInterruptXStop();
         resetInterruptYStop();
@@ -325,7 +324,7 @@ export function BioXpCockpit() {
         resetInterruptZAbort();
         resetInterruptAggregateAbort();
         resetInvokeXYMethod();
-    }, [generation, linkConnected, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZAbort, resetInterruptZStop, resetInvokeDeckAction, resetInvokeXYMethod, resetInvokeYAction]);
+    }, [generation, linkConnected, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZAbort, resetInterruptZStop, resetInvokeDeckAction, resetInvokeLifecycleAction, resetInvokeXYMethod, resetInvokeYAction]);
     const interruptMutation = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all') => {
         if (actionId === 'oem.x.stop') return interruptXStop;
         if (actionId === 'oem.y.stop') return interruptYStop;
@@ -335,8 +334,8 @@ export function BioXpCockpit() {
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptZAbort.isPending || interruptAggregateAbort.isPending;
-    const busy = invokeOperatorAction.isPending || invokeYAction.isPending || invokeDeckAction.isPending || invokeXYMethod.isPending || interruptAnyPending || emergencyAction.isPending || recoverMotion.isPending || updateFreshness.isPending;
-    const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeYAction.data ?? invokeXYMethod.data ?? invokeOperatorAction.data;
+    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || invokeXYMethod.isPending || interruptAnyPending || emergencyAction.isPending;
+    const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? invokeXYMethod.data ?? invokeOperatorAction.data;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -502,12 +501,28 @@ export function BioXpCockpit() {
         mutation.mutate({ actionId, connectionGeneration: generation, ownershipGeneration, inputs });
     };
 
-    const claimTransport = () => invokeAction('meta.activate_motion', {});
-
-    const recoverMotionNonHoming = () => recoverMotion.mutate({
-        generation,
-        reason: 'BMS operator requested exact non-homing recovery',
-    });
+    const invokeLifecycleAction = (actionId: 'meta.activate_motion' | 'meta.recover_motion_non_homing') => {
+        if (v2ActionDisabledReason(actionId) !== null) return;
+        const envelope = v2NormalEnvelope();
+        if (!envelope) return;
+        const submittedGeneration = generation;
+        setLifecycleMutationGeneration(submittedGeneration);
+        setLifecycleActionId(actionId);
+        setLifecycleCommandId(null);
+        invokeLifecycleActionMutation.mutate({ request: { ...envelope, action_id: actionId, inputs: {} } }, {
+            onSuccess: (receipt) => {
+                if (currentGenerationRef.current !== submittedGeneration) return;
+                setLifecycleCommandId(receipt.command_id);
+            },
+            onError: (error) => {
+                if (currentGenerationRef.current !== submittedGeneration) return;
+                const identity = bioXpPostDispatchCommandIdentity(error);
+                if (identity !== null) setLifecycleCommandId(identity.commandId);
+            },
+        });
+    };
+    const claimTransport = () => invokeLifecycleAction('meta.activate_motion');
+    const recoverMotionNonHoming = () => invokeLifecycleAction('meta.recover_motion_non_homing');
 
     const operatorPathForControl = (axis: Axis, operation: Operation): string | null => {
         if (operation === 'move-negative' || operation === 'move-positive') return '/motion/oem/manual/relative';
@@ -626,10 +641,15 @@ export function BioXpCockpit() {
         if (!v2AuthorityCoherent || v2NormalActionById(request.action_id) == null) return;
         const submittedGeneration = generation;
         const tracksY = request.action_id.startsWith('oem.y.');
+        const tracksZHome = request.action_id === 'oem.z.manual_home';
         setYMutationGeneration(submittedGeneration);
         if (tracksY) {
             setYCommandId(null);
             setYPendingActionId(request.action_id);
+        }
+        if (tracksZHome) {
+            setZHomeMutationGeneration(submittedGeneration);
+            setZHomeCommandId(null);
         }
         invokeYAction.mutate({ request }, {
             onSuccess: (receipt) => {
@@ -638,10 +658,15 @@ export function BioXpCockpit() {
                     setYCommandId(receipt.command_id);
                     setYPendingActionId(null);
                 }
+                if (tracksZHome) setZHomeCommandId(receipt.command_id);
             },
-            onError: () => {
+            onError: (error) => {
                 if (currentGenerationRef.current !== submittedGeneration) return;
                 if (tracksY) setYPendingActionId(null);
+                if (tracksZHome) {
+                    const identity = bioXpPostDispatchCommandIdentity(error);
+                    if (identity !== null) setZHomeCommandId(identity.commandId);
+                }
             },
         });
     };
@@ -755,6 +780,19 @@ export function BioXpCockpit() {
     const yStopDisabled = !linkConnected || generation <= 0 || interruptPending('oem.y.stop');
 
     const currentYInvokeError = yMutationGeneration === generation ? invokeYAction.error : null;
+    const currentLifecycleInvokeError = lifecycleMutationGeneration === generation ? invokeLifecycleActionMutation.error : null;
+    const lifecycleReceiptCandidate = lifecycleGenerationCurrent
+        ? lifecycleReceiptQuery.data ?? invokeLifecycleActionMutation.data
+        : undefined;
+    const lifecycleReceipt = currentLifecycleActionId !== null && lifecycleReceiptCandidate?.action_id === currentLifecycleActionId
+        ? lifecycleReceiptCandidate
+        : undefined;
+    const lifecycleFailureDetail = lifecycleReceipt?.error?.detail;
+    const zHomeReceipt = zHomeGenerationCurrent
+        && zHomeReceiptQuery.data?.action_id === 'oem.z.manual_home'
+        ? zHomeReceiptQuery.data
+        : undefined;
+    const zHomeFailureDetail = zHomeReceipt?.error?.detail;
     const currentDeckInvokeError = deckMutationGeneration === generation ? invokeDeckAction.error : null;
     const deckReceiptActionMismatch = deckReceiptQuery.data != null
         && deckReceiptQuery.data.action_id !== 'oem.deck.move_to_location';
@@ -771,7 +809,7 @@ export function BioXpCockpit() {
         : value === false
             ? negative
             : 'unknown';
-    const error = currentDeckInvokeError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? recoverMotion.error ?? updateFreshness.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
+    const error = currentDeckInvokeError ?? currentLifecycleInvokeError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -824,45 +862,6 @@ export function BioXpCockpit() {
                 </dl>
             </section>
 
-            <section className="rounded-xl border border-cyan-800/70 bg-cyan-950/20 p-4">
-                <h2 className="text-lg font-semibold">Hardware evidence freshness</h2>
-                <p className="mt-1 text-sm text-slate-300">
-                    BMS observation expiry defaults to 30 minutes. Disable it completely when desired; this does not fabricate a missing snapshot or override robot-owned hardware validity.
-                </p>
-                <div className="mt-3 flex flex-wrap items-end gap-3">
-                    <label className="flex items-center gap-2 text-sm text-slate-200">
-                        <input
-                            type="checkbox"
-                            checked={freshnessDisabled}
-                            onChange={(event) => setFreshnessDisabled(event.target.checked)}
-                        />
-                        Disable BMS age expiry
-                    </label>
-                    <label className="text-sm text-slate-300">
-                        Window (minutes)
-                        <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            disabled={freshnessDisabled}
-                            value={freshnessMinutes}
-                            onChange={(event) => setFreshnessMinutes(event.target.value)}
-                            className="ml-2 w-28 rounded border border-slate-700 bg-slate-950 p-2 font-mono text-sm disabled:opacity-40"
-                        />
-                    </label>
-                    <button
-                        type="button"
-                        disabled={!configured || !linkConnected || updateFreshness.isPending || (!freshnessDisabled && !(Number(freshnessMinutes) > 0))}
-                        onClick={saveFreshness}
-                        className={actionClass}
-                    >{updateFreshness.isPending ? 'Saving…' : 'Save freshness policy'}</button>
-                </div>
-                <p className="mt-2 text-sm text-cyan-100">Current policy: {freshnessSummary}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                    Automatic OEM snapshots: {connection?.automatic_snapshot_refresh?.published === true ? 'last collection published successfully' : 'collector awaiting its next refresh cycle'}.
-                </p>
-            </section>
-
             <BioXpQuickDashboard
                 connected={linkConnected}
                 data={dashboard}
@@ -871,7 +870,10 @@ export function BioXpCockpit() {
                 motionControlsAvailable={motionControlsAvailable}
             />
 
-            <BioXpOperatorReports generation={generation} connected={linkConnected} />
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={reportsOpen} onToggle={(event) => setReportsOpen(event.currentTarget.open)}>
+                <summary className="cursor-pointer text-lg font-semibold">Operator reports</summary>
+                {reportsOpen && <div className="mt-4"><BioXpOperatorReports generation={generation} connected={linkConnected} /></div>}
+            </details>
 
             <section className="rounded-xl border border-amber-700/60 bg-amber-950/20 p-4">
                 <h2 className="text-lg font-semibold">Controller Activation & Recovery</h2>
@@ -879,30 +881,44 @@ export function BioXpCockpit() {
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
-                        disabled={!linkConnected || operatorActionById('meta.activate_motion')?.enabled !== true || busy}
-                        title={operatorActionById('meta.activate_motion')?.disabled_reason ?? 'Robot-owned OEM activation'}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
+                        title={v2ActionDisabledReason('meta.activate_motion') ?? 'Robot-owned OEM activation'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Activate 24 V / Prepare Motion</button>
                     <button
                         type="button"
-                        disabled={!linkConnected || maintenance?.recovery_required !== true || busy}
-                        title={maintenance?.recovery_required === true ? 'Robot-authoritative non-homing recovery' : 'Recovery is not currently required'}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
+                        title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
                         onClick={recoverMotionNonHoming}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Non-homing Recovery</button>
                 </div>
-                {operatorActionById('meta.activate_motion')?.enabled !== true && (
+                {v2ActionDisabledReason('meta.activate_motion') !== null && (
                     <p className="mt-2 text-sm text-amber-100">
-                        Activate: {operatorActionById('meta.activate_motion')?.disabled_reason ?? 'Robot action unavailable.'}
+                        Activate: {v2ActionDisabledReason('meta.activate_motion')}
                     </p>
                 )}
-                {recoverMotion.error && (
-                    <p role="alert" className="mt-2 break-words text-sm text-red-300">Non-homing recovery failed: {bioXpErrorText(recoverMotion.error)}</p>
+                {(currentLifecycleActionId !== null || lifecycleReceipt !== undefined || currentLifecycleInvokeError !== null) && (
+                    <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Action</dt><dd className="font-mono">{currentLifecycleActionId ?? '—'}</dd></div>
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="break-all font-mono">{currentLifecycleCommandId ?? lifecycleReceipt?.command_id ?? '—'}</dd></div>
+                        <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{lifecycleReceipt?.status ?? (invokeLifecycleActionMutation.isPending ? 'submitting' : 'unavailable')}</dd></div>
+                    </dl>
                 )}
-                {linkConnected && catalog && !historyQuery.isError && recoverMotion.data && (
-                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-amber-800 p-2 text-xs text-cyan-200">{JSON.stringify(recoverMotion.data, null, 2)}</pre>
+                {lifecycleFailureDetail && (
+                    <div role="alert" className="mt-3 rounded border border-red-700/70 bg-red-950/30 p-3 text-sm text-red-100">
+                        <p className="font-semibold">{lifecycleFailureDetail.failure}</p>
+                        <p>Provider failure: <span className="font-mono">{lifecycleFailureDetail.provider_failure}</span></p>
+                        <p>{`Axis ${lifecycleFailureDetail.axis} · Board ${lifecycleFailureDetail.board} · Motor ${lifecycleFailureDetail.motor} · Source return ${lifecycleFailureDetail.source_return_code}`}</p>
+                        <p>{`Controller acknowledged: ${lifecycleFailureDetail.controller_acknowledged ? 'yes' : 'no'}`}</p>
+                        <p>{`Terminal state verified: ${lifecycleFailureDetail.controller_terminal_state_verified ? 'yes' : 'no'}`}</p>
+                        <p>{`Physical effect verified: ${lifecycleFailureDetail.physical_effect_verified ? 'yes' : 'no'}`}</p>
+                        <p>{`Lifecycle: ${lifecycleFailureDetail.lifecycle_state} · Reference: ${lifecycleFailureDetail.reference_state}`}</p>
+                    </div>
                 )}
+                <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} />
+                <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 
             <section data-testid="oem-deck-movement" className="rounded-xl border border-teal-700/60 bg-teal-950/20 p-4">
@@ -1278,23 +1294,37 @@ export function BioXpCockpit() {
                                     );
                                 })}
                             </div>
+                            {axis === 'z' && zHomeFailureDetail && (
+                                <div role="alert" className="mt-3 rounded border border-red-700/70 bg-red-950/30 p-3 text-sm text-red-100">
+                                    <p className="font-semibold">{zHomeFailureDetail.failure}</p>
+                                    <p>Provider failure: <span className="font-mono">{zHomeFailureDetail.provider_failure}</span></p>
+                                    <p>{`Axis ${zHomeFailureDetail.axis} · Board ${zHomeFailureDetail.board} · Motor ${zHomeFailureDetail.motor} · Source return ${zHomeFailureDetail.source_return_code}`}</p>
+                                    <p>{`Controller acknowledged: ${zHomeFailureDetail.controller_acknowledged ? 'yes' : 'no'}`}</p>
+                                    <p>{`Terminal state verified: ${zHomeFailureDetail.controller_terminal_state_verified ? 'yes' : 'no'}`}</p>
+                                    <p>{`Physical effect verified: ${zHomeFailureDetail.physical_effect_verified ? 'yes' : 'no'}`}</p>
+                                    <p>{`Lifecycle: ${zHomeFailureDetail.lifecycle_state} · Reference: ${zHomeFailureDetail.reference_state}`}</p>
+                                </div>
+                            )}
                         </article>
                     ))}
                 </div>
-                <BioXpPipetteControlPanel
-                    generation={generation}
-                    connected={robotControlReady && operatorCatalog.data !== undefined}
-                    pipettes={operatorCatalog.data?.dashboard.pipettes}
-                    freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
-                    actions={catalog?.actions}
-                    catalogLoading={operatorCatalog.isLoading}
-                    invokePending={invokeOperatorAction.isPending}
-                    invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
-                />
+                <details className="mt-4 rounded border border-slate-800 bg-slate-950/60 p-3" open={pipettesOpen} onToggle={(event) => setPipettesOpen(event.currentTarget.open)}>
+                    <summary className="cursor-pointer text-sm font-semibold">Pipette controls</summary>
+                    {pipettesOpen && <BioXpPipetteControlPanel
+                        generation={generation}
+                        connected={robotControlReady && operatorCatalog.data !== undefined}
+                        pipettes={operatorCatalog.data?.dashboard.pipettes}
+                        freshness={operatorCatalog.data?.dashboard.snapshot.freshness}
+                        actions={catalog?.actions}
+                        catalogLoading={operatorCatalog.isLoading}
+                        invokePending={invokeOperatorAction.isPending}
+                        invokeAction={(actionId, inputs) => invokeAction(actionId, inputs)}
+                    />}
+                </details>
                 {invokeOperatorAction.error && (
                     <p role="alert" className="mt-3 whitespace-pre-wrap break-words text-sm text-red-300">{bioXpErrorText(invokeOperatorAction.error)}</p>
                 )}
-                {(invokeOperatorAction.isPending || invokeYAction.isPending || invokeDeckAction.isPending || interruptAnyPending) && (
+                {(invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || interruptAnyPending) && (
                     <p role="status" className="mt-3 rounded border border-cyan-800 bg-cyan-950/30 p-2 text-sm text-cyan-100">Command accepted by BMS; waiting for the robot-owned terminal receipt. Stop and Abort remain available.</p>
                 )}
                 {linkConnected && catalog && !historyQuery.isError && latestOperatorReceipt && (
@@ -1305,19 +1335,15 @@ export function BioXpCockpit() {
                 )}
             </section>
 
-            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary className="cursor-pointer text-lg font-semibold">Advanced Full Command Catalog</summary>
-                <p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p>
-                <div className="mt-4">
-                    <BioXpOperatorControlTabs generation={generation} connected={robotControlReady} />
-                </div>
+                {advancedOpen && <><p className="mt-1 text-sm text-slate-400">All primitive, service, recovery, and diagnostic routes. Kept collapsed so handler state and exact manual controls remain primary.</p><div className="mt-4"><BioXpOperatorControlTabs generation={generation} connected={robotControlReady} /></div></>}
             </details>
 
-            <BioXpCameraPanel
-                connected={linkConnected}
-                connectionGeneration={linkConnected ? generation : null}
-                mutationEnabled={status?.mutation_access?.enabled === true}
-            />
+            <details className="rounded-xl border border-slate-800 bg-slate-950/70 p-4" open={cameraOpen} onToggle={(event) => setCameraOpen(event.currentTarget.open)}>
+                <summary className="cursor-pointer text-lg font-semibold">Camera</summary>
+                {cameraOpen && <div className="mt-4"><BioXpCameraPanel connected={linkConnected} connectionGeneration={linkConnected ? generation : null} mutationEnabled={status?.mutation_access?.enabled === true} /></div>}
+            </details>
 
             <section className="rounded-xl border border-red-800/70 bg-red-950/30 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">

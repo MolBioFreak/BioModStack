@@ -1,0 +1,291 @@
+{
+  "$id": "bms.molbio.restriction-enzyme-catalog.v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BioModStack normalized restriction-enzyme catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "bms.molbio.restriction-enzyme-catalog.v1"},
+    "catalog_id": {"const": "biopython-rebase-404-bms-v1"},
+    "generator_version": {"const": "bms-restriction-catalog-generator-v1"},
+    "source": {"$ref": "#/$defs/catalogSource"},
+    "supplier_metadata_policy": {"const": "historical_codes_are_provenance_not_current_availability"},
+    "counts": {"$ref": "#/$defs/counts"},
+    "records": {
+      "type": "array",
+      "minItems": 1092,
+      "maxItems": 1092,
+      "items": {"$ref": "#/$defs/record"}
+    },
+    "content_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "required": ["schema", "catalog_id", "generator_version", "source", "supplier_metadata_policy", "counts", "records", "content_sha256"],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableSha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "nullableString": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+    "nullableInteger": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+    "catalogSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "package": {"const": "biopython"},
+        "package_version": {"const": "1.87"},
+        "module": {"const": "Bio.Restriction.Restriction_Dictionary"},
+        "dictionary_sha256": {"const": "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"},
+        "embedded_rebase_release": {"const": "REBASE_EMBOSS_404_2024"},
+        "supplement_policy": {"const": "reviewed_static_rebase_page_receipts_only"}
+      },
+      "required": ["package", "package_version", "module", "dictionary_sha256", "embedded_rebase_release", "supplement_policy"]
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "biopython_source_records": {"const": 1088},
+        "curated_nickase_supplement_records": {"const": 4},
+        "total_discoverable": {"const": 1092},
+        "geometry_ready_double_strand": {"const": 754},
+        "commercial_geometry_ready_double_strand": {"const": 623},
+        "recognition_only": {"const": 334},
+        "nicking_analysis_only": {"const": 4}
+      },
+      "required": ["biopython_source_records", "curated_nickase_supplement_records", "total_discoverable", "geometry_ready_double_strand", "commercial_geometry_ready_double_strand", "recognition_only", "nicking_analysis_only"]
+    },
+    "recognition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site_iupac": {"type": "string", "pattern": "^[ACGTRYSWKMBDHVN]+$"},
+        "site_alternatives_iupac": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[ACGTRYSWKMBDHVN]+$"}},
+        "source_notation": {"type": "string", "pattern": "^[ACGTRYSWKMBDHVN]+(?:\\|[ACGTRYSWKMBDHVN]+)*$"},
+        "reverse_complement_iupac": {"type": "string", "pattern": "^[ACGTRYSWKMBDHVN]+$"},
+        "reverse_complement_alternatives_iupac": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[ACGTRYSWKMBDHVN]+$"}},
+        "length_bp": {"type": "integer", "minimum": 1},
+        "palindromic": {"type": "boolean"}
+      },
+      "required": ["site_iupac", "site_alternatives_iupac", "source_notation", "reverse_complement_iupac", "reverse_complement_alternatives_iupac", "length_bp", "palindromic"]
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "top_offset": {"type": "integer"},
+        "bottom_offset": {"type": "integer"},
+        "overhang_kind": {"enum": ["blunt", "five_prime", "three_prime"]},
+        "overhang_length_nt": {"type": "integer", "minimum": 0}
+      },
+      "required": ["top_offset", "bottom_offset", "overhang_kind", "overhang_length_nt"],
+      "oneOf": [
+        {"properties": {"overhang_kind": {"const": "blunt"}, "overhang_length_nt": {"const": 0}}},
+        {"properties": {"overhang_kind": {"enum": ["five_prime", "three_prime"]}, "overhang_length_nt": {"minimum": 1}}}
+      ]
+    },
+    "nickOrientation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strand": {"enum": ["top", "bottom"]},
+        "boundary_offset": {"type": "integer"}
+      },
+      "required": ["strand", "boundary_offset"]
+    },
+    "nick": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strand": {"enum": ["top", "bottom"]},
+        "boundary_offset": {"type": "integer"},
+        "reverse_orientation": {"$ref": "#/$defs/nickOrientation"}
+      },
+      "required": ["strand", "boundary_offset", "reverse_orientation"],
+      "oneOf": [
+        {
+          "properties": {
+            "strand": {"const": "top"},
+            "reverse_orientation": {
+              "properties": {"strand": {"const": "bottom"}}
+            }
+          }
+        },
+        {
+          "properties": {
+            "strand": {"const": "bottom"},
+            "reverse_orientation": {
+              "properties": {"strand": {"const": "top"}}
+            }
+          }
+        }
+      ]
+    },
+    "sourceFields": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fst5": {"$ref": "#/$defs/nullableInteger"},
+        "fst3": {"$ref": "#/$defs/nullableInteger"},
+        "scd5": {"$ref": "#/$defs/nullableInteger"},
+        "scd3": {"$ref": "#/$defs/nullableInteger"}
+      },
+      "required": ["fst5", "fst3", "scd5", "scd3"]
+    },
+    "cleavage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {"enum": ["known_double_strand", "known_single_strand_nick", "unknown"]},
+        "events": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/event"}},
+        "nick": {"oneOf": [{"$ref": "#/$defs/nick"}, {"type": "null"}]},
+        "source_fields": {"$ref": "#/$defs/sourceFields"}
+      },
+      "required": ["status", "events", "nick", "source_fields"]
+    },
+    "supplierProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reported_commercial": {"type": "boolean"},
+        "historical_supplier_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "availability_claim": {"const": "not_evaluated"}
+      },
+      "required": ["reported_commercial", "historical_supplier_codes", "availability_claim"]
+    },
+    "relationships": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isoschizomer_group_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "equischizomer_group_id": {"oneOf": [{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, {"type": "null"}]},
+        "equischizomer_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "neoschizomer_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      },
+      "required": ["isoschizomer_group_id", "equischizomer_group_id", "equischizomer_ids", "neoschizomer_ids"]
+    },
+    "recordSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["biopython_restriction_dictionary", "bms_curated_rebase_nickase"]},
+        "record_id": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"type": "null"}]},
+        "canonical_name": {"type": "string", "minLength": 1},
+        "uri": {"$ref": "#/$defs/nullableString"},
+        "package": {"$ref": "#/$defs/nullableString"},
+        "package_version": {"$ref": "#/$defs/nullableString"},
+        "embedded_rebase_release": {"$ref": "#/$defs/nullableString"},
+        "dictionary_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "page_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "retrieved_on": {"$ref": "#/$defs/nullableString"},
+        "record_modified_on": {"$ref": "#/$defs/nullableString"},
+        "source_notation": {"$ref": "#/$defs/nullableString"}
+      },
+      "required": ["kind", "record_id", "canonical_name", "uri", "package", "package_version", "embedded_rebase_release", "dictionary_sha256", "page_sha256", "retrieved_on", "record_modified_on", "source_notation"]
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enzyme_id": {"type": "string", "minLength": 1},
+        "id_policy": {"const": "canonical_name_v1_casefold_unique"},
+        "canonical_name": {"type": "string", "minLength": 1},
+        "aliases": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "recognition": {"$ref": "#/$defs/recognition"},
+        "cleavage": {"$ref": "#/$defs/cleavage"},
+        "enzyme_kind": {"enum": ["double_strand_endonuclease", "nicking_endonuclease", "restriction_enzyme_geometry_unresolved"]},
+        "analysis_capability": {"enum": ["digest_simulation", "nicking_analysis", "recognition_only"]},
+        "golden_gate_compatible": {"type": "boolean"},
+        "exclusion_reason": {"oneOf": [{"enum": ["primary_cut_geometry_incomplete", "nicking_enzyme_not_digestible"]}, {"type": "null"}]},
+        "supplier_provenance": {"$ref": "#/$defs/supplierProvenance"},
+        "relationships": {"$ref": "#/$defs/relationships"},
+        "source": {"$ref": "#/$defs/recordSource"},
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "required": ["enzyme_id", "id_policy", "canonical_name", "aliases", "recognition", "cleavage", "enzyme_kind", "analysis_capability", "exclusion_reason", "supplier_provenance", "relationships", "source", "record_sha256"],
+      "oneOf": [
+        {
+          "title": "Known double-strand cutter",
+          "properties": {
+            "enzyme_kind": {"const": "double_strand_endonuclease"},
+            "analysis_capability": {"const": "digest_simulation"},
+            "exclusion_reason": {"type": "null"},
+            "cleavage": {
+              "properties": {
+                "status": {"const": "known_double_strand"},
+                "nick": {"type": "null"},
+                "source_fields": {"properties": {"fst5": {"type": "integer"}, "fst3": {"type": "integer"}}}
+              },
+              "oneOf": [
+                {"properties": {"events": {"minItems": 1, "maxItems": 1}, "source_fields": {"properties": {"scd5": {"type": "null"}, "scd3": {"type": "null"}}}}},
+                {"properties": {"events": {"minItems": 2, "maxItems": 2}, "source_fields": {"properties": {"scd5": {"type": "integer"}, "scd3": {"type": "integer"}}}}}
+              ]
+            },
+            "source": {"properties": {
+              "kind": {"const": "biopython_restriction_dictionary"},
+              "package": {"const": "biopython"},
+              "package_version": {"const": "1.87"},
+              "embedded_rebase_release": {"const": "REBASE_EMBOSS_404_2024"},
+              "dictionary_sha256": {"const": "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"},
+              "page_sha256": {"type": "null"},
+              "retrieved_on": {"type": "null"},
+              "record_modified_on": {"type": "null"},
+              "source_notation": {"type": "null"}
+            }}
+          }
+        },
+        {
+          "title": "Recognition-only enzyme with unavailable geometry",
+          "properties": {
+            "enzyme_kind": {"const": "restriction_enzyme_geometry_unresolved"},
+            "analysis_capability": {"const": "recognition_only"},
+            "exclusion_reason": {"const": "primary_cut_geometry_incomplete"},
+            "cleavage": {"properties": {
+              "status": {"const": "unknown"},
+              "events": {"maxItems": 0},
+              "nick": {"type": "null"},
+              "source_fields": {"properties": {"fst5": {"type": "null"}, "fst3": {"type": "null"}, "scd5": {"type": "null"}, "scd3": {"type": "null"}}}
+            }},
+            "relationships": {"properties": {"equischizomer_group_id": {"type": "null"}, "equischizomer_ids": {"maxItems": 0}, "neoschizomer_ids": {"maxItems": 0}}},
+            "source": {"properties": {
+              "kind": {"const": "biopython_restriction_dictionary"},
+              "package": {"const": "biopython"},
+              "package_version": {"const": "1.87"},
+              "embedded_rebase_release": {"const": "REBASE_EMBOSS_404_2024"},
+              "dictionary_sha256": {"const": "2a79099295dbad6061ea67a11e053787c591fcb2eb10fc8c0f89ead908dfa02b"},
+              "page_sha256": {"type": "null"},
+              "retrieved_on": {"type": "null"},
+              "record_modified_on": {"type": "null"},
+              "source_notation": {"type": "null"}
+            }}
+          }
+        },
+        {
+          "title": "Curated nickase supplement",
+          "properties": {
+            "enzyme_kind": {"const": "nicking_endonuclease"},
+            "analysis_capability": {"const": "nicking_analysis"},
+            "exclusion_reason": {"const": "nicking_enzyme_not_digestible"},
+            "cleavage": {"properties": {
+              "status": {"const": "known_single_strand_nick"},
+              "events": {"maxItems": 0},
+              "nick": {"$ref": "#/$defs/nick"},
+              "source_fields": {"properties": {"fst5": {"type": "null"}, "fst3": {"type": "null"}, "scd5": {"type": "null"}, "scd3": {"type": "null"}}}
+            }},
+            "relationships": {"properties": {"equischizomer_group_id": {"type": "null"}, "equischizomer_ids": {"maxItems": 0}, "neoschizomer_ids": {"maxItems": 0}}},
+            "source": {"properties": {
+              "kind": {"const": "bms_curated_rebase_nickase"},
+              "record_id": {"type": "string", "minLength": 1},
+              "uri": {"type": "string", "pattern": "^https://rebase\\.neb\\.com/"},
+              "package": {"type": "null"},
+              "package_version": {"type": "null"},
+              "embedded_rebase_release": {"type": "null"},
+              "dictionary_sha256": {"type": "null"},
+              "page_sha256": {"$ref": "#/$defs/sha256"},
+              "retrieved_on": {"type": "string", "format": "date"},
+              "record_modified_on": {"type": "string", "format": "date"},
+              "source_notation": {"type": "string", "minLength": 1}
+            }}
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1137,6 +1137,7 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
 
     assert [response.status_code for response in responses] == [200, 200, 202, 200, 200, 200, 202, 200, 200, 200]
     assert responses[0].json()["dashboard"]["y_axis"]["active_board_epoch"] == 2
+
     assert responses[2].json()["command_id"] == "cmd-1"
     assert responses[5].json()["canonical_inputs"] == {"steps": 20}
     assert responses[6].json()["method_id"] == "method-1"
@@ -1154,6 +1155,71 @@ def test_every_strict_v2_route_relays_and_validates_the_exact_robot_contract(mon
     ]
     assert "expected_connection_generation" not in runtime.connection.client.calls[2][1]["json_data"]
     assert "expected_connection_generation" not in runtime.connection.client.calls[6][1]["json_data"]
+
+
+@pytest.mark.parametrize("action_id", ["meta.activate_motion", "meta.recover_motion_non_homing"])
+def test_oem_lifecycle_actions_relay_through_the_closed_v2_contract(monkeypatch, action_id):
+    client, runtime = make_client(monkeypatch)
+    runtime.connection.client.responses["invoke_operator_action_v2"] = v2_receipt(
+        action_id=action_id,
+        command_id=f"{action_id.replace('.', '-')}-1",
+    )
+    response = client.post(
+        f"/api/bioxp/operator-controls/v2/actions/{action_id}",
+        json={
+            "expected_connection_generation": 77,
+            "schema_version": "bioxp.operator_action_request.v2",
+            "idempotency_key": f"{action_id.replace('.', '-')}-12345678",
+            "expected_ownership_generation": 1,
+            "expected_board_epoch_by_board": {},
+            "inputs": {},
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["action_id"] == action_id
+    _, kwargs = runtime.connection.client.calls[-1]
+    assert kwargs["path_params"] == {"action_id": action_id}
+    assert kwargs["json_data"]["inputs"] == {}
+
+
+def test_v2_receipt_relays_closed_bounded_robot_failure_detail(monkeypatch):
+    client, runtime = make_client(monkeypatch)
+    failed = v2_receipt(action_id="oem.z.manual_home", command_id="home-z-failed-1")
+    failed.update({
+        "status": "failed",
+        "terminal": True,
+        "finished_at": 2.0,
+        "error": {
+            "code": "robot route returned HTTP 409",
+            "message": "robot route returned HTTP 409",
+            "retryable": False,
+            "detail": {
+                "provider_failure": "z_manual_home_evidence_not_verified",
+                "failure": "board_not_initialized",
+                "axis": "z",
+                "board": 4,
+                "motor": 1,
+                "source_return_code": 1,
+                "controller_acknowledged": False,
+                "controller_terminal_state_verified": False,
+                "physical_effect_verified": False,
+                "lifecycle_state": "failed_latched",
+                "reference_state": "desynced",
+            },
+        },
+    })
+    runtime.connection.client.responses["operator_action_receipt_v2"] = failed
+
+    response = client.get("/api/bioxp/operator-controls/v2/receipts/home-z-failed-1")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["error"]["detail"] == failed["error"]["detail"]
+
+    failed["error"]["detail"]["unexpected"] = "forbidden"
+    rejected = client.get("/api/bioxp/operator-controls/v2/receipts/home-z-failed-1")
+    assert rejected.status_code == 502
+    assert rejected.json()["detail"] == "BioXP robot returned an invalid operator-control contract"
 
 
 def test_deck_move_relays_only_semantic_inputs_and_exact_board_fences(monkeypatch):

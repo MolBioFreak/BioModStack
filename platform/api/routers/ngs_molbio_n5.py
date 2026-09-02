@@ -756,6 +756,7 @@ async def project_hub(
     experiments: list[dict[str, Any]] = []
     kind_map = {
         "digest": "restriction_digest",
+        "restriction_digest": "restriction_digest",
         "alignment": "alignment",
         "pcr": "pcr",
         "ligation": "ligation",
@@ -781,13 +782,18 @@ async def project_hub(
         operation_kind = operation.operation_kind if operation is not None else "pcr"
         summary = dict(operation.parameters or {}).get("summary") if operation is not None else None
         title = metadata.get("title") or (summary.get("title") if isinstance(summary, dict) else None) or operation_kind.replace("_", " ").title()
+        operation_status = (
+            "legacy_inexact"
+            if operation_kind == "digest"
+            else operation.status if operation is not None else "saved"
+        )
         experiments.append({
             "id": row.entity_id, "persistence": "saved", "kind": kind_map.get(operation_kind, "sequence_change"),
             "plasmid_sequence_id": sequence_id, "plasmid_name": names_by_sequence.get(sequence_id, "Unassigned DNA sequence"),
             "plasmid_sequence_ids": sequence_ids,
             "input_sequence_ids": input_sequence_ids,
             "output_sequence_ids": output_sequence_ids,
-            "title": str(title), "status": operation.status if operation is not None else "saved",
+            "title": str(title), "status": operation_status,
             "created_at": row.created_at, "reopen_href": ack.get("reopen_uri"),
         })
 
@@ -839,7 +845,7 @@ async def project_hub(
         activity_items.append({
             "id": row.id, "summary": readable, "occurred_at": row.created_at,
             "technical_event_type": row.event_type, "receipt_id": str(body.get("receipt_id") or ""),
-            "envelope_sha256": __import__("hashlib").sha256(row.payload_json.encode("utf-8")).hexdigest(),
+            "envelope_sha256": hashlib.sha256(row.payload_json.encode("utf-8")).hexdigest(),
         })
 
     return _bounded_response({

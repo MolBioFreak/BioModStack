@@ -18,6 +18,7 @@ import {
     type GoldenGateAssemblyOptionsResponse,
     type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
+import { buildAssemblyReloadOperationParams, buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
 import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
 
@@ -335,7 +336,7 @@ export function AssemblyPanel({
     const [saveName, setSaveName] = useState('');
     const [saveDescription, setSaveDescription] = useState('');
     const [goldenGateOptions, setGoldenGateOptions] = useState<GoldenGateAssemblyOptionsResponse | null>(null);
-    const [goldenGateEnzyme, setGoldenGateEnzyme] = useState('BsaI');
+    const [goldenGateEnzyme, setGoldenGateEnzyme] = useState('');
     const [gibsonMinOverlap, setGibsonMinOverlap] = useState(20);
     const [gibsonPreferredOverlap, setGibsonPreferredOverlap] = useState(28);
     const [gibsonMaxOverlap, setGibsonMaxOverlap] = useState(80);
@@ -388,9 +389,11 @@ export function AssemblyPanel({
                 const response = await fetchGoldenGateAssemblyOptions();
                 if (!cancelled) {
                     setGoldenGateOptions(response.data);
-                    if (response.data.enzymes.length > 0) {
-                        setGoldenGateEnzyme((current) => current || response.data.enzymes[0].name);
-                    }
+                    setGoldenGateEnzyme((current) => (
+                        response.data.enzymes.some((enzyme) => enzyme.enzyme_id === current)
+                            ? current
+                            : (response.data.enzymes[0]?.enzyme_id ?? '')
+                    ));
                 }
             } catch (loadError) {
                 console.error('Failed to load Golden Gate options:', loadError);
@@ -620,13 +623,14 @@ export function AssemblyPanel({
                     ? await saveGibsonAssembly(payload)
                     : await simulateGibsonAssembly(payload);
             } else {
-                const payload = {
+                const payload = buildGoldenGateAssemblyRequest({
                     fragments,
                     circular: sequenceData.circular,
-                    enzyme_name: goldenGateEnzyme,
-                    new_name: saveName || undefined,
-                    save_description: saveDescription || undefined,
-                };
+                    selectedEnzymeId: goldenGateEnzyme,
+                    options: goldenGateOptions,
+                    newName: saveName,
+                    saveDescription,
+                });
                 response = action === 'save'
                     ? await saveGoldenGateAssembly(payload)
                     : await simulateGoldenGateAssembly(payload);
@@ -655,12 +659,7 @@ export function AssemblyPanel({
             analysisTracks: [],
             parentId: savedSequence?.parent_id ?? null,
             operation: savedSequence?.operation ?? result.product.mode,
-            operationParams: savedSequence?.operation_params ?? {
-                mode: result.product.mode,
-                fragment_count: result.product.fragments.length,
-                warnings: result.product.warnings,
-                validation_notes: result.product.validation_notes,
-            },
+            operationParams: savedSequence?.operation_params ?? buildAssemblyReloadOperationParams(result.product),
             version: savedSequence?.version ?? 1,
         }, savedSequence?.id || null);
     };
@@ -840,8 +839,8 @@ export function AssemblyPanel({
                             className="w-full rounded border border-slate-600 bg-slate-800 px-2 py-1.5"
                         >
                             {(goldenGateOptions?.enzymes || []).map((enzyme) => (
-                                <option key={enzyme.name} value={enzyme.name}>
-                                    {enzyme.name} • {enzyme.site} • {enzyme.overhang_length} nt overhang
+                                <option key={enzyme.enzyme_id} value={enzyme.enzyme_id}>
+                                    {enzyme.canonical_name} • {enzyme.overhang_length} nt overhang
                                 </option>
                             ))}
                         </select>

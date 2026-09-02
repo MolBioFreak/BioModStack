@@ -145,26 +145,26 @@
       "classified_parameter_keys": [
         "change_summary",
         "circular",
-        "enzyme_name",
+        "enzyme_id",
         "fragment_revision_ids",
         "orientations"
       ],
       "entrypoint_owner": null,
       "exposure_state": "internal",
-      "inventory_sha256": "b062d4e858842f81bfbd46a4834bbf6ad4ce6339ff8abe70182c0ecbf4b805df",
+      "inventory_sha256": "b269702fb9bfde35574c5ab3d269b03433ee684e933c84205c9e07ea43e97224",
       "label": "Golden Gate Assembly",
       "launch_mode": "domain_operation",
       "materializer_owner": null,
       "native_mapping": {
         "id": "molbio.assembly.golden_gate",
         "kind": "domain_operation",
-        "native_request_compatibility": "requires_unimplemented_revision_materializer",
+        "native_request_compatibility": "exact",
         "source": "POST /api/molbio/assembly/golden-gate/save"
       },
       "observed_parameter_keys": [
         "change_summary",
         "circular",
-        "enzyme_name",
+        "enzyme_id",
         "fragment_revision_ids",
         "fragments",
         "new_name",
@@ -172,7 +172,7 @@
         "save_description"
       ],
       "parameter_schema_id": "bms.operation-parameters.molbio.assembly.golden_gate.v1",
-      "parameter_schema_sha256": "fdd0a72f8b7757d0c6f767f3bc5a438299426859deaa2d3482af0b7c5df5dda8",
+      "parameter_schema_sha256": "f50bfb3014113a110c641a90ec107b0267dfc8e86efa3945d3bab3fd5a0cd61d",
       "parity_ledger": [
         {
           "evidence": "Exact source pin, schema ID, and parameter classification are frozen.",
@@ -956,15 +956,15 @@
       ],
       "entrypoint_owner": null,
       "exposure_state": "internal",
-      "inventory_sha256": "26d508181cc138a0da6cf013d1af863ac074c54239636ec7b2f68abe2bd47aa3",
+      "inventory_sha256": "e05a945fb08a440105af0d27620b433c49e7d4890ea49d310021aa48e98378fe",
       "label": "Restriction Digest",
       "launch_mode": "domain_operation",
       "materializer_owner": null,
       "native_mapping": {
         "id": "molbio.restriction_digest",
         "kind": "domain_operation",
-        "native_request_compatibility": "requires_unimplemented_revision_materializer",
-        "source": "POST /api/molbio/digest"
+        "native_request_compatibility": "exact",
+        "source": "POST /api/molbio/restriction/digests"
       },
       "observed_parameter_keys": [
         "enzymes",
@@ -991,34 +991,34 @@
           "state": "pass"
         },
         {
-          "evidence": "Current browser surfaces do not consume this server-owned schema for every field.",
+          "evidence": "Desktop and mobile restriction workflows consume backend catalog, analysis, digest, and product projections and submit stable enzyme IDs only.",
           "gate": "browser_controls",
-          "state": "partial"
+          "state": "pass"
         },
         {
-          "evidence": "Discovery/readback/submission do not yet share this schema end to end.",
+          "evidence": "Catalog, analysis, digest simulation/save/read, and product routes publish closed OpenAPI contracts.",
           "gate": "agent_parity",
-          "state": "missing"
+          "state": "pass"
         },
         {
-          "evidence": "Requested and effective values do not yet round-trip through every Project lifecycle path.",
+          "evidence": "Saved digests bind immutable source, catalog, request, result, and one-fragment-per-document lineage.",
           "gate": "persistence",
-          "state": "partial"
+          "state": "pass"
         },
         {
-          "evidence": "Native route consumes raw objects or sequences while the Project schema uses immutable revisions. No bound revision-resolution/materialization adapter exists.",
+          "evidence": "Backend restriction catalog, analysis, and digest services own all recognition and cleavage geometry.",
           "gate": "execution",
-          "state": "partial"
+          "state": "pass"
         },
         {
-          "evidence": "Dedicated terminal or domain-operation receipt closure is not complete.",
+          "evidence": "Saved digest responses and operation records carry immutable source/catalog/request/result/fragment receipts.",
           "gate": "receipt",
-          "state": "missing"
+          "state": "pass"
         },
         {
-          "evidence": "Add to Project and exact historical reopen are incomplete.",
+          "evidence": "Project Hub and MolBio read paths preserve saved exact digest results and explicitly legacy/inexact historical operations.",
           "gate": "global_result_experience",
-          "state": "partial"
+          "state": "pass"
         },
         {
           "evidence": "Deterministic domain operation; scheduled reuse does not apply.",
@@ -1045,7 +1045,7 @@
         "new_name",
         "save"
       ],
-      "submission_owner": "routers.molbio_ops.digest",
+      "submission_owner": "routers.molbio_restriction.save_restriction_digest",
       "unclassified_parameter_keys": [
         "is_circular",
         "name",
@@ -2785,7 +2785,7 @@
   ],
   "constraint_payload_registry_sha256": "92611ecfaf2f12b9ddfef7e6031efd9503cfa9efc528b809aca33ac91e2a35f9",
   "content_hash_semantics": "sha256(rfc8785(document_without_top_level_content_sha256))",
-  "content_sha256": "b09c453b309fd2b3d98588a6b7257e72c72f7e61036b5bff77a71069e22397a0",
+  "content_sha256": "d3577c7192da3a3bf8ab3b1bb8d81f5b3324414c99cf621218478e57745411bb",
   "contract_ids": {
     "binding_adapter": "bms.ngs-molbio.domain-binding.adapter.v1",
     "binding_receipt": "bms.ngs-molbio.global-binding-receipt.v1",
@@ -2811,7 +2811,7 @@
   ],
   "payload_ownership_manifest_sha256": "a0a8e0ae952565e5f8dacbd84567e65853c8fbd1ab6b1bb7454ceefcab4aa6cb",
   "schema": "bms.ngs-molbio.capability-inventory.v1",
-  "schema_registry_sha256": "e639e6a7d6a5da1d319ec1de5cf2e9fdb00e4d12d9c35b70329a16a56c227e45",
+  "schema_registry_sha256": "89898d9b11d101eeb518267f3b6641d307bade2d9284ceae6e126fefc2126eb2",
   "schema_version": 1,
   "source_pin_sha256": "c24afa91cc42054da3899c0f9a024769be96b444a444e8ab714443836856f1a4"
 }

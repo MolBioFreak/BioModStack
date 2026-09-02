@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,6 +85,14 @@ from services.global_experiments.launch_contexts import (
     workflow_pinned_gpu,
 )
 from services.global_experiments.read_models import build_project_manager_read_model
+from services.global_experiments.workflow_setups import (
+    create_workflow_setup,
+    delete_workflow_setup,
+    get_workflow_setup,
+    mark_workflow_setup_submitted,
+    prepare_workflow_setup_launch,
+    save_workflow_setup_draft,
+)
 from services.global_experiments.receipts import attach_verified_entity, reverify_source_receipt
 from services.global_experiments.result_surfaces import result_surface_for_receipt
 from services.ngs_molbio_connector import exact_local_launch_authority
@@ -113,7 +121,39 @@ router = APIRouter(tags=["project-manager"])
 
 
 class StrictRequestModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class WorkflowSetupExperimentRequest(StrictRequestModel):
+    name: str = Field(min_length=1, max_length=255)
+    objective: str = Field(min_length=1, max_length=2000)
+
+
+class WorkflowSetupCreateRequest(StrictRequestModel):
+    schema_id: Literal["bms.project-workflow-setup.create.v1"] = Field(alias="schema")
+    relationship_kind: Literal["primary", "follow_up"]
+    global_experiment_id: str | None = Field(default=None, min_length=1, max_length=128)
+    experiment: WorkflowSetupExperimentRequest | None = None
+    domain_kind: Literal["protein_in_silico"]
+    capability_id: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def validate_relationship(self) -> "WorkflowSetupCreateRequest":
+        if self.relationship_kind == "primary":
+            if self.global_experiment_id is not None or self.experiment is None:
+                raise ValueError("primary setup requires experiment and no global_experiment_id")
+        elif self.global_experiment_id is None or self.experiment is not None:
+            raise ValueError("follow_up setup requires global_experiment_id and no experiment")
+        return self
+
+
+class WorkflowSetupDraftRequest(StrictRequestModel):
+    expected_generation: int = Field(ge=0)
+    draft: dict[str, Any]
+
+
+class WorkflowSetupPrepareRequest(StrictRequestModel):
+    expected_generation: int = Field(ge=0)
 
 
 class AttachRequest(StrictRequestModel):
@@ -218,6 +258,10 @@ async def _project_bound_job(
             "launch_context_version_read_only",
             "Historical v1 launch contexts are display-only and cannot be projected.",
             status_code=409,
+        )
+    if context.workflow_id is not None:
+        await mark_workflow_setup_submitted(
+            session, project_id=context.project_id, workflow_id=context.workflow_id
         )
     if context.contract_version == "2" and context.run_attempt_id:
         attempt = await session.get(ExperimentRunAttempt, context.run_attempt_id)
@@ -420,8 +464,120 @@ async def list_domain_adapters() -> dict:
 
 @router.get("/api/protein-project-capabilities")
 async def list_protein_project_capabilities() -> dict[str, Any]:
-    """Expose the server-owned Protein taxonomy for Domain intent authoring."""
-    return protein_capability_inventory()
+    """Expose only server-adapted Protein workflows for Project creation."""
+    return protein_capability_inventory(project_ready_only=True)
+
+
+@router.post("/api/projects/{project_id}/workflow-setups", status_code=status.HTTP_201_CREATED)
+async def create_project_workflow_setup(
+    project_id: str,
+    payload: WorkflowSetupCreateRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        response = await create_workflow_setup(
+            session,
+            project_id=project_id,
+            relationship_kind=payload.relationship_kind,
+            global_experiment_id=payload.global_experiment_id,
+            experiment_name=payload.experiment.name if payload.experiment else None,
+            experiment_objective=payload.experiment.objective if payload.experiment else None,
+            domain_kind=payload.domain_kind,
+            capability_id=payload.capability_id,
+            idempotency_key=_idempotency_key(request),
+        )
+        await session.commit()
+        return response
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
+
+
+@router.get("/api/projects/{project_id}/workflow-setups/{setup_context_id}")
+async def resume_project_workflow_setup(
+    project_id: str,
+    setup_context_id: str,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        return await get_workflow_setup(
+            session, project_id=project_id, setup_context_id=setup_context_id
+        )
+    except ExperimentServiceError as exc:
+        raise _service_error(exc) from exc
+
+
+@router.put("/api/projects/{project_id}/workflow-setups/{setup_context_id}/draft")
+async def replace_project_workflow_setup_draft(
+    project_id: str,
+    setup_context_id: str,
+    payload: WorkflowSetupDraftRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        response = await save_workflow_setup_draft(
+            session,
+            project_id=project_id,
+            setup_context_id=setup_context_id,
+            draft=payload.draft,
+            expected_generation=payload.expected_generation,
+            idempotency_key=_idempotency_key(request),
+        )
+        await session.commit()
+        return response
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
+
+
+@router.post("/api/projects/{project_id}/workflow-setups/{setup_context_id}/prepare-launch")
+async def prepare_project_workflow_setup_launch(
+    project_id: str,
+    setup_context_id: str,
+    payload: WorkflowSetupPrepareRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        response = await prepare_workflow_setup_launch(
+            session,
+            project_id=project_id,
+            setup_context_id=setup_context_id,
+            expected_generation=payload.expected_generation,
+            idempotency_key=_idempotency_key(request),
+        )
+        await session.commit()
+        return response
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
+
+
+@router.delete("/api/projects/{project_id}/workflow-setups/{setup_context_id}")
+async def remove_project_workflow_setup(
+    project_id: str,
+    setup_context_id: str,
+    request: Request,
+    session: AsyncSession = Depends(get_experiment_session),
+) -> dict[str, Any]:
+    try:
+        await _require_mutation_owner(request, session, resource_id=project_id)
+        response = await delete_workflow_setup(
+            session,
+            project_id=project_id,
+            setup_context_id=setup_context_id,
+            idempotency_key=_idempotency_key(request),
+        )
+        await session.commit()
+        return response
+    except ExperimentServiceError as exc:
+        await session.rollback()
+        raise _service_error(exc) from exc
 
 
 async def _launch_context_document(
@@ -2135,6 +2291,17 @@ async def launch_domain_run_group(project_id: str, experiment_id: str, domain_id
             source_domain_id=domain_id,
         )
         await reserve_run_group(session, group_id=group.resource_id, domain_id=domain_id, actor=actor)
+        for preparation_id in preparation_ids:
+            if preparation_id in contexts:
+                continue
+            preparation = await session.get(ExperimentWorkflowPreparation, preparation_id)
+            revision = await session.get(
+                ExperimentRevision, preparation.workflow_revision_id if preparation is not None else ""
+            )
+            if revision is not None:
+                await mark_workflow_setup_submitted(
+                    session, project_id=project_id, workflow_id=revision.subject_id
+                )
         await session.commit()
         return await _run_group_document(session, group)
     except ResourceAdmissionDenied as exc:

@@ -18,6 +18,11 @@ const managerApi = vi.hoisted(() => ({
     getProjectSummary: vi.fn(),
     listDomainAdapters: vi.fn(),
     listProteinProjectCapabilities: vi.fn(),
+    createProjectWorkflowSetup: vi.fn(),
+    getProjectWorkflowSetup: vi.fn(),
+    saveProjectWorkflowSetupDraft: vi.fn(),
+    prepareProjectWorkflowSetup: vi.fn(),
+    deleteProjectWorkflowSetup: vi.fn(),
     searchAdapterEntities: vi.fn(),
     issueAdapterReceipt: vi.fn(),
     reverifySourceReceipt: vi.fn(),
@@ -333,6 +338,32 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('renders the Protein workspace task-first and keeps authority data under Technical details', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = summaryFor('domain_experiment:domain-1') as ReturnType<typeof summaryFor> & { tasks?: unknown[] };
+            value.tasks = [{
+                setup_context_id: 'workflow-setup:reload-1', global_experiment_id: 'global-1', experiment_name: 'Fold target',
+                workflow_id: 'workflow-setup-1', workflow_name: 'Fold target — ESMFold2 structure prediction',
+                relationship_kind: 'primary', workflow_label: 'ESMFold2 structure prediction', setup_state: 'open',
+                validation_state: 'incomplete', latest_run_state: null, result_count: 0,
+                reopen_route: '/submit?template=structure_prediction&pred_method=esmfold2&setup_context_id=workflow-setup%3Areload-1&project_id=project-1',
+                allowed_actions: ['resume', 'edit', 'delete'],
+            }];
+            return Promise.resolve(normalizeProjectManagerReadModel(value));
+        });
+        await renderAt('/projects/project-1/experiments/global-1/domains/domain-1?workspace=protein&section=overview');
+        await waitUntil(() => expect(container.textContent).toContain('Add workflow'));
+        expect(container.textContent).toContain('Setup incomplete');
+        expect(container.textContent).toContain('Resume');
+        expect(container.textContent).toContain('Delete draft');
+        expect(container.textContent).toContain('Project');
+        expect(container.textContent).toContain('Experiment');
+        expect(container.textContent).not.toContain('revision-project-1');
+        expect(container.textContent).not.toContain('receipt-9');
+        expect(container.textContent).not.toContain('a'.repeat(64));
+        expect(container.textContent).toContain('Technical details');
+    });
+
     it('preserves exact selected Domain-state identity when opening NGS/MolBio', async () => {
         managerApi.getProjectSummary.mockImplementation(() => {
             const value = summaryFor('domain_experiment:domain-1');

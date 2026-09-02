@@ -5,21 +5,21 @@ import test from 'node:test';
 
 const cockpit = readFileSync(resolve('src/components/BioXpCockpit.tsx'), 'utf8');
 const client = readFileSync(resolve('src/lib/bioxpClient.ts'), 'utf8');
-const payloadType = client.slice(
-    client.indexOf('export type BioXpCommandPayload'),
-    client.indexOf('export interface BioXpProfileView'),
+const lifecycleActionSlice = cockpit.slice(
+    cockpit.indexOf('const invokeLifecycleAction ='),
+    cockpit.indexOf('const operatorPathForControl ='),
 );
 
 test('BioXP cockpit is a compact OEM operator surface', () => {
     for (const marker of [
         'BioXP 3200',
         'Connection',
-        'Controller Transport & Recovery',
-        'Claim USB Transport',
+        'Controller Activation & Recovery',
+        'Activate 24 V / Prepare Motion',
         'Non-homing Recovery',
         'Manual Controls',
         'Camera',
-        'Physical Emergency Abort Unavailable',
+        'Physical Aggregate Emergency Stop',
         'Move −',
         'Move +',
         'Home',
@@ -38,31 +38,22 @@ test('BioXP cockpit is a compact OEM operator surface', () => {
         'Normal Commands',
         'Offline Protocol Validation',
         'Local Jobs',
-        'Profile',
-        'runtime_ready',
-        'hardware_ready',
-        'runtime_fresh',
-        'hardware_fresh',
         'window.prompt',
         'window.confirm',
         'operator_ack',
-        'reason:',
     ]) {
         assert.doesNotMatch(cockpit, new RegExp(rejected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
 });
 
-test('compact cockpit can reconnect and sends terse typed commands', () => {
+test('compact cockpit reconnects and sends canonical lifecycle actions through V2', () => {
     assert.match(cockpit, /useConnectBioXp/);
     assert.match(cockpit, /useDisconnectBioXp/);
-    assert.match(cockpit, /command:\s*'activate_usb_for_service'/);
-    assert.match(cockpit, /command:\s*'recover_motion_non_homing'/);
-    assert.match(cockpit, /command:\s*'run_axis_diagnostic'/);
-    assert.match(cockpit, /command:\s*'stop_axis_diagnostic'/);
-
+    assert.match(lifecycleActionSlice, /invokeLifecycleAction\('meta\.activate_motion'\)/);
+    assert.match(lifecycleActionSlice, /invokeLifecycleAction\('meta\.recover_motion_non_homing'\)/);
+    assert.doesNotMatch(lifecycleActionSlice, /operator_ack/);
+    assert.doesNotMatch(lifecycleActionSlice, /reason\s*:/);
     assert.doesNotMatch(client, /operator_ack:\s*'RECOVER_MOTION'/);
-    assert.doesNotMatch(payloadType, /reason:\s*string/);
-    assert.doesNotMatch(payloadType, /Record<string, unknown>/);
-    assert.match(payloadType, /command:\s*'run_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);
-    assert.match(payloadType, /command:\s*'stop_axis_diagnostic'[\s\S]*axis:\s*'x'\s*\|\s*'y'\s*\|\s*'z'\s*\|\s*'g'\s*\|\s*'door'/);
+    assert.doesNotMatch(client, /command:\s*'activate_usb_for_service'/);
+    assert.doesNotMatch(client, /command:\s*'recover_motion_non_homing'/);
 });

@@ -59,6 +59,7 @@ import { buildMolecularDynamicsPredictionReturnRoute } from './gen2StartingStruc
 interface StructurePredictionTemplateProps {
     onBack: () => void;
     initialValues?: Record<string, UntypedApiValue>;
+    onDraftChange?: (draft: Record<string, UntypedApiValue>) => void;
     onOpenTemplateManager?: (context: {
         currentParams?: Record<string, UntypedApiValue>;
         currentModelId?: string;
@@ -141,7 +142,7 @@ const clampBoltzSamplingSteps = (value: unknown, useMsa: boolean): number => {
     return Math.max(min, Math.min(1000, parsed));
 };
 
-export function StructurePredictionTemplate({ onBack, initialValues, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
+export function StructurePredictionTemplate({ onBack, initialValues, onDraftChange, onOpenTemplateManager, sourceSequenceId = null, mdDraftId = null, returnTemplate = null }: StructurePredictionTemplateProps) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { gpuOptions } = useLiveGpuCatalog();
@@ -384,6 +385,36 @@ export function StructurePredictionTemplate({ onBack, initialValues, onOpenTempl
     const [selectedChainIndices, setSelectedChainIndices] = useState<Set<number>>(new Set());
     const [sequenceToSave, setSequenceToSave] = useState<{ sequence: string; name: string } | null>(null);
     const [boltzApiStatus, setBoltzApiStatus] = useState<BoltzApiProviderStatus | null>(null);
+
+    const projectDraftJson = JSON.stringify((() => {
+        const predMethod = predictor === 'boltz' ? 'boltz2' : predictor === 'protenix' ? 'protenix' : 'esmfold2';
+        const common: Record<string, UntypedApiValue> = {
+            sequence: sequence.trim(), sequence_name: sequenceName.trim(), pred_method: predMethod,
+            num_parallel_jobs: numParallelJobs,
+        };
+        if (predMethod === 'esmfold2') return {
+            ...common, run_frustrampnn: false, frustrampnn_requiredness: 'required',
+            model_variant: esmfold2Variant, local_files_only: true,
+        };
+        if (predMethod === 'boltz2') return {
+            ...common, boltz_recycling_steps: boltzRecyclingSteps,
+            boltz_diffusion_samples: boltzNumSamples,
+            boltz_max_parallel_samples: boltzMaxParallelSamples,
+            boltz_sampling_steps: boltzSamplingSteps, boltz_use_msa: boltzUseMsa,
+            boltz_method: boltzMethod,
+        };
+        return {
+            ...common, protenix_model_weights: protenixModelWeights,
+            protenix_use_msa: protenixUseMsa,
+            protenix_msa_backend: initialValues?.protenix_msa_backend ?? 'auto',
+            protenix_use_template: initialValues?.protenix_use_template ?? false,
+            protenix_seeds: protenixSeeds, protenix_n_sample: protenixNSample,
+            protenix_n_step: protenixNStep, protenix_n_cycle: protenixNCycle,
+        };
+    })());
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, UntypedApiValue>);
+    }, [onDraftChange, projectDraftJson]);
     const [boltzApiEstimate, setBoltzApiEstimate] = useState<BoltzApiEstimateResponse | null>(null);
     const [boltzApiEstimateApproved, setBoltzApiEstimateApproved] = useState(false);
     const [boltzApiEstimateError, setBoltzApiEstimateError] = useState<string | null>(null);

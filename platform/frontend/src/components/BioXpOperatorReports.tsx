@@ -88,8 +88,9 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
     const [sampleCursor, setSampleCursor] = useState<string | null>(null);
     const [exportMessage, setExportMessage] = useState<string | null>(null);
     const [exportDownload, setExportDownload] = useState<string | null>(null);
+    const [appliedFilters, setAppliedFilters] = useState<BioXpOperatorReportFilters>({});
 
-    const filters: BioXpOperatorReportFilters = {
+    const draftFilters: BioXpOperatorReportFilters = {
         ...(status ? { status } : {}),
         ...(operation ? { operation } : {}),
         ...(action ? { action } : {}),
@@ -107,14 +108,14 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
         ...(end ? { end: numberOrUndefined(end) } : {}),
     };
 
-    const summaryQuery = useBioXpOperatorReportSummary(generation, connected, filters);
-    const commandsQuery = useBioXpOperatorReportCommands(generation, connected, 25, cursor, filters);
+    const summaryQuery = useBioXpOperatorReportSummary(generation, connected, appliedFilters);
+    const commandsQuery = useBioXpOperatorReportCommands(generation, connected, 25, cursor, appliedFilters);
     const detailQuery = useBioXpOperatorReportCommandDetail(selectedCommand, connected);
     const transitionQuery = useBioXpOperatorReportCommandTransitions(selectedCommand, transitionCursor, connected);
     const evidenceQuery = useBioXpOperatorReportCommandEvidence(selectedCommand, evidenceCursor, connected);
-    const eventsQuery = useBioXpOperatorReportEvents(generation, connected, filters);
-    const pipetteQuery = useBioXpOperatorReportPipette(generation, connected, filters);
-    const pressureQuery = useBioXpOperatorReportPressureStreams(generation, connected, filters);
+    const eventsQuery = useBioXpOperatorReportEvents(generation, connected, appliedFilters);
+    const pipetteQuery = useBioXpOperatorReportPipette(generation, connected, appliedFilters);
+    const pressureQuery = useBioXpOperatorReportPressureStreams(generation, connected, appliedFilters);
     const exportsQuery = useBioXpOperatorReportExports(generation, connected);
     const selectedPipette = detailQuery.data?.pipette?.pipette_operation_id ?? null;
     const pipetteDetailQuery = useBioXpOperatorReportPipetteDetail(selectedPipette, connected);
@@ -146,6 +147,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
         setChannel('');
         setStart('');
         setEnd('');
+        setAppliedFilters({});
         setCursor(null);
         setCursorStack([]);
     };
@@ -178,7 +180,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
         if (!exportIndexAvailable) return;
         setExportMessage(null);
         setExportDownload(null);
-        exportMutation.mutate({ format, filters, limit: 1000 }, {
+        exportMutation.mutate({ format, filters: appliedFilters, limit: 1000 }, {
             onSuccess: (result) => {
                 setExportDownload(result.download);
                 setExportMessage(`${format.toUpperCase()} export ${result.export_id} is ready. SHA-256 ${result.sha256}.`);
@@ -224,6 +226,7 @@ export function BioXpOperatorReports({ generation, connected }: { generation: nu
                     <label className="text-xs text-slate-400">Start timestamp<input className="mt-1 w-full rounded bg-slate-950 px-2 py-1 text-sm text-slate-100" value={start} onChange={(event) => setStart(event.target.value)} inputMode="decimal" placeholder="optional" /></label>
                     <label className="text-xs text-slate-400">End timestamp<input className="mt-1 w-full rounded bg-slate-950 px-2 py-1 text-sm text-slate-100" value={end} onChange={(event) => setEnd(event.target.value)} inputMode="decimal" placeholder="optional" /></label>
                     <div className="flex items-end gap-2 md:col-span-3 lg:col-span-6">
+                        <button type="button" className="rounded border border-cyan-700 px-3 py-1 text-xs text-cyan-100 hover:border-cyan-400" onClick={() => { setAppliedFilters(draftFilters); setCursor(null); setCursorStack([]); }}>Apply filters</button>
                         <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500" onClick={clearFilters}>Clear filters</button>
                         <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500 disabled:opacity-40" onClick={() => exportReport('json')} disabled={exportMutation.isPending || !exportIndexAvailable}>Export JSON</button>
                         <button type="button" className="rounded border border-slate-700 px-3 py-1 text-xs hover:border-cyan-500 disabled:opacity-40" onClick={() => exportReport('csv')} disabled={exportMutation.isPending || !exportIndexAvailable}>Export CSV</button>

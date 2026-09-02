@@ -182,6 +182,41 @@ class ExperimentWorkflowPlanAuthority(ExperimentBase):
     created_at = Column(String(64), nullable=False, default=_timestamp)
 
 
+class ExperimentWorkflowSetupContext(ExperimentBase):
+    """Durable Project-owned editable context preceding immutable preparation."""
+
+    __tablename__ = "workflow_setup_contexts"
+    __table_args__ = (
+        UniqueConstraint("project_id", "workflow_id"),
+        Index("ix_experiment_workflow_setups_project_updated", "project_id", "updated_at"),
+        Index("ix_experiment_workflow_setups_experiment", "global_experiment_id", "created_at"),
+    )
+
+    setup_context_id = Column(String(128), ForeignKey("resources.id"), primary_key=True)
+    project_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    global_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    domain_experiment_id = Column(String(128), ForeignKey("resources.id"), nullable=False)
+    workflow_id = Column(String(128), ForeignKey("aggregate_heads.aggregate_id"), nullable=False)
+    relationship_kind = Column(String(16), nullable=False)
+    capability_id = Column(String(255), nullable=False)
+    capability_contract_json = Column(Text, nullable=False)
+    capability_contract_sha256 = Column(String(64), nullable=False)
+    setup_destination = Column(String(1000), nullable=False)
+    draft_json = Column(Text, nullable=False, default="{}")
+    draft_sha256 = Column(String(64), nullable=False)
+    generation = Column(Integer, nullable=False, default=0)
+    validation_state = Column(String(16), nullable=False, default="incomplete")
+    lifecycle_state = Column(String(16), nullable=False, default="open")
+    created_at = Column(String(64), nullable=False, default=_timestamp)
+    updated_at = Column(String(64), nullable=False, default=_timestamp)
+    submitted_at = Column(String(64), nullable=True)
+    deleted_at = Column(String(64), nullable=True)
+
+    @property
+    def id(self) -> str:
+        return self.setup_context_id
+
+
 class ExperimentRunGroup(ExperimentBase):
     __tablename__ = "run_groups"
     __table_args__ = (UniqueConstraint("workspace_id", "launch_idempotency_key"),)

@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeCurrentLaunchContext, fetchModels, fetchFiles, submitJob, uploadFile, fetchTemplates, fetchTemplateById, fetchInputPresets, type Job } from '../lib/api';
-import { getLaunchContext } from '../lib/projectManager';
+import { getLaunchContext, type JsonObject } from '../lib/projectManager';
 import { SequenceManagerModal } from './SequenceManagerModal';
 import { SequenceManager } from './SequenceManager';
 import { TemplateManagerModal } from './TemplateManagerModal';
@@ -36,6 +36,7 @@ import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { ProjectTechnicalDetails, ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from './project-manager/ProjectWorkflowSetup';
 import {
     hydrateFrustraMpnnSettings,
     mergeFrustraMpnnLaunchParams,
@@ -705,6 +706,7 @@ export function JobSubmission() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
+    const projectSetup = useProjectWorkflowSetup();
     const mdHandoff = useMemo(() => {
         try {
             return { route: parseMolecularDynamicsHandoffRoute(`?${searchParams.toString()}`), error: '' };
@@ -766,6 +768,12 @@ export function JobSubmission() {
     const [ligands, setLigands] = useState<LigandEntry[]>([]);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [clonedValues, setClonedValues] = useState<Record<string, UntypedApiValue> | undefined>(undefined);
+    const [projectDraftValues, setProjectDraftValues] = useState<Record<string, UntypedApiValue>>({});
+    useEffect(() => {
+        if (!projectSetup.active || !projectSetup.setup) return;
+        setClonedValues(projectSetup.settings as Record<string, UntypedApiValue>);
+        setProjectDraftValues(projectSetup.settings as Record<string, UntypedApiValue>);
+    }, [projectSetup.active, projectSetup.setup?.generation]);
     const mdHandoffInitialValues = useMemo<Record<string, UntypedApiValue> | undefined>(() => {
         const route = mdHandoff.route;
         if (!route) return undefined;
@@ -786,7 +794,7 @@ export function JobSubmission() {
             !context?.launch_context_id
             || hydratedLaunchContextRef.current === context.launch_context_id
             || !scheduler
-            || !['esmfold2', 'molecular_dynamics'].includes(String(scheduler.model_id))
+            || !['esmfold2', 'boltz2', 'protenix', 'molecular_dynamics'].includes(String(scheduler.model_id))
             || !schedulerParams
             || typeof schedulerParams !== 'object'
             || Array.isArray(schedulerParams)
@@ -1775,7 +1783,7 @@ export function JobSubmission() {
         },
     });
 
-    if (preparedStructureScheduler) {
+    if (preparedStructureScheduler && !projectSetup.active) {
         return (
             <div className="min-h-screen bg-slate-950 p-6 text-slate-100">
                 <main className="mx-auto max-w-4xl space-y-5">
@@ -1817,9 +1825,16 @@ export function JobSubmission() {
     if (isPreparedStructureFamily) {
         return <div className="min-h-screen bg-slate-950 p-6 text-slate-100"><main role="alert" className="mx-auto max-w-3xl rounded-2xl border border-red-500/40 bg-red-950/40 p-5">Project launch is blocked because the prepared Boltz-2/Protenix scheduler authority is incomplete or is not reserved by a Project Run Group.</main></div>;
     }
+    if (projectSetup.active && projectSetup.isLoading) {
+        return <div className="min-h-screen bg-slate-950 p-6 text-slate-100">Loading Project workflow setup…</div>;
+    }
+    if (projectSetup.active && (projectSetup.error || !projectSetup.setup)) {
+        return <div role="alert" className="min-h-screen bg-slate-950 p-6 text-red-200">Project workflow setup is unavailable or invalid.</div>;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 p-6">
+            {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft(projectDraftValues as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.startRun(projectDraftValues as JsonObject)}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
             <ExecutionTargetPicker />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
@@ -1964,6 +1979,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     onOpenTemplateManager={openTemplateManager}
                                     initialValues={clonedValues}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                     sourceSequenceId={mdHandoff.route?.sourceSequenceId ?? null}
                                     mdDraftId={mdHandoff.route?.draftId ?? null}
                                     returnTemplate={mdHandoff.route?.returnTemplate ?? null}
@@ -1978,6 +1994,7 @@ export function JobSubmission() {
                                     onBack={handleDedicatedTemplateBack}
                                     initialValues={clonedValues}
                                     requiredPinnedGpu={launchContextQuery.data?.pinned_gpu ?? null}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                 />
 
                             ) : selectedTemplateId === 'molecular_dynamics' ? (
@@ -1997,6 +2014,7 @@ export function JobSubmission() {
                                         ...(templateDetail?.preset_params || {}),
                                         ...(clonedValues || {}),
                                     }}
+                                    onDraftChange={projectSetup.active ? setProjectDraftValues : undefined}
                                 />
                             ) : (
                                 <>

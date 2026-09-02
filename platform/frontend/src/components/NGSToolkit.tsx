@@ -2252,7 +2252,7 @@ export function NGSToolkit() {
     const [igvRangeError, setIgvRangeError] = useState<string | null>(null);
     const [igvInspectorOpen, setIgvInspectorOpen] = useState(false);
     const [igvAuxTrackFailures, setIgvAuxTrackFailures] = useState<string[]>([]);
-    const [igvVersion, setIgvVersion] = useState<string | null>(null);
+    const [, setIgvVersion] = useState<string | null>(null);
     const [igvAutoLoadAttempted, setIgvAutoLoadAttempted] = useState(false);
     const [igvAlignmentDisplayMode, setIgvAlignmentDisplayMode] = useState<OntSignalViewerAlignmentDisplayMode>('EXPANDED');
     const [igvAlignmentColorBy, setIgvAlignmentColorBy] = useState<OntSignalViewerAlignmentColorBy>('strand');
@@ -5631,21 +5631,20 @@ export function NGSToolkit() {
                     <div ref={igvFullscreenShellRef} data-ngs-igv-fullscreen-shell className={`bg-[var(--bg-secondary)] border border-[var(--border-primary)] shadow-2xl flex flex-col ${igvIsFullscreen ? 'w-screen h-screen max-w-none max-h-none rounded-none border-0' : 'w-[min(96vw,1180px)] h-[min(84vh,760px)] rounded-2xl'}`}>
                         <div className="ngs-igv-toolbar flex flex-wrap items-center gap-2 px-3 py-2 border-b border-[var(--border-primary)]">
                             <div className="min-w-0 flex-1 flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
-                                <span className="text-xs font-semibold text-[var(--text-primary)]">IGV · Read and Signal Workbench</span>
+                                <span className="text-xs font-semibold text-[var(--text-primary)]">IGV</span>
                                 {selectedJob && (
                                     <span className="truncate max-w-[40vw]" title={selectedJob.name}>
                                         {selectedJob.name}
                                     </span>
                                 )}
-                                <span>IGV.js {igvVersion || `loading (>= ${IGV_REQUIRED_VERSION})`}</span>
-                                <span>{igvIsFullscreen ? 'FS on' : 'FS off'}</span>
+
                             </div>
                             <div className="flex flex-wrap items-center gap-1">
                                 <select
                                     value={selectedAlignmentSession?.session_id || ''}
                                     onChange={(event) => setSelectedAlignmentSessionId(event.target.value)}
                                     disabled={igvLoading || igvReadsTrackLoading || alignmentSessions.length === 0}
-                                    title="Authoritative job-scoped alignment session"
+                                    title="Choose alignment"
                                     className="max-w-[250px] bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
                                 >
                                     {alignmentSessions.length === 0 && (
@@ -5693,6 +5692,9 @@ export function NGSToolkit() {
                                         Read bases
                                     </button>
                                 </form>
+                                <details data-igv-view-options className="relative">
+                                    <summary className="cursor-pointer list-none rounded border border-[var(--border-primary)] px-2 py-0.5 text-[11px] text-[var(--text-primary)]">View options</summary>
+                                    <div className="absolute right-0 top-full z-40 mt-1 flex w-[min(520px,90vw)] flex-wrap gap-1 rounded border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-2 shadow-xl">
                                 <select
                                     value={igvAlignmentDisplayMode}
                                     onChange={(event) => setIgvAlignmentDisplayMode(event.target.value as OntSignalViewerAlignmentDisplayMode)}
@@ -5729,7 +5731,6 @@ export function NGSToolkit() {
                                         </option>
                                     ))}
                                 </select>
-                            </div>
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvReadsTrack()}
@@ -5738,6 +5739,23 @@ export function NGSToolkit() {
                             >
                                 {igvReadsTrackLoading ? 'Loading tracks...' : igvReadsTrackLoaded ? 'Reload tracks' : 'Load tracks'}
                             </button>
+                            {selectedAlignmentSession?.artifacts.alignment && (
+                                <a
+                                    href={selectedAlignmentSession.artifacts.alignment.url}
+                                    download
+                                    className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)]"
+                                >
+                                    Download BAM
+                                </a>
+                            )}
+                            {igvReadsTrackLoaded && (missingIgvAuxTracks.length > 0 || igvAuxTrackFailures.length > 0) && (
+                                <div data-igv-optional-track-status className="basis-full text-[10px] text-amber-200">
+                                    Optional tracks unavailable
+                                </div>
+                            )}
+                                    </div>
+                                </details>
+                            </div>
                             <button
                                 type="button"
                                 onClick={() => void handleLoadIgvLocusSlice()}
@@ -5746,17 +5764,8 @@ export function NGSToolkit() {
                                     || !igvCurrentLocus || !selectedAlignmentSession?.ready}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-primary)]/60 text-[var(--accent-primary)] disabled:opacity-50"
                             >
-                                {igvLocusSliceLoading ? 'Loading bounded locus...' : 'Load full-source reads for this locus'}
+                                {igvLocusSliceLoading ? 'Loading reads...' : 'Load locus reads'}
                             </button>
-                            {selectedAlignmentSession?.artifacts.alignment && (
-                                <a
-                                    href={selectedAlignmentSession.artifacts.alignment.url}
-                                    download
-                                    className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)]"
-                                >
-                                    Download complete BAM ({(selectedAlignmentSession.artifacts.alignment.size_bytes / 1_048_576).toFixed(1)} MiB)
-                                </a>
-                            )}
                             <button
                                 type="button"
                                 onClick={() => {
@@ -5766,14 +5775,14 @@ export function NGSToolkit() {
                                 disabled={!signalDatasetId || !rawSignalRunId || !rawSignalObservedGeneration}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--accent-secondary)]/50 text-[var(--accent-secondary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-40"
                             >
-                                {signalWorkbenchRequested ? 'Hide signal panel' : 'Show signal panel'}
+                                {signalWorkbenchRequested ? 'Hide signal' : 'Signal'}
                             </button>
                             <button
                                 type="button"
                                 onClick={() => void toggleIgvFullscreen()}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]"
                             >
-                                {igvIsFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                                {igvIsFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
                             </button>
                             <button
                                 type="button"
@@ -5781,7 +5790,7 @@ export function NGSToolkit() {
                                 disabled={!selectedJob || !selectedAlignmentSession?.ready}
                                 className="px-2 py-0.5 text-[11px] rounded border border-[var(--border-primary)] text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
                             >
-                                {igvInspectorOpen ? 'Hide reads' : 'Inspect reads'}
+                                {igvInspectorOpen ? 'Hide reads' : 'Reads'}
                             </button>
                             <button
                                 onClick={() => void closeIgvModal()}
@@ -5811,7 +5820,7 @@ export function NGSToolkit() {
                             <div className="relative w-full h-full">
                                 <div
                                     ref={igvContainerRef}
-                                    className="ngs-readable-igv absolute inset-0 bg-[var(--bg-primary)]"
+                                    className={`ngs-readable-igv absolute inset-y-0 left-0 bg-[var(--bg-primary)] ${signalWorkbenchRequested ? 'right-0 lg:right-[560px]' : igvInspectorOpen ? 'right-0 lg:right-[600px]' : 'right-0'}`}
                                 />
                                 {igvLoading && (
                                     <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-primary)]/65 text-[var(--text-secondary)] text-xs">
@@ -5828,16 +5837,7 @@ export function NGSToolkit() {
                                         {igvAlignmentLoadDisposition.reason || 'Reference loaded; tracks autoload or use Load tracks.'}
                                     </div>
                                 )}
-                                {!igvLoading && !igvError && igvReadsTrackLoaded && missingIgvAuxTracks.length > 0 && (
-                                    <div className="absolute bottom-2 left-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
-                                        Missing optional tracks: {missingIgvAuxTracks.map((check) => check.label).join(', ')}
-                                    </div>
-                                )}
-                                {!igvLoading && !igvError && igvReadsTrackLoaded && igvAuxTrackFailures.length > 0 && (
-                                    <div role="status" className="absolute bottom-2 right-2 max-w-[42vw] rounded border border-amber-400/35 bg-amber-500/10 text-amber-200 text-[11px] px-2 py-1.5">
-                                        Optional tracks unavailable: {igvAuxTrackFailures.join(' · ')}
-                                    </div>
-                                )}
+
                                 {signalWorkbenchRequested ? (
                                     requestedViewerSessionReopenFailed ? (
                                         <div role="alert" className="absolute right-2 top-2 z-20 max-w-md rounded border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">

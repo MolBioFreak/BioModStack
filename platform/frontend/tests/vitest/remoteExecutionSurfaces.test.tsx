@@ -4,10 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
+import { InfraLiveTelemetry } from '../../src/components/InfraLiveTelemetry';
 import { RemoteGpuTelemetry } from '../../src/components/RemoteGpuTelemetry';
 import {
     api,
     EXECUTION_TARGET_STORAGE_KEY,
+    VAST_DISCOVERY_QUERY_KEY,
     submitBoltzApiJob,
     submitOntBarcodeBatch,
     submitOntNgsJob,
@@ -38,6 +40,21 @@ const readyTarget = {
     activated_at: '2026-08-30T12:00:00Z',
 };
 
+const discoveredTarget = {
+    provider: 'vast' as const,
+    provider_instance_id: '456',
+    name: 'Remote A6000',
+    provider_state: 'running',
+    host: '203.0.113.11',
+    port: 22,
+    username: 'root',
+    gpu_name: 'RTX A6000',
+    gpu_count: 1,
+    gpu_vram_mb: 49140,
+    hourly_rate_usd: 0.35,
+    started_at: '2026-08-31T12:00:00Z',
+};
+
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
@@ -45,6 +62,82 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it('discovers Vast from the Dashboard beside local hardware discovery and shares the inventory', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        const requests: string[] = [];
+        api.defaults.adapter = async (config) => {
+            requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/execution-targets/providers/vast/refresh') {
+                return response({
+                    provider: 'vast',
+                    available: true,
+                    credential_configured: true,
+                    message: '1 running instance found',
+                    instances: [discoveredTarget],
+                });
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+        const buttons = [...container.querySelectorAll('button')];
+        const hardwareButton = buttons.find((button) => button.textContent?.trim() === 'Discover hardware');
+        const vastButton = buttons.find((button) => button.textContent?.trim() === 'Discover running Vast');
+        expect(hardwareButton).toBeTruthy();
+        expect(vastButton).toBeTruthy();
+        expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
+
+        await act(async () => {
+            vastButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
+        expect(client.getQueryData<{ data: unknown }>(VAST_DISCOVERY_QUERY_KEY)?.data).toEqual({
+            provider: 'vast',
+            available: true,
+            credential_configured: true,
+            message: '1 running instance found',
+            instances: [discoveredTarget],
+        });
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
+    it('uses Dashboard-discovered Vast inventory for attachment without duplicating discovery in Job Launcher', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([]));
+        client.setQueryData(VAST_DISCOVERY_QUERY_KEY, response({
+            provider: 'vast',
+            available: true,
+            credential_configured: true,
+            message: '1 running instance found',
+            instances: [discoveredTarget],
+        }));
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><ExecutionTargetPicker /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+
+        expect(container.textContent).toContain('Remote A6000');
+        expect(container.textContent).toContain('Attach worker');
+        expect(container.textContent).not.toContain('Discover running Vast');
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
     it('fails closed for Job Submission launchers that cannot execute on Vast', async () => {
         window.history.replaceState({}, '', '/submit');
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, 'vast:123');

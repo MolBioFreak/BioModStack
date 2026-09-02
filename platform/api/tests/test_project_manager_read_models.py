@@ -8,6 +8,7 @@ from typing import Any, cast
 import httpx
 import pytest
 import pytest_asyncio
+import rfc8785
 from fastapi import FastAPI
 from sqlalchemy import select
 
@@ -44,6 +45,10 @@ from routers.project_manager import router as project_manager_router
 from services.global_experiments.adapters import registry
 from services.global_experiments.launch_contexts import create_launch_context
 from services.global_experiments.read_models import _head_summary, build_project_manager_read_model
+from services.ngs_molbio_preparation_authority import (
+    _hierarchy_revision_reference_ids,
+    _validate_hierarchy_producer_payload,
+)
 
 
 PAGE_LIMIT = 100
@@ -63,6 +68,104 @@ def test_project_head_summary_exposes_scope_and_defaults_legacy_projects_to_glob
     typed_head = cast(Any, head)
     assert _head_summary(typed_head, {"name": "Project"})["project_scope"] == "global"
     assert _head_summary(typed_head, {"name": "Project", "project_scope": "ngs_molbio_local"})["project_scope"] == "ngs_molbio_local"
+
+
+def test_current_hierarchy_schemas_and_protein_reference_roles_are_admitted() -> None:
+    project_payload = {
+        "schema": "bms.project.v2",
+        "name": "DRT4",
+        "description": "Protein project",
+        "research_objective": "Prepare exact no-launch model handoffs",
+        "owner": "operator",
+        "contributors": [],
+        "tags": ["protein"],
+        "project_scope": "global",
+        "status": "active",
+        "needs_metadata_review": False,
+    }
+    global_payload = {
+        "schema": "bms.global-experiment.v2",
+        "name": "DRT4 Protein",
+        "objective": "Prepare three accepted structure predictors",
+        "scientific_question": "Are exact launch handoffs queue-ready?",
+        "description": "No-launch preparation",
+        "hypotheses": [],
+        "success_criteria": ["Three exact launch contexts compile"],
+        "shared_source_receipt_ids": [],
+        "shared_dataset_ids": [],
+        "status": "active",
+        "priority": "medium",
+        "needs_metadata_review": False,
+    }
+    domain_payload = {
+        "schema": "bms.domain-experiment.v4",
+        "domain_kind": "protein_in_silico",
+        "domain_contract_version": "3",
+        "name": "DRT4 Protein",
+        "objective": "Prepare exact structure prediction handoffs",
+        "status": "active",
+        "tags": ["protein"],
+        "created_by": "operator",
+        "change_summary": "Activate DRT4 Protein Domain",
+        "source_receipt_ids": ["receipt-1"],
+        "dataset_revision_ids": ["dataset-revision-1"],
+        "domain_payload": {
+            "schema": "bms.protein-in-silico-experiment.v3",
+            "experiment_mode": "exploration",
+            "scientific_objective": "Prepare exact structure prediction handoffs.",
+            "targets": [
+                {
+                    "target_id": "WP_031606642.1",
+                    "label": "DRT4",
+                    "role": "target",
+                    "source_receipt_ids": ["receipt-1"],
+                    "expected_content_sha256": "a" * 64,
+                    "dataset_member_refs": [
+                        {"dataset_revision_id": "dataset-revision-1", "member_id": "member-1"}
+                    ],
+                    "entity_map_reference": {
+                        "schema": "bms.protein-entity-map-reference.v1",
+                        "authority_kind": "governed_artifact_receipt",
+                        "receipt_id": "sci_receipt_1",
+                        "receipt_sha256": "b" * 64,
+                        "content_sha256": "c" * 64,
+                        "canonical_size_bytes": 128,
+                        "entity_count": 1,
+                        "residue_mapping_count": 540,
+                        "display_entities": [
+                            {
+                                "entity_instance_id": "A",
+                                "source_entity_id": "1",
+                                "entity_type": "protein",
+                                "label_asym_id": "A",
+                                "auth_asym_id": "A",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "design_constraints": [],
+            "planned_capability_ids": ["protein.structure_prediction.protenix_v2"],
+            "validation_capability_ids": ["protein.structure_prediction.esmfold2"],
+            "comparison_groups": [],
+            "acceptance_criteria": [],
+            "evidence_plan": [],
+        },
+    }
+    domain_payload["domain_payload_canonical_size_bytes"] = len(
+        rfc8785.dumps(domain_payload["domain_payload"])
+    )
+    without_size = dict(domain_payload)
+    domain_payload["canonical_size_bytes"] = len(rfc8785.dumps(without_size))
+
+    _validate_hierarchy_producer_payload("workspace", project_payload)
+    _validate_hierarchy_producer_payload("experiment", global_payload)
+    assert _hierarchy_revision_reference_ids(global_payload) == []
+    assert _hierarchy_revision_reference_ids(domain_payload) == [
+        ("source_receipt", "receipt-1"),
+        ("target_source_receipt:0", "receipt-1"),
+        ("dataset_revision", "dataset-revision-1"),
+    ]
 
 
 @pytest_asyncio.fixture
@@ -526,6 +629,12 @@ async def test_source_reverification_receipt_renews_project_reconciliation(read_
         "last_verified_at": verified_at.isoformat(),
         "reason": None,
     }
+    receipt_node = next(
+        node
+        for node in read_model["map"]["nodes"]
+        if node["node_key"] == f"external_entity_receipt:{source_receipt_id}"
+    )
+    assert receipt_node["reconciliation"] == read_model["reconciliation"]
 
 
 @pytest.mark.asyncio

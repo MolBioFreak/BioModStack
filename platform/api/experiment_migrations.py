@@ -53,7 +53,9 @@ MIGRATION_V19_VERSION = 19
 MIGRATION_V19_NAME = "log_stream_attempt_foreign_key_authority"
 MIGRATION_V20_VERSION = 20
 MIGRATION_V20_NAME = "domain_parent_global_revision_authority"
-LATEST_MIGRATION_VERSION = MIGRATION_V20_VERSION
+MIGRATION_V21_VERSION = 21
+MIGRATION_V21_NAME = "project_workflow_setup_context_authority"
+LATEST_MIGRATION_VERSION = MIGRATION_V21_VERSION
 MIGRATION_V2_CHECKSUM = "db24d1ef056e560f10eb2fe9f8ef4dac0d4e4dbe90fd0a49efed88f0d111935c"
 MIGRATION_V3_CHECKSUM = "46f1a1d28a02334e87d628070e2bd9c6d78e158caa23d583951fdc582e7b11d2"
 MIGRATION_V4_CHECKSUM = "ec2966efee9129f8890019bee0d569de2cdf8d2a9fc4bb2e05138839880f375b"
@@ -2203,6 +2205,57 @@ END'''.strip()
 MIGRATION_V20_SQL = MIGRATION_V20_INDEX_SQL + ";\n" + MIGRATION_V20_TRIGGER_SQL + ";"
 MIGRATION_V20_CHECKSUM = hashlib.sha256(MIGRATION_V20_SQL.encode("utf-8")).hexdigest()
 
+MIGRATION_V21_SQL = r'''
+CREATE TABLE workflow_setup_contexts (
+    setup_context_id TEXT PRIMARY KEY NOT NULL REFERENCES resources(id),
+    project_id TEXT NOT NULL REFERENCES resources(id),
+    global_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    domain_experiment_id TEXT NOT NULL REFERENCES resources(id),
+    workflow_id TEXT NOT NULL REFERENCES aggregate_heads(aggregate_id),
+    relationship_kind TEXT NOT NULL CHECK(relationship_kind IN ('primary','follow_up')),
+    capability_id TEXT NOT NULL,
+    capability_contract_json TEXT NOT NULL,
+    capability_contract_sha256 TEXT NOT NULL CHECK(length(capability_contract_sha256) = 64),
+    setup_destination TEXT NOT NULL CHECK(
+        setup_destination LIKE '/submit?template=%'
+        AND setup_destination NOT LIKE '//%'
+    ),
+    draft_json TEXT NOT NULL DEFAULT '{}',
+    draft_sha256 TEXT NOT NULL CHECK(length(draft_sha256) = 64),
+    generation INTEGER NOT NULL DEFAULT 0 CHECK(generation >= 0),
+    validation_state TEXT NOT NULL DEFAULT 'incomplete'
+        CHECK(validation_state IN ('incomplete','ready','invalid')),
+    lifecycle_state TEXT NOT NULL DEFAULT 'open'
+        CHECK(lifecycle_state IN ('open','submitted','deleted')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    submitted_at TEXT,
+    deleted_at TEXT,
+    UNIQUE(project_id, workflow_id),
+    CHECK((lifecycle_state = 'submitted') = (submitted_at IS NOT NULL)),
+    CHECK((lifecycle_state = 'deleted') = (deleted_at IS NOT NULL))
+);
+CREATE INDEX ix_experiment_workflow_setups_project_updated
+    ON workflow_setup_contexts(project_id, updated_at);
+CREATE INDEX ix_experiment_workflow_setups_experiment
+    ON workflow_setup_contexts(global_experiment_id, created_at);
+CREATE TRIGGER trg_experiment_workflow_setup_contract_immutable
+BEFORE UPDATE OF project_id, global_experiment_id, domain_experiment_id, workflow_id,
+                 relationship_kind, capability_id, capability_contract_json,
+                 capability_contract_sha256, setup_destination, created_at
+ON workflow_setup_contexts
+BEGIN
+    SELECT RAISE(ABORT, 'workflow setup ownership and capability contract are immutable');
+END;
+CREATE TRIGGER trg_experiment_workflow_setup_terminal_immutable
+BEFORE UPDATE ON workflow_setup_contexts
+WHEN OLD.lifecycle_state IN ('submitted','deleted')
+BEGIN
+    SELECT RAISE(ABORT, 'terminal workflow setup is immutable');
+END;
+'''.strip()
+MIGRATION_V21_CHECKSUM = hashlib.sha256(MIGRATION_V21_SQL.encode("utf-8")).hexdigest()
+
 _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_resource_owner_same_workspace_insert",
     "trg_experiment_resource_owner_same_workspace_update",
@@ -2282,6 +2335,8 @@ _MIGRATION_TRIGGER_NAMES = (
     "trg_experiment_run_control_command_state_transition",
     "trg_experiment_run_control_command_terminal_immutable",
     "trg_experiment_run_control_command_delete_forbidden",
+    "trg_experiment_workflow_setup_contract_immutable",
+    "trg_experiment_workflow_setup_terminal_immutable",
 )
 
 
@@ -2327,6 +2382,10 @@ def _migration_v19_checksum() -> str:
 
 def _migration_v20_checksum() -> str:
     return MIGRATION_V20_CHECKSUM
+
+
+def _migration_v21_checksum() -> str:
+    return MIGRATION_V21_CHECKSUM
 
 
 def _migration_v9_checksum() -> str:
@@ -2419,6 +2478,7 @@ _REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
     "resource_admissions": {"admission_id", "workspace_id", "domain_experiment_id", "plan_id", "preparation_id", "run_attempt_id", "canonical_job_id", "state", "cpu_threads", "dram_bytes", "gpu_index", "gpu_uuid", "policy_source", "policy_version", "owner", "lease_token", "refusal_code", "refusal_reason", "release_reason", "recovery_evidence_json", "admitted_at", "queued_at", "released_at", "reconciled_at", "created_at", "updated_at"},
     "operational_receipts": {"receipt_id", "operation_kind", "workspace_id", "native_identity", "state", "receipt_json", "receipt_sha256", "source_revision", "occurred_at", "verified_at"},
     "workflow_plan_authority": {"workflow_id", "workspace_id", "domain_experiment_id", "expected_domain_revision_id", "capability_contract_json", "capability_contract_sha256", "created_at"},
+    "workflow_setup_contexts": {"setup_context_id", "project_id", "global_experiment_id", "domain_experiment_id", "workflow_id", "relationship_kind", "capability_id", "capability_contract_json", "capability_contract_sha256", "setup_destination", "draft_json", "draft_sha256", "generation", "validation_state", "lifecycle_state", "created_at", "updated_at", "submitted_at", "deleted_at"},
 }
 _REQUIRED_INDEXES = {
     "ux_experiment_run_events_idempotency",
@@ -2440,6 +2500,8 @@ _REQUIRED_INDEXES = {
     "ix_experiment_run_control_commands_ready",
     "ix_experiment_run_control_commands_group",
     "ux_experiment_domain_parent_global_revision",
+    "ix_experiment_workflow_setups_project_updated",
+    "ix_experiment_workflow_setups_experiment",
 }
 
 
@@ -2463,10 +2525,11 @@ def _accepted_migration_ledgers() -> tuple[list[tuple[int, str, str]], ...]:
     v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
     v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
+    v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
     v1 = (LEGACY_MIGRATION_VERSION, LEGACY_MIGRATION_NAME, LEGACY_MIGRATION_CHECKSUM)
     return (
-        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
-        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
+        [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
+        [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21],
     )
 
 
@@ -2636,6 +2699,11 @@ def _expected_schema_definition_manifest(*, legacy_lineage: bool = False) -> dic
         _apply_resource_usage_receipt_upgrade(expected)
         _apply_log_stream_attempt_fk_upgrade(expected)
         _apply_domain_parent_revision_authority_upgrade(expected)
+        _apply_additive_migration(
+            expected, MIGRATION_V21_VERSION, MIGRATION_V21_NAME,
+            _migration_v21_checksum(), "Project-owned editable workflow setup context authority",
+            MIGRATION_V21_SQL,
+        )
         manifest = _schema_definition_manifest(expected)
         if legacy_lineage:
             for table_name, definition in _LEGACY_FINAL_TABLE_SQL.items():
@@ -3657,6 +3725,7 @@ def run_all(db_path: str | Path) -> None:
     v18 = (MIGRATION_V18_VERSION, MIGRATION_V18_NAME, _migration_v18_checksum())
     v19 = (MIGRATION_V19_VERSION, MIGRATION_V19_NAME, _migration_v19_checksum())
     v20 = (MIGRATION_V20_VERSION, MIGRATION_V20_NAME, _migration_v20_checksum())
+    v21 = (MIGRATION_V21_VERSION, MIGRATION_V21_NAME, _migration_v21_checksum())
     try:
         connection.execute(
             """
@@ -3853,6 +3922,19 @@ def run_all(db_path: str | Path) -> None:
         rows = connection.execute(
             "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
         ).fetchall()
+        if rows in (
+            [v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
+            [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20],
+        ):
+            _apply_additive_migration(
+                connection, MIGRATION_V21_VERSION, MIGRATION_V21_NAME,
+                _migration_v21_checksum(), "Project-owned editable workflow setup context authority",
+                MIGRATION_V21_SQL,
+            )
+
+        rows = connection.execute(
+            "SELECT version, name, checksum FROM experiment_schema_migrations ORDER BY version"
+        ).fetchall()
         if rows not in _accepted_migration_ledgers():
             raise RuntimeError(f"experiment migration ledger mismatch: {rows!r}")
         connection.execute(
@@ -3928,6 +4010,10 @@ __all__ = [
     "MIGRATION_V20_NAME",
     "MIGRATION_V20_SQL",
     "MIGRATION_V20_CHECKSUM",
+    "MIGRATION_V21_VERSION",
+    "MIGRATION_V21_NAME",
+    "MIGRATION_V21_SQL",
+    "MIGRATION_V21_CHECKSUM",
     "LATEST_MIGRATION_VERSION",
     "MIGRATION_V4_VERSION",
     "MIGRATION_V4_NAME",

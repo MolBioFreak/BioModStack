@@ -118,7 +118,8 @@ Current capabilities include:
 - process-local connect, disconnect, and bounded readiness probe
 - orthogonal configured/active/reachable/runtime/hardware/freshness evidence
 - robot-owned operator catalog, admission, invocation, and durable receipts
-- typed non-homing recovery relay with robot-owned completion authority
+- canonical activation and recovery through `meta.activate_motion` and
+  `meta.recover_motion_non_homing`
 - physical aggregate emergency stop through the robot operator plane
 - deterministic offline protocol validation
 - persistent local jobs with append-only transition events

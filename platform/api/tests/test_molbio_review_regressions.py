@@ -38,8 +38,7 @@ from routers.molbio_ops import (  # noqa: E402
     AlignmentSettingsSchema,
     AssemblyFragmentEndSchema,
     AssemblyFragmentSchema,
-    DigestRequest,
-    EnzymeSchema,
+
     LigationAssemblyRequest,
     MutationSchema,
     MutagenesisRequest,
@@ -52,7 +51,7 @@ from routers.molbio_ops import (  # noqa: E402
     create_primer,
     align_molecular_sequences,
     delete_primer,
-    digest,
+
     get_primer,
     list_primers,
     mutagenesis,
@@ -68,8 +67,9 @@ from routers.nucleotide_sequences import (  # noqa: E402
     normalize_feature_payloads,
     update_sequence,
 )
-from services.assembly.golden_gate import simulate_golden_gate  # noqa: E402
+from services.assembly.golden_gate import resolve_golden_gate_enzyme, simulate_golden_gate  # noqa: E402
 from services.assembly.types import AssemblyFragment, FragmentEnd  # noqa: E402
+from services.restriction_catalog import catalog_authority  # noqa: E402
 from services.molbio_ops import pcr_product  # noqa: E402
 from services.molbio_persistence import record_sequence_revision  # noqa: E402
 from services.primer_qc import evaluate_primer_pair_qc  # noqa: E402
@@ -946,6 +946,12 @@ def test_three_prime_heterodimer_anchors_both_physical_three_prime_ends() -> Non
 
 
 def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends() -> None:
+    catalog = catalog_authority.require()
+    enzyme = resolve_golden_gate_enzyme(
+        enzyme_id="BsaI",
+        catalog_id=catalog.catalog_id,
+        expected_catalog_sha256=catalog.content_sha256,
+    )
     with pytest.raises(ValidationError):
         AssemblyFragmentEndSchema(type="sticky", overhang="AAAA")
 
@@ -966,7 +972,7 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         ),
     ]
     with pytest.raises(ValueError, match="recognition site"):
-        simulate_golden_gate(fragments, enzyme_name="BsaI", circular=False)
+        simulate_golden_gate(fragments, enzyme=enzyme, circular=False)
 
     reverse_site_fragments = [
         AssemblyFragment(
@@ -979,7 +985,7 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         fragments[1],
     ]
     with pytest.raises(ValueError, match="recognition site"):
-        simulate_golden_gate(reverse_site_fragments, enzyme_name="BsaI", circular=False)
+        simulate_golden_gate(reverse_site_fragments, enzyme=enzyme, circular=False)
 
     junction_fragments = [
         AssemblyFragment(
@@ -997,9 +1003,10 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
             right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
         ),
     ]
-    product = simulate_golden_gate(junction_fragments, enzyme_name="BsaI", circular=False)
+    product = simulate_golden_gate(junction_fragments, enzyme=enzyme, circular=False)
     assert "GAGACC" in product.sequence
     assert any("either orientation" in warning for warning in product.warnings)
+    assert any("catalog enzyme BsaI" in note for note in product.validation_notes)
 
 
 @pytest.mark.asyncio
@@ -1119,48 +1126,5 @@ async def test_saved_assembly_records_every_ordered_immutable_source_revision(tm
                 source_revisions[first.id].content_sha256,
                 source_revisions[second.id].content_sha256,
             ]
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_saved_inline_digest_records_private_immutable_input_revision(tmp_path: Path) -> None:
-    engine = create_molbio_engine(f"sqlite+aiosqlite:///{tmp_path / 'inline-digest-lineage.db'}")
-    await init_molbio_db(engine=engine)
-    sessions = make_molbio_session_factory(engine)
-    inline_sequence = "AAAAGAATTCTTTT"
-    try:
-        async with sessions() as session:
-            await digest(
-                DigestRequest(
-                    name="inline digest template",
-                    sequence=inline_sequence,
-                    sequence_type="dna",
-                    enzymes=[EnzymeSchema(name="EcoRI", site="GAATTC", cut_index=1)],
-                    save=True,
-                    new_name="digested-inline",
-                ),
-                session,
-            )
-            operation = await session.scalar(
-                select(MolecularOperation).where(MolecularOperation.operation_kind == "digest")
-            )
-            edge = await session.scalar(
-                select(MolecularOperationInput).where(
-                    MolecularOperationInput.operation_id == operation.id
-                )
-            )
-            revision = await session.get(MolecularRevision, edge.revision_id)
-            document = await session.get(MolecularDocument, revision.document_id)
-            projection = await session.get(NucleotideSequence, revision.document_id)
-
-            assert edge.role == "template"
-            assert edge.position == 0
-            assert edge.snapshot["input_kind"] == "inline_sequence"
-            assert edge.snapshot["revision_sha256"] == revision.content_sha256
-            assert revision.snapshot["sequence"] == inline_sequence
-            assert document is not None
-            assert document.current_revision_id == revision.id
-            assert projection is None
     finally:
         await engine.dispose()

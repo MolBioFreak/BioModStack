@@ -37,7 +37,7 @@ const locusSlice = {
     selected_read_count: 2,
     selected_record_count: 2,
     capped: false,
-    policy: { id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5_000, max_records: 20_000, max_bytes: 64, max_span_bp: 10_000, max_seconds: 30 },
+    policy: { id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5_000, max_records: 20_000, max_bytes: 64, max_span_bp: 10_000, max_seconds: 60 },
     bam: {}, index: {}, manifest: {},
 } as never;
 
@@ -108,7 +108,7 @@ describe('sortable read workbench', () => {
         vi.restoreAllMocks();
     });
 
-    it('renders the admitted locus population and synchronizes exact IGV and signal actions', async () => {
+    it('renders a compact locus population and synchronizes exact IGV and signal actions', async () => {
         const navigate = vi.fn();
         const openSignal = vi.fn();
         await act(async () => {
@@ -125,8 +125,8 @@ describe('sortable read workbench', () => {
             );
         });
         await vi.waitFor(() => expect(container.textContent).toContain('read-a'));
-        expect(container.textContent).toContain('2 admitted');
-        expect(container.textContent).toContain('Signal metrics ready');
+        expect(container.textContent).toContain('2 results · 2 loaded');
+        expect(container.textContent).not.toMatch(/admitted|signal metrics|server-sorted|locus policy/i);
         expect(container.textContent).not.toMatch(/signal drift|robust tail|abrupt transition|ADC rail/i);
 
         const firstRow = Array.from(container.querySelectorAll('tbody tr'))[0] as HTMLTableRowElement;
@@ -198,7 +198,7 @@ describe('sortable read workbench', () => {
         expect(container.textContent).not.toContain('read-a');
     });
 
-    it('clears stale rows and authority state when a refresh fails', async () => {
+    it('clears stale rows when a refresh fails', async () => {
         const failed = deferred<ReturnType<typeof page>>();
         fetchSortableAlignmentReads
             .mockResolvedValueOnce(page())
@@ -208,7 +208,7 @@ describe('sortable read workbench', () => {
 
         await act(async () => button(container, 'Refresh').click());
         expect(container.textContent).not.toContain('read-a');
-        expect(container.textContent).not.toContain('Signal metrics ready');
+
         await act(async () => failed.reject(new Error('refresh failed')));
         await vi.waitFor(() => expect(container.textContent).toContain('refresh failed'));
         expect(container.textContent).not.toContain('read-a');

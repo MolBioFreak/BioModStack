@@ -29,6 +29,7 @@ from typing import Literal
 SYNC_SERVICE = "biomodstack-dev-sync.service"
 SYNC_TIMER = "biomodstack-dev-sync.timer"
 SYNC_INTERVAL_SECONDS = 60
+MAX_RUNTIME_SOURCE_PATHS = 512
 SYNC_QUEUE_FILENAME = "dev-sync-queue.json"
 SYNC_CONTROL_FILENAME = "dev-sync-control.json"
 SYNC_REFRESH_FILENAME = "dev-sync-refresh.json"
@@ -299,7 +300,7 @@ def validate_candidate_runtime_authority(root: Path, revision: str) -> dict[str,
         or denominator.get("schema") != DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
-        or len(paths) > 256
+        or len(paths) > MAX_RUNTIME_SOURCE_PATHS
         or any(type(path) is not str or not path or path.startswith("/") for path in paths)
         or any(".." in Path(path).parts for path in paths)
         or len(paths) != len(set(paths))

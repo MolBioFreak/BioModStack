@@ -578,6 +578,8 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
     import pysam
     from services import ngs_alignment_sessions as service
 
+    assert service.LOCUS_MAX_SECONDS == 60.0
+
     source = tmp_path / "source.bam"
     index, bam_sha, bam_size, bai_sha, bai_size = _write_governed_alignment_fixture(source)
     identity = service.source_stat_identity(source)

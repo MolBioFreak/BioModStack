@@ -696,7 +696,7 @@ export function normalizeAlignmentLocusSlice(
     if (slice.policy.id !== 'bounded-full-source-locus-slice' || slice.policy.version !== 1
         || slice.policy.max_reads !== expectedRequest.max_reads || slice.policy.max_records !== 20_000
         || slice.policy.max_bytes !== 67_108_864 || slice.policy.max_span_bp !== 1_000_000
-        || slice.policy.max_seconds !== 30 || slice.selected_read_count > slice.policy.max_reads
+        || slice.policy.max_seconds !== 60 || slice.selected_read_count > slice.policy.max_reads
         || slice.selected_record_count > slice.policy.max_records || slice.bam.size_bytes > slice.policy.max_bytes
         || (!slice.capped && slice.overlapping_read_count !== slice.selected_read_count)) {
         throw new Error('Invalid alignment locus policy.');

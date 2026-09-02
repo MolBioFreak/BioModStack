@@ -44,13 +44,13 @@ test('primary alignment session cannot silently select dimer evidence', () => {
 test('large governed BAM avoids unsafe automatic browser allocation', () => {
     assert.deepEqual(alignmentTrackAutoLoadDisposition(818_274_983), {
         autoLoad: false,
-        reason: 'Alignment is 780.4 MiB; browser track loading is disabled. Use Inspect reads instead.',
+        reason: 'This BAM is too large to open automatically. Load locus reads instead.',
     });
     assert.deepEqual(alignmentTrackAutoLoadDisposition(65_536), { autoLoad: true, reason: null });
     for (const unsafe of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
         const disposition = alignmentTrackAutoLoadDisposition(unsafe);
         assert.equal(disposition.autoLoad, false);
-        assert.match(disposition.reason || '', /unknown|invalid/i);
+        assert.equal(disposition.reason, 'This BAM cannot be opened automatically. Load locus reads instead.');
     }
 });
 
@@ -63,7 +63,7 @@ test('track sources keep browser presentation separate from full-source download
         alignmentSizeBytes: 65_536,
     });
     assert.equal(full?.kind, 'full');
-    assert.equal(full?.name, 'Full alignment');
+    assert.equal(full?.name, 'Reads');
     assert.deepEqual(full?.fullSourceDownload, { url: '/source.bam', sizeBytes: 65_536 });
 
     const presentation = presentationFixture();
@@ -73,7 +73,7 @@ test('track sources keep browser presentation separate from full-source download
         presentation,
     });
     assert.equal(preview?.kind, 'preview');
-    assert.equal(preview?.name, 'Primary-read preview');
+    assert.equal(preview?.name, 'Read preview');
     assert.equal(preview?.bamUrl, `/api/jobs/job-a/alignment-sessions/session-a/presentation/${hash('6')}/bam`);
     assert.equal(preview?.capped, true);
     assert.deepEqual(preview?.fullSourceDownload, { url: '/source.bam', sizeBytes: 818_274_983 });
@@ -125,7 +125,7 @@ function locusFixture() {
         selected_read_count: 5000, selected_record_count: 5100, capped: true,
         policy: {
             id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5000,
-            max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 30,
+            max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 60,
         },
         bam: artifact('alignment_locus_slice', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/${hash('a')}/bam`),
         index: artifact('alignment_locus_slice_index', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/${hash('a')}/bai`),
@@ -190,10 +190,10 @@ test('IGV config has authoritative sequence, honest reads, and full-source cover
         fastaURL: '/reference.fasta', indexURL: '/reference.fasta.fai', order: -1000,
     });
     const previewTrack = buildAlignmentTrackConfig(preview, 420);
-    assert.equal(previewTrack.name, 'Primary-read preview');
+    assert.equal(previewTrack.name, 'Read preview');
     assert.equal(previewTrack.showCoverage, false, 'preview depth must not appear as full-source coverage');
     assert.deepEqual(buildFullSourceCoverageTrackConfig(presentation), {
-        id: 'ngs-full-source-primary-read-coverage', name: 'Full-source primary-read coverage', type: 'wig', format: 'bedgraph',
+        id: 'ngs-full-source-primary-read-coverage', name: 'Read coverage', type: 'wig', format: 'bedgraph',
         url: `/api/jobs/job-a/alignment-sessions/session-a/presentation/${hash('6')}/coverage`,
         autoscale: true, graphType: 'bar', height: 72,
     });
@@ -232,11 +232,11 @@ test('auxiliary tracks load once by stable track id', async () => {
     assert.deepEqual(loaded, ['junctions']);
 });
 
-test('preview disclosure stays persistent and generic aligned-read naming is absent', () => {
+test('compact read labels stay persistent and generic aligned-read naming is absent', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     assert.doesNotMatch(source, /!igvReadsTrackLoaded[\s\S]{0,400}Primary-read preview/u);
     assert.doesNotMatch(source, /name:\s*['"]Aligned Reads['"]/u);
-    assert.match(source, /Load full-source reads for this locus/u);
+    assert.match(source, /Load locus reads/u);
     assert.match(source, /igvPresentationGenerationRef/u);
     assert.match(source, /igvLocusSliceGenerationRef/u);
     assert.match(source, /igvTrackOperationActiveRef/u);
@@ -623,18 +623,31 @@ test('NGS viewer exposes a readable base-scale view and legible IGV chrome', () 
     assert.match(css, /font-size:\s*14px\s*!important/u);
 });
 
-test('NGS viewer opens compactly with explicit Range, fullscreen, and read-inspector controls', () => {
+test('NGS viewer opens compactly with primary controls and split scientific views', () => {
     const source = readFileSync(new URL('../src/components/NGSToolkit.tsx', import.meta.url), 'utf8');
     const openStart = source.indexOf('const openIgvModal');
     const closeStart = source.indexOf('const closeIgvModal');
     const openBody = source.slice(openStart, closeStart);
+    const viewOptionsStart = source.indexOf('<details data-igv-view-options');
+    const viewOptionsOpenEnd = source.indexOf('>', viewOptionsStart);
+    const viewOptionsEnd = source.indexOf('</details>', viewOptionsStart);
+    const optionalTrackStatus = source.indexOf('data-igv-optional-track-status', viewOptionsStart);
 
     assert.ok(openStart >= 0 && closeStart > openStart);
     assert.doesNotMatch(openBody, /requestDocumentFullscreen/u);
     assert.match(source, /w-\[min\(96vw,1180px\)\]/u);
     assert.match(source, /aria-label="Range"/u);
     assert.match(source, /parseLocalIgvRange\(/u);
-    assert.match(source, /Enter fullscreen/u);
+    assert.match(source, /\? 'Exit fullscreen' : 'Fullscreen'/u);
+    assert.match(source, /View options/u);
+    assert.ok(viewOptionsStart >= 0 && viewOptionsOpenEnd > viewOptionsStart);
+    assert.ok(optionalTrackStatus > viewOptionsOpenEnd && optionalTrackStatus < viewOptionsEnd);
+    assert.doesNotMatch(source.slice(viewOptionsStart, viewOptionsOpenEnd + 1), /\bopen=/u);
+    assert.doesNotMatch(source.slice(viewOptionsEnd), /data-igv-optional-track-status/u);
+    assert.doesNotMatch(source, /Missing optional tracks:/u);
+    assert.match(source, /Load locus reads/u);
+    assert.match(source, /lg:right-\[560px\]/u);
+    assert.match(source, /lg:right-\[600px\]/u);
     assert.match(source, /igvInspectorOpen &&/u);
 });
 

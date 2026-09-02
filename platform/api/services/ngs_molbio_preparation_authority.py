@@ -59,6 +59,16 @@ _EXPERIMENT_STATUSES = {
     "archived",
 }
 _DOMAIN_KINDS = {"protein_in_silico", "ngs_molbio"}
+_HIERARCHY_SCHEMA_VERSIONS = {
+    "bms.project.v1": "1",
+    "bms.project.v2": "2",
+    "bms.global-experiment.v1": "1",
+    "bms.global-experiment.v2": "2",
+    "bms.domain-experiment.v1": "1",
+    "bms.domain-experiment.v2": "1",
+    "bms.domain-experiment.v3": "2",
+    "bms.domain-experiment.v4": "3",
+}
 
 
 class PreparationInputAuthorityError(ValueError):
@@ -96,14 +106,19 @@ def _validate_hierarchy_producer_payload(
     """Mirror experiment_services hierarchy admission without importing it circularly."""
     if not isinstance(payload, dict):
         raise PreparationInputAuthorityError("aggregate payload must be an object")
-    expected_schema = {
-        "workspace": "bms.project.v1",
-        "experiment": "bms.global-experiment.v1",
-        "domain_experiment": payload.get("schema"),
+    allowed_schemas = {
+        "workspace": {"bms.project.v1", "bms.project.v2"},
+        "experiment": {"bms.global-experiment.v1", "bms.global-experiment.v2"},
+        "domain_experiment": {
+            "bms.domain-experiment.v1",
+            "bms.domain-experiment.v2",
+            "bms.domain-experiment.v3",
+            "bms.domain-experiment.v4",
+        },
     }[aggregate_kind]
-    if payload.get("schema") != expected_schema:
+    if payload.get("schema") not in allowed_schemas:
         raise PreparationInputAuthorityError(
-            f"{aggregate_kind} payload schema must be {expected_schema}"
+            f"{aggregate_kind} payload schema is not a supported immutable hierarchy contract"
         )
     required = {
         "workspace": {
@@ -162,10 +177,15 @@ def _validate_hierarchy_producer_payload(
         raise PreparationInputAuthorityError(
             "domain_kind must be protein_in_silico or ngs_molbio"
         )
-    if payload.get("domain_contract_version") == "2":
-        if payload.get("schema") != "bms.domain-experiment.v2":
+    contract_version = payload.get("domain_contract_version")
+    if contract_version in {"2", "3"}:
+        expected_schema = {
+            "2": "bms.domain-experiment.v2",
+            "3": "bms.domain-experiment.v4",
+        }[contract_version]
+        if payload.get("schema") != expected_schema:
             raise PreparationInputAuthorityError(
-                "Domain v2 requires bms.domain-experiment.v2"
+                f"Domain contract v{contract_version} requires {expected_schema}"
             )
         try:
             validate_domain_experiment(payload)
@@ -437,10 +457,15 @@ def _hierarchy_revision_reference_ids(payload: Mapping[str, Any]) -> list[tuple[
         target.extend((role, value) for value in values)
 
     schema = payload.get("schema")
-    if schema == "bms.global-experiment.v1":
+    if schema in {"bms.global-experiment.v1", "bms.global-experiment.v2"}:
         collect(payload, "shared_source_receipt_ids", "shared_source_receipt", receipt_references)
         collect(payload, "shared_dataset_ids", "shared_dataset", dataset_references)
-    elif schema in {"bms.domain-experiment.v1", "bms.domain-experiment.v2"}:
+    elif schema in {
+        "bms.domain-experiment.v1",
+        "bms.domain-experiment.v2",
+        "bms.domain-experiment.v3",
+        "bms.domain-experiment.v4",
+    }:
         collect(payload, "source_receipt_ids", "source_receipt", receipt_references)
         if schema == "bms.domain-experiment.v1":
             collect(payload, "dataset_ids", "dataset", dataset_references)
@@ -453,12 +478,20 @@ def _hierarchy_revision_reference_ids(payload: Mapping[str, Any]) -> list[tuple[
                 raise PreparationInputAuthorityError("hierarchy revision target dependencies are malformed")
             for target_index, target_payload in enumerate(targets):
                 if isinstance(target_payload, Mapping):
-                    collect(
-                        target_payload,
-                        "entity_receipt_ids",
-                        f"target_entity_receipt:{target_index}",
-                        receipt_references,
-                    )
+                    if domain_payload.get("schema") == "bms.protein-in-silico-experiment.v3":
+                        collect(
+                            target_payload,
+                            "source_receipt_ids",
+                            f"target_source_receipt:{target_index}",
+                            receipt_references,
+                        )
+                    else:
+                        collect(
+                            target_payload,
+                            "entity_receipt_ids",
+                            f"target_entity_receipt:{target_index}",
+                            receipt_references,
+                        )
 
     return receipt_references + dataset_references + dataset_revision_references
 
@@ -468,7 +501,7 @@ async def _current_hierarchy_revision_authority(
     *,
     head: ExperimentAggregateHead,
     project_id: str,
-    expected_schema_name: str,
+    expected_schema_names: frozenset[str],
 ) -> dict[str, Any]:
     revision_id = head.current_revision_id
     revision = await session.get(ExperimentRevision, revision_id or "")
@@ -487,8 +520,8 @@ async def _current_hierarchy_revision_authority(
             head.aggregate_kind != "workspace"
             and revision.revision_number != head.head_generation
         )
-        or revision.schema_name != expected_schema_name
-        or revision.schema_version != "1"
+        or revision.schema_name not in expected_schema_names
+        or revision.schema_version != _HIERARCHY_SCHEMA_VERSIONS.get(revision.schema_name)
         or revision_resource.id != revision.resource_id
         or revision_resource.kind != "revision"
         or revision_resource.workspace_id != project_id
@@ -505,7 +538,7 @@ async def _current_hierarchy_revision_authority(
         "current hierarchy revision dependency digest",
     )
     if (
-        payload.get("schema") != expected_schema_name
+        payload.get("schema") != revision.schema_name
         or payload.get("status") != head.lifecycle_state
         or hashlib.sha256(revision.canonical_payload.encode("utf-8")).hexdigest() != payload_sha256
     ):
@@ -561,6 +594,36 @@ async def _current_hierarchy_revision_authority(
                 "expected_sha256": expected_sha256,
             }
         )
+    if head.aggregate_kind == "domain_experiment":
+        parent_head = await session.get(ExperimentAggregateHead, str(head.parent_id or ""))
+        parent_revision = (
+            await session.get(ExperimentRevision, str(parent_head.current_revision_id))
+            if parent_head is not None and parent_head.current_revision_id
+            else None
+        )
+        parent_identity = (
+            "parent_global_revision",
+            0,
+            str(parent_revision.resource_id if parent_revision is not None else ""),
+        )
+        parent_row = rows_by_identity.get(parent_identity)
+        if (
+            parent_head is None
+            or parent_head.aggregate_kind != "experiment"
+            or parent_head.workspace_id != project_id
+            or parent_head.parent_id != project_id
+            or parent_revision is None
+            or parent_revision.subject_id != parent_head.aggregate_id
+            or parent_revision.payload_sha256
+            != hashlib.sha256(parent_revision.canonical_payload.encode("utf-8")).hexdigest()
+            or parent_row is None
+            or parent_row.metadata_json != _canonical({"authority": "server_resolved"})
+            or parent_row.expected_sha256 != parent_revision.payload_sha256
+        ):
+            raise PreparationInputAuthorityError(
+                "current Domain parent Global revision authority diverges"
+            )
+        expected_identities.add(parent_identity)
     if set(rows_by_identity) != expected_identities:
         raise PreparationInputAuthorityError("current hierarchy revision dependencies are missing or extraneous")
 
@@ -630,25 +693,37 @@ async def _active_input_hierarchy(
         session,
         head=project,
         project_id=project_id,
-        expected_schema_name="bms.project.v1",
+        expected_schema_names=frozenset({"bms.project.v1", "bms.project.v2"}),
     )
     await _current_hierarchy_revision_authority(
         session,
         head=experiment,
         project_id=project_id,
-        expected_schema_name="bms.global-experiment.v1",
+        expected_schema_names=frozenset({"bms.global-experiment.v1", "bms.global-experiment.v2"}),
     )
     domain_payload = await _current_hierarchy_revision_authority(
         session,
         head=domain,
         project_id=project_id,
-        expected_schema_name="bms.domain-experiment.v2",
+        expected_schema_names=frozenset({
+            "bms.domain-experiment.v1",
+            "bms.domain-experiment.v2",
+            "bms.domain-experiment.v3",
+            "bms.domain-experiment.v4",
+        }),
     )
-    if (
-        domain_payload.get("domain_kind") != "ngs_molbio"
-        or domain_payload.get("domain_contract_version") != "2"
-    ):
-        raise PreparationInputAuthorityError("preparation input Domain is not exact package-local NGS/MolBio authority")
+    domain_contract = (
+        domain_payload.get("domain_kind"),
+        domain_payload.get("domain_contract_version"),
+        domain_payload.get("schema"),
+    )
+    if domain_contract not in {
+        ("ngs_molbio", "2", "bms.domain-experiment.v2"),
+        ("protein_in_silico", "3", "bms.domain-experiment.v4"),
+    }:
+        raise PreparationInputAuthorityError(
+            "preparation input Domain is not an exact supported package-local authority"
+        )
     return project, experiment, domain
 
 

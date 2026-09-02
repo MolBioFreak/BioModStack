@@ -89,20 +89,6 @@ def find_pattern_positions(sequence: str, pattern: str, circular: bool = False) 
 
 
 @dataclass
-class DigestEnzyme:
-    name: str
-    site: str
-    cut_index: Optional[int] = None  # offset from site start
-
-
-@dataclass
-class DigestFragment:
-    sequence: str
-    start: int
-    end: int
-
-
-@dataclass
 class PCRProductResult:
     sequence: str
     start: int
@@ -149,55 +135,6 @@ def resolve_primer_binding_sites(
             ]
 
     return []
-
-
-def digest_sequence(sequence: str, enzymes: List[DigestEnzyme], circular: bool = False) -> List[DigestFragment]:
-    seq = clean_sequence(sequence)
-    if not seq:
-        return []
-
-    cut_positions: List[int] = []
-    for enzyme in enzymes:
-        site = clean_sequence(enzyme.site)
-        if not site:
-            continue
-        cut_offset = enzyme.cut_index if enzyme.cut_index is not None else max(1, len(site) // 2)
-        patterns = {site, reverse_complement(site)}
-        for pattern in patterns:
-            for site_start in find_pattern_positions(seq, pattern, circular=circular):
-                cut_pos = site_start + cut_offset
-                if circular:
-                    cut_positions.append(cut_pos % len(seq))
-                elif 0 <= cut_pos <= len(seq):
-                    cut_positions.append(cut_pos)
-
-    cut_positions = sorted(set(cut_positions))
-    if not cut_positions:
-        return [DigestFragment(sequence=seq, start=0, end=len(seq))]
-
-    if not circular:
-        cut_positions = [0] + cut_positions + [len(seq)]
-        fragments = []
-        for i in range(len(cut_positions) - 1):
-            start = cut_positions[i]
-            end = cut_positions[i + 1]
-            if start == end:
-                continue
-            fragments.append(DigestFragment(sequence=seq[start:end], start=start, end=end))
-        return fragments
-
-    # Circular: wrap around
-    cut_positions = sorted(cut_positions)
-    fragments = []
-    for i in range(len(cut_positions)):
-        start = cut_positions[i]
-        end = cut_positions[(i + 1) % len(cut_positions)]
-        if start < end:
-            frag_seq = seq[start:end]
-        else:
-            frag_seq = seq[start:] + seq[:end]
-        fragments.append(DigestFragment(sequence=frag_seq, start=start, end=end))
-    return fragments
 
 
 def pcr_product(
@@ -330,19 +267,6 @@ def gibson_assembly(fragments: List[str], overlap_length: int = 20) -> str:
         else:
             assembled += frag_clean
     return assembled
-
-
-def golden_gate_assembly(fragments: List[str], enzymes: List[DigestEnzyme]) -> str:
-    # Remove recognition sites (simplified) then ligate
-    cleaned = []
-    for frag in fragments:
-        frag_seq = clean_sequence(frag)
-        for enzyme in enzymes:
-            site = clean_sequence(enzyme.site)
-            if site:
-                frag_seq = frag_seq.replace(site, "")
-        cleaned.append(frag_seq)
-    return ligate_fragments(cleaned, circular=True)
 
 
 def apply_mutations(sequence: str, mutations: List[Dict]) -> str:

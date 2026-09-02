@@ -29,7 +29,7 @@ test('static BioXP metadata hooks are request-driven rather than timer-polled', 
         'export const useBioXpOperatorControlCatalog',
         'export const useBioXpOperatorDashboard',
     );
-    assert.match(catalog, /queryKey:\s*\[\.\.\.operatorCatalogKey, connectionGeneration, enabled\]/u);
+    assert.match(catalog, /queryKey:\s*\[\.\.\.operatorCatalogKey, connectionGeneration, enabled, lifecycleState \?\? null\]/u);
     assert.match(catalog, /enabled:\s*enabled && connectionGeneration > 0/u);
 });
 
@@ -41,12 +41,12 @@ test('cockpit keeps bounded status and compact dashboard freshness loops', () =>
     assert.match(dashboard, /queryKey:\s*\[\.\.\.operatorDashboardKey, connectionGeneration, enabled\]/u);
     assert.match(dashboard, /refetchInterval:\s*enabled && connectionGeneration > 0\s*\?\s*15_000\s*:\s*false/u);
     assert.match(dashboard, /refetchIntervalInBackground:\s*false/u);
-    const dashboardConsumers = `${cockpit}\n${quickDashboard}`.match(/useBioXpOperatorDashboard\(/gu) ?? [];
+    const dashboardConsumers = `${cockpit}\n${quickDashboard}`.match(/useBioXpOperatorDashboardV2\(/gu) ?? [];
     assert.equal(dashboardConsumers.length, 1);
-    assert.match(cockpit, /useBioXpOperatorDashboard\(generation, linkConnected\)/u);
-    assert.match(cockpit, /!linkConnected \|\| dashboardQuery\.isError \? undefined/u);
+    assert.match(cockpit, /useBioXpOperatorDashboardV2\(generation, robotControlReady\)/u);
+    assert.match(cockpit, /!robotControlReady \|\| dashboardQuery\.isError \? undefined/u);
     assert.match(quickDashboard, /\{connected && data && \(/u);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected\)/u);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, false, historyLimit\)/u);
     assert.match(cockpit, /!linkConnected \|\| operatorCatalog\.isError \? undefined/u);
     assert.match(cockpit, /!linkConnected \|\| historyQuery\.isError \? \[\]/u);
 });
@@ -79,11 +79,11 @@ test('operator receipt type strictly exposes startup reconciliation and durable 
 test('operator mutations fence history races and refresh every authority projection', () => {
     const invoke = hookSource('export const useInvokeBioXpOperatorAction', 'export const useAssessBioXpOperatorAction');
     const assess = hookSource('export const useAssessBioXpOperatorAction', 'export const usePlanBioXpOemFullLifecycle');
+    assert.match(invoke, /invalidateQueries\(\{ queryKey: operatorCatalogKey \}\)/u);
     for (const source of [invoke, assess]) {
         assert.match(source, /cancelQueries\(\{ queryKey: operatorHistoryKey \}\)/u);
-        for (const key of [
-            'statusKey', 'operatorAdmissionKey', 'operatorCatalogKey',
-            'operatorDashboardKey', 'operatorHistoryKey',
-        ]) assert.match(source, new RegExp(`invalidateQueries\\(\\{ queryKey: ${key} \\}\\)`));
+        for (const key of ['operatorDashboardKey', 'operatorHistoryKey']) {
+            assert.match(source, new RegExp(`invalidateQueries\\(\\{ queryKey: ${key} \\}\\)`));
+        }
     }
 });

@@ -42,6 +42,7 @@ import MolstarViewer from '../MolstarViewer';
 interface Props {
     onBack?: () => void;
     initialValues?: Record<string, unknown>;
+    onDraftChange?: (draft: Record<string, unknown>) => void;
     services?: {
         listSources?: typeof listCmSources;
         inspectFrustrampnnSource?: typeof inspectCmFrustrampnnSource;
@@ -152,7 +153,8 @@ const hydrateState = (values?: Record<string, unknown>): LauncherState => {
     try { stored = asObject(JSON.parse(sessionStorage.getItem(STATE_KEY) || '{}')) || {}; } catch { stored = {}; }
     // Session state wins over card defaults so every control survives launcher
     // navigation. Explicit clone/template loads clear this key before mounting.
-    const merged = { ...(values || {}), ...stored };
+    const projectRequest = asObject(values?.request) || {};
+    const merged = { ...(values || {}), ...projectRequest, ...stored };
     const editableState = Object.fromEntries(
         Object.entries(merged).filter(([key]) => key !== 'analysis'
             && key !== 'analysis_policy'
@@ -368,7 +370,7 @@ const cmCoordinateCardinality = (input: {
 const inputClass = 'w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-orange-400 disabled:cursor-not-allowed disabled:opacity-50';
 const checkClass = 'h-4 w-4 rounded border-slate-600 bg-slate-950 text-orange-500 focus:ring-orange-500';
 
-export function ConformationalMappingLauncher({ onBack, initialValues, services }: Props) {
+export function ConformationalMappingLauncher({ onBack, initialValues, onDraftChange, services }: Props) {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const [form, setForm] = useState<LauncherState>(() => hydrateState(initialValues));
@@ -816,8 +818,8 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
         });
     };
 
-    const buildPayload = (): CmSubmitRequest => {
-        if (validationErrors.length) throw new Error(validationErrors.join(' '));
+    const buildPayload = (requireValid = true): CmSubmitRequest => {
+        if (requireValid && validationErrors.length) throw new Error(validationErrors.join(' '));
         const featurePolicy: CmFeaturePolicy = form.backend === 'protenix_v2_ensemble'
             ? { mode: form.featureMode, protein_msa_enabled: form.proteinMsa, templates_enabled: form.templates, rna_msa_enabled: form.rnaMsa }
             : { mode: form.featureMode };
@@ -902,6 +904,10 @@ export function ConformationalMappingLauncher({ onBack, initialValues, services 
     };
 
     const effectivePayload = validationErrors.length === 0 ? buildPayload() : null;
+    const projectDraftJson = JSON.stringify({ backend: form.backend, request: buildPayload(false) });
+    useEffect(() => {
+        onDraftChange?.(JSON.parse(projectDraftJson) as Record<string, unknown>);
+    }, [onDraftChange, projectDraftJson]);
     const analysisPolicySummary = effectivePayload
         ? `analysis ${effectivePayload.analysis_policy.clash_detector_id}/${effectivePayload.analysis_policy.clash_detector_version} · zero ε ${effectivePayload.analysis_policy.sign_zero_epsilon} · support ${effectivePayload.analysis_policy.outer_support_minimum}/${effectivePayload.analysis_policy.inner_support_minimum} · sign ${effectivePayload.analysis_policy.sign_consistency_minimum} · clash-free ${effectivePayload.analysis_policy.clash_free_minimum} · rank ${effectivePayload.analysis_policy.rank_stability_minimum} · common universe ${effectivePayload.analysis_policy.minimum_common_ranked_universe_size}`
         : 'analysis unresolved';

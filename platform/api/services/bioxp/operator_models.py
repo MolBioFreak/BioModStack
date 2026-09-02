@@ -4481,12 +4481,29 @@ class OperatorMethodRequestV1(BaseModel):
         return self
 
 
+class OperatorReceiptFailureDetailV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    provider_failure: str = Field(min_length=1, max_length=160)
+    failure: str = Field(min_length=1, max_length=160)
+    axis: str = Field(min_length=1, max_length=16)
+    board: StrictInt = Field(ge=0, le=255)
+    motor: StrictInt = Field(ge=0, le=255)
+    source_return_code: StrictInt = Field(ge=-(2 ** 31), le=2 ** 31 - 1)
+    controller_acknowledged: StrictBool
+    controller_terminal_state_verified: StrictBool
+    physical_effect_verified: StrictBool
+    lifecycle_state: str = Field(min_length=1, max_length=160)
+    reference_state: str = Field(min_length=1, max_length=160)
+
+
 class OperatorReceiptErrorV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     code: str = Field(min_length=1, max_length=160)
     message: str = Field(min_length=1, max_length=1000)
     retryable: StrictBool
+    detail: OperatorReceiptFailureDetailV2 | None = None
 
 
 class OperatorActionReceiptV2(BaseModel):
@@ -4755,6 +4772,7 @@ class OperatorDashboardV2(BaseModel):
     active_commands: list[OperatorActionReceiptV2]
     command_queue: OperatorQueueV1
     latest_receipts: list[OperatorActionReceiptV2]
+    telemetry: OperatorDashboard | None = None
     deck: OperatorDeckDashboardV1 | None = None
 
     @field_validator("generated_at")

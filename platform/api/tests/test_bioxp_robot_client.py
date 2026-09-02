@@ -159,6 +159,7 @@ def test_robot_client_routes_only_supported_compact_commissioning_contracts() ->
         "initialize_oem_environment",
         "run_oem_motor_stage",
         "record_oem_motor_stage_observation",
+        "recover_motion_non_homing",
     ):
         assert retired not in client.routes
     assert client.routes["collect_hardware_snapshot"][:2] == ("POST", "/hardware/snapshot/collect")
@@ -167,7 +168,6 @@ def test_robot_client_routes_only_supported_compact_commissioning_contracts() ->
         "collect_axis_diagnostics",
         "run_axis_diagnostic",
         "stop_axis_diagnostic",
-        "recover_motion_non_homing",
     ):
         assert command in client.routes
 

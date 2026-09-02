@@ -7,6 +7,7 @@ import {
     EXECUTION_TARGET_STORAGE_KEY,
     fetchExecutionTargets,
     refreshVastExecutionTargets,
+    VAST_DISCOVERY_QUERY_KEY,
 } from '../lib/api';
 
 export function ExecutionTargetPicker() {
@@ -21,9 +22,11 @@ export function ExecutionTargetPicker() {
         queryFn: fetchExecutionTargets,
         refetchInterval: 15_000,
     });
-    const refreshMutation = useMutation({
-        mutationFn: refreshVastExecutionTargets,
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    const inventoryQuery = useQuery({
+        queryKey: VAST_DISCOVERY_QUERY_KEY,
+        queryFn: refreshVastExecutionTargets,
+        enabled: false,
+        staleTime: Infinity,
     });
     const activateMutation = useMutation({
         mutationFn: activateExecutionTarget,
@@ -64,26 +67,18 @@ export function ExecutionTargetPicker() {
             window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
         }
     };
-    const inventory = refreshMutation.data?.data.instances ?? [];
+    const inventory = inventoryQuery.data?.data.instances ?? [];
     const activeTarget = readyTargets.find((target) => target.id === selectedTargetId) ?? null;
 
     return (
         <section className="mb-5 rounded-xl border border-slate-700 bg-slate-900/80 p-4" aria-label="Execution target">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
                 <div>
                     <h2 className="text-sm font-semibold text-slate-100">Execution target</h2>
                     <p className="mt-1 text-xs text-slate-400">
                         BMS keeps the Job, scheduler, lineage, and results local. A selected Vast worker executes the compiled workflow only.
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => refreshMutation.mutate()}
-                    disabled={refreshMutation.isPending}
-                    className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 disabled:opacity-50"
-                >
-                    {refreshMutation.isPending ? 'Discovering…' : 'Discover running Vast'}
-                </button>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
@@ -160,7 +155,7 @@ export function ExecutionTargetPicker() {
                 </div>
             )}
 
-            {(targetsQuery.error || refreshMutation.error || activateMutation.error || deactivateMutation.error) && (
+            {(targetsQuery.error || activateMutation.error || deactivateMutation.error) && (
                 <p role="alert" className="mt-3 text-xs text-red-300">
                     Execution target operation failed. The local execution target remains authoritative.
                 </p>

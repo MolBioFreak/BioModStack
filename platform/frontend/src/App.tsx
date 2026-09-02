@@ -14,7 +14,6 @@ const JobDetailPage = lazy(() => import('./components/JobDetailPage').then((modu
 const MolBioToolkitV2 = lazy(() => import('./components/MolBioToolkit/indexV2').then((module) => ({ default: module.MolBioToolkitV2 })));
 const NGSToolkit = lazy(() => import('./components/NGSToolkit').then((module) => ({ default: module.NGSToolkit })));
 const BioXpCockpit = lazy(() => import('./components/BioXpCockpit').then((module) => ({ default: module.BioXpCockpit })));
-const InfraMonitorPage = lazy(() => import('./components/InfraMonitorPage').then((module) => ({ default: module.InfraMonitorPage })));
 const StatsToolkitLauncher = lazy(() => import('./components/StatsToolkitLauncher').then((module) => ({ default: module.StatsToolkitLauncher })));
 
 function RouteLoadingFallback() {
@@ -104,8 +103,8 @@ function App() {
             />
             {/* Isolated Stats Toolkit rendered inside the BioModStack workspace. */}
             <Route path="/stats" element={<StatsToolkitLauncher />} />
-            {/* Infra Monitor - native workstation telemetry surface */}
-            <Route path="/infra" element={<InfraMonitorPage />} />
+            {/* Historical analytics route now resolves to Dashboard telemetry. */}
+            <Route path="/infra" element={<Navigate replace to="/" />} />
             {/* BioXP Handler Controls */}
             <Route
               path="/bioxp"
