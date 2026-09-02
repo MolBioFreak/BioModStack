@@ -9,11 +9,11 @@ import { useLocation } from 'react-router-dom';
 import { ngsResultHref } from '../../lib/ngsResultRouting';
 import { createLatestAsyncResourceController } from '../../lib/latestAsyncResource';
 import {
-    fetchRestrictionAnalysis,
+    fetchRestrictionAnalysisBatch,
     fetchRestrictionCatalog,
     fetchRestrictionProducts,
     simulateRestrictionDigest,
-    type RestrictionAnalysisResponse,
+    type RestrictionAnalysisBatch,
     type RestrictionCatalogReceipt,
     type RestrictionDigestSimulation,
     type RestrictionProductReleaseReceipt,
@@ -875,7 +875,7 @@ export function MolBioToolkitV2() {
     const [restrictionCatalog, setRestrictionCatalog] = useState<RestrictionCatalogReceipt | null>(null);
     const [restrictionCatalogRecords, setRestrictionCatalogRecords] = useState<RestrictionRecord[]>([]);
     const [restrictionProductEvidence, setRestrictionProductEvidence] = useState<RestrictionProductReleaseReceipt | null>(null);
-    const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisResponse | null>(null);
+    const [restrictionAnalysis, setRestrictionAnalysis] = useState<RestrictionAnalysisBatch | null>(null);
     const [restrictionAuthorityLoading, setRestrictionAuthorityLoading] = useState(false);
     const [restrictionAuthorityError, setRestrictionAuthorityError] = useState<string | null>(null);
     const [restrictionDigest, setRestrictionDigest] = useState<RestrictionDigestSimulation | null>(null);
@@ -929,12 +929,10 @@ export function MolBioToolkitV2() {
                     fetchRestrictionProducts({ signal: abort.signal }),
                 ]);
                 if (!authorityController.isCurrent(token)) return;
-                const analysisResult = await fetchRestrictionAnalysis({
+                const analysisResult = await fetchRestrictionAnalysisBatch({
                     source: restrictionSource,
-                    catalog: {
-                        catalog_id: catalogResult.catalog.catalog_id,
-                        expected_catalog_sha256: catalogResult.catalog.catalog_sha256,
-                    },
+                    catalog: catalogResult.catalog,
+                    records: catalogResult.items,
                     signal: abort.signal,
                 });
                 if (!authorityController.isCurrent(token)) return;

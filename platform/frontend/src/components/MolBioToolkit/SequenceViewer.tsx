@@ -15,7 +15,7 @@ import {
     type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, PrimerTmSettings } from '../../lib/api';
-import type { RestrictionAnalysisResponse, RestrictionOccurrence } from '../../lib/restrictionAnalysis';
+import type { RestrictionAnalysisBatch, RestrictionOccurrence } from '../../lib/restrictionAnalysis';
 import {
     getSeqVizTouchRotationWheelDelta,
     installSeqVizTouchBridge,
@@ -370,7 +370,7 @@ interface SequenceViewerProps {
     sequenceData: SequenceData;
     visibility: VisibilityState;
     selectedEnzymes?: string[];
-    restrictionAnalysis?: RestrictionAnalysisResponse | null;
+    restrictionAnalysis?: RestrictionAnalysisBatch | null;
     searchQuery?: string;
     selection?: SelectionInfo | null;
     onSelection?: (sel: SelectionInfo) => void;

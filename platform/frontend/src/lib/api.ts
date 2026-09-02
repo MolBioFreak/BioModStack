@@ -2,6 +2,7 @@ import axios from 'axios';
 import type { TelemetryChartHistoryResponse } from './telemetryChart';
 import type { ViewerSnapshotV2 } from '../structureViewer/contracts/m6Reproducibility';
 import type { SpatialVolumeDescriptorV1, VolumeRegistrationV1, VolumeSegmentationV1 } from '../structureViewer/contracts/spatialVolumes';
+import { requireGoldenGateAssemblyResponse } from './goldenGateAuthority';
 
 // Use relative path - Vite's proxy handles /api -> localhost:8000
 const API_BASE = '';
@@ -2811,6 +2812,12 @@ export interface AssemblyJunction {
     notes: string[];
 }
 
+export interface GoldenGateCatalogAuthority {
+    enzyme_id: string;
+    catalog_id: string;
+    catalog_sha256: string;
+}
+
 export interface AssemblyProduct {
     sequence: string;
     circular: boolean;
@@ -2820,6 +2827,7 @@ export interface AssemblyProduct {
     junctions: AssemblyJunction[];
     warnings: string[];
     validation_notes: string[];
+    golden_gate_authority: GoldenGateCatalogAuthority | null;
 }
 
 export interface AssemblyOperationResponse {
@@ -2958,6 +2966,8 @@ export interface GoldenGateAssemblyRequest {
     fragments: AssemblyFragmentInput[];
     circular?: boolean;
     enzyme_id: string;
+    catalog_id: string;
+    expected_catalog_sha256: string;
     new_name?: string;
     save_description?: string;
 }
@@ -3400,10 +3410,16 @@ export const fetchGoldenGateAssemblyOptions = () =>
     api.get<GoldenGateAssemblyOptionsResponse>('/api/molbio/assembly/golden-gate/options');
 
 export const simulateGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/simulate', data).then((response) => {
+        requireGoldenGateAssemblyResponse(response.data);
+        return response;
+    });
 
 export const saveGoldenGateAssembly = (data: GoldenGateAssemblyRequest) =>
-    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data);
+    api.post<AssemblyOperationResponse>('/api/molbio/assembly/golden-gate/save', data).then((response) => {
+        requireGoldenGateAssemblyResponse(response.data);
+        return response;
+    });
 
 // Antibody API
 export interface AntibodyOverlaySelection {

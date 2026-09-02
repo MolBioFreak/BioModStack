@@ -29,6 +29,14 @@ class GoldenGateAnalysisLimitError(AssemblyError):
     """Sanitized resource-limit boundary for public Golden Gate routes."""
 
 
+class GoldenGateCatalogNotFoundError(AssemblyError):
+    """The requested immutable catalog identity is not active."""
+
+
+class GoldenGateCatalogDigestMismatchError(AssemblyError):
+    """The requested immutable catalog bytes are not active."""
+
+
 @dataclass(frozen=True, slots=True)
 class TypeIISEnzyme:
     enzyme_id: str
@@ -70,11 +78,22 @@ def _resolve_from_catalog(catalog: CatalogView, enzyme_id: str) -> TypeIISEnzyme
     )
 
 
-def get_type_iis_enzyme(enzyme_id: str) -> TypeIISEnzyme:
+def resolve_golden_gate_enzyme(
+    *,
+    enzyme_id: str,
+    catalog_id: str,
+    expected_catalog_sha256: str,
+) -> TypeIISEnzyme:
     try:
         catalog = catalog_authority.require()
     except CatalogUnavailable as exc:
         raise AssemblyError("restriction catalog authority is unavailable") from exc
+    if catalog_id != catalog.catalog_id:
+        raise GoldenGateCatalogNotFoundError("restriction catalog was not found")
+    if expected_catalog_sha256 != catalog.content_sha256:
+        raise GoldenGateCatalogDigestMismatchError(
+            "restriction catalog digest does not match"
+        )
     return _resolve_from_catalog(catalog, enzyme_id)
 
 
@@ -116,13 +135,12 @@ def _site_count(sequence: str, *, circular: bool, enzyme: TypeIISEnzyme) -> int:
 def simulate_golden_gate(
     fragments: list[AssemblyFragment],
     *,
-    enzyme_id: str,
+    enzyme: TypeIISEnzyme,
     circular: bool,
 ) -> AssemblyProduct:
     if len(fragments) < 2:
         raise AssemblyError("Golden Gate assembly requires at least two fragments")
 
-    enzyme = get_type_iis_enzyme(enzyme_id)
     try:
         oriented = [orient_fragment(fragment) for fragment in fragments]
     except AssemblyError:

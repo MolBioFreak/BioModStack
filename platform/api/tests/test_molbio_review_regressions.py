@@ -67,8 +67,9 @@ from routers.nucleotide_sequences import (  # noqa: E402
     normalize_feature_payloads,
     update_sequence,
 )
-from services.assembly.golden_gate import simulate_golden_gate  # noqa: E402
+from services.assembly.golden_gate import resolve_golden_gate_enzyme, simulate_golden_gate  # noqa: E402
 from services.assembly.types import AssemblyFragment, FragmentEnd  # noqa: E402
+from services.restriction_catalog import catalog_authority  # noqa: E402
 from services.molbio_ops import pcr_product  # noqa: E402
 from services.molbio_persistence import record_sequence_revision  # noqa: E402
 from services.primer_qc import evaluate_primer_pair_qc  # noqa: E402
@@ -945,6 +946,12 @@ def test_three_prime_heterodimer_anchors_both_physical_three_prime_ends() -> Non
 
 
 def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends() -> None:
+    catalog = catalog_authority.require()
+    enzyme = resolve_golden_gate_enzyme(
+        enzyme_id="BsaI",
+        catalog_id=catalog.catalog_id,
+        expected_catalog_sha256=catalog.content_sha256,
+    )
     with pytest.raises(ValidationError):
         AssemblyFragmentEndSchema(type="sticky", overhang="AAAA")
 
@@ -965,7 +972,7 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         ),
     ]
     with pytest.raises(ValueError, match="recognition site"):
-        simulate_golden_gate(fragments, enzyme_id="BsaI", circular=False)
+        simulate_golden_gate(fragments, enzyme=enzyme, circular=False)
 
     reverse_site_fragments = [
         AssemblyFragment(
@@ -978,7 +985,7 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
         fragments[1],
     ]
     with pytest.raises(ValueError, match="recognition site"):
-        simulate_golden_gate(reverse_site_fragments, enzyme_id="BsaI", circular=False)
+        simulate_golden_gate(reverse_site_fragments, enzyme=enzyme, circular=False)
 
     junction_fragments = [
         AssemblyFragment(
@@ -996,7 +1003,7 @@ def test_assembly_schemas_and_golden_gate_reject_unsupported_or_ambiguous_ends()
             right_end=FragmentEnd(type="sticky_5", overhang="TTTT"),
         ),
     ]
-    product = simulate_golden_gate(junction_fragments, enzyme_id="BsaI", circular=False)
+    product = simulate_golden_gate(junction_fragments, enzyme=enzyme, circular=False)
     assert "GAGACC" in product.sequence
     assert any("either orientation" in warning for warning in product.warnings)
     assert any("catalog enzyme BsaI" in note for note in product.validation_notes)

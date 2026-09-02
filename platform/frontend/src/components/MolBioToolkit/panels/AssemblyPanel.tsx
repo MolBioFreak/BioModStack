@@ -18,7 +18,7 @@ import {
     type GoldenGateAssemblyOptionsResponse,
     type SavedGibsonWorkupListItem,
 } from '../../../lib/api';
-import { buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
+import { buildAssemblyReloadOperationParams, buildGoldenGateAssemblyRequest } from '../../../lib/goldenGateAuthority';
 import type { SequenceData, SelectionInfo } from '../types';
 import { GibsonDesignWorkspace } from './GibsonDesignWorkspace';
 
@@ -659,12 +659,7 @@ export function AssemblyPanel({
             analysisTracks: [],
             parentId: savedSequence?.parent_id ?? null,
             operation: savedSequence?.operation ?? result.product.mode,
-            operationParams: savedSequence?.operation_params ?? {
-                mode: result.product.mode,
-                fragment_count: result.product.fragments.length,
-                warnings: result.product.warnings,
-                validation_notes: result.product.validation_notes,
-            },
+            operationParams: savedSequence?.operation_params ?? buildAssemblyReloadOperationParams(result.product),
             version: savedSequence?.version ?? 1,
         }, savedSequence?.id || null);
     };

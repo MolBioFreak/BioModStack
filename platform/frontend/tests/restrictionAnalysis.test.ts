@@ -12,6 +12,7 @@ import {
     simulateRestrictionDigest,
 } from '../src/lib/restrictionAnalysis';
 import { createLatestAsyncResourceController } from '../src/lib/latestAsyncResource';
+import * as restrictionApi from '../src/lib/restrictionAnalysis';
 
 const H = 'a'.repeat(64);
 const POLICY = {
@@ -291,6 +292,49 @@ describe('restriction API boundary', () => {
             visit(body);
             expect(body.scope?.enzyme_ids ?? body.enzyme_ids).toEqual(['EcoRI']);
         }
+    });
+
+    it('replaces an oversized all-capable request with deterministic explicit chunks', async () => {
+        const ids = Array.from({ length: 513 }, (_, index) => `E${String(index).padStart(3, '0')}`);
+        const records = ids.map((enzyme_id) => ({ ...clone(RECORD), enzyme_id, canonical_name: enzyme_id }));
+        const receipt = clone(RECEIPT);
+        receipt.counts = { total: 513, geometry_ready: 513, commercial_geometry_ready: 0, unknown_geometry: 0, nicking: 0, two_event_double_strand: 0 };
+        const revisionSource = { ...SOURCE, kind: 'molecular_revision', name: 'fixture', sequence_id: 'seq-1', revision_id: 'rev-1', revision_number: 1 };
+        const makeResponse = (chunk: string[], index: number) => {
+            const response = clone(ANALYSIS);
+            const resultHash = String(index + 1).repeat(64);
+            response.source = revisionSource;
+            response.catalog = receipt;
+            response.request_sha256 = String(index + 4).repeat(64);
+            response.result_sha256 = resultHash;
+            response.analysis.result_sha256 = resultHash;
+            response.analysis.counts = { recognition_site_count_definite: 0, recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0 };
+            response.analysis.enzyme_summaries = chunk.map((enzyme_id) => ({ enzyme_id, canonical_name: enzyme_id, analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 0, recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0, limitations: [] }));
+            response.analysis.occurrences = [];
+            response.analysis.grouped_cleavages = [];
+            return response;
+        };
+        const explicitChunks: string[][] = [];
+        const transport = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+            const body = JSON.parse(String(init?.body));
+            if (body.scope.mode === 'all_analysis_capable') return new Response(JSON.stringify({ detail: { code: 'analysis_failed' } }), { status: 500 });
+            explicitChunks.push(body.scope.enzyme_ids);
+            return new Response(JSON.stringify(makeResponse(body.scope.enzyme_ids, explicitChunks.length - 1)));
+        });
+        const source = { kind: 'molecular_revision' as const, sequence_id: 'seq-1', revision_id: 'rev-1', expected_content_sha256: H, topology: 'linear' as const };
+        const binding = { catalog_id: 'catalog-v1', expected_catalog_sha256: H };
+        await expect(fetchRestrictionAnalysis({ source, catalog: binding, enzymeIds: [], transport })).rejects.toThrow('explicit stable enzyme IDs');
+        const batchFetch = (restrictionApi as unknown as { fetchRestrictionAnalysisBatch(args: unknown): Promise<{ chunks: Array<{ enzyme_ids: string[]; result_sha256: string }>; analysis: { enzyme_summaries: Array<{ enzyme_id: string }> } }> }).fetchRestrictionAnalysisBatch;
+
+        const result = await batchFetch({ source, catalog: receipt, records, transport });
+
+        expect(explicitChunks.map((chunk) => chunk.length)).toEqual([200, 200, 113]);
+        expect(explicitChunks.flat()).toEqual(ids);
+        expect(result.analysis.enzyme_summaries.map((row) => row.enzyme_id)).toEqual(ids);
+        expect(result.chunks.map((chunk) => chunk.result_sha256)).toEqual(['1'.repeat(64), '2'.repeat(64), '3'.repeat(64)]);
+        await expect(batchFetch({ source, catalog: receipt, records: records.slice(0, -1), transport })).rejects.toThrow('catalog record count');
+        const missingCapability = records.map((row, index) => index === 0 ? { ...row, analysis_capability: 'recognition_only' } : row);
+        await expect(batchFetch({ source, catalog: receipt, records: missingCapability, transport })).rejects.toThrow('analysis-capable catalog count');
     });
 
     it('prevents an older completion from replacing newer authority even when transport ignores AbortSignal', async () => {

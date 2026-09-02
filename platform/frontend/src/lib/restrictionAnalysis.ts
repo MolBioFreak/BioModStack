@@ -7,13 +7,29 @@ export type RestrictionSource =
     | { kind: 'inline_dna'; name: string; dna: string; topology: Topology }
     | { kind: 'molecular_revision'; sequence_id: string; revision_id: string; expected_content_sha256: string; topology?: Topology | null };
 export interface RestrictionCatalogBinding { catalog_id: string; expected_catalog_sha256: string }
-export interface RestrictionCatalogReceipt { catalog_id: string; catalog_sha256: string; source_release: string; counts: { total: number; geometry_ready: number; commercial_geometry_ready: number; unknown_geometry: number; nicking: number; two_event_double_strand: number }; [key: string]: unknown }
+export interface RestrictionCatalogReceipt { catalog_id: string; catalog_sha256: string; source_release: string; counts: { total: number; geometry_ready: number; commercial_geometry_ready: number; unknown_geometry: number; nicking: number; two_event_double_strand: number }; bounds: { analysis_explicit_enzyme_maximum: number; [key: string]: unknown }; [key: string]: unknown }
 export interface RestrictionRecord { enzyme_id: string; canonical_name: string; aliases: string[]; recognition: { site_iupac: string; site_alternatives_iupac: string[]; [key: string]: unknown }; cleavage: { status: 'known_double_strand' | 'known_single_strand_nick' | 'unknown'; events: Array<{ overhang_kind: 'blunt' | 'five_prime' | 'three_prime'; [key: string]: unknown }>; nick: { strand: 'top' | 'bottom'; [key: string]: unknown } | null; [key: string]: unknown }; enzyme_kind: 'double_strand_endonuclease' | 'nicking_endonuclease' | 'restriction_enzyme_geometry_unresolved'; analysis_capability: 'digest_simulation' | 'nicking_analysis' | 'recognition_only'; golden_gate_compatible: boolean; supplier_provenance: { reported_commercial: boolean; historical_supplier_codes: string[]; [key: string]: unknown }; [key: string]: unknown }
 export interface RestrictionDoubleStrandEvent { enzyme_id: string; occurrence_id: string; event_ordinal: number; orientation: Orientation; status: 'complete' | 'geometry_out_of_bounds'; top_boundary: number | null; bottom_boundary: number | null; top_boundary_unwrapped: number; bottom_boundary_unwrapped: number; contributor_group_id: string; [key: string]: unknown }
 export interface RestrictionNickEvent { enzyme_id: string; occurrence_id: string; event_ordinal: number; orientation: Orientation; strand: 'top' | 'bottom'; status: 'complete' | 'geometry_out_of_bounds'; boundary: number | null; boundary_unwrapped: number; contributor_group_id: string; [key: string]: unknown }
 export interface RestrictionOccurrence { occurrence_id: string; occurrence_ordinal: number; enzyme_id: string; canonical_name: string; orientation: Orientation; certainty: Certainty; site_start: number; site_end_unwrapped: number; site_segments: Array<[number, number]>; wraps_origin: boolean; double_strand_events: RestrictionDoubleStrandEvent[]; nicks: RestrictionNickEvent[]; limitations: string[]; [key: string]: unknown }
 export interface RestrictionEnzymeSummary { enzyme_id: string; canonical_name: string; analysis_capability: RestrictionRecord['analysis_capability']; cleavage_status: RestrictionRecord['cleavage']['status']; recognition_site_count_definite: number; recognition_site_count_possible: number; double_strand_break_count: number; nick_count: number; limitations: string[] }
 export interface RestrictionAnalysisResponse { schema: 'bms.molbio.restriction-analysis-response.v1'; source: { kind: 'inline_dna' | 'molecular_revision'; name: string | null; sequence_id: string | null; revision_id: string | null; revision_number: number | null; content_sha256: string; content_length: number; topology: Topology }; catalog: RestrictionCatalogReceipt; request_sha256: string; result_sha256: string; analysis: { algorithm_id: 'bms-restriction-analysis'; algorithm_version: '2.1.0'; source_sha256: string; topology: Topology; sequence_length: number; catalog_sha256: string; counts: { recognition_site_count_definite: number; recognition_site_count_possible: number; double_strand_break_count: number; nick_count: number }; enzyme_summaries: RestrictionEnzymeSummary[]; occurrences: RestrictionOccurrence[]; grouped_cleavages: unknown[]; warnings: string[]; limitations: unknown[]; result_sha256: string; [key: string]: unknown } }
+export interface RestrictionAnalysisChunkAuthority { enzyme_ids: string[]; request_sha256: string; result_sha256: string; analysis_result_sha256: string; response: RestrictionAnalysisResponse }
+export interface RestrictionAnalysisBatch {
+    schema: 'bms.molbio.restriction-analysis-batch-view.v1';
+    source: RestrictionAnalysisResponse['source'];
+    catalog: RestrictionCatalogReceipt;
+    chunks: RestrictionAnalysisChunkAuthority[];
+    authority_key: string;
+    analysis: {
+        counts: RestrictionAnalysisResponse['analysis']['counts'];
+        enzyme_summaries: RestrictionEnzymeSummary[];
+        occurrences: RestrictionOccurrence[];
+        grouped_cleavages: unknown[];
+        warnings: string[];
+        limitations: unknown[];
+    };
+}
 export interface RestrictionDigestEnd { kind: 'natural' | 'blunt' | 'five_prime_overhang' | 'three_prime_overhang' | 'no_cut_circular'; enzyme_created: boolean; side: 'left' | 'right'; protruding_strand: 'top' | 'bottom' | null; overhang_sequence_5to3: string | null; length_nt: number; contributing_enzyme_ids: string[]; contributor_group_id: string | null; [key: string]: unknown }
 export interface RestrictionDigestFragment { fragment_index: number; topology: Topology; top_strand_sequence: string; reference_span_bp: number; source_segments: Array<[number, number]>; wraps_origin: boolean; left_end: RestrictionDigestEnd; right_end: RestrictionDigestEnd; contributing_enzyme_ids: string[]; [key: string]: unknown }
 export interface RestrictionDigestSimulation { schema: 'bms.molbio.restriction-digest-simulation.v1'; cleavage_state: 'uncut' | 'linearized' | 'fragmented'; source: RestrictionAnalysisResponse['source']; catalog: RestrictionCatalogReceipt; selected_enzyme_ids: string[]; selected_enzymes: RestrictionRecord[]; occurrences: RestrictionOccurrence[]; cleavages: unknown[]; fragments: RestrictionDigestFragment[]; warnings: string[]; limitations: string[]; simulation_sha256: string; [key: string]: unknown }
@@ -124,5 +140,74 @@ async function sourceIdentityMatches(source: RestrictionSource, receipt: Restric
     const actual = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
     return receipt.content_sha256 === actual;
 }
-export async function fetchRestrictionAnalysis({ source, catalog, enzymeIds, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogBinding; enzymeIds?: string[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionAnalysisResponse> { const scope = enzymeIds && enzymeIds.length > 0 ? { mode: 'explicit', enzyme_ids: enzymeIds, commercial_only: false } : { mode: 'all_analysis_capable', commercial_only: false }; const response = parseRestrictionAnalysis(await json(await transport('/api/molbio/restriction/analyze', { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schema: 'bms.molbio.restriction-analysis-request.v1', ...requestBody(source, catalog), scope, regions: [], include_possible_sites: true, methylation_policy: 'report_only' }) }))); if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.expected_catalog_sha256) throw new Error('Restriction analysis catalog authority mismatch.'); if (!await sourceIdentityMatches(source, response.source)) throw new Error('Restriction analysis source authority mismatch.'); return response; }
+export async function fetchRestrictionAnalysis({ source, catalog, enzymeIds, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogBinding; enzymeIds: string[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionAnalysisResponse> {
+    if (enzymeIds.length === 0) throw new Error('Restriction analysis requires explicit stable enzyme IDs.');
+    unique(enzymeIds, 'enzymeIds');
+    const response = parseRestrictionAnalysis(await json(await transport('/api/molbio/restriction/analyze', {
+        method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schema: 'bms.molbio.restriction-analysis-request.v1', ...requestBody(source, catalog), scope: { mode: 'explicit', enzyme_ids: enzymeIds, commercial_only: false }, regions: [], include_possible_sites: true, methylation_policy: 'report_only' }),
+    })));
+    if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.expected_catalog_sha256) throw new Error('Restriction analysis catalog authority mismatch.');
+    if (!await sourceIdentityMatches(source, response.source)) throw new Error('Restriction analysis source authority mismatch.');
+    return response;
+}
+
+export async function fetchRestrictionAnalysisBatch({ source, catalog, records, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogReceipt; records: RestrictionRecord[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionAnalysisBatch> {
+    if (records.length !== catalog.counts.total) throw new Error('Restriction catalog record count is incomplete.');
+    const enzymeIds = records
+        .filter((record) => record.analysis_capability === 'digest_simulation' || record.analysis_capability === 'nicking_analysis')
+        .map((record) => record.enzyme_id);
+    unique(enzymeIds, 'analysis-capable catalog enzyme IDs');
+    if (enzymeIds.length !== catalog.counts.geometry_ready + catalog.counts.nicking) throw new Error('Restriction analysis-capable catalog count is incomplete.');
+    if (enzymeIds.length === 0) throw new Error('Restriction catalog has no analysis-capable enzyme authority.');
+    const maximum = Math.min(256, catalog.bounds.analysis_explicit_enzyme_maximum);
+    if (!Number.isInteger(maximum) || maximum < 1) throw new Error('Restriction catalog explicit-analysis bound is invalid.');
+    const binding = { catalog_id: catalog.catalog_id, expected_catalog_sha256: catalog.catalog_sha256 };
+    const chunks: RestrictionAnalysisChunkAuthority[] = [];
+    const summaries: RestrictionEnzymeSummary[] = [];
+    const occurrences: RestrictionOccurrence[] = [];
+    const groupedCleavages: unknown[] = [];
+    const warnings: string[] = [];
+    const limitations: unknown[] = [];
+    const counts = { recognition_site_count_definite: 0, recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0 };
+    let sourceBytes: string | null = null;
+    const seenSummaryIds = new Set<string>();
+    const seenOccurrenceIds = new Set<string>();
+
+    for (let start = 0; start < enzymeIds.length; start += maximum) {
+        const chunkIds = enzymeIds.slice(start, start + maximum);
+        const response = await fetchRestrictionAnalysis({ source, catalog: binding, enzymeIds: chunkIds, transport, signal });
+        const currentSourceBytes = JSON.stringify(response.source);
+        if (sourceBytes !== null && sourceBytes !== currentSourceBytes) throw new Error('Restriction analysis chunk source authority mismatch.');
+        sourceBytes = currentSourceBytes;
+        if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.catalog_sha256) throw new Error('Restriction analysis chunk catalog authority mismatch.');
+        const summaryIds = response.analysis.enzyme_summaries.map((summary) => summary.enzyme_id);
+        if (!sameSet(summaryIds, chunkIds)) throw new Error('Restriction analysis chunk enzyme coverage is incomplete.');
+        for (const summary of response.analysis.enzyme_summaries) {
+            if (seenSummaryIds.has(summary.enzyme_id)) throw new Error('Restriction analysis responses overlap.');
+            seenSummaryIds.add(summary.enzyme_id);
+            summaries.push(summary);
+        }
+        for (const occurrence of response.analysis.occurrences) {
+            if (!seenSummaryIds.has(occurrence.enzyme_id) || seenOccurrenceIds.has(occurrence.occurrence_id)) throw new Error('Restriction analysis occurrence authority overlaps or is missing.');
+            seenOccurrenceIds.add(occurrence.occurrence_id);
+            occurrences.push(occurrence);
+        }
+        for (const key of Object.keys(counts) as Array<keyof typeof counts>) counts[key] += response.analysis.counts[key];
+        groupedCleavages.push(...response.analysis.grouped_cleavages);
+        warnings.push(...response.analysis.warnings);
+        limitations.push(...response.analysis.limitations);
+        chunks.push({ enzyme_ids: chunkIds, request_sha256: response.request_sha256, result_sha256: response.result_sha256, analysis_result_sha256: response.analysis.result_sha256, response });
+    }
+    if (seenSummaryIds.size !== enzymeIds.length || enzymeIds.some((enzymeId) => !seenSummaryIds.has(enzymeId))) throw new Error('Restriction analysis batch is incomplete.');
+    const authorityKey = JSON.stringify(chunks.map((chunk) => ({ enzyme_ids: chunk.enzyme_ids, request_sha256: chunk.request_sha256, result_sha256: chunk.result_sha256, analysis_result_sha256: chunk.analysis_result_sha256 })));
+    return {
+        schema: 'bms.molbio.restriction-analysis-batch-view.v1',
+        source: chunks[0].response.source,
+        catalog,
+        chunks,
+        authority_key: authorityKey,
+        analysis: { counts, enzyme_summaries: summaries, occurrences, grouped_cleavages: groupedCleavages, warnings, limitations },
+    };
+}
 export async function simulateRestrictionDigest({ source, catalog, enzymeIds, transport = fetch, signal }: { source: RestrictionSource; catalog: RestrictionCatalogBinding; enzymeIds: string[]; transport?: Transport; signal?: AbortSignal }): Promise<RestrictionDigestSimulation> { unique(enzymeIds, 'enzymeIds'); const response = parseRestrictionDigestSimulation(await json(await transport('/api/molbio/restriction/digests/simulate', { method: 'POST', credentials: 'same-origin', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ schema: 'bms.molbio.restriction-digest-simulation-request.v1', ...requestBody(source, catalog), enzyme_ids: enzymeIds }) }))); if (response.catalog.catalog_id !== catalog.catalog_id || response.catalog.catalog_sha256 !== catalog.expected_catalog_sha256 || response.selected_enzyme_ids.length !== enzymeIds.length || response.selected_enzyme_ids.some((idValue,i) => idValue !== enzymeIds[i]) || !await sourceIdentityMatches(source, response.source)) throw new Error('Restriction digest authority mismatch.'); return response; }

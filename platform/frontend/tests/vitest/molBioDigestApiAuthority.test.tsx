@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import './setup';
 import { DigestPanel } from '../../src/components/MolBioToolkit/panels/DigestPanel';
-import type { RestrictionAnalysisResponse, RestrictionCatalogReceipt, RestrictionDigestSimulation, RestrictionProductReleaseReceipt, RestrictionRecord } from '../../src/lib/restrictionAnalysis';
+import type { RestrictionAnalysisBatch, RestrictionCatalogReceipt, RestrictionDigestSimulation, RestrictionProductReleaseReceipt, RestrictionRecord } from '../../src/lib/restrictionAnalysis';
 import type { SequenceData } from '../../src/components/MolBioToolkit/types';
 
 const sequence: SequenceData = { name: 'API fixture', sequence: 'TTGAATTCAA', circular: false, sequenceType: 'dna', features: [] };
@@ -13,7 +13,8 @@ const catalog = { catalog_id: 'catalog-v1', catalog_sha256: 'a'.repeat(64), sour
 const products = { release_id: 'bms-restriction-products-permission-pending-v1', release_version: '1.0.0', content_sha256: 'c'.repeat(64), raw_sha256: 'd'.repeat(64), schema_raw_sha256: 'e'.repeat(64), created_at: null, created_at_policy: 'omitted_until_permissioned_evidence_release', source_policy: 'no_runtime_scraping_written_redistribution_permission_required', redistribution_permission_state: 'unavailable', permission_receipt: null, product_evidence_available: false, record_count: 0, active_claim_count: 0, core_catalog_digest_binding: 'independent_no_binding' } as RestrictionProductReleaseReceipt;
 const record = { enzyme_id: 'EcoRI', canonical_name: 'EcoRI', aliases: [], recognition: { site_iupac: 'GAATTC', site_alternatives_iupac: ['GAATTC'], palindromic: true }, cleavage: { status: 'known_double_strand', events: [{ top_offset: 1, bottom_offset: 5, overhang_kind: 'five_prime' }], nick: null }, enzyme_kind: 'double_strand_endonuclease', analysis_capability: 'digest_simulation', supplier_provenance: { reported_commercial: true, historical_supplier_codes: [] } } as unknown as RestrictionRecord;
 const occurrence = { occurrence_id: 'occ:1', occurrence_ordinal: 0, enzyme_id: 'EcoRI', canonical_name: 'EcoRI', orientation: 'forward', certainty: 'definite', site_start: 2, site_end_unwrapped: 8, site_segments: [[2, 8]], wraps_origin: false, double_strand_events: [{ enzyme_id: 'EcoRI', occurrence_id: 'occ:1', event_ordinal: 0, orientation: 'forward', status: 'complete', top_boundary: 3, bottom_boundary: 7, top_boundary_unwrapped: 3, bottom_boundary_unwrapped: 7, contributor_group_id: 'cut:1' }], nicks: [], limitations: [] };
-const analysis = { result_sha256: 'b'.repeat(64), analysis: { counts: { recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 }, enzyme_summaries: [{ enzyme_id: 'EcoRI', canonical_name: 'EcoRI', analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0, limitations: [] }], occurrences: [occurrence] } } as unknown as RestrictionAnalysisResponse;
+const analysis = { authority_key: 'b'.repeat(64), chunks: [{ enzyme_ids: ['EcoRI'], request_sha256: 'a'.repeat(64), result_sha256: 'b'.repeat(64), analysis_result_sha256: 'b'.repeat(64) }], analysis: { counts: { recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0 }, enzyme_summaries: [{ enzyme_id: 'EcoRI', canonical_name: 'EcoRI', analysis_capability: 'digest_simulation', cleavage_status: 'known_double_strand', recognition_site_count_definite: 1, recognition_site_count_possible: 0, double_strand_break_count: 1, nick_count: 0, limitations: [] }], occurrences: [occurrence] } } as unknown as RestrictionAnalysisBatch;
+const recognitionOnly = { ...record, enzyme_id: 'MysteryI', canonical_name: 'MysteryI', analysis_capability: 'recognition_only', cleavage: { status: 'unknown', events: [], nick: null } } as unknown as RestrictionRecord;
 const end = (side: 'left' | 'right', kind: 'five_prime_overhang' | 'three_prime_overhang' | 'blunt') => ({ kind, enzyme_created: true, side, protruding_strand: kind === 'blunt' ? null : 'top', overhang_sequence_5to3: kind === 'blunt' ? null : 'AATT', length_nt: kind === 'blunt' ? 0 : 4, contributing_enzyme_ids: ['EcoRI'], contributor_group_id: 'cut:1' });
 const simulation = { fragments: [
     { fragment_index: 0, reference_span_bp: 3, source_segments: [[0, 3]], left_end: end('left', 'five_prime_overhang'), right_end: end('right', 'three_prime_overhang') },
@@ -30,7 +31,7 @@ describe('DigestPanel backend authority', () => {
         const authorityEffect = toolkitSource.slice(toolkitSource.indexOf('const restrictionSource ='), toolkitSource.indexOf('const runRestrictionDigest ='));
         expect(authorityEffect).not.toContain('restrictionSelectionKey');
         expect(authorityEffect).toContain('}, [restrictionSource]);');
-        expect(authorityEffect).not.toMatch(/fetchRestrictionAnalysis\([\s\S]*?enzymeIds/);
+        expect(authorityEffect).toContain('fetchRestrictionAnalysisBatch');
 
         container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
         const highlight = vi.fn();
@@ -42,6 +43,16 @@ describe('DigestPanel backend authority', () => {
         expect(mapChange).toHaveBeenCalledWith(['EcoRI']);
         expect(highlight.mock.calls.at(-1)?.[0]).toBe(highlighted);
         expect(container.querySelector('[data-fragment-index="0"]')).toBeTruthy();
+    });
+
+    it('renders complete catalog discovery and exact ordered chunk hashes', async () => {
+        container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
+        await act(async () => root?.render(<DigestPanel sequenceData={sequence} sequenceId={null} onHighlight={vi.fn()} selectedEnzymes={[]} onEnzymesChange={vi.fn()} catalog={catalog} productEvidence={products} catalogRecords={[record, recognitionOnly]} analysis={analysis} authorityLoading={false} authorityError={null} digestSimulation={null} digestLoading={false} digestError={null} onDigestSelectionChange={vi.fn()} onSimulateDigest={vi.fn()} />));
+        const all = [...container.querySelectorAll('button')].find((button) => button.textContent === 'All');
+        await act(async () => all?.click());
+        expect(container.textContent).toContain('MysteryI');
+        expect(container.textContent).toContain('geometry unavailable');
+        expect(container.querySelector(`[data-restriction-chunk-result-sha256="${'b'.repeat(64)}"]`)).toBeTruthy();
     });
 
     it('clears fragment highlights when digest authority disappears and on unmount', async () => {

@@ -57,8 +57,11 @@ from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
     GoldenGateAnalysisLimitError,
+    GoldenGateCatalogDigestMismatchError,
+    GoldenGateCatalogNotFoundError,
     GoldenGateInvalidDNAError,
     golden_gate_options as catalog_golden_gate_options,
+    resolve_golden_gate_enzyme,
     simulate_golden_gate,
 )
 from services.assembly.ligation import simulate_ligation
@@ -861,7 +864,17 @@ class AssemblyJunctionResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class GoldenGateCatalogAuthorityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enzyme_id: str
+    catalog_id: str
+    catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AssemblyProductResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     sequence: str
     circular: bool
     length: int
@@ -870,6 +883,15 @@ class AssemblyProductResponse(BaseModel):
     junctions: List[AssemblyJunctionResponse]
     warnings: List[str] = Field(default_factory=list)
     validation_notes: List[str] = Field(default_factory=list)
+    golden_gate_authority: Optional[GoldenGateCatalogAuthorityResponse] = None
+
+    @model_validator(mode="after")
+    def validate_golden_gate_authority(self) -> "AssemblyProductResponse":
+        if self.mode == "golden_gate" and self.golden_gate_authority is None:
+            raise ValueError("Golden Gate products require catalog authority")
+        if self.mode != "golden_gate" and self.golden_gate_authority is not None:
+            raise ValueError("non-Golden-Gate products cannot carry Golden Gate authority")
+        return self
 
 
 class AssemblyOperationResponse(BaseModel):
@@ -1017,6 +1039,8 @@ class GoldenGateAssemblyRequest(BaseModel):
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$",
     )
+    catalog_id: str = Field(min_length=1, max_length=128)
+    expected_catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     new_name: Optional[str] = None
     save_description: Optional[str] = None
 
@@ -1320,6 +1344,15 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
         ],
         warnings=product.warnings,
         validation_notes=product.validation_notes,
+        golden_gate_authority=(
+            None
+            if product.golden_gate_authority is None
+            else GoldenGateCatalogAuthorityResponse(
+                enzyme_id=product.golden_gate_authority.enzyme_id,
+                catalog_id=product.golden_gate_authority.catalog_id,
+                catalog_sha256=product.golden_gate_authority.catalog_sha256,
+            )
+        ),
     )
 
 
@@ -2730,11 +2763,20 @@ async def golden_gate_options():
 @router.post("/assembly/golden-gate/simulate", response_model=AssemblyOperationResponse)
 async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
     try:
+        enzyme = resolve_golden_gate_enzyme(
+            enzyme_id=request.enzyme_id,
+            catalog_id=request.catalog_id,
+            expected_catalog_sha256=request.expected_catalog_sha256,
+        )
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_id=request.enzyme_id,
+            enzyme=enzyme,
             circular=request.circular,
         )
+    except GoldenGateCatalogNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GoldenGateCatalogDigestMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GoldenGateInvalidDNAError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except GoldenGateAnalysisLimitError as exc:
@@ -2757,11 +2799,20 @@ async def save_golden_gate_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
+        enzyme = resolve_golden_gate_enzyme(
+            enzyme_id=request.enzyme_id,
+            catalog_id=request.catalog_id,
+            expected_catalog_sha256=request.expected_catalog_sha256,
+        )
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_id=request.enzyme_id,
+            enzyme=enzyme,
             circular=request.circular,
         )
+    except GoldenGateCatalogNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GoldenGateCatalogDigestMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GoldenGateInvalidDNAError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except GoldenGateAnalysisLimitError as exc:
