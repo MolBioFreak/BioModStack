@@ -454,7 +454,6 @@ export interface RemoteGpuTelemetry {
 }
 
 export const EXECUTION_TARGET_STORAGE_KEY = 'bms.jobLauncher.executionTargetId';
-export const VAST_DISCOVERY_QUERY_KEY = ['execution-targets', 'providers', 'vast', 'inventory'] as const;
 
 const selectedExecutionTargetForSubmission = (): string | null => (
     typeof window !== 'undefined' && window.location.pathname === '/submit'

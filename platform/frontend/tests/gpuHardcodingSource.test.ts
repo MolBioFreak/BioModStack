@@ -119,7 +119,9 @@ test('dashboard telemetry exposes a hardware discovery refresh action', () => {
     assert.match(source, /INFRA_LIVE_SHARED_QUERY_KEY/u, 'Discovery action should refresh system telemetry');
     assert.match(source, /Discover running Vast/u, 'Dashboard telemetry should render Vast discovery beside local hardware discovery');
     assert.match(source, /refreshVastExecutionTargets/u, 'Dashboard Vast discovery should call the provider refresh API');
-    assert.match(source, /VAST_DISCOVERY_QUERY_KEY/u, 'Dashboard Vast discovery should preserve inventory for Job Launcher attachment');
+    assert.match(source, /fetchExecutionTargets/u, 'Dashboard should restore persisted Vast targets after navigation or reload');
+    assert.match(source, /activateExecutionTarget/u, 'Dashboard should own Vast worker attachment');
+    assert.match(source, /deactivateExecutionTarget/u, 'Dashboard should own Vast worker detachment');
     assert.doesNotMatch(picker, /Discover running Vast/u, 'Job Launcher should not duplicate the Dashboard discovery button');
-    assert.match(picker, /VAST_DISCOVERY_QUERY_KEY/u, 'Job Launcher should consume the Dashboard-discovered Vast inventory');
+    assert.doesNotMatch(picker, /Attach worker|Detach/u, 'Job Launcher should only select Local or a ready Vast target');
 });

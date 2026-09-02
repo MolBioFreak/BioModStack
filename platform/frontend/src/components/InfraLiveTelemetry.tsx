@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+    activateExecutionTarget,
+    deactivateExecutionTarget,
     discoverHardware,
+    EXECUTION_TARGET_STORAGE_KEY,
     fetchFanControl,
+    fetchExecutionTargets,
     fetchPowerControl,
     fetchSchedulerConfig,
     fetchSystemStatus,
@@ -11,7 +15,6 @@ import {
     setFanControl,
     setPowerControlManual,
     toggleGpuDisabled,
-    VAST_DISCOVERY_QUERY_KEY,
 } from '../lib/api';
 import type { GPUStatus, PerGpuFanStatus, SystemStatus } from '../lib/api';
 import {
@@ -1668,9 +1671,25 @@ export function InfraLiveTelemetry({
     });
     const vastDiscoverMutation = useMutation({
         mutationFn: refreshVastExecutionTargets,
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    });
+    const executionTargetsQuery = useQuery({
+        queryKey: ['execution-targets'],
+        queryFn: fetchExecutionTargets,
+        refetchInterval: 5_000,
+        retry: false,
+    });
+    const attachVastMutation = useMutation({
+        mutationFn: activateExecutionTarget,
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+    });
+    const detachVastMutation = useMutation({
+        mutationFn: deactivateExecutionTarget,
         onSuccess: (response) => {
-            queryClient.setQueryData(VAST_DISCOVERY_QUERY_KEY, response);
-            queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
+            if (window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) === response.data.id) {
+                window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+            }
+            return queryClient.invalidateQueries({ queryKey: ['execution-targets'] });
         },
     });
 
@@ -1690,6 +1709,9 @@ export function InfraLiveTelemetry({
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
+    const vastTargets = executionTargetsQuery.isError
+        ? []
+        : (executionTargetsQuery.data?.data ?? []).filter((target) => target.provider === 'vast');
 
     return (
         <section className={variant === 'infra'
@@ -1773,6 +1795,79 @@ export function InfraLiveTelemetry({
             {vastDiscoverMutation.isError && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
                     Vast discovery failed: {vastDiscoverMutation.error instanceof Error ? vastDiscoverMutation.error.message : 'unknown error'}
+                </div>
+            )}
+            {vastDiscoverMutation.isSuccess && vastTargets.length === 0 && (
+                <div className="mb-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3 text-sm text-[var(--text-secondary)]">
+                    No running Vast instances found.
+                </div>
+            )}
+            {vastTargets.length > 0 && (
+                <div className="mb-4 space-y-2" aria-label="Vast workers">
+                    {vastTargets.map((target) => {
+                        const isReady = target.active && target.state === 'ready';
+                        const isAttaching = target.state === 'probing'
+                            || (attachVastMutation.isPending && attachVastMutation.variables === target.provider_instance_id);
+                        const stateLabel = isReady
+                            ? 'Ready'
+                            : isAttaching
+                                ? 'Checking readiness'
+                                : target.state === 'unavailable'
+                                    ? 'Unavailable'
+                                    : target.state === 'inactive'
+                                        ? 'Inactive'
+                                        : 'Discovered';
+                        const canAttach = !isReady && !isAttaching && Boolean(target.host && target.port);
+                        return (
+                            <div
+                                key={target.id}
+                                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3"
+                            >
+                                <div className="min-w-0 text-sm text-[var(--text-secondary)]">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="font-semibold text-[var(--text-primary)]">
+                                            {target.name ?? `Vast ${target.provider_instance_id}`}
+                                        </span>
+                                        <span className={isReady ? 'font-semibold text-emerald-300' : 'text-[var(--text-muted)]'}>
+                                            {stateLabel}
+                                        </span>
+                                    </div>
+                                    <div className="mt-1 text-xs">
+                                        {String(target.capabilities.gpu_count ?? '?')} × {String(target.capabilities.gpu_name ?? 'GPU')}
+                                        {target.pricing.hourly_rate != null ? ` · $${target.pricing.hourly_rate.toFixed(3)}/hr` : ''}
+                                        {isReady ? ' · Remote analytics available' : ''}
+                                    </div>
+                                    {target.last_error && (
+                                        <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
+                                    )}
+                                </div>
+                                {isReady ? (
+                                    <button
+                                        type="button"
+                                        onClick={() => detachVastMutation.mutate(target.id)}
+                                        disabled={detachVastMutation.isPending}
+                                        className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-200 disabled:opacity-50"
+                                    >
+                                        {detachVastMutation.isPending ? 'Detaching…' : 'Detach'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={() => attachVastMutation.mutate(target.provider_instance_id)}
+                                        disabled={!canAttach || attachVastMutation.isPending}
+                                        className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 disabled:opacity-40"
+                                    >
+                                        {isAttaching ? 'Attaching…' : 'Attach worker'}
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+            {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError) && (
+                <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
+                    Vast worker operation failed. Local execution remains authoritative.
                 </div>
             )}
 

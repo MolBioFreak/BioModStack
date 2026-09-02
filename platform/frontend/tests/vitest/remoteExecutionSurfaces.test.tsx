@@ -9,7 +9,6 @@ import { RemoteGpuTelemetry } from '../../src/components/RemoteGpuTelemetry';
 import {
     api,
     EXECUTION_TARGET_STORAGE_KEY,
-    VAST_DISCOVERY_QUERY_KEY,
     submitBoltzApiJob,
     submitOntBarcodeBatch,
     submitOntNgsJob,
@@ -55,6 +54,20 @@ const discoveredTarget = {
     started_at: '2026-08-31T12:00:00Z',
 };
 
+const persistedDiscoveredTarget = {
+    ...readyTarget,
+    id: 'vast:456',
+    provider_instance_id: '456',
+    name: 'Remote A6000',
+    state: 'discovered' as const,
+    active: false,
+    host: '203.0.113.11',
+    capabilities: { gpu_count: 1, gpu_name: 'RTX A6000', gpu_vram_mb: 49140 },
+    pricing: { hourly_rate: 0.35, provider_started_at: '2026-08-31T12:00:00Z' },
+    host_key_sha256: null,
+    activated_at: null,
+};
+
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
@@ -62,12 +75,15 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
-    it('discovers Vast from the Dashboard beside local hardware discovery and shares the inventory', async () => {
+    it('discovers Vast beside local hardware discovery and renders the persisted target on Dashboard', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const requests: string[] = [];
+        let targets = [] as typeof persistedDiscoveredTarget[];
         api.defaults.adapter = async (config) => {
             requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/execution-targets') return response(targets);
             if (config.url === '/api/execution-targets/providers/vast/refresh') {
+                targets = [persistedDiscoveredTarget];
                 return response({
                     provider: 'vast',
                     available: true,
@@ -99,28 +115,58 @@ describe('remote execution operator surfaces', () => {
         });
 
         expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
-        expect(client.getQueryData<{ data: unknown }>(VAST_DISCOVERY_QUERY_KEY)?.data).toEqual({
-            provider: 'vast',
-            available: true,
-            credential_configured: true,
-            message: '1 running instance found',
-            instances: [discoveredTarget],
-        });
+        expect(container.textContent).toContain('Remote A6000');
+        expect(container.textContent).toContain('Discovered');
+        expect(container.textContent).toContain('Attach worker');
 
         await act(async () => root.unmount());
         client.clear();
     });
 
-    it('uses Dashboard-discovered Vast inventory for attachment without duplicating discovery in Job Launcher', async () => {
+    it('restores a persisted discovered target and attaches it from Dashboard without launching a workflow', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-        client.setQueryData(['execution-targets'], response([]));
-        client.setQueryData(VAST_DISCOVERY_QUERY_KEY, response({
-            provider: 'vast',
-            available: true,
-            credential_configured: true,
-            message: '1 running instance found',
-            instances: [discoveredTarget],
-        }));
+        client.setQueryData(['execution-targets'], response([persistedDiscoveredTarget]));
+        const requests: string[] = [];
+        let targets = [persistedDiscoveredTarget];
+        api.defaults.adapter = async (config) => {
+            requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/execution-targets') return response(targets);
+            if (config.url === '/api/execution-targets/activate') {
+                targets = [readyTarget];
+                return response(readyTarget);
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>);
+            await Promise.resolve();
+        });
+
+        expect(container.textContent).toContain('Remote A6000');
+        expect(container.textContent).toContain('Attach worker');
+        const attachButton = [...container.querySelectorAll('button')]
+            .find((button) => button.textContent?.trim() === 'Attach worker');
+        await act(async () => {
+            attachButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(requests).toContain('POST /api/execution-targets/activate');
+        expect(container.textContent).toContain('Ready');
+        expect(container.textContent).toContain('Remote analytics available');
+        expect(container.textContent).toContain('Detach');
+
+        await act(async () => root.unmount());
+        client.clear();
+    });
+
+    it('keeps lifecycle controls on Dashboard and leaves Job Launcher for placement only', async () => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([readyTarget]));
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
@@ -130,9 +176,11 @@ describe('remote execution operator surfaces', () => {
             await Promise.resolve();
         });
 
-        expect(container.textContent).toContain('Remote A6000');
-        expect(container.textContent).toContain('Attach worker');
+        expect(container.textContent).toContain('Local');
+        expect(container.textContent).toContain('Vast · Remote 4090');
         expect(container.textContent).not.toContain('Discover running Vast');
+        expect(container.textContent).not.toContain('Attach worker');
+        expect(container.textContent).not.toContain('Detach');
 
         await act(async () => root.unmount());
         client.clear();
