@@ -919,7 +919,7 @@ def test_phase2_catalog_readiness_exposes_receipt_age_bounds_and_analysis_capabi
     assert readiness["bounds"]["maximum_limit"] == 250
     assert readiness["source_year"] == 2024
     assert readiness["analysis_enabled"] is True
-    assert readiness["digest_enabled"] is False
+    assert readiness["digest_enabled"] is True
     receipt = readiness["resource_policy"]
     assert isinstance(receipt, Mapping)
     assert readiness["resource_policy_sha256"] == RESOURCE_POLICY_SHA256

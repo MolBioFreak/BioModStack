@@ -455,7 +455,7 @@ def test_products_route_rejects_query_and_cursor_abuse(query: str) -> None:
     assert "path" not in response.text.lower()
 
 
-def test_product_readiness_is_truthful_without_claiming_full_runtime_ready() -> None:
+def test_product_readiness_reports_current_full_runtime_with_empty_evidence_plane() -> None:
     state = _service_module().product_authority.readiness()
     assert state["required"] is True
     assert state["ready"] is True
@@ -464,19 +464,19 @@ def test_product_readiness_is_truthful_without_claiming_full_runtime_ready() -> 
     assert state["active_claim_count"] == 0
     assert state["product_evidence_available"] is False
     assert state["require_known_policy"] == "fail_closed_product_evidence_unavailable"
-    assert state["full_restriction_runtime_ready"] is False
-    assert state["phase6_denominator_status"] == "stale"
+    assert state["full_restriction_runtime_ready"] is True
+    assert state["phase6_denominator_status"] == "current"
 
 
-def test_future_product_readiness_reports_loaded_evidence_without_phase6_claim(tmp_path: Path) -> None:
+def test_future_product_readiness_reports_loaded_evidence_on_current_runtime(tmp_path: Path) -> None:
     state = _write_authority(tmp_path, _future_document()).readiness()
     assert state["ready"] is True
     assert state["status"] == "evidence_available"
     assert state["record_count"] == 3
     assert state["active_claim_count"] == 12
-    assert state["require_known_policy"] == "governed_product_evidence_loaded_phase5_analysis_not_enabled"
-    assert state["full_restriction_runtime_ready"] is False
-    assert state["phase6_denominator_status"] == "stale"
+    assert state["require_known_policy"] == "governed_product_evidence_loaded"
+    assert state["full_restriction_runtime_ready"] is True
+    assert state["phase6_denominator_status"] == "current"
 
 
 def test_require_known_fails_before_analysis_or_evidence_mutation(monkeypatch: pytest.MonkeyPatch) -> None:

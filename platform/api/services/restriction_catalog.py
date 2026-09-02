@@ -644,7 +644,7 @@ class CatalogAuthority:
                 "resource_policy": resource_policy_receipt(),
                 "resource_policy_sha256": resource_policy_sha256(),
                 "analysis_enabled": True,
-                "digest_enabled": False,
+                "digest_enabled": True,
             }
         )
 

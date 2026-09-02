@@ -412,11 +412,11 @@ class ProductAuthority:
             "status": "evidence_available" if available else "evidence_unavailable",
             "loader_healthy": True, **view.receipt(),
             "require_known_policy": (
-                "governed_product_evidence_loaded_phase5_analysis_not_enabled"
+                "governed_product_evidence_loaded"
                 if available else "fail_closed_product_evidence_unavailable"
             ),
-            "full_restriction_runtime_ready": False,
-            "phase6_denominator_status": "stale",
+            "full_restriction_runtime_ready": True,
+            "phase6_denominator_status": "current",
         }
 
 
