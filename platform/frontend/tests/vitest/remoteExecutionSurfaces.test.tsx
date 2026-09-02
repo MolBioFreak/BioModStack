@@ -134,7 +134,7 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
-    it('gives both Dashboard discovery actions large hit areas and visible success receipts', async () => {
+    it('gives both compact Dashboard discovery actions visible success receipts', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const requests: string[] = [];
         let targets = [] as typeof persistedDiscoveredTarget[];
@@ -169,10 +169,8 @@ describe('remote execution operator surfaces', () => {
         expect(hardwareButton).toBeTruthy();
         expect(vastButton).toBeTruthy();
         expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
-        expect(hardwareButton?.className).toContain('min-h-11');
-        expect(hardwareButton?.className).toContain('cursor-pointer');
-        expect(vastButton?.className).toContain('min-h-11');
-        expect(vastButton?.className).toContain('cursor-pointer');
+        expect(hardwareButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
+        expect(vastButton?.className).toContain('px-2.5 py-1.5 text-[10px]');
 
         await act(async () => {
             hardwareButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));

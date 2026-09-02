@@ -1768,7 +1768,7 @@ export function InfraLiveTelemetry({
                                 type="button"
                                 onClick={() => discoverMutation.mutate()}
                                 disabled={discoverMutation.isPending}
-                                className={`min-h-11 cursor-pointer touch-manipulation rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition hover:border-accent/40 hover:text-[var(--text-primary)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-3 py-2 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
                                 title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
                             >
                                 {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
@@ -1777,7 +1777,7 @@ export function InfraLiveTelemetry({
                                 type="button"
                                 onClick={() => vastDiscoverMutation.mutate()}
                                 disabled={vastDiscoverMutation.isPending}
-                                className={`min-h-11 cursor-pointer touch-manipulation rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition hover:border-accent/40 hover:text-[var(--text-primary)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-3 py-2 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
                                 title="Query Vast for running instances without creating, starting, stopping, or destroying provider resources"
                             >
                                 {vastDiscoverMutation.isPending ? 'Discovering Vast...' : 'Discover running Vast'}
