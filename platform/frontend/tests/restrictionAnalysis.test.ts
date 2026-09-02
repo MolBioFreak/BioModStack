@@ -117,6 +117,51 @@ describe('restriction API boundary', () => {
         expect(parseRestrictionDigestSimulation(DIGEST).fragments[0]).toBe(DIGEST.fragments[0]);
     });
 
+    it('accepts distinct envelope and analysis result receipts', () => {
+        const value = clone(ANALYSIS);
+        value.result_sha256 = 'b'.repeat(64);
+        expect(parseRestrictionAnalysis(value).result_sha256).toBe('b'.repeat(64));
+        expect(parseRestrictionAnalysis(value).analysis.result_sha256).toBe(H);
+    });
+
+    it('accepts occurrence ordinals scoped to each enzyme', () => {
+        const value = clone(ANALYSIS);
+        const other = clone(value.analysis.occurrences[0]);
+        other.occurrence_id = 'occ:2';
+        other.occurrence_ordinal = 0;
+        other.enzyme_id = 'Other';
+        other.canonical_name = 'Other';
+        other.double_strand_events = [];
+        other.limitations = ['enzyme_geometry_unavailable'];
+        value.analysis.occurrences.push(other);
+        value.analysis.counts.recognition_site_count_definite = 2;
+        value.analysis.enzyme_summaries.push({
+            enzyme_id: 'Other', canonical_name: 'Other', analysis_capability: 'recognition_only',
+            cleavage_status: 'unknown', recognition_site_count_definite: 1,
+            recognition_site_count_possible: 0, double_strand_break_count: 0, nick_count: 0,
+            limitations: ['enzyme_geometry_unavailable'],
+        });
+
+        expect(parseRestrictionAnalysis(value).analysis.occurrences.map((row) => row.occurrence_ordinal)).toEqual([0, 0]);
+    });
+
+    it('accepts digest occurrence ordinals scoped to each enzyme', () => {
+        const digest = clone(DIGEST);
+        const selected = clone(digest.selected_enzymes[0]);
+        selected.enzyme_id = 'Other';
+        selected.canonical_name = 'Other';
+        digest.selected_enzyme_ids.push('Other');
+        digest.selected_enzymes.push(selected);
+        const digestOccurrence = clone(digest.occurrences[0]);
+        digestOccurrence.occurrence_id = 'occ:2';
+        digestOccurrence.occurrence_ordinal = 0;
+        digestOccurrence.enzyme_id = 'Other';
+        digestOccurrence.canonical_name = 'Other';
+        digestOccurrence.double_strand_events = [];
+        digest.occurrences.push(digestOccurrence);
+        expect(parseRestrictionDigestSimulation(digest).occurrences.map((row) => row.occurrence_ordinal)).toEqual([0, 0]);
+    });
+
     it('accepts empty and complete future product contracts without reordering', () => {
         expect(parseRestrictionProducts(PRODUCTS).product_release).toBe(PRODUCT_RELEASE);
         expect(parseRestrictionProducts(FUTURE_PRODUCTS).items[0]).toBe(PRODUCT_RECORD);
@@ -192,7 +237,6 @@ describe('restriction API boundary', () => {
     ])('rejects %s', (_label, mutate) => expect(() => parseRestrictionAnalysis(mutate())).toThrow());
 
     it.each([
-        ['result hash mismatch', () => { const value = clone(ANALYSIS); value.result_sha256 = 'b'.repeat(64); return value; }],
         ['occurrence summary mismatch', () => { const value = clone(ANALYSIS); value.analysis.occurrences[0].canonical_name = 'EcoRI-inconsistent'; return value; }],
         ['duplicate occurrence ordinal', () => { const value = clone(ANALYSIS); const occurrence = clone(value.analysis.occurrences[0]); occurrence.occurrence_id = 'occ:2'; occurrence.double_strand_events = []; value.analysis.occurrences.push(occurrence); value.analysis.counts.recognition_site_count_definite = 2; value.analysis.enzyme_summaries[0].recognition_site_count_definite = 2; return value; }],
         ['duplicate event ordinal', () => { const value = clone(ANALYSIS); const event = clone(value.analysis.occurrences[0].double_strand_events[0]); event.contributor_group_id = 'cut:duplicate'; value.analysis.occurrences[0].double_strand_events.push(event); value.analysis.counts.double_strand_break_count = 2; value.analysis.enzyme_summaries[0].double_strand_break_count = 2; const group = clone(value.analysis.grouped_cleavages[0]); group.contributor_group_id = 'cut:duplicate'; value.analysis.grouped_cleavages.push(group); return value; }],
