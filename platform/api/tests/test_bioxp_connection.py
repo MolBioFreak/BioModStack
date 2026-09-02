@@ -853,6 +853,17 @@ def test_timed_out_dispatched_v2_work_keeps_lane_and_generation_lease_until_remo
     asyncio.run(scenario())
 
 
+def test_default_v2_enqueue_deadline_exceeds_robot_admission_timeout(tmp_path: Path) -> None:
+    from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES
+
+    clients: list[FakeRobotClient] = []
+    service = _service(tmp_path, clients)
+    _, _, robot_timeout_seconds = DEFAULT_ROBOT_ROUTES["invoke_operator_action_v2"]
+
+    assert service.v2_enqueue_timeout_seconds == 20.0
+    assert service.v2_enqueue_timeout_seconds > robot_timeout_seconds
+
+
 def test_v2_query_enqueue_and_interrupt_lanes_enter_independently(tmp_path: Path) -> None:
     _, BioXpProfile, _, _ = _load()
     clients: list[FakeRobotClient] = []

@@ -113,7 +113,7 @@ class BioXpConnectionService:
         active_probe_interval_seconds: float | None = None,
         clock: Clock | None = None,
         initial_generation: int | None = None,
-        v2_enqueue_timeout_seconds: float = 5.0,
+        v2_enqueue_timeout_seconds: float = 20.0,
         interrupt_timeout_seconds: float = 10.0,
     ) -> None:
         self.profile_store = profile_store

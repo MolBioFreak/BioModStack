@@ -112,6 +112,8 @@ const state = vi.hoisted(() => ({
     lifecycleInvokeError: null as unknown,
     lifecycleInvokeData: undefined as Record<string, unknown> | undefined,
     lifecycleInvokePending: false,
+    lifecycleDeferred: false,
+    lifecycleCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
     v2MutationHookCalls: 0,
     deckInvokeError: null as unknown,
     deckInvokePending: false,
@@ -363,15 +365,21 @@ vi.mock('../../src/lib/bioxpClient', () => ({
                 isPending: state.lifecycleInvokePending,
                 mutate: (
                     payload: Record<string, unknown>,
-                    callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void },
+                    callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void; onError?: (error: unknown) => void },
                 ) => {
                     state.lifecycleInvokeCalls.push(payload);
+                    if (state.lifecycleDeferred) {
+                        state.lifecycleCallbacks = callbacks ?? null;
+                        return;
+                    }
                     const actionId = (payload.request as Record<string, unknown>).action_id as string;
                     const receipt = {
                         command_id: `lifecycle-command-${state.lifecycleInvokeCalls.length}`,
                         action_id: actionId,
                         status: 'completed',
                         terminal: true,
+                        ownership_generation: state.v2Dashboard.data.ownership_generation,
+                        accepted_at: state.v2Dashboard.data.generated_at + 1,
                     };
                     state.lifecycleReceipt.data = receipt;
                     callbacks?.onSuccess?.(receipt);
@@ -529,6 +537,8 @@ beforeEach(() => {
     state.lifecycleInvokeError = null;
     state.lifecycleInvokeData = undefined;
     state.lifecycleInvokePending = false;
+    state.lifecycleDeferred = false;
+    state.lifecycleCallbacks = null;
     state.v2MutationHookCalls = 0;
     state.deckInvokeError = null;
     state.deckInvokePending = false;
@@ -554,6 +564,7 @@ beforeEach(() => {
     state.v2Dashboard.data.y_axis.ownership_generation = 1;
     state.v2Dashboard.data.y_axis.state_version = 4;
     state.v2Dashboard.data.y_axis.latest_compact_receipt = null;
+    state.v2Dashboard.data.latest_receipts = [];
     state.v2Catalog.error = null;
     state.v2Catalog.isStale = false;
     state.v2Catalog.data = {
@@ -773,6 +784,188 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(state.receiptHookCalls.some((call) => call.commandId === 'lifecycle-command-2')).toBe(true);
     });
 
+    it('treats a dispatched activation timeout as pending and reconciles the terminal dashboard receipt', async () => {
+        (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push(
+            {
+                action_id: 'meta.activate_motion',
+                request_schema_version: 'bioxp.operator_action_request.v2',
+                response_schema_version: 'bioxp.operator_action_receipt.v2',
+                interrupt: false,
+                enabled: true,
+                disabled_reason: null,
+            },
+            {
+                action_id: 'meta.recover_motion_non_homing',
+                request_schema_version: 'bioxp.operator_action_request.v2',
+                response_schema_version: 'bioxp.operator_action_receipt.v2',
+                interrupt: false,
+                enabled: true,
+                disabled_reason: null,
+            },
+        );
+        state.lifecycleDeferred = true;
+        state.lifecycleInvokeData = {
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'stale-activation-receipt',
+            action_id: 'meta.activate_motion',
+            status: 'completed',
+            terminal: true,
+            ownership_generation: 1,
+            accepted_at: 0,
+            error: null,
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+        const panel = [...container.querySelectorAll('section')].find(
+            (node) => node.textContent?.includes('Controller Activation & Recovery'),
+        ) as HTMLElement;
+        const activate = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Activate 24 V / Prepare Motion',
+        ) as HTMLButtonElement;
+        const recover = [...panel.querySelectorAll('button')].find(
+            (button) => button.textContent === 'Non-homing Recovery',
+        ) as HTMLButtonElement;
+        await act(async () => {
+            activate.click();
+            state.lifecycleInvokeError = {
+                response: {
+                    status: 409,
+                    data: {
+                        detail: {
+                            error: 'bioxp_robot_timeout',
+                            dispatch_state: 'outcome_ambiguous',
+                        },
+                    },
+                },
+            };
+            state.lifecycleCallbacks?.onError?.(state.lifecycleInvokeError);
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('Activation / recovery failed · HTTP 409 · bioxp_robot_timeout');
+        expect(panel.textContent).not.toContain('result pending');
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
+
+        state.lifecycleInvokeError = {
+            response: {
+                status: 504,
+                data: {
+                    detail: {
+                        error: 'bioxp_robot_timeout',
+                        dispatch_state: 'outcome_ambiguous',
+                        retry_guidance: 'do_not_retry_until_status_recovery',
+                    },
+                },
+            },
+        };
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('Activation / recovery result pending');
+        expect(panel.textContent).toContain('Do not retry');
+        expect(panel.textContent).not.toContain('Activation / recovery failed');
+        expect(
+            [...(container.firstElementChild?.children ?? [])]
+                .filter((element) => element.getAttribute('role') === 'alert'),
+        ).toHaveLength(0);
+        expect(panel.textContent).not.toContain('stale-activation-receipt');
+        expect(activate.disabled).toBe(true);
+        expect(recover.disabled).toBe(true);
+
+        state.v2Dashboard.data.ownership_generation = 2;
+        state.v2Dashboard.data.latest_receipts = [{
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'other-generation-activation',
+            action_id: 'meta.activate_motion',
+            status: 'completed',
+            terminal: true,
+            ownership_generation: 2,
+            accepted_at: 2,
+            error: null,
+        }];
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('Activation / recovery result pending');
+        expect(panel.textContent).not.toContain('other-generation-activation');
+        expect(activate.disabled).toBe(true);
+        expect(recover.disabled).toBe(true);
+
+        state.v2Dashboard.data.ownership_generation = 1;
+        state.v2Dashboard.data.latest_receipts = [{
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'lifecycle-command-activation',
+            action_id: 'meta.activate_motion',
+            status: 'dispatched',
+            terminal: false,
+            ownership_generation: 1,
+            accepted_at: 2,
+            error: null,
+        }];
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('lifecycle-command-activation');
+        expect(panel.textContent).toContain('dispatched');
+        expect(panel.textContent).toContain('Activation / recovery result pending');
+        expect(activate.disabled).toBe(true);
+        expect(recover.disabled).toBe(true);
+
+        state.lifecycleReceipt.data = {
+            schema_version: 'bioxp.operator_action_receipt.v2',
+            command_id: 'lifecycle-command-activation',
+            action_id: 'meta.activate_motion',
+            status: 'dispatched',
+            terminal: false,
+            ownership_generation: 1,
+            accepted_at: 2,
+            error: null,
+        };
+        state.v2Dashboard.data.latest_receipts = [
+            {
+                schema_version: 'bioxp.operator_action_receipt.v2',
+                command_id: 'lifecycle-command-activation',
+                action_id: 'meta.activate_motion',
+                status: 'dispatched',
+                terminal: false,
+                ownership_generation: 1,
+                accepted_at: 2,
+                error: null,
+            },
+            {
+                schema_version: 'bioxp.operator_action_receipt.v2',
+                command_id: 'lifecycle-command-activation',
+                action_id: 'meta.activate_motion',
+                status: 'completed',
+                terminal: true,
+                ownership_generation: 1,
+                accepted_at: 2,
+                error: null,
+            },
+        ];
+        await act(async () => {
+            root.render(<BioXpCockpit />);
+            await Promise.resolve();
+        });
+
+        expect(panel.textContent).toContain('lifecycle-command-activation');
+        expect(panel.textContent).toContain('completed');
+        expect(panel.textContent).not.toContain('result pending');
+        expect(panel.textContent).not.toContain('failed');
+        expect(activate.disabled).toBe(false);
+        expect(recover.disabled).toBe(false);
+    });
+
     it('renders the bounded robot failure detail from a terminal lifecycle receipt', async () => {
         (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push({
             action_id: 'meta.recover_motion_non_homing',
@@ -802,6 +995,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
             action_id: 'meta.recover_motion_non_homing',
             status: 'failed',
             terminal: true,
+            ownership_generation: 1,
+            accepted_at: 2,
             error: {
                 code: 'robot route returned HTTP 409',
                 message: 'robot route returned HTTP 409',
@@ -1606,6 +1801,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(raw).toContain('"actual"');
         expect(raw).toContain('"dispatch_state"');
     });
+
 
     it('fails normal Y closed when current robot control state is unavailable', async () => {
         state.v2Catalog.error = new Error('catalog query failed');

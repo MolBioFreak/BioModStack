@@ -28,6 +28,7 @@ import {
     type BioXpOperatorHistoryReceipt,
     type BioXpOperatorInputSpec,
     type BioXpOperatorLegacyReconciliationReceipt,
+    type BioXpOperatorReceiptV2,
 } from '../lib/bioxpClient';
 import { bioXpReceiptTimestampText } from '../lib/bioxpReceiptTimestamp';
 import { BioXpCameraPanel } from './BioXpCameraPanel';
@@ -162,12 +163,33 @@ const relativeMagnitudeMaximum = (input: BioXpOperatorInputSpec | undefined): nu
     return Math.max(Math.abs(minimum), Math.abs(maximum));
 };
 
-function YOperatorError({ label, error }: { label: string; error: unknown }) {
-    if (!error) return null;
+function isDispatchedOutcomeAmbiguous(error: unknown): boolean {
+    const response = (error as { response?: { status?: unknown; data?: { detail?: unknown } } })?.response;
+    const detail = response?.data?.detail;
+    return response?.status === 504
+        && detail !== null
+        && typeof detail === 'object'
+        && !Array.isArray(detail)
+        && (detail as Record<string, unknown>).error === 'bioxp_robot_timeout'
+        && (detail as Record<string, unknown>).dispatch_state === 'outcome_ambiguous';
+}
+
+function YOperatorError({
+    label,
+    error,
+    reconcileAmbiguousOutcome = false,
+}: {
+    label: string;
+    error: unknown;
+    reconcileAmbiguousOutcome?: boolean;
+}) {
+    if (error == null) return null;
     const presentation = bioXpErrorPresentation(error);
+    const outcomeAmbiguous = reconcileAmbiguousOutcome && isDispatchedOutcomeAmbiguous(error);
     return (
-        <div role="alert" className="mt-2 rounded border border-red-800/70 bg-red-950/30 p-2 text-xs text-red-200">
-            <p className="font-semibold">{label} failed · {presentation.status == null ? 'HTTP status unavailable' : `HTTP ${presentation.status}`} · {presentation.summary}</p>
+        <div role="alert" className={`mt-2 rounded border p-2 text-xs ${outcomeAmbiguous ? 'border-amber-700/70 bg-amber-950/30 text-amber-100' : 'border-red-800/70 bg-red-950/30 text-red-200'}`}>
+            <p className="font-semibold">{label} {outcomeAmbiguous ? 'result pending' : 'failed'} · {presentation.status == null ? 'HTTP status unavailable' : `HTTP ${presentation.status}`} · {presentation.summary}</p>
+            {outcomeAmbiguous && <p className="mt-1">The robot may have accepted the command. Checking the current robot receipt. Do not retry.</p>}
             <details className="mt-1">
                 <summary>Raw bounded robot/BMS response</summary>
                 <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-all">{presentation.rawJson}</pre>
@@ -210,6 +232,8 @@ export function BioXpCockpit() {
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
     const [lifecycleCommandId, setLifecycleCommandId] = useState<string | null>(null);
     const [lifecycleActionId, setLifecycleActionId] = useState<'meta.activate_motion' | 'meta.recover_motion_non_homing' | null>(null);
+    const [lifecycleOwnershipGeneration, setLifecycleOwnershipGeneration] = useState<number | null>(null);
+    const [lifecycleDashboardBaselineAt, setLifecycleDashboardBaselineAt] = useState<number | null>(null);
     const [yPendingActionId, setYPendingActionId] = useState<string | null>(null);
     const [deckCommandId, setDeckCommandId] = useState<string | null>(null);
     const [yMutationGeneration, setYMutationGeneration] = useState<number | null>(null);
@@ -309,6 +333,8 @@ export function BioXpCockpit() {
         setZHomeCommandId(null);
         setLifecycleCommandId(null);
         setLifecycleActionId(null);
+        setLifecycleOwnershipGeneration(null);
+        setLifecycleDashboardBaselineAt(null);
         setYPendingActionId(null);
         setDeckCommandId(null);
         setYMutationGeneration(null);
@@ -506,12 +532,16 @@ export function BioXpCockpit() {
         const envelope = v2NormalEnvelope();
         if (!envelope) return;
         const submittedGeneration = generation;
+        const submittedOwnershipGeneration = envelope.expected_ownership_generation;
         setLifecycleMutationGeneration(submittedGeneration);
         setLifecycleActionId(actionId);
         setLifecycleCommandId(null);
+        setLifecycleOwnershipGeneration(submittedOwnershipGeneration);
+        setLifecycleDashboardBaselineAt(currentDashboardV2?.generated_at ?? null);
         invokeLifecycleActionMutation.mutate({ request: { ...envelope, action_id: actionId, inputs: {} } }, {
             onSuccess: (receipt) => {
                 if (currentGenerationRef.current !== submittedGeneration) return;
+                if (receipt.ownership_generation !== submittedOwnershipGeneration) return;
                 setLifecycleCommandId(receipt.command_id);
             },
             onError: (error) => {
@@ -780,13 +810,53 @@ export function BioXpCockpit() {
     const yStopDisabled = !linkConnected || generation <= 0 || interruptPending('oem.y.stop');
 
     const currentYInvokeError = yMutationGeneration === generation ? invokeYAction.error : null;
-    const currentLifecycleInvokeError = lifecycleMutationGeneration === generation ? invokeLifecycleActionMutation.error : null;
-    const lifecycleReceiptCandidate = lifecycleGenerationCurrent
-        ? lifecycleReceiptQuery.data ?? invokeLifecycleActionMutation.data
+    const currentLifecycleOwnershipGeneration = lifecycleMutationGeneration === generation
+        ? lifecycleOwnershipGeneration
+        : null;
+    const lifecycleDashboardReceipt = lifecycleGenerationCurrent
+        && currentLifecycleActionId !== null
+        && currentLifecycleOwnershipGeneration !== null
+        && lifecycleDashboardBaselineAt !== null
+        && currentDashboardV2?.ownership_generation === currentLifecycleOwnershipGeneration
+        ? (currentDashboardV2?.latest_receipts ?? [])
+            .filter((receipt) => receipt.action_id === currentLifecycleActionId
+                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
+                && receipt.accepted_at >= lifecycleDashboardBaselineAt)
+            .reduce<BioXpOperatorReceiptV2 | undefined>(
+                (latest, receipt) => {
+                    if (latest === undefined || receipt.accepted_at > latest.accepted_at) return receipt;
+                    if (receipt.accepted_at === latest.accepted_at && receipt.terminal && !latest.terminal) return receipt;
+                    return latest;
+                },
+                undefined,
+            )
         : undefined;
-    const lifecycleReceipt = currentLifecycleActionId !== null && lifecycleReceiptCandidate?.action_id === currentLifecycleActionId
-        ? lifecycleReceiptCandidate
+    const lifecycleReceipt = lifecycleGenerationCurrent
+        && currentLifecycleActionId !== null
+        && currentLifecycleOwnershipGeneration !== null
+        && lifecycleDashboardBaselineAt !== null
+        ? [lifecycleReceiptQuery.data, lifecycleDashboardReceipt, invokeLifecycleActionMutation.data]
+            .filter((receipt): receipt is BioXpOperatorReceiptV2 => receipt !== undefined
+                && receipt.action_id === currentLifecycleActionId
+                && receipt.ownership_generation === currentLifecycleOwnershipGeneration
+                && receipt.accepted_at >= lifecycleDashboardBaselineAt
+                && (lifecycleCommandId === null || receipt.command_id === lifecycleCommandId))
+            .reduce<BioXpOperatorReceiptV2 | undefined>((selected, receipt) => {
+                if (selected === undefined || receipt.accepted_at > selected.accepted_at) return receipt;
+                if (receipt.accepted_at === selected.accepted_at && receipt.terminal && !selected.terminal) return receipt;
+                return selected;
+            }, undefined)
         : undefined;
+    const currentLifecycleInvokeError = lifecycleMutationGeneration === generation && lifecycleReceipt?.terminal !== true
+        ? invokeLifecycleActionMutation.error
+        : null;
+    const lifecycleStatusRecoveryPending = isDispatchedOutcomeAmbiguous(currentLifecycleInvokeError)
+        || (lifecycleReceipt !== undefined && lifecycleReceipt.terminal !== true);
+    useEffect(() => {
+        if (lifecycleDashboardReceipt !== undefined && lifecycleCommandId === null) {
+            setLifecycleCommandId(lifecycleDashboardReceipt.command_id);
+        }
+    }, [lifecycleCommandId, lifecycleDashboardReceipt]);
     const lifecycleFailureDetail = lifecycleReceipt?.error?.detail;
     const zHomeReceipt = zHomeGenerationCurrent
         && zHomeReceiptQuery.data?.action_id === 'oem.z.manual_home'
@@ -809,7 +879,10 @@ export function BioXpCockpit() {
         : value === false
             ? negative
             : 'unknown';
-    const error = currentDeckInvokeError ?? currentLifecycleInvokeError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
+    const lifecycleAggregateError = isDispatchedOutcomeAmbiguous(currentLifecycleInvokeError)
+        ? null
+        : currentLifecycleInvokeError;
+    const error = currentDeckInvokeError ?? lifecycleAggregateError ?? currentYInvokeError ?? invokeXYMethod.error ?? interruptXStop.error ?? interruptYStop.error ?? interruptZStop.error ?? interruptZAbort.error ?? interruptAggregateAbort.error ?? invokeOperatorAction.error ?? emergencyAction.error ?? connect.error ?? disconnect.error;
 
     return (
         <div className="space-y-4 p-4 text-slate-100 md:p-6">
@@ -881,14 +954,14 @@ export function BioXpCockpit() {
                 <div className="mt-3 flex flex-wrap gap-3">
                     <button
                         type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.activate_motion') !== null || busy || lifecycleStatusRecoveryPending}
                         title={v2ActionDisabledReason('meta.activate_motion') ?? 'Robot-owned OEM activation'}
                         onClick={claimTransport}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
                     >Activate 24 V / Prepare Motion</button>
                     <button
                         type="button"
-                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy}
+                        disabled={!linkConnected || v2ActionDisabledReason('meta.recover_motion_non_homing') !== null || busy || lifecycleStatusRecoveryPending}
                         title={v2ActionDisabledReason('meta.recover_motion_non_homing') ?? 'Robot-authoritative non-homing recovery'}
                         onClick={recoverMotionNonHoming}
                         className="rounded bg-amber-700 px-4 py-2 font-semibold hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
@@ -917,7 +990,7 @@ export function BioXpCockpit() {
                         <p>{`Lifecycle: ${lifecycleFailureDetail.lifecycle_state} · Reference: ${lifecycleFailureDetail.reference_state}`}</p>
                     </div>
                 )}
-                <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} />
+                <YOperatorError label="Activation / recovery" error={currentLifecycleInvokeError} reconcileAmbiguousOutcome />
                 <YOperatorError label="Activation / recovery receipt" error={lifecycleReceiptQuery.error} />
             </section>
 

@@ -6,7 +6,7 @@ from ipaddress import ip_address
 import httpx
 
 from services.bioxp.errors import RobotTimeoutError
-from services.bioxp.robot_client import BioXpRobotClient
+from services.bioxp.robot_client import DEFAULT_ROBOT_ROUTES, BioXpRobotClient
 from services.bioxp.target_policy import ValidatedBioXpTarget
 
 
@@ -127,6 +127,13 @@ def test_robot_read_timeout_is_typed_as_dispatched_and_outcome_ambiguous() -> No
     else:  # pragma: no cover - regression assertion
         raise AssertionError("robot request timeout must remain explicitly ambiguous")
     asyncio.run(client.close())
+
+
+def test_v2_admission_timeout_covers_observed_activation_duration() -> None:
+    _, _, timeout_seconds = DEFAULT_ROBOT_ROUTES["invoke_operator_action_v2"]
+
+    assert timeout_seconds == 15.0
+    assert timeout_seconds > 8.052384
 
 
 def test_robot_transport_rejects_unresolved_targets() -> None:
