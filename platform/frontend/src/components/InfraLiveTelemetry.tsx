@@ -1768,7 +1768,7 @@ export function InfraLiveTelemetry({
                                 type="button"
                                 onClick={() => discoverMutation.mutate()}
                                 disabled={discoverMutation.isPending}
-                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                className={`min-h-11 cursor-pointer touch-manipulation rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition hover:border-accent/40 hover:text-[var(--text-primary)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-3 py-2 text-[10px]' : 'px-3 py-2 text-sm'}`}
                                 title="Refresh GPU, fan, power, and CPU RAPL capability discovery from the live host"
                             >
                                 {discoverMutation.isPending ? 'Discovering...' : 'Discover hardware'}
@@ -1777,7 +1777,7 @@ export function InfraLiveTelemetry({
                                 type="button"
                                 onClick={() => vastDiscoverMutation.mutate()}
                                 disabled={vastDiscoverMutation.isPending}
-                                className={`rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition-colors hover:border-accent/40 hover:text-[var(--text-primary)] disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}
+                                className={`min-h-11 cursor-pointer touch-manipulation rounded-xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-primary))] font-medium text-[var(--text-secondary)] transition hover:border-accent/40 hover:text-[var(--text-primary)] active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-wait disabled:opacity-60 ${compact ? 'px-3 py-2 text-[10px]' : 'px-3 py-2 text-sm'}`}
                                 title="Query Vast for running instances without creating, starting, stopping, or destroying provider resources"
                             >
                                 {vastDiscoverMutation.isPending ? 'Discovering Vast...' : 'Discover running Vast'}
@@ -1792,14 +1792,19 @@ export function InfraLiveTelemetry({
                     Hardware discovery failed: {discoverMutation.error instanceof Error ? discoverMutation.error.message : 'unknown error'}
                 </div>
             )}
+            {discoverMutation.isSuccess && (
+                <div className="mb-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-sm text-emerald-200" role="status">
+                    Hardware discovery complete: {discoverMutation.data.discovery.data.message}
+                </div>
+            )}
             {vastDiscoverMutation.isError && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
                     Vast discovery failed: {vastDiscoverMutation.error instanceof Error ? vastDiscoverMutation.error.message : 'unknown error'}
                 </div>
             )}
-            {vastDiscoverMutation.isSuccess && vastTargets.length === 0 && (
-                <div className="mb-3 rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-control,var(--bg-secondary))] p-3 text-sm text-[var(--text-secondary)]">
-                    No running Vast instances found.
+            {vastDiscoverMutation.isSuccess && (
+                <div className="mb-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-sm text-emerald-200" role="status">
+                    Vast discovery complete: {vastDiscoverMutation.data.data.message}
                 </div>
             )}
             {vastTargets.length > 0 && (

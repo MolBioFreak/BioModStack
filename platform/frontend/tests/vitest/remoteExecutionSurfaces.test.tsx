@@ -68,6 +68,65 @@ const persistedDiscoveredTarget = {
     activated_at: null,
 };
 
+const discoveredSystem = {
+    gpus: [],
+    gpu_error: null,
+    cpu: {
+        name: 'Test CPU',
+        cores_physical: 4,
+        cores_logical: 8,
+        utilization: 10,
+        per_core_utilization: [],
+        frequency_current_mhz: 3000,
+        frequency_max_mhz: 4000,
+        temperature: 40,
+        power_watts: 35,
+    },
+    ram: {
+        total_gb: 32,
+        used_gb: 8,
+        available_gb: 24,
+        utilization: 25,
+        swap_total_gb: 0,
+        swap_used_gb: 0,
+        swap_percent: 0,
+    },
+    timestamp: '2026-09-01T12:00:00Z',
+    cpu_history: [],
+    ram_history: [],
+};
+
+const hardwareDiscovery = {
+    success: true,
+    message: '3 GPUs discovered',
+    gpu_count: 3,
+    gpu_error: null,
+    cpu_power_telemetry: {
+        source: 'rapl',
+        available: true,
+        status: 'ok',
+        message: 'available',
+        discovered_sources: 1,
+        readable_sources: 1,
+    },
+    power_control: {
+        limits: {},
+        eco_mode: false,
+        power_percentage: 100,
+        total_current_watts: 0,
+        total_max_watts: 0,
+        hardware_limits: {},
+    },
+    fan_control: {
+        supported: false,
+        message: 'unavailable',
+        backend: 'none',
+        available_modes: [],
+        gpus: {},
+    },
+    timestamp: '2026-09-01T12:00:00Z',
+};
+
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
@@ -75,12 +134,14 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
-    it('discovers Vast beside local hardware discovery and renders the persisted target on Dashboard', async () => {
+    it('gives both Dashboard discovery actions large hit areas and visible success receipts', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const requests: string[] = [];
         let targets = [] as typeof persistedDiscoveredTarget[];
         api.defaults.adapter = async (config) => {
             requests.push(`${config.method?.toUpperCase()} ${config.url}`);
+            if (config.url === '/api/gpu/hardware/discover') return response(hardwareDiscovery);
+            if (config.url === '/api/gpu/status') return response(discoveredSystem);
             if (config.url === '/api/execution-targets') return response(targets);
             if (config.url === '/api/execution-targets/providers/vast/refresh') {
                 targets = [persistedDiscoveredTarget];
@@ -108,6 +169,18 @@ describe('remote execution operator surfaces', () => {
         expect(hardwareButton).toBeTruthy();
         expect(vastButton).toBeTruthy();
         expect(hardwareButton?.parentElement).toBe(vastButton?.parentElement);
+        expect(hardwareButton?.className).toContain('min-h-11');
+        expect(hardwareButton?.className).toContain('cursor-pointer');
+        expect(vastButton?.className).toContain('min-h-11');
+        expect(vastButton?.className).toContain('cursor-pointer');
+
+        await act(async () => {
+            hardwareButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(requests).toContain('POST /api/gpu/hardware/discover');
+        expect(container.textContent).toContain('Hardware discovery complete: 3 GPUs discovered');
 
         await act(async () => {
             vastButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -115,6 +188,7 @@ describe('remote execution operator surfaces', () => {
         });
 
         expect(requests).toContain('POST /api/execution-targets/providers/vast/refresh');
+        expect(container.textContent).toContain('Vast discovery complete: 1 running instance found');
         expect(container.textContent).toContain('Remote A6000');
         expect(container.textContent).toContain('Discovered');
         expect(container.textContent).toContain('Attach worker');
