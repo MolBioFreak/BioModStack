@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "1b079eb4e710f554f2935053979f42ece8f3b5651edfdbc9b5cf944df5b0d9aa",
+  "content_sha256": "59f192da2adc29f7a2041beb1026c262126af6d428c1ca3eb9618782b44b9c20",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -1069,7 +1069,7 @@
     },
     {
       "path": "platform/frontend/src/lib/ngsAlignmentSession.ts",
-      "sha256": "e2eb74de25921f79003dac57babc3577a87b6983ef9511231f35d78443730f0f",
+      "sha256": "9f5d69d9543fb4775bbba0dd051e8f93a1871a997909dfba5e1b02268bed6e7b",
       "size_bytes": 50604
     },
     {
@@ -1104,7 +1104,7 @@
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentViewer.test.ts",
-      "sha256": "c5195eb1c92b9fc99f0551db5b231e20c45cfc93422d691d0a8ac28814171cc0",
+      "sha256": "c3ef3c08ecb4c3969e2111c2bcc6fc895aa6ccddf9065dd4470bcbea117ecf5e",
       "size_bytes": 34962
     },
     {
@@ -1124,7 +1124,7 @@
     },
     {
       "path": "platform/frontend/tests/vitest/rawReadSortableWorkbench.test.tsx",
-      "sha256": "dadb7be5589a071e66814f39633e2547e6a17a40e2b689724d065286f04d7bce",
+      "sha256": "47db15f5de7bd1a055eb7ad36b21bbe40d732a5083dbee0347bdc141a333c06e",
       "size_bytes": 18206
     },
     {
@@ -1347,8 +1347,8 @@
     "content_sha256": "6919297a4ad62720a2cdad707c7ab28aef6f3e2a3fda1545a83c90df8f2322a6",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "9bc37e3964e3f7b02fd4079c0c54022603ee5e6b",
-  "successor_source_tree": "ebfcf2c0016dd469864e7c8f5717f5b1ec52bc0c",
+  "successor_source_commit": "0ea2e7fad23fae1c1eef55dda33129c1ecff7fe7",
+  "successor_source_tree": "9837f0de8528aa51fe9ecd4b42dd89495dbe323a",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

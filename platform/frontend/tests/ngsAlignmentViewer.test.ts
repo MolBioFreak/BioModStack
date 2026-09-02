@@ -125,7 +125,7 @@ function locusFixture() {
         selected_read_count: 5000, selected_record_count: 5100, capped: true,
         policy: {
             id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5000,
-            max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 30,
+            max_records: 20_000, max_bytes: 67_108_864, max_span_bp: 1_000_000, max_seconds: 60,
         },
         bam: artifact('alignment_locus_slice', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/${hash('a')}/bam`),
         index: artifact('alignment_locus_slice_index', `/api/jobs/job-a/alignment-sessions/session-a/locus-slices/${hash('5')}/${hash('a')}/bai`),

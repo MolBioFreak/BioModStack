@@ -37,7 +37,7 @@ const locusSlice = {
     selected_read_count: 2,
     selected_record_count: 2,
     capped: false,
-    policy: { id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5_000, max_records: 20_000, max_bytes: 64, max_span_bp: 10_000, max_seconds: 30 },
+    policy: { id: 'bounded-full-source-locus-slice', version: 1, max_reads: 5_000, max_records: 20_000, max_bytes: 64, max_span_bp: 10_000, max_seconds: 60 },
     bam: {}, index: {}, manifest: {},
 } as never;
 
