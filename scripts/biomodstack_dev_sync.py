@@ -299,7 +299,7 @@ def validate_candidate_runtime_authority(root: Path, revision: str) -> dict[str,
         or denominator.get("schema") != DENOMINATOR_SCHEMA
         or type(paths) is not list
         or not paths
-        or len(paths) > 256
+        or len(paths) > 512
         or any(type(path) is not str or not path or path.startswith("/") for path in paths)
         or any(".." in Path(path).parts for path in paths)
         or len(paths) != len(set(paths))

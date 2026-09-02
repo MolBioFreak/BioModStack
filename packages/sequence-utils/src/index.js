@@ -11,7 +11,6 @@ import {
   getMergedFeatureMap
 } from "./featureTypesAndColors";
 
-export * from "./computeDigestFragments";
 export * from "./diffUtils";
 export * from "./annotationTypes";
 
@@ -37,19 +36,13 @@ export { default as getAllInsertionsInSeqReads } from "./getAllInsertionsInSeqRe
 export { default as annotateSingleSeq } from "./annotateSingleSeq";
 export { default as getDegenerateDnaStringFromAAString } from "./getDegenerateDnaStringFromAAString";
 export { default as getDegenerateRnaStringFromAAString } from "./getDegenerateRnaStringFromAAString";
-export { default as getVirtualDigest } from "./getVirtualDigest";
-export { default as isEnzymeType2S } from "./isEnzymeType2S";
 export { default as insertGapsIntoRefSeq } from "./insertGapsIntoRefSeq";
 export { default as findApproxMatches } from "./findApproxMatches";
 export { default as adjustBpsToReplaceOrInsert } from "./adjustBpsToReplaceOrInsert";
 export { default as calculatePercentGC } from "./calculatePercentGC";
 export { default as calculateTm } from "./calculateTm";
-export { default as cutSequenceByRestrictionEnzyme } from "./cutSequenceByRestrictionEnzyme";
 export { default as deleteSequenceDataAtRange } from "./deleteSequenceDataAtRange";
 export { default as DNAComplementMap } from "./DNAComplementMap";
-export { default as doesEnzymeChopOutsideOfRecognitionSite } from "./doesEnzymeChopOutsideOfRecognitionSite";
-export { default as aliasedEnzymesByName } from "./aliasedEnzymesByName";
-export { default as defaultEnzymesByName } from "./defaultEnzymesByName";
 export { default as generateSequenceData } from "./generateSequenceData";
 export { default as generateAnnotations } from "./generateAnnotations";
 export {
@@ -66,13 +59,11 @@ export { default as getCodonRangeForAASliver } from "./getCodonRangeForAASliver"
 export { default as getComplementAminoAcidStringFromSequenceString } from "./getComplementAminoAcidStringFromSequenceString";
 export { default as getComplementSequenceAndAnnotations } from "./getComplementSequenceAndAnnotations";
 export { default as getComplementSequenceString } from "./getComplementSequenceString";
-export { default as getCutsitesFromSequence } from "./getCutsitesFromSequence";
-export { default as getCutsiteType } from "./getCutsiteType";
 export { default as getInsertBetweenVals } from "./getInsertBetweenVals";
 export { default as getLeftAndRightOfSequenceInRangeGivenPosition } from "./getLeftAndRightOfSequenceInRangeGivenPosition";
 export { default as getOrfsFromSequence } from "./getOrfsFromSequence";
 export { default as getOverlapBetweenTwoSequences } from "./getOverlapBetweenTwoSequences";
-export { default as getPossiblePartsFromSequenceAndEnzymes } from "./getPossiblePartsFromSequenceAndEnzymes";
+
 export { default as getReverseAminoAcidStringFromSequenceString } from "./getReverseAminoAcidStringFromSequenceString";
 export { default as getReverseComplementAminoAcidStringFromSequenceString } from "./getReverseComplementAminoAcidStringFromSequenceString";
 export { default as getReverseComplementAnnotation } from "./getReverseComplementAnnotation";
@@ -98,8 +89,7 @@ export { default as calculateNebTm } from "./calculateNebTm";
 export { default as calculateNebTa } from "./calculateNebTa";
 export { default as calculateSantaLuciaTm } from "./calculateSantaLuciaTm";
 export { default as calculateEndStability } from "./calculateEndStability";
-export { default as getDigestFragmentsForCutsites } from "./getDigestFragmentsForCutsites";
-export { default as getDigestFragmentsForRestrictionEnzymes } from "./getDigestFragmentsForRestrictionEnzymes";
+
 export { default as convertDnaCaretPositionOrRangeToAA } from "./convertDnaCaretPositionOrRangeToAA";
 export { default as convertAACaretPositionOrRangeToDna } from "./convertAACaretPositionOrRangeToDna";
 export { default as aminoAcidToDegenerateDnaMap } from "./aminoAcidToDegenerateDnaMap";

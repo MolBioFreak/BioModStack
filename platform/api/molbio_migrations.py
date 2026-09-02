@@ -8,13 +8,15 @@ import json
 import os
 import sqlite3
 import uuid
+
+import rfc8785
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from molbio_database import create_molbio_engine, init_molbio_db, make_molbio_session_factory
 from molbio_models import (
@@ -23,9 +25,11 @@ from molbio_models import (
     NucleotideSequence,
     Primer,
     PrimerRevision,
+    RestrictionDigestResult,
 )
 from services.sqlite_backup import backup_sqlite_database
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
+from services.sqlite_schema_attestation import sqlite_master_sql_identity
 
 
 class MigrationConflictError(RuntimeError):
@@ -34,6 +38,606 @@ class MigrationConflictError(RuntimeError):
 
 class MigrationVerificationError(RuntimeError):
     pass
+
+
+RESTRICTION_DIGEST_MIGRATION_VERSION = "0007_restriction_digest_results"
+RESTRICTION_DIGEST_MIGRATION_NAME = "immutable exact restriction digest results"
+_RESTRICTION_DIGEST_COLUMNS = (
+    ("id", "VARCHAR(36)", False, 1),
+    ("operation_id", "VARCHAR(36)", False, 0),
+    ("source_revision_id", "VARCHAR(36)", False, 0),
+    ("catalog_id", "VARCHAR(128)", False, 0),
+    ("catalog_sha256", "VARCHAR(64)", False, 0),
+    ("request_sha256", "VARCHAR(64)", False, 0),
+    ("result_sha256", "VARCHAR(64)", False, 0),
+    ("result", "TEXT", False, 0),
+    ("created_at", "DATETIME", False, 0),
+)
+_RESTRICTION_DIGEST_FOREIGN_KEYS = (
+    ("operation_id", "molecular_operations", "id", "NO ACTION", "RESTRICT"),
+    ("source_revision_id", "molecular_revisions", "id", "NO ACTION", "RESTRICT"),
+)
+_RESTRICTION_DIGEST_INDEXES = (
+    (
+        "ix_restriction_digest_results_source_created", False, "c", False,
+        ("source_revision_id", "created_at"),
+    ),
+    ("sqlite_autoindex_restriction_digest_results_1", True, "pk", False, ("id",)),
+    ("sqlite_autoindex_restriction_digest_results_2", True, "u", False, ("operation_id",)),
+)
+
+
+def _normalize_restriction_digest_sql(sql: object) -> str:
+    return sqlite_master_sql_identity(sql)
+
+
+def _restriction_digest_immutable_trigger_sql(action: str) -> str:
+    table_name = "restriction_digest_results"
+    trigger_name = f"molbio_immutable_{table_name}_{action.lower()}"
+    return f'''CREATE TRIGGER "{trigger_name}"
+                    BEFORE {action} ON "{table_name}"
+                    BEGIN
+                        SELECT RAISE(ABORT, '{table_name} is immutable');
+                    END'''
+
+
+def restriction_digest_json_equal(left: object, right: object) -> int:
+    """SQLite UDF: compare two JSON values structurally, independent of key order."""
+
+    try:
+        if not isinstance(left, str) or not isinstance(right, str):
+            return 0
+        return int(json.loads(left) == json.loads(right))
+    except Exception:
+        return 0
+
+
+def validate_restriction_digest_result(
+    result_text: object,
+    operation_id: object,
+    source_revision_id: object,
+    catalog_id: object,
+    catalog_sha256: object,
+    request_sha256: object,
+    result_sha256: object,
+) -> int:
+    """SQLite UDF: strict JCS, closed models, digest, and row-binding validation."""
+
+    try:
+        from services.restriction_digest import DigestSimulation
+
+        if not isinstance(result_text, str):
+            return 0
+        payload = json.loads(result_text)
+        if not isinstance(payload, dict) or set(payload) != {
+            "schema", "operation_id", "source_revision_id", "catalog_id",
+            "catalog_sha256", "request_sha256", "result_sha256", "simulation", "outputs",
+        }:
+            return 0
+        if rfc8785.dumps(payload).decode("utf-8") != result_text:
+            return 0
+        expected = {
+            "operation_id": str(operation_id), "source_revision_id": str(source_revision_id),
+            "catalog_id": str(catalog_id), "catalog_sha256": str(catalog_sha256),
+            "request_sha256": str(request_sha256), "result_sha256": str(result_sha256),
+        }
+        if payload.get("schema") != "bms.molbio.restriction-digest-saved-result.v1" or any(
+            payload.get(key) != value for key, value in expected.items()
+        ):
+            return 0
+        simulation = DigestSimulation.model_validate(payload.get("simulation"))
+        if (
+            simulation.source.kind != "molecular_revision"
+            or simulation.source.revision_id != str(source_revision_id)
+            or simulation.catalog.catalog_id != str(catalog_id)
+            or simulation.catalog.catalog_sha256 != str(catalog_sha256)
+            or simulation.request_sha256 != str(request_sha256)
+            or simulation.simulation_sha256 != str(result_sha256)
+            or hashlib.sha256(simulation.canonical_unsigned_bytes()).hexdigest() != str(result_sha256)
+        ):
+            return 0
+        outputs = payload.get("outputs")
+        output_keys = {
+            "fragment_index", "document_id", "revision_id", "output_edge_id",
+            "name", "topology", "content_sha256", "content_length",
+        }
+        if not isinstance(outputs, list):
+            return 0
+        if outputs and len(outputs) != len(simulation.fragments):
+            return 0
+        identity_fields = ("document_id", "revision_id", "output_edge_id")
+        if any(
+            len({str(output.get(field)) for output in outputs}) != len(outputs)
+            for field in identity_fields
+        ):
+            return 0
+        for ordinal, output in enumerate(outputs):
+            fragment = simulation.fragments[ordinal]
+            fragment_bytes = fragment.top_strand_sequence.encode("ascii")
+            if (
+                not isinstance(output, dict) or set(output) != output_keys
+                or output.get("fragment_index") != ordinal
+                or output.get("topology") != fragment.topology
+                or not isinstance(output.get("content_length"), int)
+                or output.get("content_length") != len(fragment_bytes)
+                or output.get("content_sha256")
+                != hashlib.sha256(fragment_bytes).hexdigest()
+                or any(not isinstance(output.get(field), str) or not output[field] for field in identity_fields)
+            ):
+                return 0
+        return 1
+    except Exception:
+        return 0
+
+
+_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL = """
+CREATE TRIGGER molbio_restriction_digest_results_integrity_insert
+BEFORE INSERT ON restriction_digest_results
+WHEN bms_restriction_digest_result_valid(
+       NEW.result, NEW.operation_id, NEW.source_revision_id, NEW.catalog_id,
+       NEW.catalog_sha256, NEW.request_sha256, NEW.result_sha256
+     ) != 1
+  OR json_valid(NEW.result) != 1
+  OR json(NEW.result) != NEW.result
+  OR json_type(NEW.result) != 'object'
+  OR (SELECT count(*) FROM json_each(NEW.result)) != 9
+  OR json_extract(NEW.result, '$.schema') != 'bms.molbio.restriction-digest-saved-result.v1'
+  OR json_extract(NEW.result, '$.operation_id') IS NOT NEW.operation_id
+  OR json_extract(NEW.result, '$.source_revision_id') IS NOT NEW.source_revision_id
+  OR json_extract(NEW.result, '$.catalog_id') IS NOT NEW.catalog_id
+  OR json_extract(NEW.result, '$.catalog_sha256') IS NOT NEW.catalog_sha256
+  OR json_extract(NEW.result, '$.request_sha256') IS NOT NEW.request_sha256
+  OR json_extract(NEW.result, '$.result_sha256') IS NOT NEW.result_sha256
+  OR json_extract(NEW.result, '$.simulation.schema') != 'bms.molbio.restriction-digest-simulation.v1'
+  OR json_extract(NEW.result, '$.simulation.simulation_sha256') IS NOT NEW.result_sha256
+  OR json_type(NEW.result, '$.outputs') != 'array'
+  OR length(NEW.catalog_sha256) != 64
+  OR length(NEW.request_sha256) != 64
+  OR length(NEW.result_sha256) != 64
+  OR NOT EXISTS (
+       SELECT 1
+       FROM molecular_operations AS operation
+       WHERE operation.id = NEW.operation_id
+         AND operation.operation_kind = 'restriction_digest'
+         AND operation.implementation = 'services.restriction_digest.simulate_digest'
+         AND operation.implementation_version
+             IS json_extract(NEW.result, '$.simulation.digest_algorithm_version')
+         AND operation.status = 'completed'
+         AND json_valid(operation.parameters) = 1
+         AND json_type(operation.parameters) = 'object'
+         AND (SELECT count(*) FROM json_each(operation.parameters)) = 6
+         AND json_extract(operation.parameters, '$.schema')
+             = 'bms.molbio.restriction-digest-operation-parameters.v1'
+         AND json_extract(operation.parameters, '$.selected_enzyme_ids')
+             IS json_extract(NEW.result, '$.simulation.selected_enzyme_ids')
+         AND json_extract(operation.parameters, '$.simulation_sha256') IS NEW.result_sha256
+         AND json_type(operation.parameters, '$.save_request_receipt') = 'text'
+         AND bms_restriction_digest_save_receipt_valid(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               operation.idempotency_key,
+               operation.request_fingerprint
+             ) = 1
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.schema'
+             ) = 'bms.molbio.restriction-digest-save-request.v1'
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.kind'
+             ) = 'molecular_revision'
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.sequence_id'
+             ) IS json_extract(NEW.result, '$.simulation.source.sequence_id')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.source.revision_id'
+             ) IS NEW.source_revision_id
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.source.expected_content_sha256'
+             ) IS json_extract(NEW.result, '$.simulation.source.content_sha256')
+         AND (
+               json_type(
+                 json_extract(operation.parameters, '$.save_request_receipt'), '$.source.topology'
+               ) = 'null'
+               OR json_extract(
+                    json_extract(operation.parameters, '$.save_request_receipt'), '$.source.topology'
+                  ) IS json_extract(NEW.result, '$.simulation.source.topology')
+             )
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.catalog.catalog_id'
+             ) IS NEW.catalog_id
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.catalog.expected_catalog_sha256'
+             ) IS NEW.catalog_sha256
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.enzyme_ids'
+             ) IS json_extract(NEW.result, '$.simulation.selected_enzyme_ids')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.simulation_sha256'
+             ) IS NEW.result_sha256
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.idempotency_key'
+             ) IS operation.idempotency_key
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'), '$.persistence_mode'
+             ) IS json_extract(operation.parameters, '$.persistence_mode')
+         AND json_extract(
+               json_extract(operation.parameters, '$.save_request_receipt'),
+               '$.fragment_name_prefix'
+             ) IS json_extract(operation.parameters, '$.fragment_name_prefix')
+         AND json_type(operation.parameters, '$.fragment_name_prefix') IN ('null', 'text')
+         AND (
+               json_type(operation.parameters, '$.fragment_name_prefix') = 'null'
+               OR length(trim(json_extract(
+                    operation.parameters, '$.fragment_name_prefix'
+                  ))) > 0
+             )
+         AND (
+               (
+                 json_extract(operation.parameters, '$.persistence_mode') = 'operation_only'
+                 AND json_array_length(NEW.result, '$.outputs') = 0
+               )
+               OR (
+                 json_extract(operation.parameters, '$.persistence_mode')
+                     = 'operation_and_fragments'
+                 AND json_array_length(NEW.result, '$.outputs')
+                     = json_array_length(NEW.result, '$.simulation.fragments')
+               )
+             )
+         AND json_valid(operation.warnings) = 1
+         AND json_type(operation.warnings) = 'array'
+         AND json(operation.warnings)
+             IS json(json_extract(NEW.result, '$.simulation.warnings'))
+         AND json_valid(operation.provenance) = 1
+         AND json_type(operation.provenance) = 'object'
+         AND (SELECT count(*) FROM json_each(operation.provenance)) = 4
+         AND json_extract(operation.provenance, '$.source_revision_id')
+             IS NEW.source_revision_id
+         AND json_extract(operation.provenance, '$.catalog_id') IS NEW.catalog_id
+         AND json_extract(operation.provenance, '$.catalog_sha256') IS NEW.catalog_sha256
+         AND json_extract(operation.provenance, '$.request_sha256') IS NEW.request_sha256
+         AND typeof(operation.idempotency_key) = 'text'
+         AND length(trim(operation.idempotency_key)) > 0
+         AND length(operation.request_fingerprint) = 64
+         AND operation.request_fingerprint NOT GLOB '*[^0-9a-f]*'
+     )
+  OR (SELECT count(*) FROM molecular_operation_inputs
+      WHERE operation_id = NEW.operation_id) != 1
+  OR NOT EXISTS (
+       SELECT 1
+       FROM molecular_operation_inputs AS input
+       WHERE input.operation_id = NEW.operation_id
+         AND input.revision_id = NEW.source_revision_id
+         AND input.role = 'digest_source'
+         AND input.position = 0
+         AND json_valid(input.snapshot) = 1
+         AND json_type(input.snapshot) = 'object'
+         AND (SELECT count(*) FROM json_each(input.snapshot)) = 3
+         AND json_extract(input.snapshot, '$.content_sha256')
+             IS json_extract(NEW.result, '$.simulation.source.content_sha256')
+         AND json_extract(input.snapshot, '$.name')
+             IS json_extract(NEW.result, '$.simulation.source.name')
+         AND json_extract(input.snapshot, '$.sequence_id')
+             IS json_extract(NEW.result, '$.simulation.source.sequence_id')
+     )
+  OR NOT EXISTS (
+       SELECT 1
+       FROM molecular_revisions AS revision
+       JOIN molecular_documents AS document ON document.id = revision.document_id
+       WHERE revision.id = NEW.source_revision_id
+         AND revision.document_id
+             IS json_extract(NEW.result, '$.simulation.source.sequence_id')
+         AND revision.revision_number
+             IS json_extract(NEW.result, '$.simulation.source.revision_number')
+         AND revision.content_sha256
+             IS json_extract(NEW.result, '$.simulation.source.content_sha256')
+         AND revision.content_length
+             IS json_extract(NEW.result, '$.simulation.source.content_length')
+         AND document.document_kind = 'dna'
+         AND (
+               (
+                 json_type(revision.snapshot, '$.is_circular') = 'true'
+                 AND json_extract(NEW.result, '$.simulation.source.topology') = 'circular'
+               )
+               OR (
+                 json_type(revision.snapshot, '$.is_circular') = 'false'
+                 AND json_extract(NEW.result, '$.simulation.source.topology') = 'linear'
+               )
+               OR (
+                 coalesce(json_type(revision.snapshot, '$.is_circular'), 'missing')
+                     NOT IN ('true', 'false')
+                 AND json_extract(revision.snapshot, '$.topology')
+                     IS json_extract(NEW.result, '$.simulation.source.topology')
+               )
+             )
+     )
+  OR (SELECT count(*) FROM molecular_operation_outputs
+      WHERE operation_id = NEW.operation_id)
+     != json_array_length(NEW.result, '$.outputs')
+  OR EXISTS (
+       SELECT 1
+       FROM json_each(NEW.result, '$.outputs') AS identity
+       LEFT JOIN molecular_operation_outputs AS edge
+         ON edge.id = json_extract(identity.value, '$.output_edge_id')
+       LEFT JOIN molecular_revisions AS revision
+         ON revision.id = json_extract(identity.value, '$.revision_id')
+       LEFT JOIN molecular_documents AS document
+         ON document.id = json_extract(identity.value, '$.document_id')
+       WHERE edge.id IS NULL
+          OR edge.operation_id != NEW.operation_id
+          OR edge.revision_id IS NOT json_extract(identity.value, '$.revision_id')
+          OR edge.role != 'digest_fragment'
+          OR edge.position IS NOT CAST(identity.key AS INTEGER)
+          OR json_valid(edge.snapshot) != 1
+          OR json_type(edge.snapshot) != 'object'
+          OR (SELECT count(*) FROM json_each(edge.snapshot)) != 3
+          OR json_extract(edge.snapshot, '$.fragment_index')
+             IS NOT CAST(identity.key AS INTEGER)
+          OR json_extract(edge.snapshot, '$.name')
+             IS NOT json_extract(identity.value, '$.name')
+          OR json_extract(edge.snapshot, '$.simulation_sha256') IS NOT NEW.result_sha256
+          OR revision.id IS NULL
+          OR revision.document_id IS NOT json_extract(identity.value, '$.document_id')
+          OR revision.revision_number != 1
+          OR revision.change_kind != 'restriction_digest_fragment'
+          OR revision.content_sha256
+             IS NOT json_extract(identity.value, '$.content_sha256')
+          OR revision.content_length
+             IS NOT json_extract(identity.value, '$.content_length')
+          OR revision.operation_id != NEW.operation_id
+          OR revision.created_by IS NOT NULL
+          OR json_valid(revision.snapshot) != 1
+          OR json_type(revision.snapshot) != 'object'
+          OR (SELECT count(*) FROM json_each(revision.snapshot)) != 5
+          OR json_extract(revision.snapshot, '$.sequence_type') != 'dna'
+          OR json_extract(revision.snapshot, '$.sequence') IS NOT json_extract(
+               NEW.result,
+               '$.simulation.fragments[' || CAST(identity.key AS INTEGER)
+               || '].top_strand_sequence'
+             )
+          OR json_extract(revision.snapshot, '$.topology')
+             IS NOT json_extract(identity.value, '$.topology')
+          OR json_extract(revision.snapshot, '$.name')
+             IS NOT json_extract(identity.value, '$.name')
+          OR json_extract(revision.snapshot, '$.is_circular')
+             IS NOT (json_extract(identity.value, '$.topology') = 'circular')
+          OR json_valid(revision.provenance) != 1
+          OR json_type(revision.provenance) != 'object'
+          OR (SELECT count(*) FROM json_each(revision.provenance)) != 6
+          OR json_extract(revision.provenance, '$.schema')
+             != 'bms.molbio.restriction-digest-fragment-provenance.v1'
+          OR json_extract(revision.provenance, '$.source_revision_id')
+             != NEW.source_revision_id
+          OR json_extract(revision.provenance, '$.operation_id') != NEW.operation_id
+          OR json_extract(revision.provenance, '$.simulation_sha256') != NEW.result_sha256
+          OR json_extract(revision.provenance, '$.fragment_index')
+             IS NOT CAST(identity.key AS INTEGER)
+          OR bms_restriction_digest_json_equal(
+               json_extract(revision.provenance, '$.geometry'),
+               json_extract(
+                 NEW.result,
+                 '$.simulation.fragments[' || CAST(identity.key AS INTEGER) || ']'
+               )
+             ) != 1
+          OR document.id IS NULL
+          OR document.document_kind != 'dna'
+          OR json_extract(identity.value, '$.fragment_index')
+             IS NOT CAST(identity.key AS INTEGER)
+          OR json_extract(identity.value, '$.topology') IS NOT json_extract(
+               NEW.result,
+               '$.simulation.fragments[' || CAST(identity.key AS INTEGER) || '].topology'
+             )
+          OR json_extract(identity.value, '$.name') IS NOT (
+               CASE
+                 WHEN json_type(
+                        (SELECT parameters FROM molecular_operations
+                         WHERE id = NEW.operation_id),
+                        '$.fragment_name_prefix'
+                      ) = 'text'
+                 THEN trim(json_extract(
+                        (SELECT parameters FROM molecular_operations
+                         WHERE id = NEW.operation_id),
+                        '$.fragment_name_prefix'
+                      ))
+                 ELSE json_extract(NEW.result, '$.simulation.source.name')
+                      || ' digest fragment'
+               END || ' ' || (CAST(identity.key AS INTEGER) + 1)
+             )
+     )
+BEGIN
+  SELECT RAISE(ABORT, 'restriction digest result integrity violation');
+END
+""".strip()
+def restriction_digest_integrity_trigger_sql() -> str:
+    return _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+
+
+def _restriction_digest_expected_triggers() -> dict[str, str]:
+    return {
+        "molbio_immutable_restriction_digest_results_delete": (
+            _restriction_digest_immutable_trigger_sql("DELETE")
+        ),
+        "molbio_immutable_restriction_digest_results_update": (
+            _restriction_digest_immutable_trigger_sql("UPDATE")
+        ),
+        "molbio_restriction_digest_results_integrity_insert": (
+            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL
+        ),
+    }
+
+
+def restriction_digest_physical_schema_issues(  # noqa: ANN001
+    sync_connection, *, allow_missing_triggers: bool = False,
+) -> list[str]:
+    """Compare every attested 0007 SQLite object without repairing drift."""
+
+    table_name = "restriction_digest_results"
+    table_exists = sync_connection.exec_driver_sql(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table_name,),
+    ).scalar_one_or_none()
+    if table_exists is None:
+        return ["attested table is missing"]
+
+    issues: list[str] = []
+    columns = tuple(
+        (
+            str(row[1]), str(row[2]).upper(), not bool(row[3]), int(row[5]),
+        )
+        for row in sync_connection.exec_driver_sql(
+            'PRAGMA table_info("restriction_digest_results")'
+        ).fetchall()
+    )
+    if columns != _RESTRICTION_DIGEST_COLUMNS:
+        issues.append("attested columns, types, nullability, or primary-key ordinals differ")
+
+    foreign_keys = tuple(sorted(
+        (
+            str(row[3]), str(row[2]), str(row[4]),
+            str(row[5]).upper(), str(row[6]).upper(),
+        )
+        for row in sync_connection.exec_driver_sql(
+            'PRAGMA foreign_key_list("restriction_digest_results")'
+        ).fetchall()
+    ))
+    if foreign_keys != tuple(sorted(_RESTRICTION_DIGEST_FOREIGN_KEYS)):
+        issues.append("attested foreign keys differ")
+
+    index_rows = sync_connection.exec_driver_sql(
+        'PRAGMA index_list("restriction_digest_results")'
+    ).fetchall()
+    observed_indexes = {
+        str(row[1]): (bool(row[2]), str(row[3]), bool(row[4]))
+        for row in index_rows
+    }
+    expected_indexes = {
+        name: (unique, origin, partial)
+        for name, unique, origin, partial, _columns in _RESTRICTION_DIGEST_INDEXES
+    }
+    if observed_indexes != expected_indexes:
+        issues.append("attested index identities, uniqueness, or origins differ")
+    else:
+        for name, _unique, _origin, _partial, expected_columns in _RESTRICTION_DIGEST_INDEXES:
+            quoted_name = name.replace('"', '""')
+            actual_columns = tuple(
+                str(row[2]) for row in sync_connection.exec_driver_sql(
+                    f'PRAGMA index_info("{quoted_name}")'
+                ).fetchall()
+            )
+            if actual_columns != expected_columns:
+                issues.append(f"attested index columns differ: {name}")
+
+    trigger_rows = sync_connection.exec_driver_sql(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?",
+        (table_name,),
+    ).fetchall()
+    observed_triggers = {str(row[0]): str(row[1] or "") for row in trigger_rows}
+    expected_triggers = _restriction_digest_expected_triggers()
+    unexpected_triggers = set(observed_triggers).difference(expected_triggers)
+    missing_triggers = set(expected_triggers).difference(observed_triggers)
+    allow_fresh_trigger_bootstrap = (
+        allow_missing_triggers
+        and missing_triggers == {
+            "molbio_restriction_digest_results_integrity_insert"
+        }
+        and set(observed_triggers) == {
+            "molbio_immutable_restriction_digest_results_delete",
+            "molbio_immutable_restriction_digest_results_update",
+        }
+    )
+    if unexpected_triggers or (missing_triggers and not allow_fresh_trigger_bootstrap):
+        issues.append("attested trigger identities differ")
+    for name in set(observed_triggers).intersection(expected_triggers):
+        if (
+            _normalize_restriction_digest_sql(observed_triggers[name])
+            != _normalize_restriction_digest_sql(expected_triggers[name])
+        ):
+            issues.append(f"attested trigger SQL differs: {name}")
+    return issues
+
+
+def restriction_digest_migration_attestation() -> dict[str, object]:
+    """Return the complete deterministic Phase 3 migration identity."""
+
+    return {
+        "schema": "bms.molbio.restriction-digest-migration-attestation.v1",
+        "version": RESTRICTION_DIGEST_MIGRATION_VERSION,
+        "name": RESTRICTION_DIGEST_MIGRATION_NAME,
+        "table": {
+            "name": "restriction_digest_results",
+            "columns": [list(column) for column in _RESTRICTION_DIGEST_COLUMNS],
+            "foreign_keys": [
+                ["operation_id", "molecular_operations", "id", "NO ACTION", "RESTRICT"],
+                ["source_revision_id", "molecular_revisions", "id", "NO ACTION", "RESTRICT"],
+            ],
+            "unique": [["operation_id"]],
+            "indexes": [["source_revision_id", "created_at"]],
+        },
+        "objects": {
+            "tables": ["restriction_digest_results"],
+            "indexes": [
+                "ix_restriction_digest_results_source_created",
+                "sqlite_autoindex_restriction_digest_results_1",
+                "sqlite_autoindex_restriction_digest_results_2",
+            ],
+            "triggers": [
+                "molbio_immutable_restriction_digest_results_delete",
+                "molbio_immutable_restriction_digest_results_update",
+                "molbio_restriction_digest_results_integrity_insert",
+            ],
+        },
+        "integrity_trigger_sha256": hashlib.sha256(
+            _RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL.encode("utf-8")
+        ).hexdigest(),
+        "trigger_sha256": {
+            name: hashlib.sha256(sql.encode("utf-8")).hexdigest()
+            for name, sql in _restriction_digest_expected_triggers().items()
+        },
+    }
+
+
+RESTRICTION_DIGEST_MIGRATION_CHECKSUM = hashlib.sha256(
+    rfc8785.dumps(restriction_digest_migration_attestation())
+).hexdigest()
+
+
+async def apply_restriction_digest_result_migration(connection: AsyncConnection) -> None:
+    """Add the exact immutable digest result table and insert-time binding guard."""
+
+    existing_table = (
+        await connection.execute(text(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='restriction_digest_results'"
+        ))
+    ).scalar_one_or_none()
+    if existing_table is not None:
+        issues = await connection.run_sync(
+            lambda sync_connection: restriction_digest_physical_schema_issues(
+                sync_connection, allow_missing_triggers=True,
+            )
+        )
+        if issues:
+            raise RuntimeError(
+                "counterfeit restriction digest schema blocks migration: " + "; ".join(issues)
+            )
+        existing_integrity_trigger = (
+            await connection.execute(text(
+                "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+                "AND name='molbio_restriction_digest_results_integrity_insert'"
+            ))
+        ).scalar_one_or_none()
+        if existing_integrity_trigger is None:
+            await connection.execute(text(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL))
+        return
+    await connection.run_sync(
+        lambda sync_connection: RestrictionDigestResult.__table__.create(
+            sync_connection, checkfirst=False,
+        )
+    )
+    await connection.execute(text(_RESTRICTION_DIGEST_INTEGRITY_TRIGGER_SQL))
+    violations = (await connection.execute(text("PRAGMA foreign_key_check"))).fetchall()
+    if violations:
+        raise MigrationVerificationError(
+            "Restriction digest migration foreign-key verification failed"
+        )
 
 
 async def _acquire_destination_extraction_lock(destination: Path) -> int:

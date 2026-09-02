@@ -21,10 +21,10 @@
       "pattern": "^[0-9a-f]{40}$"
     },
     "n0_package_fingerprint": {
-      "const": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8"
+      "const": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653"
     },
     "n0_receipt_content_sha256": {
-      "const": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4"
+      "const": "321143a91aac3fd22eef4d4f4c7041f6e9e9495de41f88c64db520e445aa1ece"
     },
     "implementation_state": {
       "const": "implemented_unverified"
@@ -103,7 +103,7 @@
     "source_authorities": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 256,
+      "maxItems": 512,
       "x-bms-unique-by": "path",
       "items": {
         "type": "object",

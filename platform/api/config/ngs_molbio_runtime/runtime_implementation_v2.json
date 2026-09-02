@@ -5,11 +5,11 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "d25693fc3be580e048f19f98f701608a5da7c66367c4dda3f4489257f340a811",
+  "content_sha256": "755a86899d6b012771ce5c31a07194270b8a840705a5db6b5a2e6e88a239df59",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
-  "n0_package_fingerprint": "3b57abf9b59ccabc8de43f7f6fa3cddcd948ee2ad1a6aa9f97f8c1a3f62a4fd8",
-  "n0_receipt_content_sha256": "d72f90a03f632b884612c761b6712a70f5b62311f9e6b26d40fd17bbdf3a1cd4",
+  "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
+  "n0_receipt_content_sha256": "321143a91aac3fd22eef4d4f4c7041f6e9e9495de41f88c64db520e445aa1ece",
   "payload_scanner_runtime_state": "implemented_unverified",
   "phases": [
     {
@@ -134,8 +134,8 @@
     },
     {
       "path": "docs/reports/ngs-molbio-phase-n0-verification-v1.json",
-      "sha256": "ad76f673c06b0667ba715d2936ecce6b0bafde0d1136e5507214cae7e785f73e",
-      "size_bytes": 18964
+      "sha256": "cf92d4cec9f1fb36ae91517453abe2a45e3e056eed4b51a213e6297d06a7a6b2",
+      "size_bytes": 19163
     },
     {
       "path": "docs/specs/2026-08-12-ngs-molbio-global-project-integration-sow.md",
@@ -173,6 +173,11 @@
       "size_bytes": 96921
     },
     {
+      "path": "packages/sequence-utils/src/index.js",
+      "sha256": "e30f22b9e31f3dc261698f46a6d96e6ef4cd1e5107291a095b83e05a4c55f604",
+      "size_bytes": 6229
+    },
+    {
       "path": "platform/api/config/models/nanopore.yaml",
       "sha256": "33ab7124556e4278acc11532b114dac6b58d686439f0a7da1a8b66301080fe03",
       "size_bytes": 16177
@@ -183,19 +188,39 @@
       "size_bytes": 5666
     },
     {
+      "path": "platform/api/config/molbio/restriction/restriction_enzyme_catalog_change_report_v1.json",
+      "sha256": "c9fd900f96978027e86aedb9b23d4c2261bc0b261c28d7536afb2271b78834f7",
+      "size_bytes": 10981
+    },
+    {
+      "path": "platform/api/config/molbio/restriction/restriction_enzyme_catalog_manifest_v1.json",
+      "sha256": "f79eb4a611b8e6bc28e906afafc24c7e38723b4d0b8aeb40dbc541ea8c19e983",
+      "size_bytes": 117462
+    },
+    {
+      "path": "platform/api/config/molbio/restriction/restriction_enzyme_catalog_v1.json",
+      "sha256": "afa440bbbf47d9368e85f300e5abcb4f630b5cb3828e832feaa9e13f71d520c8",
+      "size_bytes": 1661054
+    },
+    {
+      "path": "platform/api/config/molbio/restriction/restriction_enzyme_products_v1.json",
+      "sha256": "9aadcbf2c64a3a64713de7ee5aa4aa0d9ccbd2c91b37fb388b18a889a2ace711",
+      "size_bytes": 899
+    },
+    {
       "path": "platform/api/config/ngs_molbio/adapter_registry_v1.json",
       "sha256": "0cd4555c38165f78977dc3b5273de1fea753d77902f884d2974a8cac1e151f15",
       "size_bytes": 42647
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v1.json",
-      "sha256": "c0d71a2e2e68c2e5c8feda1726fe51f0898096b5daf8fcf668bb06313f06d6bc",
-      "size_bytes": 100169
+      "sha256": "48f6926905a410235ebed86239e8f08034da05ce62bbe15d08c8c951c9fd0158",
+      "size_bytes": 100254
     },
     {
       "path": "platform/api/config/ngs_molbio/capability_inventory_v2.json",
-      "sha256": "6cc207a240a187a0197cfaa7383cb1d2e91ff1bc02bfcb3eb2ceecebb0d27701",
-      "size_bytes": 104813
+      "sha256": "ab76f2ce66f81aebe81d729d9c799e8d18e34d424535103acc4eb2da396e8b89",
+      "size_bytes": 105160
     },
     {
       "path": "platform/api/config/ngs_molbio/dataset_kind_registry_v1.json",
@@ -204,13 +229,13 @@
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v1.json",
-      "sha256": "e639e6a7d6a5da1d319ec1de5cf2e9fdb00e4d12d9c35b70329a16a56c227e45",
+      "sha256": "89898d9b11d101eeb518267f3b6641d307bade2d9284ceae6e126fefc2126eb2",
       "size_bytes": 26539
     },
     {
       "path": "platform/api/config/ngs_molbio/schema_registry_v2.json",
-      "sha256": "cc522f21bf32414da361f651d01d505141c891975766c4f785ca437e87ef47ae",
-      "size_bytes": 27571
+      "sha256": "d6d22268a675a979a6537efb820dd404fa02d10cb7241a5d4a02d24c49fc7c0a",
+      "size_bytes": 27928
     },
     {
       "path": "platform/api/config/ngs_molbio/source_pin_v1.json",
@@ -274,8 +299,8 @@
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "ce988225694026a15682c577b1db13c64bed192544c31bea2bf561614a8e4eb0",
-      "size_bytes": 18383
+      "sha256": "7b3869d67b5d99037c7e739c5c69bce3ca02ece8d28a84d872a256049cb2404f",
+      "size_bytes": 18627
     },
     {
       "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
@@ -328,14 +353,14 @@
       "size_bytes": 846
     },
     {
-      "path": "platform/api/migrations/seal_ont_read_metric_receipt_immutability.py",
-      "sha256": "df7692f4564eb2e3cb684ef06c8f88ce76900f5c1ba2a6ee0483e32afe05da5c",
-      "size_bytes": 1667
-    },
-    {
       "path": "platform/api/migrations/seal_ont_raw_signal_lookup_terminal_immutability.py",
       "sha256": "646cff5eec8c5a6b3dad08f3261daf8abc3adba703dd29ddc84fe549d8f618ab",
       "size_bytes": 2529
+    },
+    {
+      "path": "platform/api/migrations/seal_ont_read_metric_receipt_immutability.py",
+      "sha256": "df7692f4564eb2e3cb684ef06c8f88ce76900f5c1ba2a6ee0483e32afe05da5c",
+      "size_bytes": 1667
     },
     {
       "path": "platform/api/migrations/sqlite_sha256.py",
@@ -349,13 +374,18 @@
     },
     {
       "path": "platform/api/molbio_database.py",
-      "sha256": "ee9da749553273e92d061ccbc88e8f2c3c72d2dd321858a8dfa7644263998b3e",
-      "size_bytes": 31158
+      "sha256": "406aea48dd86fb9af4f3482f91355da506e8f8bd6710ffbd40a78c74a0e047ac",
+      "size_bytes": 34845
+    },
+    {
+      "path": "platform/api/molbio_migrations.py",
+      "sha256": "b0de59539ff804bc0ab244e7ca6b1de7555b9ef664083a52eddf1835a817ae3e",
+      "size_bytes": 57425
     },
     {
       "path": "platform/api/molbio_models.py",
-      "sha256": "446a653897342afeb8cee9f372385a22ae3d75b3c088f72287b84982787d3d18",
-      "size_bytes": 17967
+      "sha256": "3fd8735dd4f4c83e23b9f2d2e5e08b8349a98e64b2086ffcf0a3ce0337eebb39",
+      "size_bytes": 19029
     },
     {
       "path": "platform/api/molbio_ngs_database.py",
@@ -388,6 +418,16 @@
       "size_bytes": 1580
     },
     {
+      "path": "platform/api/readiness.py",
+      "sha256": "2433b6b0da7dcc0886218273360e7aff6b61f0e57b31d850f6e61670437652d8",
+      "size_bytes": 13489
+    },
+    {
+      "path": "platform/api/restriction_catalog_integrity.py",
+      "sha256": "b6fde287e7e9498d1928c70d31cca5ca7af76a7f5419b52fe0fb9ee620dbb087",
+      "size_bytes": 15676
+    },
+    {
       "path": "platform/api/routers/experiment_workspaces.py",
       "sha256": "e519dbe271c01a1474a392cc9d9f50e8996b918d4f20112ea369028e359539b6",
       "size_bytes": 55087
@@ -414,8 +454,13 @@
     },
     {
       "path": "platform/api/routers/molbio_ops.py",
-      "sha256": "3470d6b1a5342f42b91cac856334b0f72d294c27d52187bb2250d46eb7f2214e",
-      "size_bytes": 171701
+      "sha256": "2b045e5aa333eb553645981ec2f09a7d0737131de1e4ab4a2082a571bad5c745",
+      "size_bytes": 172256
+    },
+    {
+      "path": "platform/api/routers/molbio_restriction.py",
+      "sha256": "ae72a32f01c3977f553caea1167598d0752fd54291e44c46ae89d90edd49cc0b",
+      "size_bytes": 89523
     },
     {
       "path": "platform/api/routers/ngs_alignment_sessions.py",
@@ -424,8 +469,8 @@
     },
     {
       "path": "platform/api/routers/ngs_molbio_n5.py",
-      "sha256": "da1c2a77c406f443c5a4881285317f3366cbda1eecdc2d8dcceb853bc4d29640",
-      "size_bytes": 79354
+      "sha256": "8d96e156998c1645359f012d7066529104f0b55ad6cae2c47976560535a40402",
+      "size_bytes": 79536
     },
     {
       "path": "platform/api/routers/nucleotide_sequences.py",
@@ -486,6 +531,26 @@
       "path": "platform/api/services/analysis_autorun.py",
       "sha256": "1af034c320bb45d9b0ce6d52c12a750c3f6ba5de0e45a5fcdd349e9bb1b57de3",
       "size_bytes": 6114
+    },
+    {
+      "path": "platform/api/services/assembly/common.py",
+      "sha256": "1c5187940012c6606c6f26f082bda316174df8f6f92a3ca2440d2b91bc31fe6c",
+      "size_bytes": 5214
+    },
+    {
+      "path": "platform/api/services/assembly/golden_gate.py",
+      "sha256": "824fd4df8122cefe721ac64a847f398dba7935783f8e8f016268c91594462f8f",
+      "size_bytes": 7028
+    },
+    {
+      "path": "platform/api/services/assembly/ligation.py",
+      "sha256": "ebc9043186d4e457945f4afb52a20fbca4753656199484a5ed238a4bf5b0df7b",
+      "size_bytes": 3406
+    },
+    {
+      "path": "platform/api/services/assembly/types.py",
+      "sha256": "73fe2f93def237b8fc5ca37b2b588c45f21ad4a549247ebb4e37273bd314518b",
+      "size_bytes": 4000
     },
     {
       "path": "platform/api/services/execution_ownership.py",
@@ -553,6 +618,16 @@
       "size_bytes": 39984
     },
     {
+      "path": "platform/api/services/molbio_ops.py",
+      "sha256": "ae1a572df746444dcd8004c0c1284a33e847b7cfc870bab3dd0121fd49013cc5",
+      "size_bytes": 9843
+    },
+    {
+      "path": "platform/api/services/molbio_persistence.py",
+      "sha256": "cae70e12c81de7f87be50e36c31f8fe2aff390179dc1c5a9b022d7c75e664424",
+      "size_bytes": 32038
+    },
+    {
       "path": "platform/api/services/molbio_sequence_import.py",
       "sha256": "443c82170ba9dd17648bce1dfe52de176888ccff51c2f24e56b2177d2a7414d8",
       "size_bytes": 35341
@@ -604,13 +679,18 @@
     },
     {
       "path": "platform/api/services/ngs_molbio_runtime_status.py",
-      "sha256": "40dd9a50279afd3047539da7ab3a524b140511ca8ab98b07dc91471863aab2a8",
+      "sha256": "be8d4f440a39883b2d152fd3d36708593e2d8c3cd3f2bb32cbe2114f23638794",
       "size_bytes": 6062
     },
     {
       "path": "platform/api/services/ngs_molbio_source_authority.py",
       "sha256": "3df98e2c85845a3fffb1ece270427fa7480a2704e5df5b4d5153e39cb80d2f0e",
       "size_bytes": 804
+    },
+    {
+      "path": "platform/api/services/nucleotide_validation.py",
+      "sha256": "c916c5a9ef9046cfbe1ac7f8817c4600e47b09471ce6c186851ee0040529f75c",
+      "size_bytes": 1419
     },
     {
       "path": "platform/api/services/ont_ngs_completion.py",
@@ -623,11 +703,6 @@
       "size_bytes": 29046
     },
     {
-      "path": "platform/api/services/ont_read_metrics.py",
-      "sha256": "ee7d454f07ec678bd89a58687333420fc0280d019fa28ae5a351949cc8c50838",
-      "size_bytes": 15714
-    },
-    {
       "path": "platform/api/services/ont_raw_signal.py",
       "sha256": "b2c9174667f52179a10f1603d4f42dc8a70a58e800c6336ee4e0e161834924fc",
       "size_bytes": 177717
@@ -636,6 +711,11 @@
       "path": "platform/api/services/ont_raw_signal_worker.py",
       "sha256": "23cb9601142349a9b6f5e6a1aa8dc27f2d74180903ae31e06198c28055090472",
       "size_bytes": 24423
+    },
+    {
+      "path": "platform/api/services/ont_read_metrics.py",
+      "sha256": "ee7d454f07ec678bd89a58687333420fc0280d019fa28ae5a351949cc8c50838",
+      "size_bytes": 15714
     },
     {
       "path": "platform/api/services/ont_signal_workbench.py",
@@ -668,6 +748,31 @@
       "size_bytes": 78069
     },
     {
+      "path": "platform/api/services/restriction_analysis.py",
+      "sha256": "a2f99b6ac38f88eccabe5d215d00e7f213909809a447043b134fbe6c71763931",
+      "size_bytes": 32167
+    },
+    {
+      "path": "platform/api/services/restriction_catalog.py",
+      "sha256": "340f289a762f0ac2df31744300028762e18b3a98ae85ebb54905277562fd7cdf",
+      "size_bytes": 26557
+    },
+    {
+      "path": "platform/api/services/restriction_digest.py",
+      "sha256": "4e28ce19b19e399659024647a17ca7ad22b4febb2410e0fea7754ae3fc7c0865",
+      "size_bytes": 27162
+    },
+    {
+      "path": "platform/api/services/restriction_digest_save_receipt.py",
+      "sha256": "d8a34069bb98dc40457e5c39b8abafb370476d29a6326636672af90b157e3730",
+      "size_bytes": 4218
+    },
+    {
+      "path": "platform/api/services/restriction_products.py",
+      "sha256": "d6978e068e78514035bd53abd88883ab2dc8937f25edc8c802cb74bdc4cb05bc",
+      "size_bytes": 19202
+    },
+    {
       "path": "platform/api/services/scientific_artifacts/__init__.py",
       "sha256": "91f85fa3a3edf3961f4facf656bb96fd0701e8dc613cd79619e532e128b5e9fb",
       "size_bytes": 1440
@@ -698,6 +803,11 @@
       "size_bytes": 13580
     },
     {
+      "path": "platform/api/services/sqlite_schema_attestation.py",
+      "sha256": "d0100bdbcb64c9c75a5f9d3fdb59dc06e950ca6f02230a173f3506aff4f016d6",
+      "size_bytes": 379
+    },
+    {
       "path": "platform/api/services/workflow_adapter.py",
       "sha256": "e3eebefc68a296efd2b29773c6f24dca0de087664fce1b3d5ed47f3722aedb2d",
       "size_bytes": 8717
@@ -724,8 +834,8 @@
     },
     {
       "path": "platform/api/tests/test_ngs_molbio_runtime_record_builder.py",
-      "sha256": "cccce6fd8f874815ec64c5e6ee94ccf933fff110dfd6f33add19f1e27d1df0ca",
-      "size_bytes": 3479
+      "sha256": "8703be7f5da9b460769cf743f3511173cfa830c19642096706693913945c3d34",
+      "size_bytes": 6348
     },
     {
       "path": "platform/api/tests/test_ont_ngs_completion.py",
@@ -736,11 +846,6 @@
       "path": "platform/api/tests/test_ont_raw_signal_conversion_automation.py",
       "sha256": "2b642696e8705cc7bfd3891f28767c2fd9a43a71bb016f87b9e632f28ecad262",
       "size_bytes": 109711
-    },
-    {
-      "path": "platform/api/tests/test_scientific_artifacts.py",
-      "sha256": "58e6fbd2a96615e242d7a841c5d7433f8dc837f440479f54cab9e98f24960dc6",
-      "size_bytes": 27303
     },
     {
       "path": "platform/api/tests/test_ont_signal_comparison.py",
@@ -763,6 +868,11 @@
       "size_bytes": 247407
     },
     {
+      "path": "platform/api/tests/test_scientific_artifacts.py",
+      "sha256": "58e6fbd2a96615e242d7a841c5d7433f8dc837f440479f54cab9e98f24960dc6",
+      "size_bytes": 27303
+    },
+    {
       "path": "platform/api/uv.lock",
       "sha256": "9ada7d97f0e8f07a1aa1045d865dbf3395d3d97a4fbe065bfbe39cca2df0b54d",
       "size_bytes": 1182158
@@ -778,19 +888,49 @@
       "size_bytes": 6045
     },
     {
+      "path": "platform/frontend/src/components/MolBioToolkit/GCContentTrack.tsx",
+      "sha256": "44d7dd971321db06a7bc60677109d6917974b933b4d3d73b0ace81385f50357c",
+      "size_bytes": 24783
+    },
+    {
       "path": "platform/frontend/src/components/MolBioToolkit/MolBioToolkitV2.tsx",
-      "sha256": "ef56ad3afa6f025cc31e2f2c2fd2c91a1fb1ce2b074c5005890843083282f06d",
-      "size_bytes": 174388
+      "sha256": "9cb1101226c595abe3209b67d212dc1cc7a663b8ee5884eb8da73610cdbd280a",
+      "size_bytes": 182742
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/SequenceViewer.tsx",
+      "sha256": "2b04197c7052ae3fb3dfffe2ac6118b570e2dc13ec0b09eeefacb6da81681feb",
+      "size_bytes": 46353
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/hooks/useSequenceOperations.ts",
+      "sha256": "b715635510b9941d849dc3f188edf2918bc39cadaba6ee1f27b57d4bd19c312c",
+      "size_bytes": 7267
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/indexV2.ts",
-      "sha256": "8a3b4bc97a0513d9ba260e2a614eb0b042074748af8c058eb4c79916542b0b8b",
-      "size_bytes": 990
+      "sha256": "6cd49618a925bd6d0b0fda66f8697bcb7bf0f276bcdad62f6dc688db9a329a8e",
+      "size_bytes": 936
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/panels/AlignmentPanel.tsx",
       "sha256": "a56d1f096a96e13242e9dca645713e9ecbc445e7cd0cb963d45ae55b5bd829a6",
       "size_bytes": 34748
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/panels/AssemblyPanel.tsx",
+      "sha256": "28371e835cd5c1d6bc0356bfccf71b37dfc0876979e9f5dc071a495e5022c7af",
+      "size_bytes": 60367
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/panels/DigestPanel.tsx",
+      "sha256": "e55cd664c66a8b4e00f00c2ecc52a74c2fff3619cafd2a2a65a92bf770420e80",
+      "size_bytes": 16099
+    },
+    {
+      "path": "platform/frontend/src/components/MolBioToolkit/types.ts",
+      "sha256": "3abd1480725d1b26fca6278f8bc282cd73aaee000714eb7640d6ee1127ac4e3c",
+      "size_bytes": 3745
     },
     {
       "path": "platform/frontend/src/components/MolBioToolkit/utils/molecularWorkspaceState.ts",
@@ -909,8 +1049,13 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "836af9211feb762f45baf86a4c2c5dea9374ac4363c1cf63a8e5216a0e9b374a",
-      "size_bytes": 201425
+      "sha256": "93f873d4633977969cb1eda85bbc2a8c388729b1979c33c899d8f069406c64a7",
+      "size_bytes": 202070
+    },
+    {
+      "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
+      "sha256": "f204b8425361b61cc2392f5ecba66cec0d0e60dc852132813952fe45d1c280ad",
+      "size_bytes": 3930
     },
     {
       "path": "platform/frontend/src/lib/nanoporeCloneState.ts",
@@ -943,6 +1088,11 @@
       "size_bytes": 122107
     },
     {
+      "path": "platform/frontend/src/lib/restrictionAnalysis.ts",
+      "sha256": "9d83c076ad9aca0f5165a5c01490cdb5783f14381309f3354c061d9d737d5dec",
+      "size_bytes": 78284
+    },
+    {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
       "sha256": "31792a7babf38b923b2f9cbd8633a2738b2e7f72a9ca6f08ed6d35fed71ccbfb",
       "size_bytes": 64718
@@ -973,14 +1123,14 @@
       "size_bytes": 27706
     },
     {
-      "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
-      "sha256": "469a8cc189ff154530340fbbbc214bf8696b1ad2e2a846213fbf6432fb754f0a",
-      "size_bytes": 138074
-    },
-    {
       "path": "platform/frontend/tests/vitest/rawReadSortableWorkbench.test.tsx",
       "sha256": "dadb7be5589a071e66814f39633e2547e6a17a40e2b689724d065286f04d7bce",
       "size_bytes": 18206
+    },
+    {
+      "path": "platform/frontend/tests/vitest/readAndSignalWorkbench.test.tsx",
+      "sha256": "469a8cc189ff154530340fbbbc214bf8696b1ad2e2a846213fbf6432fb754f0a",
+      "size_bytes": 138074
     },
     {
       "path": "platform/frontend/vite.config.ts",
@@ -993,6 +1143,16 @@
       "size_bytes": 3507
     },
     {
+      "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
+      "sha256": "792b040db2cc3e3ae43a20061729cc46e8905dc895698917db0acc1c425a1b7a",
+      "size_bytes": 14593
+    },
+    {
+      "path": "schemas/molbio/restriction_enzyme_products_v1.schema.json",
+      "sha256": "49255d6f1408a1478bd666811c784df331ec22a7c5055530e3031380d6741e59",
+      "size_bytes": 9999
+    },
+    {
       "path": "schemas/ngs_molbio/binding-status-v1.schema.json",
       "sha256": "cc13a8076ebcb1199f8540d16ef8b88b3eb54397176ef978c078ae3b8a69f6cf",
       "size_bytes": 3372
@@ -1001,6 +1161,16 @@
       "path": "schemas/ngs_molbio/capability-inventory-v2.schema.json",
       "sha256": "3a6f1c128a169edf157860876e8d4fb1fb7507e6169e27e8d95979653704057b",
       "size_bytes": 12708
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-assembly-golden_gate-v1.schema.json",
+      "sha256": "dc0c436568ddf431a87658a91b50c5d4db8abecc957f61c0b2255ea9ca5bea5c",
+      "size_bytes": 5837
+    },
+    {
+      "path": "schemas/ngs_molbio/molbio-restriction_digest-v2.schema.json",
+      "sha256": "470f0544b7a4df7673400ffd51f312bf6f24227991df77127db081a7ae4b9350",
+      "size_bytes": 2608
     },
     {
       "path": "schemas/ngs_molbio/ngs-ont-construct_screening-v1.schema.json",
@@ -1014,7 +1184,7 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-implementation-v1.schema.json",
-      "sha256": "f27e9afd34ccb79ee7c4b38c06e9b773b9ccb19dec9cc0a95b17eee381152f26",
+      "sha256": "7cd667ee91827d9812913121045ac9575bdd28a767cb699694ee45cfacb2a024",
       "size_bytes": 4193
     },
     {
@@ -1024,8 +1194,8 @@
     },
     {
       "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json",
-      "sha256": "8f6a1cf391218c5147194da6fb2eb478ae03bc656d69728a4db9100c4e1e001c",
-      "size_bytes": 12609
+      "sha256": "fe24881da0c1b63c4a60b390218242ff14da90dc254a2ae4348af15aaa322247",
+      "size_bytes": 14733
     },
     {
       "path": "schemas/ngs_molbio_runtime/shared-global-package-acceptance-v1.schema.json",
@@ -1039,12 +1209,12 @@
     },
     {
       "path": "scripts/biomodstack_dev_sync.py",
-      "sha256": "7b077fff806094d1f89b65df5e54d43b76722ea4f29bb23e8486783684f2dc67",
+      "sha256": "205082b06dfd1e0e4d4f01a3667e2c8e6eeef9b6df16f9c8603722bf4710bef2",
       "size_bytes": 48598
     },
     {
       "path": "scripts/build_ngs_molbio_runtime_implementation_record.py",
-      "sha256": "cc79b87ea4dc34fd701d0abc72d27dc1b2561f3ec4bcb9580b66433e3b95cfcd",
+      "sha256": "46081c337e53072e67a753d811b52dbf5d56c6e941a1c574f62028258acd9f53",
       "size_bytes": 10787
     },
     {
@@ -1066,6 +1236,11 @@
       "path": "scripts/build_ont_squigulator_runtime.sh",
       "sha256": "5feee84e38019e388967085e242f0dc2d8549fb7054af63a515cbb633df70fd1",
       "size_bytes": 936
+    },
+    {
+      "path": "scripts/build_restriction_enzyme_catalog.py",
+      "sha256": "7e07d9214a788a084ab5da13a3fb83519a117e2437a26fc0767b779a6f2861ea",
+      "size_bytes": 26529
     },
     {
       "path": "scripts/build_small_igv_report_inputs.py",
@@ -1169,11 +1344,11 @@
     }
   ],
   "source_denominator": {
-    "content_sha256": "4606321f9b99e3ee55dfc9b69540cdeace362a0519689b33bad5ae0ec35699c2",
+    "content_sha256": "6919297a4ad62720a2cdad707c7ab28aef6f3e2a3fda1545a83c90df8f2322a6",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "5689811c452de3bd863c87c73d657f8834011d2c",
-  "successor_source_tree": "5bee5dca40bec88963679fa93349a97fdcc9579f",
+  "successor_source_commit": "270b1c17d2ede14fe14e3368c92799ed00e3c10f",
+  "successor_source_tree": "446b7ee18b15dad0afe9cad526559c0e4d2f29a3",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }

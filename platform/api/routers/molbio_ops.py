@@ -56,8 +56,12 @@ from services.molbio_sequence_import import (
 from services.assembly.common import fragment_provenance_payload
 from services.assembly.gibson import simulate_gibson
 from services.assembly.golden_gate import (
-    TYPE_IIS_ENZYMES,
-    get_type_iis_enzyme,
+    GoldenGateAnalysisLimitError,
+    GoldenGateCatalogDigestMismatchError,
+    GoldenGateCatalogNotFoundError,
+    GoldenGateInvalidDNAError,
+    golden_gate_options as catalog_golden_gate_options,
+    resolve_golden_gate_enzyme,
     simulate_golden_gate,
 )
 from services.assembly.ligation import simulate_ligation
@@ -71,13 +75,7 @@ from services.assembly.types import (
     FragmentEnd,
     GibsonDesignResult,
 )
-from services.molbio_ops import (
-    DigestEnzyme,
-    digest_sequence,
-    pcr_product,
-    apply_mutations,
-    reverse_complement,
-)
+from services.molbio_ops import pcr_product, apply_mutations, reverse_complement
 from services.primer_qc import evaluate_primer_pair_qc, evaluate_primer_qc
 from services.nucleotide_validation import canonicalize_nucleotide_sequence
 from services.annotation_sources import (
@@ -614,18 +612,6 @@ class SequenceInput(BaseModel):
     is_circular: bool = False
 
 
-class EnzymeSchema(BaseModel):
-    name: str
-    site: str
-    cut_index: Optional[int] = None
-
-
-class DigestRequest(SequenceInput):
-    enzymes: List[EnzymeSchema]
-    save: bool = False
-    new_name: Optional[str] = None
-
-
 class PCRRequest(SequenceInput):
     primer_fwd: str
     primer_rev: str
@@ -749,15 +735,6 @@ class GibsonRequest(BaseModel):
     new_name: Optional[str] = None
 
 
-class GoldenGateRequest(BaseModel):
-    fragments: List[str]
-    enzymes: List[EnzymeSchema]
-    circular: bool = True
-    parent_id: Optional[str] = None
-    save: bool = True
-    new_name: Optional[str] = None
-
-
 class NucleotideSequenceResponse(BaseModel):
     id: str
     name: str
@@ -782,14 +759,6 @@ class NucleotideSequenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DigestFragmentResponse(BaseModel):
-    sequence: str
-    start: int
-    end: int
-    length: int
-    wraps_origin: bool
-
-
 class PCRProductResponse(BaseModel):
     sequence: str
     start: int
@@ -800,7 +769,6 @@ class PCRProductResponse(BaseModel):
 
 class MolbioOperationResponse(BaseModel):
     sequence: Optional[NucleotideSequenceResponse] = None
-    fragments: Optional[List[DigestFragmentResponse]] = None
     product: Optional[PCRProductResponse] = None
     message: str
     experiment_id: Optional[str] = None
@@ -896,7 +864,17 @@ class AssemblyJunctionResponse(BaseModel):
     notes: List[str] = Field(default_factory=list)
 
 
+class GoldenGateCatalogAuthorityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enzyme_id: str
+    catalog_id: str
+    catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class AssemblyProductResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     sequence: str
     circular: bool
     length: int
@@ -905,6 +883,15 @@ class AssemblyProductResponse(BaseModel):
     junctions: List[AssemblyJunctionResponse]
     warnings: List[str] = Field(default_factory=list)
     validation_notes: List[str] = Field(default_factory=list)
+    golden_gate_authority: Optional[GoldenGateCatalogAuthorityResponse] = None
+
+    @model_validator(mode="after")
+    def validate_golden_gate_authority(self) -> "AssemblyProductResponse":
+        if self.mode == "golden_gate" and self.golden_gate_authority is None:
+            raise ValueError("Golden Gate products require catalog authority")
+        if self.mode != "golden_gate" and self.golden_gate_authority is not None:
+            raise ValueError("non-Golden-Gate products cannot carry Golden Gate authority")
+        return self
 
 
 class AssemblyOperationResponse(BaseModel):
@@ -1043,9 +1030,17 @@ class GibsonDesignResponse(BaseModel):
 
 
 class GoldenGateAssemblyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     fragments: List[AssemblyFragmentSchema]
     circular: bool = True
-    enzyme_name: str = "BsaI"
+    enzyme_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$",
+    )
+    catalog_id: str = Field(min_length=1, max_length=128)
+    expected_catalog_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     new_name: Optional[str] = None
     save_description: Optional[str] = None
 
@@ -1349,6 +1344,15 @@ def assembly_product_to_response(product: "AssemblyProduct") -> AssemblyProductR
         ],
         warnings=product.warnings,
         validation_notes=product.validation_notes,
+        golden_gate_authority=(
+            None
+            if product.golden_gate_authority is None
+            else GoldenGateCatalogAuthorityResponse(
+                enzyme_id=product.golden_gate_authority.enzyme_id,
+                catalog_id=product.golden_gate_authority.catalog_id,
+                catalog_sha256=product.golden_gate_authority.catalog_sha256,
+            )
+        ),
     )
 
 
@@ -1681,74 +1685,6 @@ async def persist_assembly_product(
     await session.commit()
     await session.refresh(sequence_row)
     return sequence_row
-
-
-@router.post("/digest", response_model=MolbioOperationResponse)
-async def digest(
-    request: DigestRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    parent = await resolve_sequence(request, session)
-    enzymes = [
-        DigestEnzyme(name=e.name, site=e.site, cut_index=e.cut_index)
-        for e in request.enzymes
-    ]
-    fragments = digest_sequence(parent.sequence, enzymes, circular=parent.is_circular)
-    fragment_payload = [
-        DigestFragmentResponse(
-            sequence=f.sequence,
-            start=f.start,
-            end=f.end,
-            length=len(f.sequence),
-            wraps_origin=f.start >= f.end,
-        )
-        for f in fragments
-    ]
-
-    if not request.save:
-        return MolbioOperationResponse(
-            fragments=fragment_payload,
-            message=f"Digest produced {len(fragment_payload)} fragments",
-        )
-
-    new_name = request.new_name or f"{parent.name}_digest"
-    seq_obj = create_child_sequence(
-        parent=parent if request.sequence_id else None,
-        sequence="".join(f.sequence for f in fragments),
-        name=new_name,
-        circular=False,
-        operation="digest",
-        operation_params={"enzymes": [e.model_dump() for e in request.enzymes]},
-    )
-    await record_generated_sequence(
-        session,
-        seq_obj,
-        parent=parent if request.sequence_id else None,
-        operation_kind="digest",
-        implementation="services.molbio_ops.digest_sequence",
-        parameters={"enzymes": [e.model_dump() for e in request.enzymes]},
-        provenance={"source": "api"},
-        inline_inputs=(
-            [
-                (
-                    parent,
-                    "template",
-                    {
-                        "request_source": "inline",
-                        "declared_name": request.name,
-                        "declared_sequence_type": request.sequence_type,
-                        "declared_circular": request.is_circular,
-                    },
-                )
-            ]
-            if request.sequence_id is None
-            else []
-        ),
-    )
-    await session.commit()
-    await session.refresh(seq_obj)
-    return MolbioOperationResponse(
-        sequence=seq_obj, fragments=fragment_payload, message="Digest complete"
-    )
 
 
 @router.post("/pcr", response_model=MolbioOperationResponse)
@@ -2799,33 +2735,61 @@ async def save_gibson_assembly(
 
 @router.get("/assembly/golden-gate/options")
 async def golden_gate_options():
+    try:
+        enzymes = catalog_golden_gate_options()
+    except AssemblyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    first = enzymes[0] if enzymes else None
     return {
+        "catalog": (
+            {
+                "catalog_id": first.catalog_id,
+                "catalog_sha256": first.catalog_sha256,
+            }
+            if first is not None
+            else None
+        ),
         "enzymes": [
             {
-                "name": enzyme.name,
-                "site": enzyme.site,
+                "enzyme_id": enzyme.enzyme_id,
+                "canonical_name": enzyme.canonical_name,
                 "overhang_length": enzyme.overhang_length,
             }
-            for enzyme in TYPE_IIS_ENZYMES.values()
-        ]
+            for enzyme in enzymes
+        ],
     }
 
 
 @router.post("/assembly/golden-gate/simulate", response_model=AssemblyOperationResponse)
 async def simulate_golden_gate_assembly(request: GoldenGateAssemblyRequest):
     try:
+        enzyme = resolve_golden_gate_enzyme(
+            enzyme_id=request.enzyme_id,
+            catalog_id=request.catalog_id,
+            expected_catalog_sha256=request.expected_catalog_sha256,
+        )
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_name=request.enzyme_name,
+            enzyme=enzyme,
             circular=request.circular,
         )
+    except GoldenGateCatalogNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GoldenGateCatalogDigestMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GoldenGateInvalidDNAError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GoldenGateAnalysisLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
 
-    enzyme = get_type_iis_enzyme(request.enzyme_name)
+    authority = product.golden_gate_authority
+    if authority is None:
+        raise HTTPException(status_code=500, detail="Golden Gate authority is unavailable")
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
-        message=f"Validated {enzyme.name} Golden Gate assembly across {len(product.fragments)} fragments",
+        message=f"Validated {authority.enzyme_id} Golden Gate assembly across {len(product.fragments)} fragments",
     )
 
 
@@ -2835,19 +2799,40 @@ async def save_golden_gate_assembly(
     session: AsyncSession = Depends(get_molbio_session),
 ):
     try:
+        enzyme = resolve_golden_gate_enzyme(
+            enzyme_id=request.enzyme_id,
+            catalog_id=request.catalog_id,
+            expected_catalog_sha256=request.expected_catalog_sha256,
+        )
         product = simulate_golden_gate(
             [build_assembly_fragment(fragment) for fragment in request.fragments],
-            enzyme_name=request.enzyme_name,
+            enzyme=enzyme,
             circular=request.circular,
         )
+    except GoldenGateCatalogNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except GoldenGateCatalogDigestMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except GoldenGateInvalidDNAError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GoldenGateAnalysisLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except AssemblyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Golden Gate assembly request is invalid") from exc
 
+    authority = product.golden_gate_authority
+    if authority is None:
+        raise HTTPException(status_code=500, detail="Golden Gate authority is unavailable")
     saved = await persist_assembly_product(
         session,
         product=product,
         name=request.new_name,
         save_description=request.save_description,
+        extra_operation_params={
+            "enzyme_id": authority.enzyme_id,
+            "catalog_id": authority.catalog_id,
+            "catalog_sha256": authority.catalog_sha256,
+        },
     )
     return AssemblyOperationResponse(
         product=assembly_product_to_response(product),
@@ -2878,19 +2863,6 @@ async def gibson(
         detail=(
             "The legacy /gibson route is deprecated because it does not carry validated overlap contracts. "
             "Use /api/molbio/assembly/gibson/simulate or /save."
-        ),
-    )
-
-
-@router.post("/golden-gate", response_model=MolbioOperationResponse)
-async def golden_gate(
-    request: GoldenGateRequest, session: AsyncSession = Depends(get_molbio_session)
-):
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The legacy /golden-gate route is deprecated because it does not carry explicit post-digestion fragment metadata. "
-            "Use /api/molbio/assembly/golden-gate/simulate or /save."
         ),
     )
 

@@ -15,6 +15,7 @@ import {
     type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { NucleotideMoleculeOrientation, NucleotideMoleculeStrandedness, PrimerTmSettings } from '../../lib/api';
+import type { RestrictionAnalysisBatch, RestrictionOccurrence } from '../../lib/restrictionAnalysis';
 import {
     getSeqVizTouchRotationWheelDelta,
     installSeqVizTouchBridge,
@@ -34,10 +35,6 @@ import {
     getSelectionRanges,
     mapSeqVizSelectionToSource,
 } from './utils/selectionActions';
-import {
-    findRestrictionSiteMatches,
-    getRestrictionEnzyme,
-} from './utils/restrictionEnzymes';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR PALETTES
@@ -72,49 +69,75 @@ interface NickingMapAnnotation {
 }
 
 export function buildNickingMapAnnotations({
-    sequence,
-    circular,
+    occurrences,
     selectedEnzymes,
+    sequenceLength,
     sourceDisplayStrand,
     resolvedDisplayStrand,
 }: {
-    sequence: string;
-    circular: boolean;
+    occurrences: RestrictionOccurrence[];
     selectedEnzymes: string[];
+    sequenceLength: number;
     sourceDisplayStrand: NucleotideDisplayStrand;
     resolvedDisplayStrand: NucleotideDisplayStrand;
 }): NickingMapAnnotation[] {
-    const sequenceLength = sequence.length;
-    return selectedEnzymes.flatMap((name) => {
-        const enzyme = getRestrictionEnzyme(name);
-        if (!enzyme?.nickingStrand) return [];
-
-        return findRestrictionSiteMatches(sequence, enzyme.site, circular).map((match) => {
-            const sourceDirection = (enzyme.nickingStrand === 'top'
-                ? match.orientation
-                : -match.orientation) as 1 | -1;
-            const displayDirection = transformDirectionForDisplayStrand(
-                sourceDirection,
-                sourceDisplayStrand,
-                resolvedDisplayStrand,
-            );
-            const displayRange = transformRangeForDisplayStrand(
-                match.position,
-                Math.min(sequenceLength, match.position + 1),
-                sequenceLength,
-                sourceDisplayStrand,
-                resolvedDisplayStrand,
-            );
-            return {
-                name: enzyme.name,
-                start: displayRange.start,
-                end: displayRange.end,
-                direction: displayDirection,
-                color: displayDirection === 1 ? '#f472b6' : '#a78bfa',
-                type: 'nickase' as const,
-            };
-        });
+    const selected = new Set(selectedEnzymes);
+    return occurrences.flatMap((occurrence) => {
+        if (!selected.has(occurrence.enzyme_id)) return [];
+        return occurrence.nicks
+            .filter((nick) => nick.status === 'complete' && nick.boundary !== null)
+            .map((nick) => {
+                const sourceDirection = (nick.strand === 'top'
+                    ? (occurrence.orientation === 'forward' ? 1 : -1)
+                    : (occurrence.orientation === 'forward' ? -1 : 1)) as 1 | -1;
+                const displayDirection = transformDirectionForDisplayStrand(
+                    sourceDirection,
+                    sourceDisplayStrand,
+                    resolvedDisplayStrand,
+                );
+                const displayRange = transformRangeForDisplayStrand(
+                    nick.boundary!,
+                    Math.min(sequenceLength, nick.boundary! + 1),
+                    sequenceLength,
+                    sourceDisplayStrand,
+                    resolvedDisplayStrand,
+                );
+                return {
+                    name: occurrence.canonical_name,
+                    start: displayRange.start,
+                    end: displayRange.end,
+                    direction: displayDirection,
+                    color: displayDirection === 1 ? '#f472b6' : '#a78bfa',
+                    type: 'nickase' as const,
+                };
+            });
     });
+}
+
+export function buildRestrictionMapAnnotations({ occurrences, selectedEnzymes, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand }: {
+    occurrences: RestrictionOccurrence[];
+    selectedEnzymes: string[];
+    sequenceLength: number;
+    sourceDisplayStrand: NucleotideDisplayStrand;
+    resolvedDisplayStrand: NucleotideDisplayStrand;
+}) {
+    const selected = new Set(selectedEnzymes);
+    return occurrences.flatMap((occurrence) => selected.has(occurrence.enzyme_id)
+        ? occurrence.site_segments.map(([start, end], segmentIndex) => {
+            const range = transformRangeForDisplayStrand(start, end, sequenceLength, sourceDisplayStrand, resolvedDisplayStrand);
+            const sourceDirection = occurrence.orientation === 'forward' ? 1 : -1;
+            const semantic = occurrence.nicks.length > 0 ? 'nick' : occurrence.double_strand_events.length > 0 ? 'DSB' : 'recognition';
+            return {
+                name: `${occurrence.canonical_name} · ${occurrence.certainty} ${semantic}`,
+                start: range.start,
+                end: range.end,
+                direction: transformDirectionForDisplayStrand(sourceDirection, sourceDisplayStrand, resolvedDisplayStrand),
+                color: occurrence.certainty === 'possible' ? '#f59e0b' : semantic === 'nick' ? '#f472b6' : '#22d3ee',
+                type: `restriction_${semantic}`,
+                id: `${occurrence.occurrence_id}:segment:${segmentIndex}`,
+            };
+        })
+        : []);
 }
 
 export function getNickingMarkerGeometry({
@@ -347,6 +370,7 @@ interface SequenceViewerProps {
     sequenceData: SequenceData;
     visibility: VisibilityState;
     selectedEnzymes?: string[];
+    restrictionAnalysis?: RestrictionAnalysisBatch | null;
     searchQuery?: string;
     selection?: SelectionInfo | null;
     onSelection?: (sel: SelectionInfo) => void;
@@ -385,6 +409,7 @@ export function SequenceViewer({
     sequenceData,
     visibility,
     selectedEnzymes = [],
+    restrictionAnalysis = null,
     searchQuery,
     selection,
     onSelection,
@@ -476,8 +501,18 @@ export function SequenceViewer({
             })));
         }
 
+        if (visibility.cutsites && restrictionAnalysis) {
+            result.push(...buildRestrictionMapAnnotations({
+                occurrences: restrictionAnalysis.analysis.occurrences,
+                selectedEnzymes,
+                sequenceLength,
+                sourceDisplayStrand,
+                resolvedDisplayStrand,
+            }));
+        }
+
         return result;
-    }, [featureAnnotations, resolvedDisplayStrand, sequenceData.primers, sequenceLength, sourceDisplayStrand, visibility.features, visibility.primers]);
+    }, [featureAnnotations, resolvedDisplayStrand, restrictionAnalysis, selectedEnzymes, sequenceData.primers, sequenceLength, sourceDisplayStrand, visibility.cutsites, visibility.features, visibility.primers]);
 
     // Build translations array if visible - filter by selected reading frames
     // Also filter overlapping ORFs to prevent visual chaos
@@ -659,14 +694,14 @@ export function SequenceViewer({
     const nickingMapMarkers = useMemo(() => (
         visibility.cutsites && sequenceData.circular && resolvedViewerMode !== 'linear'
             ? buildNickingMapAnnotations({
-                sequence: sequenceData.sequence,
-                circular: true,
+                occurrences: restrictionAnalysis?.analysis.occurrences ?? [],
                 selectedEnzymes,
+                sequenceLength,
                 sourceDisplayStrand,
                 resolvedDisplayStrand,
             })
             : []
-    ), [resolvedDisplayStrand, resolvedViewerMode, selectedEnzymes, sequenceData.circular, sequenceData.sequence, sourceDisplayStrand, visibility.cutsites]);
+    ), [resolvedDisplayStrand, resolvedViewerMode, restrictionAnalysis, selectedEnzymes, sequenceData.circular, sequenceLength, sourceDisplayStrand, visibility.cutsites]);
 
     useEffect(() => {
         const viewer = viewerRef.current;
@@ -946,9 +981,7 @@ export function SequenceViewer({
                 seqType={seqVizSeqType}
                 annotations={annotations}
                 translations={translations}
-                enzymes={visibility.cutsites
-                    ? selectedEnzymes.filter((name) => !getRestrictionEnzyme(name)?.nickingStrand)
-                    : []}
+                enzymes={[]}
                 viewer={resolvedViewerMode}
                 showComplement={visibility.reverseComplement}
                 rotateOnScroll

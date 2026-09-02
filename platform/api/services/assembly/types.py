@@ -77,6 +77,13 @@ class AssemblyJunction:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class GoldenGateCatalogAuthority:
+    enzyme_id: str
+    catalog_id: str
+    catalog_sha256: str
+
+
 @dataclass(slots=True)
 class AssemblyProduct:
     mode: AssemblyMode
@@ -86,6 +93,7 @@ class AssemblyProduct:
     junctions: list[AssemblyJunction]
     warnings: list[str] = field(default_factory=list)
     validation_notes: list[str] = field(default_factory=list)
+    golden_gate_authority: Optional[GoldenGateCatalogAuthority] = None
 
 
 @dataclass(slots=True)

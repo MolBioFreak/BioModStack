@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout, PlotSelectionEvent, Shape } from 'plotly.js';
 import type { SelectionInfo } from './SequenceViewer';
-import { findRestrictionSites, getRestrictionEnzyme } from './utils/restrictionEnzymes';
+import type { RestrictionOccurrence } from '../../lib/restrictionAnalysis';
 import {
     createSelectionSnapshot,
     selectionForPlotDisplay,
@@ -46,12 +46,45 @@ interface GCContentTrackProps {
     reverseCoordinates?: boolean;
     circular?: boolean;
     selectedEnzymes?: string[];
+    restrictionOccurrences?: RestrictionOccurrence[];
     windowSize?: number;
     stepSize?: number;
     height?: number;
     selection?: SelectionInfo | null;
     onSelectionChange?: (selection: SelectionInfo) => void;
     onClearSelection?: () => void;
+}
+
+export function restrictionBoundaryPositions(
+    occurrences: RestrictionOccurrence[],
+    selectedEnzymes: string[],
+    sequenceLength: number,
+    reverseCoordinates = false,
+    circular = false,
+): number[] {
+    if (sequenceLength <= 0) return [];
+    const selected = new Set(selectedEnzymes);
+    const seenDsbGroups = new Set<string>();
+    const positions: number[] = [];
+    for (const occurrence of occurrences) {
+        if (!selected.has(occurrence.enzyme_id)) continue;
+        for (const event of occurrence.double_strand_events) {
+            if (event.status !== 'complete' || seenDsbGroups.has(event.contributor_group_id)) continue;
+            const boundary = event.top_boundary;
+            if (boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary > sequenceLength || (circular && boundary === sequenceLength)) continue;
+            seenDsbGroups.add(event.contributor_group_id);
+            positions.push(boundary);
+        }
+        for (const event of occurrence.nicks) {
+            const boundary = event.boundary;
+            if (event.status !== 'complete' || boundary === null || !Number.isInteger(boundary) || boundary < 0 || boundary > sequenceLength || (circular && boundary === sequenceLength)) continue;
+            positions.push(boundary);
+        }
+    }
+    const displayed = positions.map((position) => reverseCoordinates
+        ? (circular ? (sequenceLength - position) % sequenceLength : sequenceLength - position)
+        : position);
+    return displayed.sort((left, right) => left - right);
 }
 
 const CANONICAL_BASES = new Set(['A', 'C', 'G', 'T']);
@@ -196,10 +229,10 @@ function smoothValues(values: number[]): number[] {
     });
 }
 
-function countPositionsInRange(positions: number[], start: number, end: number): number {
+function countPositionsInRange(positions: number[], start: number, end: number, includeEnd = false): number {
     let count = 0;
     for (const position of positions) {
-        if (position >= start && position < end) {
+        if (position >= start && (position < end || (includeEnd && position === end))) {
             count += 1;
         }
     }
@@ -225,7 +258,7 @@ function computeMetricValue(
             return calculateHomopolymerBurden(windowSeq);
         case 'restriction_density': {
             const windowLengthKb = Math.max(1, end - start) / 1000;
-            return countPositionsInRange(restrictionPositions, start, end) / windowLengthKb;
+            return countPositionsInRange(restrictionPositions, start, end, end === sequence.length) / windowLengthKb;
         }
         default:
             return 0;
@@ -243,7 +276,7 @@ function computeSelectionMetricValue(
 
     if (metric === 'restriction_density') {
         const cutCount = ranges.reduce(
-            (total, range) => total + countPositionsInRange(restrictionPositions, range.start, range.end),
+            (total, range) => total + countPositionsInRange(restrictionPositions, range.start, range.end, range.end === sequence.length),
             0,
         );
         return cutCount / (totalLength / 1000);
@@ -312,6 +345,7 @@ export function GCContentTrack({
     reverseCoordinates = false,
     circular = false,
     selectedEnzymes = [],
+    restrictionOccurrences = [],
     windowSize = 60,
     stepSize,
     height = 156,
@@ -331,13 +365,14 @@ export function GCContentTrack({
         if (!shouldComputeRestrictionPositions(metricId)) {
             return [];
         }
-        const allPositions = selectedEnzymes.flatMap((name) => {
-            const enzyme = getRestrictionEnzyme(name);
-            if (!enzyme) return [];
-            return findRestrictionSites(normalizedSequence, enzyme.site, circular);
-        });
-        return Array.from(new Set(allPositions)).sort((left, right) => left - right);
-    }, [circular, metricId, normalizedSequence, selectedEnzymes]);
+        return restrictionBoundaryPositions(
+            restrictionOccurrences,
+            selectedEnzymes,
+            normalizedSequence.length,
+            reverseCoordinates,
+            circular,
+        );
+    }, [circular, metricId, normalizedSequence.length, restrictionOccurrences, reverseCoordinates, selectedEnzymes]);
 
     const analyticsData = useMemo<AnalyticsPoint[]>(() => {
         if (!normalizedSequence || normalizedSequence.length < 10) return [];
