@@ -167,6 +167,17 @@ async def persist_host_key(line: str, fingerprint: str) -> None:
     os.chmod(path, 0o600)
 
 
+def _controlled_remote_failure(stdout: str) -> str | None:
+    for line in reversed(stdout.splitlines()):
+        missing = re.fullmatch(r"missing:([A-Za-z0-9][A-Za-z0-9._+-]{0,63})", line.strip())
+        if missing:
+            return f"Remote readiness prerequisite is missing: {missing.group(1)}"
+        occupied = re.fullmatch(r"occupied:(/[A-Za-z0-9._/-]{1,499})", line.strip())
+        if occupied:
+            return f"Remote readiness path is occupied: {occupied.group(1)}"
+    return None
+
+
 async def run_remote(
     connection: RemoteConnection,
     argv: Sequence[str],
@@ -183,8 +194,9 @@ async def run_remote(
         timeout=timeout,
     )
     if result.returncode != 0:
+        controlled = _controlled_remote_failure(result.stdout)
         detail = result.stderr.strip().splitlines()[-1:] or ["remote command failed"]
-        raise RemoteTransportError(detail[0][:500])
+        raise RemoteTransportError(controlled or detail[0][:500])
     return result
 
 

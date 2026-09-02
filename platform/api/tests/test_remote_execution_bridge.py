@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pydantic import ValidationError
 from migrations.add_remote_execution import migrate
 from services.remote_execution import bundle as bundle_module
 from services.remote_execution import executor as executor_module
+from services.remote_execution import transport as transport_module
 from services.remote_execution.bundle import (
     RemoteBundleError,
     current_source_identity,
@@ -211,6 +213,44 @@ def test_transport_rejects_shell_unsafe_target_fields() -> None:
         payload[field] = value
         with pytest.raises(RemoteTransportError):
             RemoteConnection.from_target(SimpleNamespace(**payload))
+
+
+@pytest.mark.parametrize(
+    ("stdout", "expected"),
+    [
+        ("missing:java\n", "Remote readiness prerequisite is missing: java"),
+        (
+            "occupied:/mnt/BioModStack/dev/apptainer\n",
+            "Remote readiness path is occupied: /mnt/BioModStack/dev/apptainer",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_remote_failure_reports_readiness_marker_before_login_banner(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    expected: str,
+) -> None:
+    connection = RemoteConnection(
+        target_id="vast:123",
+        host="203.0.113.10",
+        port=22,
+        username="root",
+        remote_root="/opt/biomodstack",
+    )
+
+    async def fake_run(*_args: object, **_kwargs: object) -> transport_module.CommandResult:
+        return transport_module.CommandResult(
+            returncode=20,
+            stdout=stdout,
+            stderr="untrusted login banner\n",
+        )
+
+    monkeypatch.setattr(transport_module, "_run", fake_run)
+    monkeypatch.setattr(transport_module, "_ssh_base", lambda _connection: ["ssh"])
+
+    with pytest.raises(RemoteTransportError, match=f"^{re.escape(expected)}$"):
+        await transport_module.run_remote(connection, ["bash", "-lc", "probe"])
 
 
 def test_source_identity_rejects_dirty_tracked_checkout(tmp_path: Path) -> None:
