@@ -114,18 +114,49 @@ def test_result_manifest_rejects_duplicate_artifact_paths() -> None:
         )
 
 
-def test_vast_inventory_normalization_drops_provider_payload() -> None:
+def test_vast_inventory_prefers_current_direct_ssh_mapping() -> None:
     target = _normalize({
         "id": 123,
         "actual_status": "running",
-        "ssh_host": "203.0.113.10",
-        "ssh_port": 22,
+        "ssh_host": "ssh3.vast.ai",
+        "ssh_port": 14414,
+        "public_ipaddr": "220.135.0.171",
+        "direct_port_start": -1,
+        "ports": {
+            "22/tcp": [
+                {"HostIp": "0.0.0.0", "HostPort": "24404"},
+                {"HostIp": "::", "HostPort": "24404"},
+            ],
+        },
         "num_gpus": 1,
         "gpu_name": "RTX 4090",
         "api_key": "must-not-survive",
     })
+
     assert target.provider_instance_id == "123"
+    assert target.host == "220.135.0.171"
+    assert target.port == 24404
     assert target.raw == {}
+
+
+def test_vast_inventory_falls_back_to_proxy_ssh_endpoint() -> None:
+    target = _normalize({
+        "id": 123,
+        "actual_status": "running",
+        "ssh_host": "ssh3.vast.ai",
+        "ssh_port": 14415,
+        "public_ipaddr": "220.135.0.171",
+        "direct_port_start": -1,
+        "ports": {
+            "22/tcp": [
+                {"HostIp": "0.0.0.0", "HostPort": "-1"},
+                {"HostIp": "::", "HostPort": "70000"},
+            ],
+        },
+    })
+
+    assert target.host == "ssh3.vast.ai"
+    assert target.port == 14415
 
 
 def test_vast_inventory_uses_current_v1_instances_endpoint(

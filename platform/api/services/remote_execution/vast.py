@@ -60,6 +60,38 @@ def _instances(payload: Any) -> list[dict[str, Any]]:
     raise VastInventoryError("Vast returned no instance inventory array")
 
 
+def _valid_port(value: Any) -> int | None:
+    port = _number(value, integer=True)
+    if port is None:
+        return None
+    normalized = int(port)
+    return normalized if 1 <= normalized <= 65535 else None
+
+
+def _ssh_endpoint(item: dict[str, Any]) -> tuple[str | None, int | None]:
+    public_host = str(item.get("public_ipaddr") or "").strip() or None
+    ports = item.get("ports")
+    mappings = ports.get("22/tcp") if isinstance(ports, dict) else None
+    if public_host and isinstance(mappings, list):
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            mapped_port = _valid_port(mapping.get("HostPort"))
+            if mapped_port is not None:
+                return public_host, mapped_port
+
+    direct_port = _valid_port(item.get("direct_port_start"))
+    if public_host and direct_port is not None:
+        return public_host, direct_port
+
+    proxy_host = str(item.get("ssh_host") or "").strip() or None
+    proxy_port = _valid_port(item.get("ssh_port"))
+    if proxy_host and proxy_port is not None:
+        return proxy_host, proxy_port
+
+    return proxy_host or public_host, None
+
+
 def _normalize(item: dict[str, Any]) -> DiscoveredExecutionTarget:
     raw_id = item.get("id") or item.get("instance_id") or item.get("contract_id")
     if raw_id is None:
@@ -71,8 +103,7 @@ def _normalize(item: dict[str, Any]) -> DiscoveredExecutionTarget:
     gpu_ram = int(raw_gpu_ram) if raw_gpu_ram is not None else None
     if gpu_ram is not None and gpu_ram < 1024:
         gpu_ram *= 1024
-    raw_port = _number(item.get("ssh_port") or item.get("direct_port_start"), integer=True)
-    port = int(raw_port) if raw_port is not None else None
+    host, port = _ssh_endpoint(item)
     raw_gpu_count = _number(item.get("num_gpus") or item.get("gpu_count"), integer=True)
     gpu_count = int(raw_gpu_count) if raw_gpu_count is not None else 0
     return DiscoveredExecutionTarget(
@@ -80,7 +111,7 @@ def _normalize(item: dict[str, Any]) -> DiscoveredExecutionTarget:
         provider_instance_id=str(raw_id),
         name=(str(item.get("label") or item.get("name") or "").strip() or None),
         provider_state=provider_state,
-        host=(str(item.get("ssh_host") or item.get("public_ipaddr") or "").strip() or None),
+        host=host,
         port=port,
         username=(str(item.get("ssh_user") or item.get("username") or "root").strip() or "root"),
         gpu_name=(str(item.get("gpu_name") or item.get("gpu_model") or "").strip() or None),
