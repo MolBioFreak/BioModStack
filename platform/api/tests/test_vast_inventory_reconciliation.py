@@ -301,14 +301,14 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
     if outcome == 'present':
         result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
         assert result.active and result.state == 'ready'
-        assert len(calls) == 8
+        assert len(calls) == 7  # One verified promotion replaces two chmod calls.
         return
     with pytest.raises(targets.ExecutionTargetError):
         await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
     await session.rollback()
     async with factory() as check:
         assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
-    assert len(calls) == (6 if outcome == 'stopped_final' else 2)
+    assert len(calls) == (5 if outcome == 'stopped_final' else 2)
 
 
 @pytest.mark.asyncio

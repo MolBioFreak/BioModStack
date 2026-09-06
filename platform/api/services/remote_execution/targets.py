@@ -5,6 +5,7 @@ import asyncio
 import logging
 import hashlib
 import json
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -478,29 +479,29 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         from services.nextflow import resolve_nextflow_executable, resolve_nextflow_version
 
         nextflow_launcher = Path(resolve_nextflow_executable())
-        await checked_io(run_remote, connection, ["mkdir", "-p", f"{connection.remote_root}/runner"])
-        await checked_io(rsync_to_remote,
-            connection,
-            runner,
-            f"{connection.remote_root}/runner/bms_remote_worker.py",
-            timeout=3600,
-        )
-        await checked_io(run_remote,
-            connection,
-            ["chmod", "0755", f"{connection.remote_root}/runner/bms_remote_worker.py"],
-        )
-        await checked_io(rsync_to_remote,
-            connection,
-            nextflow_launcher,
-            f"{connection.remote_root}/runner/nextflow",
-            timeout=3600,
-        )
-        await checked_io(run_remote,
-            connection,
-            ["chmod", "0755", f"{connection.remote_root}/runner/nextflow"],
-        )
         runner_sha256 = _sha256_file(runner)
         nextflow_sha256 = _sha256_file(nextflow_launcher)
+        # Never let a delayed/partial rsync receiver own a published pathname.
+        # Each invocation has its own staging directory on the final filesystem.
+        staging = f"{connection.remote_root}/runner/.attach-{uuid.uuid4().hex}"
+        await checked_io(run_remote, connection, ["mkdir", "-p", staging])
+        await checked_io(rsync_to_remote, connection, runner,
+                         f"{staging}/bms_remote_worker.py", timeout=3600)
+        await checked_io(rsync_to_remote, connection, nextflow_launcher,
+                         f"{staging}/nextflow", timeout=3600)
+        # Verify BOTH candidates before replacing either file; chmod the private
+        # inodes first. Each rename is atomic, not a pair-wide transaction.
+        publish = (
+            'set -eu; printf "%s  %s\\n%s  %s\\n" "$3" "$1" "$4" "$2" | sha256sum -c -; '
+            'chmod 0755 "$1" "$2"; mv -fT -- "$1" "$5"; mv -fT -- "$2" "$6"'
+        )
+        await checked_verification([
+            "bash", "-c", publish, "bms-publish-runner",
+            f"{staging}/bms_remote_worker.py", f"{staging}/nextflow",
+            runner_sha256, nextflow_sha256,
+            f"{connection.remote_root}/runner/bms_remote_worker.py",
+            f"{connection.remote_root}/runner/nextflow",
+        ], "Remote runner transfer failed integrity verification", timeout=120)
         remote_hashes = await checked_io(run_remote,
             connection,
             [

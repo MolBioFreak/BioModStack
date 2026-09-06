@@ -51,6 +51,10 @@ class RemoteExecutionError(RuntimeError):
     pass
 
 
+class RemoteRunnerIntegrityError(RemoteExecutionError):
+    pass
+
+
 class RemoteCollectionPending(RemoteExecutionError):
     pass
 
@@ -118,7 +122,43 @@ async def _verify_remote_runner(
     )
     observed = [line.split()[0] for line in response.stdout.splitlines() if line.strip()]
     if observed != expected:
-        raise RemoteExecutionError("Remote runner identity changed after target activation")
+        raise RemoteRunnerIntegrityError(
+            "Remote runner identity changed after target activation; integrity verification failed; retry Attach"
+        )
+
+
+async def _verify_launch_runner(session, job, connection, target) -> None:
+    # Freeze the observed attachment and claim before remote I/O. Inventory
+    # refreshes may continue; a newer attachment/lease/claim must never be poisoned.
+    generation = [
+        ExecutionTarget.id == target.id,
+        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
+        ExecutionTarget.activated_at == target.activated_at,
+        ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() ==
+            (target.provider_metadata or {}).get("setup", {}).get("started_at"),
+        ExecutionTarget.host == target.host, ExecutionTarget.port == target.port,
+        ExecutionTarget.username == target.username, ExecutionTarget.remote_root == target.remote_root,
+        ExecutionTarget.capabilities["runner_sha256"].as_string() == (target.capabilities or {}).get("runner_sha256"),
+        ExecutionTarget.capabilities["nextflow_launcher_sha256"].as_string() == (target.capabilities or {}).get("nextflow_launcher_sha256"),
+        ExecutionTarget.leased_job_id == str(job.id),
+        ExecutionTarget.lease_acquired_at == target.lease_acquired_at,
+    ]
+    claim = select(Job.id).where(
+        Job.id == str(job.id), Job.status == job.status, Job.queue_status == job.queue_status,
+        Job.execution_target_id == job.execution_target_id, Job.nextflow_run_id == job.nextflow_run_id,
+        Job.remote_attempt_id == job.remote_attempt_id, Job.remote_state == job.remote_state,
+        Job.provenance == job.provenance, Job.params == job.params,
+    ).exists()
+    try:
+        await _verify_remote_runner(connection, target)
+    except RemoteRunnerIntegrityError as exc:
+        with session.no_autoflush:
+            await session.execute(update(ExecutionTarget).where(*generation, claim).values(
+                active=False, state="unavailable", last_error=str(exc), updated_at=datetime.utcnow(),
+            ).execution_options(synchronize_session=False))
+        await session.commit()
+        # Lease release and job terminalization remain with the existing attempt CAS.
+        raise
 
 
 def _parse_status(payload: str) -> RemoteAttemptStatus:
@@ -415,7 +455,7 @@ async def _launch_remote_job_owned(
     try:
         target = await get_ready_target(session, str(job.execution_target_id))
         connection = RemoteConnection.from_target(target)
-        await _verify_remote_runner(connection, target)
+        await _verify_launch_runner(session, job, connection, target)
         bundle = await asyncio.to_thread(
             prepare_remote_bundle, job=job, target=target, command=command,
             environment=environment, attempt_id=requested_attempt_id,
@@ -861,7 +901,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
         if target is None:
             raise RemoteExecutionError("Remote execution target record is missing")
         connection, attempt_dir = _connection_for_attempt(target, job)
-        await _verify_remote_runner(connection, target)
+        await _verify_launch_runner(session, job, connection, target)
         if not await _publish_remote_transition(session, job, {"remote_state": "launch_requested"}):
             return False
         response = await run_remote(
