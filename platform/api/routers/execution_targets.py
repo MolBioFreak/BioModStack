@@ -1,7 +1,7 @@
 """Operator API for attaching an already-running execution target."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_session
@@ -12,7 +12,6 @@ from services.remote_execution.contracts import (
 )
 from services.remote_execution.targets import (
     ExecutionTargetError,
-    activate_target,
     active_remote_telemetry,
     deactivate_target,
     list_targets,
@@ -41,13 +40,17 @@ async def refresh_vast_inventory(session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/activate", response_model=ExecutionTargetResponse)
+@router.post("/activate", response_model=ExecutionTargetResponse, status_code=202)
 async def activate_execution_target(
     request: ExecutionTargetActivateRequest,
+    http_request: Request,
     session: AsyncSession = Depends(get_session),
 ):
     try:
-        return await activate_target(session, request)
+        controller = getattr(http_request.app.state, "attachment_controller", None)
+        if controller is None:
+            raise HTTPException(status_code=503, detail="Attachment service is unavailable")
+        return await controller.attach(session, request)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

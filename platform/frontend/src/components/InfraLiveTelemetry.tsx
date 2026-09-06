@@ -1263,6 +1263,12 @@ export function InfraControlStateCollector() {
     return null;
 }
 
+function vastOperationErrorMessage(error: unknown): string {
+    const detail = (error as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    return error instanceof Error && error.message ? error.message : 'Unknown error';
+}
+
 export function InfraLiveTelemetry({
     showXAxisLabels = true,
     defaultPollIntervalMs = 1000,
@@ -1472,8 +1478,17 @@ export function InfraLiveTelemetry({
     });
     const attachVastMutation = useMutation({
         mutationFn: activateExecutionTarget,
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
+        onSettled: () => queryClient.invalidateQueries({ queryKey: ['execution-targets'] }),
     });
+    useEffect(() => {
+        if (attachVastMutation.isError && !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
+            (target) => target.provider === 'vast'
+                && target.provider_instance_id === attachVastMutation.variables
+                && target.active && target.state === 'ready' && target.setup?.phase !== 'failed',
+        )) {
+            attachVastMutation.reset();
+        }
+    }, [attachVastMutation.isError, attachVastMutation.variables, attachVastMutation.reset, executionTargetsQuery.data, executionTargetsQuery.isError]);
     const detachVastMutation = useMutation({
         mutationFn: deactivateExecutionTarget,
         onSuccess: (response) => {
@@ -1647,7 +1662,12 @@ export function InfraLiveTelemetry({
                                         {target.pricing.hourly_rate != null ? ` · $${target.pricing.hourly_rate.toFixed(3)}/hr` : ''}
                                         {isReady ? ' · Remote analytics available' : ''}
                                     </div>
-                                    {target.last_error && (
+                                    {target.setup && (
+                                        <div role="status" className={`mt-1 text-xs ${target.setup.phase === 'failed' ? 'text-red-300' : 'text-[var(--text-muted)]'}`}>
+                                            Setup · {target.setup.phase}: {target.setup.message}
+                                        </div>
+                                    )}
+                                    {target.last_error && target.last_error !== target.setup?.message && (
                                         <div className="mt-1 text-xs text-red-300">{target.last_error}</div>
                                     )}
                                 </div>
@@ -1677,7 +1697,7 @@ export function InfraLiveTelemetry({
             )}
             {(executionTargetsQuery.isError || attachVastMutation.isError || detachVastMutation.isError) && (
                 <div className="mb-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
-                    Vast worker operation failed. Local execution remains authoritative.
+                    {attachVastMutation.isError ? 'Attach failed' : detachVastMutation.isError ? 'Detach failed' : 'Worker inventory failed'}: {vastOperationErrorMessage(attachVastMutation.error ?? detachVastMutation.error ?? executionTargetsQuery.error)}
                 </div>
             )}
 

@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { InfraLiveTelemetry } from '../../src/components/InfraLiveTelemetry';
@@ -138,6 +138,167 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it('polls accepted Attach setup through installing, transferring and verified ready', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', active: false, setup: null as null | { phase: string; message: string } };
+        let accept!: () => void;
+        let reads = 0;
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') { reads++; return response([target]); }
+            if (config.url === '/api/execution-targets/activate') {
+                expect(JSON.parse(config.data)).toEqual({ provider: 'vast', provider_instance_id: '456' });
+                await new Promise<void>((resolve) => { accept = resolve; });
+                target = { ...target, state: 'probing', setup: { phase: 'checking', message: 'Checking worker prerequisites' } };
+                return { ...response(target), status: 202, statusText: 'Accepted' };
+            }
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        const attach = () => [...container.querySelectorAll('button')].find((button) => /Attach worker|Attaching/.test(button.textContent ?? ''));
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /><ExecutionTargetPicker /></QueryClientProvider>));
+            await flush();
+            await act(async () => attach()!.click());
+            await flush();
+            expect(attach()?.disabled).toBe(true);
+            await act(async () => accept());
+            await flush();
+            expect(container.textContent).toContain('Checking worker prerequisites');
+            expect(attach()?.disabled).toBe(true);
+            expect(container.textContent).not.toContain('Remote analytics available');
+            await act(async () => focusManager.setFocused(false));
+            const hiddenReads = reads;
+            target = { ...target, setup: { phase: 'installing', message: 'Installing Apptainer' } };
+            await flush(10_020);
+            expect(reads).toBe(hiddenReads);
+            expect(container.textContent).not.toContain('Installing Apptainer');
+            await act(async () => focusManager.setFocused(true));
+            await flush();
+            expect(reads).toBeGreaterThan(hiddenReads);
+            expect(container.textContent).toContain('Installing Apptainer');
+            for (const [phase, message] of [['installing', 'Installing Apptainer'], ['transferring', 'Transferring runtime bundle'], ['verifying', 'Verifying worker runtime']]) {
+                const previousReads = reads;
+                target = { ...target, setup: { phase, message } };
+                await flush(5_020);
+                expect(reads).toBeGreaterThan(previousReads);
+                expect(container.textContent).toContain(phase);
+                expect(container.textContent).toContain(message);
+                expect(attach()?.disabled).toBe(true);
+                expect(container.textContent).not.toContain('Vast · Remote A6000');
+                expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+            }
+            target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' } };
+            await flush(5_020);
+            expect(container.textContent).toContain('Remote analytics available');
+            expect(container.textContent).toContain('Detach');
+            expect(container.textContent).toContain('Vast · Remote A6000');
+            expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            focusManager.setFocused(undefined);
+            vi.useRealTimers();
+        }
+    });
+
+    it('restores probing setup on a fresh mount and polls the persisted failure reason', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'probing', setup: { phase: 'transferring', message: 'Copying runtime bundle' } };
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') return response([target]);
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+            expect(container.textContent).toContain('Copying runtime bundle');
+            expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Attaching…')?.disabled).toBe(true);
+            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Runtime verification failed: Apptainer unavailable' } };
+            await act(async () => { await vi.advanceTimersByTimeAsync(5_020); });
+            expect(container.textContent).toContain('Runtime verification failed: Apptainer unavailable');
+            expect([...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')?.disabled).toBe(false);
+            expect(container.textContent).not.toContain('Remote analytics available');
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            focusManager.setFocused(undefined);
+            vi.useRealTimers();
+        }
+    });
+
+    it('clears a rejected Attach error when that target becomes ready but preserves persisted setup failure', async () => {
+        vi.useFakeTimers();
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        let target = { ...persistedDiscoveredTarget, state: 'discovered', setup: null as null | { phase: string; message: string }, last_error: null as string | null };
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') return response([target, readyTarget]);
+            if (config.url === '/api/execution-targets/activate') throw new Error('Attach request timed out');
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        const flush = async (ms = 20) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await flush();
+            await act(async () => [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click());
+            await flush();
+            expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
+            target = { ...target, state: 'unavailable', setup: { phase: 'failed', message: 'Worker verification failed' }, last_error: 'Worker verification failed' };
+            await flush(5_020);
+            expect(container.textContent).toContain('Setup · failed: Worker verification failed');
+            expect(container.textContent?.split('Worker verification failed')).toHaveLength(2);
+            expect(container.querySelector('[role="alert"]')?.textContent).toContain('Attach request timed out');
+            target = { ...target, state: 'ready', active: true, setup: { phase: 'ready', message: 'Worker runtime verified' }, last_error: null };
+            await flush(5_020);
+            expect(container.textContent).toContain('Worker runtime verified');
+            expect(container.textContent).not.toContain('Attach request timed out');
+            expect(container.querySelector('[role="alert"]')).toBeNull();
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        ['SSH host key changed', 'SSH host key changed'],
+        [{ message: 'structured detail' }, 'Request failed with status code 409'],
+        [[{ msg: 'validation error' }], 'Request failed with status code 409'],
+    ])('shows safe API Attach errors and refetches targets on failure (%j)', async (detail, expected) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['execution-targets'], response([persistedDiscoveredTarget]));
+        let reads = 0;
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') { reads++; return response([persistedDiscoveredTarget]); }
+            if (config.url === '/api/execution-targets/activate') throw Object.assign(new Error('Request failed with status code 409'), { response: { data: { detail }, status: 409 } });
+            throw new Error('offline test dependency');
+        };
+        const container = document.createElement('div');
+        const root = createRoot(container);
+        try {
+            await act(async () => root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>));
+            await act(async () => {
+                [...container.querySelectorAll('button')].find((button) => button.textContent === 'Attach worker')!.click();
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            });
+            expect(container.textContent).toContain(expected);
+            expect(container.textContent).not.toContain('[object Object]');
+            expect(reads).toBeGreaterThan(0);
+            expect(container.textContent).not.toContain('Local execution remains authoritative');
+            expect(container.querySelector('[role="alert"]')?.textContent).toBe(`Attach failed: ${expected}`);
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+        }
+    });
     it.each([true, false])('shows current empty or unknown inventory and clears saved placement on Dashboard (available=%s)', async (available) => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);

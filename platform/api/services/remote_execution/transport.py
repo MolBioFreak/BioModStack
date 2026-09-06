@@ -191,8 +191,14 @@ async def persist_host_key(line: str, fingerprint: str) -> None:
     os.chmod(path, 0o600)
 
 
+# Only fixed messages from our checked-in bootstrap script, never remote logs.
+BOOTSTRAP_ERRORS = frozenset(re.findall(r"fail '([^']+)'", Path(__file__).with_name("bootstrap_worker.sh").read_text()))
+
+
 def _controlled_remote_failure(stdout: str) -> str | None:
     for line in reversed(stdout.splitlines()):
+        if line.startswith("BMS_SETUP_ERROR:") and line.removeprefix("BMS_SETUP_ERROR:") in BOOTSTRAP_ERRORS:
+            return line.removeprefix("BMS_SETUP_ERROR:")
         missing = re.fullmatch(r"missing:([A-Za-z0-9][A-Za-z0-9._+-]{0,63})", line.strip())
         if missing:
             return f"Remote readiness prerequisite is missing: {missing.group(1)}"

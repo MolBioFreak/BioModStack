@@ -3146,6 +3146,10 @@ def launch_nextflow_job_detached(
     return task
 
 
+def resolve_nextflow_version() -> str:
+    return str(os.getenv("BMS_NEXTFLOW_VERSION") or "25.10.1").strip()
+
+
 def resolve_nextflow_executable() -> str:
     """Resolve the exact host Nextflow binary used for API-launched jobs.
 
@@ -3162,7 +3166,7 @@ def resolve_nextflow_executable() -> str:
             raise RuntimeError(f"BMS_NEXTFLOW_BIN is not an executable file: {candidate}")
         return str(candidate.resolve())
 
-    version = str(os.getenv("BMS_NEXTFLOW_VERSION") or "25.10.1").strip()
+    version = resolve_nextflow_version()
     managed = Path.home() / ".local" / "lib" / "nextflow" / version / "nextflow"
     if managed.is_file() and os.access(managed, os.X_OK):
         return str(managed.resolve())

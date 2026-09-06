@@ -289,6 +289,8 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
             inventory(monkeypatch, ['49674511'], state='stopped')
             async with factory() as other:
                 await targets.refresh_vast_targets(other)
+        if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
+        if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
         return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
     monkeypatch.setattr(targets, 'capture_host_key', capture)
     monkeypatch.setattr(targets, 'persist_host_key', noop)
@@ -299,14 +301,14 @@ async def test_activation_cannot_publish_ready_after_provider_stops_during_probe
     if outcome == 'present':
         result = await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
         assert result.active and result.state == 'ready'
-        assert len(calls) == 4
+        assert len(calls) == 8
         return
     with pytest.raises(targets.ExecutionTargetError):
         await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
     await session.rollback()
     async with factory() as check:
         assert not (await check.get(ExecutionTarget, 'vast:49674511')).active
-    assert len(calls) == (4 if outcome == 'stopped_final' else 0)
+    assert len(calls) == (6 if outcome == 'stopped_final' else 2)
 
 
 @pytest.mark.asyncio
@@ -348,6 +350,8 @@ async def test_inventory_healthy_refresh_preserves_attachment(store, monkeypatch
     async def run(connection, command, **kwargs):
         if refresh_at == 'final' and command[0] == 'sha256sum':
             await refresh()
+        if command[0] == 'env': return SimpleNamespace(stdout='nextflow version 25.10.1\n')
+        if command[0] == 'apptainer': return SimpleNamespace(stdout='BMS_CUDA_OK\n')
         return SimpleNamespace(stdout='fixturehash worker\nfixturehash nextflow\n')
     monkeypatch.setattr(targets, 'capture_host_key', capture)
     monkeypatch.setattr(targets, 'persist_host_key', noop)

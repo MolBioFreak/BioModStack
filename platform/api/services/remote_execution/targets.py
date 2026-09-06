@@ -21,6 +21,7 @@ from .contracts import (
     ExecutionTargetResponse,
 )
 from .transport import (
+    BOOTSTRAP_ERRORS,
     RemoteConnection,
     RemoteTransportError,
     capture_host_key,
@@ -100,6 +101,7 @@ def target_id(provider: str, provider_instance_id: str) -> str:
 
 def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
     return ExecutionTargetResponse(
+        setup=(target.provider_metadata or {}).get("setup"),
         id=str(target.id),
         provider="vast",
         provider_instance_id=str(target.provider_instance_id),
@@ -270,7 +272,80 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
     return inventory
 
 
-async def activate_target(
+async def set_setup(session, target, phase: str, message: str) -> None:
+    await session.refresh(target)
+    now = datetime.utcnow().isoformat()
+    previous = (target.provider_metadata or {}).get("setup", {})
+    setup = {"phase": phase, "message": message, "started_at": previous.get("started_at", now), "updated_at": now}
+    await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == target.id).values(
+        provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.setup", func.json(json.dumps(setup)))
+    ).execution_options(synchronize_session=False))
+    await session.commit()
+    await session.refresh(target)
+
+
+class AttachmentController:
+    """One lifespan-owned installer; requests never own its sessions or task."""
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+        self.tasks = {}
+        self.lock = asyncio.Lock()
+        self.closed = False
+
+    async def attach(self, session, request):
+        async with self.lock:
+            if self.closed:
+                raise ExecutionTargetError("Attachment service is stopping")
+            if self.tasks:
+                raise ExecutionTargetError("An attachment is already in progress")
+            result = await begin_activation(session, request)
+            task = asyncio.create_task(self._run(result.id), name=f"attach-{result.id}")
+            self.tasks[result.id] = task
+            return result
+
+    async def _run(self, identifier):
+        try:
+            async with self.session_factory() as session:
+                await finish_activation(session, identifier)
+        except BaseException as exc:
+            async with self.session_factory() as session:
+                row = await get_target(session, identifier)
+                if row.state == "probing" and not row.leased_job_id:
+                    phase = (row.provider_metadata or {}).get("setup", {}).get("phase", "checking")
+                    message = f"Remote setup interrupted during {phase}; retry Attach" if isinstance(exc, asyncio.CancelledError) else f"Remote setup failed during {phase}; retry Attach"
+                    await set_setup(session, row, "failed", message)
+                    row.state, row.active, row.last_error = "unavailable", False, message
+                    await session.commit()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+        finally:
+            self.tasks.pop(identifier, None)
+
+    async def recover(self):
+        async with self.session_factory() as session:
+            rows = (await session.scalars(select(ExecutionTarget).where(
+                ExecutionTarget.state == "probing", ExecutionTarget.leased_job_id.is_(None)))).all()
+            for row in rows:
+                message = "Remote setup interrupted by service restart; retry Attach"
+                await set_setup(session, row, "failed", message)
+                row.state, row.active, row.last_error = "unavailable", False, message
+            await session.commit()
+
+    async def close(self):
+        self.closed = True
+        tasks = list(self.tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def activate_target(session, request):
+    """Internal synchronous entrypoint retained for fenced service callers."""
+    result = await begin_activation(session, request)
+    return await finish_activation(session, result.id)
+
+
+async def begin_activation(
     session: AsyncSession,
     request: ExecutionTargetActivateRequest,
 ) -> ExecutionTargetResponse:
@@ -304,6 +379,7 @@ async def activate_target(
     admitted = await session.execute(update(ExecutionTarget).where(
         ExecutionTarget.id == identifier,
         ExecutionTarget.leased_job_id.is_(None),
+        ExecutionTarget.state != "probing",
         ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
         ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
         ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
@@ -324,6 +400,12 @@ async def activate_target(
     await session.commit()
     target = await get_target(session, identifier)
 
+    await set_setup(session, target, "checking", "Checking remote worker compatibility")
+    return _target_response(target)
+
+
+async def finish_activation(session: AsyncSession, identifier: str) -> ExecutionTargetResponse:
+    target = await get_target(session, identifier)
     connection = RemoteConnection.from_target(target)
 
     async def checked_io(operation, *args, **kwargs):
@@ -342,9 +424,14 @@ async def activate_target(
         if target.host_key_sha256 and target.host_key_sha256 != fingerprint:
             raise RemoteTransportError("Remote SSH host key changed since the last activation")
         await persist_host_key(host_key_line, fingerprint)
+        script = Path(__file__).with_name("bootstrap_worker.sh").read_bytes()
+        await checked_io(run_remote, connection, ["bash", "-s", "--", "check", connection.remote_root], input_bytes=script, timeout=60)
+        await set_setup(session, target, "installing", "Installing missing worker tools (up to 30 minutes)")
+        await checked_io(run_remote, connection, ["bash", "-s", "--", "install", connection.remote_root], input_bytes=script, timeout=3600)
         probe = await checked_io(probe_readiness, connection)
+        await set_setup(session, target, "transferring", "Transferring verified runner and Nextflow; slow links may take up to one hour")
         runner = Path(__file__).resolve().parents[2] / "tools" / "bms_remote_worker.py"
-        from services.nextflow import resolve_nextflow_executable
+        from services.nextflow import resolve_nextflow_executable, resolve_nextflow_version
 
         nextflow_launcher = Path(resolve_nextflow_executable())
         await checked_io(run_remote, connection, ["mkdir", "-p", f"{connection.remote_root}/runner"])
@@ -352,7 +439,7 @@ async def activate_target(
             connection,
             runner,
             f"{connection.remote_root}/runner/bms_remote_worker.py",
-            timeout=120,
+            timeout=3600,
         )
         await checked_io(run_remote,
             connection,
@@ -362,7 +449,7 @@ async def activate_target(
             connection,
             nextflow_launcher,
             f"{connection.remote_root}/runner/nextflow",
-            timeout=120,
+            timeout=3600,
         )
         await checked_io(run_remote,
             connection,
@@ -385,20 +472,57 @@ async def activate_target(
         ]
         if observed_hashes != [runner_sha256, nextflow_sha256]:
             raise RemoteTransportError("Remote runner transfer failed integrity verification")
+        await set_setup(session, target, "verifying", "Verifying Nextflow and CUDA inside a pinned container")
+        expected_version = resolve_nextflow_version()
+        version = await checked_io(run_remote, connection,
+            ["env", "NXF_OFFLINE=true", f"NXF_VER={expected_version}", f"{connection.remote_root}/runner/nextflow", "-version"], timeout=120)
+        if f"version {expected_version}" not in version.stdout:
+            raise RemoteTransportError("Pinned Nextflow version verification failed")
+        cuda = await checked_io(run_remote, connection, [
+            "apptainer", "exec", "--nv",
+            "docker://python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4",
+            "python", "-c", "import ctypes; c=ctypes.CDLL('libcuda.so.1'); assert c.cuInit(0)==0; n=ctypes.c_int(); assert c.cuDeviceGetCount(ctypes.byref(n))==0 and n.value>0; print('BMS_CUDA_OK')",
+        ], timeout=3600)
+        if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
+            raise RemoteTransportError("CUDA container verification failed")
     except (RemoteTransportError, OSError) as exc:
         await session.refresh(target)
-        target.state = "unavailable"
-        target.active = False
-        target.last_error = str(exc)[:2000]
-        target.updated_at = datetime.utcnow()
+        phase = (target.provider_metadata or {}).get("setup", {}).get("phase", "checking")
+        safe = BOOTSTRAP_ERRORS | {
+            "Remote transport timed out", "Remote runner transfer failed integrity verification",
+            "Pinned Nextflow version verification failed", "CUDA container verification failed",
+            "Remote SSH host key changed since the last activation", "Remote SSH host key changed",
+            "Unable to read the remote SSH host key", "Remote readiness probe returned invalid output",
+            "Remote readiness probe is incomplete",
+        }
+        message = str(exc) if str(exc) in safe else f"Remote setup failed during {phase}; retry Attach"
+        setup = {**(target.provider_metadata or {}).get("setup", {}), "phase": "failed",
+                 "message": message, "updated_at": datetime.utcnow().isoformat()}
+        await session.execute(update(ExecutionTarget).where(
+            ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
+            ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
+            ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
+            ExecutionTarget.remote_root == connection.remote_root,
+        ).values(state="unavailable", active=False, last_error=message, updated_at=datetime.utcnow(),
+            provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.setup", func.json(json.dumps(setup)))
+        ).execution_options(synchronize_session=False))
         await session.commit()
-        raise ExecutionTargetError(str(exc)) from exc
+        raise ExecutionTargetError(message) from exc
 
+    nonterminal = select(Job.id).where(
+        Job.execution_target_id == ExecutionTarget.id,
+        Job.status.notin_(("completed", "failed", "cancelled", "canceled")),
+    ).exists()
     await session.execute(
         update(ExecutionTarget)
-        .where(ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True))
+        .where(ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True),
+               ExecutionTarget.leased_job_id.is_(None), ~nonterminal)
         .values(active=False, state="inactive", updated_at=datetime.utcnow())
     )
+    if await session.scalar(select(ExecutionTarget.id).where(
+        ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True)).limit(1)):
+        await session.rollback()
+        raise ExecutionTargetError("The active execution target acquired work during attachment; retry when idle")
     await session.refresh(target)
     # Publish readiness with an atomic current-inventory predicate, never ORM
     # autoflush of an old ready projection after network I/O.
@@ -420,6 +544,9 @@ async def activate_target(
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= now.isoformat(),
         ).values(
             state="ready", active=True, activated_at=now, updated_at=now, last_error=None,
+            provider_metadata={**dict(target.provider_metadata or {}), "setup": {
+                **(target.provider_metadata or {}).get("setup", {}), "phase": "ready",
+                "message": "Remote worker ready; analytics available", "updated_at": now.isoformat()}},
             host_key_sha256=fingerprint,
             capabilities={**dict(target.capabilities or {}), "readiness": probe,
                           "runner_sha256": runner_sha256, "nextflow_launcher_sha256": nextflow_sha256},

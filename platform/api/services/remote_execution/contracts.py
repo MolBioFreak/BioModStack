@@ -44,7 +44,15 @@ class DiscoveredExecutionTarget(StrictModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExecutionTargetSetup(StrictModel):
+    phase: Literal["checking", "installing", "transferring", "verifying", "ready", "failed"]
+    message: str
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ExecutionTargetResponse(StrictModel):
+    setup: ExecutionTargetSetup | None = None
     id: str
     provider: Literal["vast"]
     provider_instance_id: str

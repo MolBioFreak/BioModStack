@@ -404,6 +404,7 @@ export interface ExecutionTarget {
     provider_instance_id: string;
     name: string | null;
     state: 'discovered' | 'probing' | 'ready' | 'inactive' | 'unavailable';
+    setup?: { phase: string; message: string; started_at?: string; updated_at?: string } | null;
     active: boolean;
     host: string | null;
     port: number | null;
