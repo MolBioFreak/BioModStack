@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "b48eeb8dd4d2930dc0924bd519d9f32e07a5fe0b36d67300796d4f2ed8adced7",
+  "content_sha256": "18341da799903424edddab8b58c64214853d5edc6bfdb7d16d0002d2c26e5c24",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -309,8 +309,8 @@
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "ea7f3a280aec128f5949661cb9e0ff3e6690e773bd18e0d3d77e271a4b6dd7a3",
-      "size_bytes": 19100
+      "sha256": "a03f48a7181ae8cd83bc3bc5eb68403722c65491d9520c581dd3ed8eec669051",
+      "size_bytes": 19298
     },
     {
       "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
@@ -644,8 +644,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "98c6a2eb1ab768357c7197271bd735b59c710af6ccfd2873568e1491013d1c7d",
-      "size_bytes": 218586
+      "sha256": "e145554a2c255aac661c74ebd95274a6390b86ab5d1735fc0a0cdd85cfcc0530",
+      "size_bytes": 218665
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -1069,8 +1069,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "8817431d08c8af77e88b5caa3e86de5cabe235c4a9564fe457d2afda2c5cfb51",
-      "size_bytes": 201993
+      "sha256": "fe74aad4f4aeddc6f3db9280e7cda6167034c4e42d32902d40e1283ded6338ae",
+      "size_bytes": 202090
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "65c2099cdb8bd5a4af0441d310a481095e09c904",
-  "successor_source_tree": "5af99b8bc9138edfec2314c9298ee16aba522395",
+  "successor_source_commit": "7ae1f7390d24c31e027e658f05ed90d0e190c6de",
+  "successor_source_tree": "92b49e4be5d5decccfeb58b2386d0cd1af8e1058",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
