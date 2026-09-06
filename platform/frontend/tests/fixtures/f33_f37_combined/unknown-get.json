@@ -1,0 +1,1 @@
+{"schema":"bioxp.direct-liquid.lookup.v1","request_kind":"readback","idempotency_key":"f33:duplicate-12345678","lookup_state":"unknown","reason":"identity_not_found","retry_forbidden":true,"live_query_performed":false,"record":null}

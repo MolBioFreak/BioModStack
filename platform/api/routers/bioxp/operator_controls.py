@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import ValidationError
 
@@ -35,6 +35,9 @@ from services.bioxp.operator_models import (
     OperatorYMoveStepsInputsV2,
     OperatorDashboard,
     PipetteReadbackRequest,
+    PipetteDirectRequestLookupResponse,
+    PipetteReadbackPostEnvelope,
+    PipetteApplicationPlanPostEnvelope,
     PipetteReadbackResponse,
     PipetteApplicationPlanRequest,
     PipetteApplicationPlanResponse,
@@ -759,22 +762,69 @@ async def operator_dashboard(
     return _validate(OperatorDashboard, payload)
 
 
+def _direct_liquid_ingress(request: Request, allowed: set[str]) -> None:
+    if set(request.query_params) != allowed or any(len(request.query_params.getlist(name)) != 1 for name in allowed) or len(request.headers.getlist("idempotency-key")) != 1:
+        raise HTTPException(status_code=422, detail="Invalid or ambiguous direct-liquid parameters")
+
+
+@router.get("/operator-controls/pipettes/requests", response_model=PipetteDirectRequestLookupResponse, response_model_exclude_unset=True)
+async def pipette_request_lookup(
+    request: Request,
+    response: Response,
+    request_kind: Literal["readback", "application_plan"] = Query(...),
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> PipetteDirectRequestLookupResponse:
+    _direct_liquid_ingress(request, {"request_kind", "expected_connection_generation"})
+    upstream_status = 200
+    try:
+        payload = await runtime.connection.request_active_query(
+            "pipette_request_lookup", expected_generation=expected_connection_generation,
+            require_fresh=False, params={"request_kind": request_kind},
+            json_data={"idempotency_key": idempotency_key},
+        )
+    except RobotResponseError as exc:
+        if exc.status_code not in {409, 503}:
+            raise _translate_robot_error(exc) from exc
+        payload = exc.detail
+        upstream_status = exc.status_code
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    lookup = _validate(PipetteDirectRequestLookupResponse, payload)
+    expected_status = {"conflict": 409, "unavailable": 503}.get(lookup.lookup_state, 200)
+    if upstream_status != expected_status:
+        raise HTTPException(status_code=502, detail="BioXP robot returned mismatched lookup status")
+    if lookup.request_kind != request_kind or lookup.idempotency_key != idempotency_key:
+        raise HTTPException(status_code=502, detail="BioXP robot returned mismatched direct-liquid identity")
+    response.headers["Cache-Control"] = "no-store"
+    response.status_code = expected_status
+    return lookup
+
+
 @router.post("/operator-controls/pipettes/readback", response_model=PipetteReadbackResponse)
 async def pipette_readback(
     request: PipetteReadbackRequest,
+    http_request: Request,
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> PipetteReadbackResponse:
-    snapshot = runtime.connection.snapshot()
+    """Explicit hardware queries, not activation, initialization or liquid motion."""
+    _direct_liquid_ingress(http_request, {"expected_connection_generation"})
     try:
         payload = await runtime.connection.request_active_query(
             "pipette_readback",
-            expected_generation=snapshot.generation,
+            expected_generation=expected_connection_generation,
             require_fresh=True,
-            json_data=request.model_dump(),
+            json_data={**request.model_dump(), "idempotency_key": idempotency_key},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(PipetteReadbackResponse, payload)
+    envelope = _validate(PipetteReadbackPostEnvelope, payload)
+    if envelope.include_data != request.include_data:
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched readback request")
+    return _validate(PipetteReadbackResponse, envelope.model_dump(include=set(PipetteReadbackResponse.model_fields)))
 
 
 @router.get("/operator-controls/pipettes/application/status", response_model=PipetteApplicationStatus)
@@ -796,19 +846,40 @@ async def pipette_application_status(
 @router.post("/operator-controls/pipettes/application/plan", response_model=PipetteApplicationPlanResponse)
 async def pipette_application_plan(
     request: PipetteApplicationPlanRequest,
+    http_request: Request,
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> PipetteApplicationPlanResponse:
-    snapshot = runtime.connection.snapshot()
+    """No-motion planning/receipt creation; unlike readback, no hardware query."""
+    _direct_liquid_ingress(http_request, {"expected_connection_generation"})
     try:
         payload = await runtime.connection.request_active(
             "pipette_application_plan",
-            expected_generation=snapshot.generation,
+            expected_generation=expected_connection_generation,
             require_fresh=True,
-            json_data=request.model_dump(exclude_none=True),
+            json_data={**request.model_dump(exclude_none=True), "idempotency_key": idempotency_key},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(PipetteApplicationPlanResponse, payload)
+    envelope = _validate(PipetteApplicationPlanPostEnvelope, payload)
+    # Planner inputs are a documented projection, not the normalized HTTP body.
+    inputs = request.model_dump(exclude_none=True)
+    if request.operation == "load_tip":
+        expected_inputs = {name: inputs[name] for name in ("tip_tray", "tip_well", "tip_type", "tip_location", "home_z_after")}
+    elif request.operation == "detect_fluid":
+        expected_inputs = {"fluid_class": inputs["fluid_class"]}
+    elif request.operation in {"plunger_up", "plunger_down"}:
+        expected_inputs = {"direction": request.operation.removeprefix("plunger_")}
+    else:
+        expected_inputs = {}
+    # These producer fields are strings, integers and booleans, not coercible
+    # equivalents: Python equality alone treats True as 1 (and 1.0 as 1).
+    actual_inputs = envelope.requested_inputs
+    if (envelope.operation != request.operation or actual_inputs.keys() != expected_inputs.keys()
+            or any(type(actual_inputs[k]) is not type(v) or actual_inputs[k] != v for k, v in expected_inputs.items())):
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched plan request")
+    return _validate(PipetteApplicationPlanResponse, envelope.model_dump(include=set(PipetteApplicationPlanResponse.model_fields)))
 
 
 @router.post(

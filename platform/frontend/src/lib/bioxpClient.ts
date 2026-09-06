@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
@@ -536,6 +537,7 @@ export interface BioXpPipetteReceipt {
     created_at: string;
     operation: string;
     truth: {
+        semantic_query_response_verified: boolean;
         delivery_verified: boolean;
         controller_acknowledged: boolean;
         completion_verified: boolean;
@@ -595,6 +597,7 @@ export interface BioXpPipetteReadbackChannel {
 }
 
 export interface BioXpPipetteReadback {
+    hardware_truth_level: 'hardware_query';
     ok: boolean;
     semantic_ok: boolean;
     available: boolean;
@@ -1641,14 +1644,270 @@ export const useBioXpOperatorCommandV2 = (
     refetchInterval: (query) => bioXpReceiptV2IsNonTerminal(query.state.data) ? 500 : false,
     refetchIntervalInBackground: false,
 });
-export const useReadBioXpPipetteReadback = () => useMutation({
-    mutationFn: async (request: BioXpPipetteReadbackRequest) => (
-        await api.post<BioXpPipetteReadback>(
-            '/api/bioxp/operator-controls/pipettes/readback',
-            request,
-        )
-    ).data,
-});
+type BioXpDirectLiquidKind = 'readback' | 'application_plan';
+type BioXpDirectLiquidRequest = BioXpPipetteReadbackRequest | BioXpPipetteApplicationPlanRequest;
+type BioXpDirectLiquidResult = BioXpPipetteReadback | BioXpPipetteApplicationPlan;
+export type BioXpDirectLiquidSubmission = Readonly<{
+    requestKind: BioXpDirectLiquidKind;
+    idempotencyKey: string;
+    request: Readonly<BioXpDirectLiquidRequest & { home_z_after?: boolean }>;
+    expectedConnectionGeneration: number;
+}>;
+export interface BioXpDirectLiquidLookup {
+    schema: 'bioxp.direct-liquid.lookup.v1';
+    request_kind: BioXpDirectLiquidKind;
+    idempotency_key: string;
+    lookup_state: 'unknown' | 'pending' | 'incomplete' | 'resolved' | 'conflict' | 'unavailable';
+    reason: 'identity_not_found' | 'nonterminal' | 'outcome_unresolved' | 'receipt_incomplete' | 'identity_scope_conflict' | 'store_unavailable' | 'stored_binding_invalid' | null;
+    retry_forbidden: true;
+    live_query_performed: false;
+    record: null | {
+        command_id: string; pipette_operation_id: string | null; canonical_request_sha256: string;
+        operation: string; entrypoint_id: string; caller_class: string; control_class: string; action_id: string;
+        command_status: string; pipette_status: string | null; outcome: string | null; failure_code: string | null;
+        ownership_generation: number; connection_generation: number | null;
+        requested_inputs: BioXpDirectLiquidSubmission['request']; result: BioXpDirectLiquidResult | null;
+    };
+}
+
+const directLiquidNormalize = (kind: BioXpDirectLiquidKind, request: BioXpDirectLiquidRequest) => (
+    kind === 'readback' ? { include_data: false, ...request } : { home_z_after: true, ...request }
+);
+const directLiquidEqual = (a: object, b: object) => {
+    // All expected request maps are flat scalars; never stringify unknown values.
+    const expected = Object.entries(b);
+    return Object.keys(a).length === expected.length && expected.every(([key, value]) =>
+        Object.hasOwn(a, key) && (a as Record<string, unknown>)[key] === value);
+};
+
+// Runtime checks for the existing public direct-liquid DTOs only. Private POST
+// envelope metadata is neither required nor learned as browser authority.
+const directLiquidObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const directLiquidString = (v: unknown, max: number, min = 0): v is string => typeof v === 'string' && v.length >= min && v.length <= max;
+const directLiquidStrings = (v: unknown, max: number, min = 0): v is string[] => Array.isArray(v) && v.length >= min && v.length <= max && v.every(x => typeof x === 'string');
+const directLiquidKeys = (v: Record<string, unknown>, keys: string[]) => Object.keys(v).every(k => keys.includes(k));
+const directLiquidInteger = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+const directLiquidNullableString = (v: unknown, max: number) => v === null || directLiquidString(v, max, 1);
+
+function directLiquidResultValid(v: unknown, s: BioXpDirectLiquidSubmission): v is BioXpDirectLiquidResult {
+    if (!directLiquidObject(v) || !directLiquidString(v.receipt_id, 32, 32) || !/^[0-9a-f]{32}$/.test(v.receipt_id)
+        || typeof v.ok !== 'boolean' || !directLiquidObject(v.receipt_truth)) return false;
+    const truth = v.receipt_truth;
+    const truthBooleans = ['semantic_query_response_verified', 'delivery_verified', 'controller_acknowledged',
+        'completion_verified', 'hardware_precondition_verified', 'hardware_postcondition_verified'];
+    if (!directLiquidKeys(truth, [...truthBooleans, 'physical_effect_verified', 'physical_effect_claim_suppressed'])
+        || !truthBooleans.every(k => typeof truth[k] === 'boolean')
+        || truth.physical_effect_verified !== false || truth.physical_effect_claim_suppressed !== true) return false;
+    if (s.requestKind === 'readback') {
+        return typeof v.semantic_ok === 'boolean' && typeof v.available === 'boolean'
+            && typeof v.include_data === 'boolean' && 'include_data' in s.request && v.include_data === s.request.include_data
+            && v.hardware_truth_level === 'hardware_query' && v.live_query_performed === true
+            && v.truth_source === 'live_hardware_queries' && v.channel_count === 4
+            && v.oem_source_anchor === 'ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData'
+            && ['delivery_verified', 'controller_acknowledged', 'completion_verified', 'hardware_postcondition_verified', 'physical_effect_verified'].every(k => v[k] === false)
+            && Array.isArray(v.channels_constructed_unconditionally) && v.channels_constructed_unconditionally.length === 4
+            && v.channels_constructed_unconditionally.every((id, i) => id === i)
+            && Array.isArray(v.channels) && v.channels.length === 4 && v.channels.every((c, i) => directLiquidObject(c)
+                && directLiquidKeys(c, ['channel', 'semantic_ok', 'firmware', 'status', 'tip', 'pressure', 'data'])
+                && c.channel === i && typeof c.semantic_ok === 'boolean'
+                && directLiquidObject(c.firmware) && directLiquidObject(c.status) && directLiquidObject(c.tip)
+                && (c.pressure === null || directLiquidObject(c.pressure))
+                && (v.include_data ? directLiquidObject(c.data) : c.data === null));
+    }
+    const request = s.request;
+    if (!('operation' in request) || v.operation !== request.operation || v.mode !== 'plan_only'
+        || !['execution_admitted', 'motion_commanded', 'liquid_mutation_commanded', 'controller_acknowledged',
+            'completion_verified', 'physical_effect_verified', 'state_reconciled'].every(k => v[k] === false)
+        || !directLiquidObject(v.requested_inputs) || (v.effective_inputs !== undefined && v.effective_inputs !== null)) return false;
+    const expected = request.operation === 'load_tip'
+        ? { tip_tray: request.tip_tray, tip_well: request.tip_well, tip_type: request.tip_type, tip_location: request.tip_location, home_z_after: request.home_z_after }
+        : request.operation === 'detect_fluid' ? { fluid_class: request.fluid_class }
+            : request.operation === 'plunger_up' ? { direction: 'up' }
+                : request.operation === 'plunger_down' ? { direction: 'down' } : {};
+    if (!directLiquidEqual(v.requested_inputs, expected)
+        || !Array.isArray(v.steps) || v.steps.length < 1 || v.steps.length > 32
+        || !v.steps.every(step => directLiquidObject(step)
+            && directLiquidKeys(step, ['action', 'mutates', 'location_id', 'wire_command', 'current', 'owner'])
+            && directLiquidString(step.action, 240, 1) && typeof step.mutates === 'boolean'
+            && typeof step.owner === 'string' && ['deck', 'gantry', 'z', 'pressure', 'pipette', 'machine_state'].includes(step.owner)
+            && ['location_id', 'current'].every(k => step[k] === undefined || step[k] === null || directLiquidInteger(step[k]))
+            && (step.wire_command === undefined || step.wire_command === null || directLiquidString(step.wire_command, 120)))
+        || !directLiquidObject(v.dependencies) || !directLiquidStrings(v.required_dependencies, 6, 1)
+        || !directLiquidStrings(v.missing_dependencies, 6) || !directLiquidStrings(v.dependency_blockers, 64)
+        || !directLiquidStrings(v.required_completion_evidence, 32) || !directLiquidObject(v.constants)
+        || !directLiquidString(v.oem_source_anchor, 1000, 1)) return false;
+    const required = v.required_dependencies;
+    if (Object.keys(v.dependencies).length < 1 || Object.keys(v.dependencies).length > 6
+        || Object.keys(v.dependencies).some(k => !required.includes(k))
+        || required.some(k => !Object.hasOwn(v.dependencies as object, k))
+        || v.missing_dependencies.some(k => !required.includes(k))
+        || !Object.values(v.dependencies).every(d => directLiquidObject(d)
+            && directLiquidKeys(d, ['bound', 'authority', 'generation', 'state', 'blockers'])
+            && typeof d.bound === 'boolean' && directLiquidInteger(d.generation) && directLiquidObject(d.state)
+            && (d.authority === undefined || d.authority === null || directLiquidString(d.authority, 240))
+            && directLiquidStrings(d.blockers, 32))) return false;
+    const satisfied = v.missing_dependencies.length === 0 && v.dependency_blockers.length === 0;
+    return v.dependencies_satisfied === satisfied && v.ok === satisfied
+        && v.blocker === (satisfied ? 'physical_pipette_execution_not_authorized' : 'application_dependencies_unbound');
+}
+
+function directLiquidLookupValid(v: unknown, status: number, s: BioXpDirectLiquidSubmission): v is BioXpDirectLiquidLookup {
+    if (!directLiquidObject(v) || v.schema !== 'bioxp.direct-liquid.lookup.v1' || v.request_kind !== s.requestKind
+        || v.idempotency_key !== s.idempotencyKey || v.live_query_performed !== false || v.retry_forbidden !== true
+        || !directLiquidKeys(v, ['schema', 'request_kind', 'idempotency_key', 'lookup_state', 'reason', 'retry_forbidden', 'live_query_performed', 'record'])) return false;
+    const reasons: Record<string, unknown[]> = { unknown: ['identity_not_found'], pending: ['nonterminal'],
+        incomplete: ['outcome_unresolved', 'receipt_incomplete'], resolved: [null], conflict: ['identity_scope_conflict'],
+        unavailable: ['store_unavailable', 'stored_binding_invalid'] };
+    if (typeof v.lookup_state !== 'string' || !Object.hasOwn(reasons, v.lookup_state)
+        || !reasons[v.lookup_state].includes(v.reason)
+        || status !== (v.lookup_state === 'conflict' ? 409 : v.lookup_state === 'unavailable' ? 503 : 200)) return false;
+    if (['unknown', 'conflict', 'unavailable'].includes(v.lookup_state)) return v.record === null;
+    const r = v.record;
+    if (!directLiquidObject(r) || !directLiquidKeys(r, ['command_id', 'pipette_operation_id', 'canonical_request_sha256',
+        'operation', 'entrypoint_id', 'caller_class', 'control_class', 'action_id', 'command_status', 'pipette_status',
+        'outcome', 'failure_code', 'ownership_generation', 'connection_generation', 'requested_inputs', 'result'])
+        || !['command_id', 'operation', 'entrypoint_id', 'caller_class', 'control_class'].every(k => directLiquidString(r[k], 160, 1))
+        || !directLiquidString(r.action_id, 240, 1) || !directLiquidString(r.command_status, 120, 1)
+        || !directLiquidNullableString(r.pipette_operation_id, 160) || !directLiquidNullableString(r.pipette_status, 120)
+        || !directLiquidNullableString(r.outcome, 120) || !directLiquidNullableString(r.failure_code, 240)
+        || !directLiquidString(r.canonical_request_sha256, 64, 64) || !/^[0-9a-f]{64}$/.test(r.canonical_request_sha256)
+        || !directLiquidInteger(r.ownership_generation) || r.ownership_generation < 0
+        || !(r.connection_generation === null || (directLiquidInteger(r.connection_generation) && r.connection_generation >= 0))
+        || !directLiquidObject(r.requested_inputs) || !directLiquidEqual(r.requested_inputs, s.request)
+        || (r.result !== null && !directLiquidResultValid(r.result, s))) return false;
+    const plan = s.requestKind === 'application_plan';
+    const operation = plan && 'operation' in s.request ? 'application_plan:' + s.request.operation : 'live_readback';
+    if (r.operation !== operation || r.action_id !== 'pipette.' + operation
+        || r.entrypoint_id !== (plan ? 'legacy.record' : 'direct.liquid.readback')
+        || r.caller_class !== (plan ? 'legacy' : 'direct_api') || r.control_class !== (plan ? 'pipette_state_command' : 'hardware_query')
+        || (r.pipette_operation_id === null) !== (r.pipette_status === null)
+        || (v.lookup_state !== 'resolved' && r.result !== null)) return false;
+    const pending = ['reserved', 'queued', 'admitted', 'dispatched', 'acknowledged', 'executing', 'running', 'blocked'];
+    const terminal = ['completed', 'observed', 'failed', 'rejected', 'cleared', 'cancelled'];
+    if (v.lookup_state === 'pending' && (!pending.includes(r.command_status) || !pending.includes(String(r.pipette_status)))) return false;
+    if (v.lookup_state === 'resolved' && (r.outcome === null || !terminal.includes(r.command_status)
+        || r.command_status !== r.pipette_status || (['completed', 'observed'].includes(r.command_status) && r.result === null))) return false;
+    return !(v.lookup_state === 'incomplete' && v.reason === 'receipt_incomplete' && r.pipette_operation_id !== null
+        && !(terminal.includes(r.command_status) && r.command_status === r.pipette_status));
+}
+
+// Mounted owner only: no reload persistence or reconnect reassociation.
+function useDirectLiquid<Request extends BioXpDirectLiquidRequest, Result extends BioXpDirectLiquidResult>(
+    kind: BioXpDirectLiquidKind, path: string, generation: number, connected: boolean,
+) {
+    const [submission, setSubmission] = useState<BioXpDirectLiquidSubmission | null>(null);
+    const [lookup, setLookup] = useState<BioXpDirectLiquidLookup | null>(null);
+    const [data, setData] = useState<Result | undefined>();
+    const [recover, setRecover] = useState(false);
+    const [identityConflict, setIdentityConflict] = useState(false);
+    const detachedOwners = useRef(new WeakSet<BioXpDirectLiquidSubmission>());
+    const retainedKeys = useRef(new Set<string>());
+    const [retainedHistory, setRetainedHistory] = useState<BioXpDirectLiquidSubmission[]>([]);
+    const owner = useRef(submission);
+    const context = useRef({ generation, connected });
+    context.current = { generation, connected };
+    const sent = useRef<BioXpDirectLiquidSubmission | null>(null);
+    const learned = useRef<{ command?: string; pipette?: string; digest?: string; receipt?: string }>({});
+    const mounted = useRef(true);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    // A disconnect is terminal for this owner, including same-generation reconnect.
+    if (submission && (!connected || generation !== submission.expectedConnectionGeneration)) detachedOwners.current.add(submission);
+    const detached = Boolean(submission && detachedOwners.current.has(submission));
+    const owns = (s: BioXpDirectLiquidSubmission) => mounted.current && owner.current === s
+        && context.current.connected && context.current.generation === s.expectedConnectionGeneration && !detachedOwners.current.has(s);
+    const mutation = useMutation({
+        mutationFn: async (s: BioXpDirectLiquidSubmission) => {
+            // BMS POST union stays unchanged; home_z_after is a robot default for non-load plans.
+            const body = { ...s.request };
+            if ('operation' in body && body.operation !== 'load_tip') delete body.home_z_after;
+            const result = (await api.post<unknown>(path, body, {
+                headers: { 'Idempotency-Key': s.idempotencyKey },
+                params: { expected_connection_generation: s.expectedConnectionGeneration },
+            })).data;
+            if (!directLiquidResultValid(result, s)) throw new Error('Invalid or mismatched direct-liquid result; reconcile stored evidence only');
+            return result as Result;
+        },
+        retry: false,
+        onSuccess: (result, s) => {
+            if (!owns(s)) return;
+            if (!result.receipt_id || (learned.current.receipt && learned.current.receipt !== result.receipt_id)) {
+                setIdentityConflict(true); setData(undefined); setLookup(null); setRecover(true); return;
+            }
+            learned.current.receipt = result.receipt_id;
+            setData(result);
+        },
+        onError: (_error, s) => { if (owns(s)) setRecover(true); },
+    });
+    // Publish the immutable owner in a committed render before transport starts.
+    useEffect(() => {
+        if (submission && sent.current !== submission && !detached) {
+            sent.current = submission;
+            mutation.mutate(submission);
+        }
+    }, [submission, detached]);
+    const query = useQuery({
+        queryKey: ['bioxp', 'direct-liquid-request', submission?.expectedConnectionGeneration, kind, submission?.idempotencyKey],
+        queryFn: async () => {
+            const s = submission!;
+            const response = await api.get<unknown>('/api/bioxp/operator-controls/pipettes/requests', {
+                params: { request_kind: s.requestKind, expected_connection_generation: s.expectedConnectionGeneration },
+                headers: { 'Idempotency-Key': s.idempotencyKey },
+                validateStatus: (status) => status === 200 || status === 409 || status === 503,
+            });
+            const value = response.data;
+            if (!owns(s)) return null;
+            if (!directLiquidLookupValid(value, response.status, s)) {
+                setIdentityConflict(true); setData(undefined); setLookup(null); return null;
+            }
+            const r = value.record;
+            const prior = learned.current;
+            const mismatch = value.schema !== 'bioxp.direct-liquid.lookup.v1' || value.request_kind !== s.requestKind
+                || value.idempotency_key !== s.idempotencyKey || value.live_query_performed !== false || value.retry_forbidden !== true
+                || (r && (!directLiquidEqual(r.requested_inputs, s.request)
+                    || (r.outcome === null ? !['pending', 'incomplete'].includes(value.lookup_state)
+                        : typeof r.outcome !== 'string' || r.outcome.length < 1 || r.outcome.length > 120)
+                    || (prior.command && prior.command !== r.command_id)
+                    || (prior.pipette && prior.pipette !== r.pipette_operation_id)
+                    || (prior.digest && prior.digest !== r.canonical_request_sha256)
+                    || (prior.receipt && r.result && prior.receipt !== r.result.receipt_id)));
+            if (mismatch) { setIdentityConflict(true); setData(undefined); setLookup(null); return null; }
+            if (r) learned.current = { command: r.command_id, pipette: r.pipette_operation_id ?? prior.pipette,
+                digest: r.canonical_request_sha256, receipt: r.result?.receipt_id ?? prior.receipt };
+            setLookup(value);
+            setData(value.lookup_state === 'resolved' && r?.result ? r.result as Result : undefined);
+            return value;
+        },
+        enabled: Boolean(submission) && recover && !detached && !identityConflict,
+        retry: false, gcTime: 0, refetchOnWindowFocus: false, refetchOnReconnect: false,
+        refetchInterval: (q) => !detached && !identityConflict && q.state.data?.lookup_state === 'pending' ? 500 : false,
+        refetchIntervalInBackground: false,
+    });
+    const start = (input: Request & { idempotencyKey?: string }, explicitlyNew = false) => {
+        if (generation < 1 || !connected) return;
+        if (owner.current && !explicitlyNew) return;
+        const previousOwner = owner.current;
+        const { idempotencyKey, ...body } = input;
+        const key = idempotencyKey ?? crypto.randomUUID();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$/.test(key)) throw new Error('Invalid direct-liquid identity');
+        if (retainedKeys.current.has(key)) throw new Error('Direct-liquid identity already retained');
+        const request = Object.freeze(JSON.parse(JSON.stringify(directLiquidNormalize(kind, body as Request)))) as BioXpDirectLiquidSubmission['request'];
+        const next = Object.freeze({ requestKind: kind, idempotencyKey: key, request, expectedConnectionGeneration: generation });
+        retainedKeys.current.add(key);
+        if (previousOwner) setRetainedHistory((previous) => [...previous, previousOwner]);
+        owner.current = next; learned.current = {}; setLookup(null); setData(undefined);
+        setRecover(false); setIdentityConflict(false); mutation.reset(); setSubmission(next);
+    };
+    return { isPending: mutation.isPending, error: mutation.error, data: detached || identityConflict ? undefined : data,
+        mutate: (input: Request & { idempotencyKey?: string }) => start(input),
+        newOperation: (input: Request & { idempotencyKey?: string }) => start(input, true),
+        submission, retainedHistory, lookup, detached, identityConflict,
+        recoveryError: query.error,
+        refreshRecovery: async () => { if (submission && !detached && !identityConflict) await query.refetch({ cancelRefetch: false }); },
+    };
+}
+
+export const useReadBioXpPipetteReadback = (generation = 0, connected = true) =>
+    useDirectLiquid<BioXpPipetteReadbackRequest, BioXpPipetteReadback>('readback', '/api/bioxp/operator-controls/pipettes/readback', generation, connected);
 
 export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, enabled = true) => useQuery({
     queryKey: ['bioxp', 'operator-controls', 'pipettes', 'application-status', connectionGeneration, enabled],
@@ -1660,14 +1919,8 @@ export const useBioXpPipetteApplicationStatus = (connectionGeneration: number, e
     retry: false,
 });
 
-export const usePlanBioXpPipetteApplication = () => useMutation({
-    mutationFn: async (request: BioXpPipetteApplicationPlanRequest) => (
-        await api.post<BioXpPipetteApplicationPlan>(
-            '/api/bioxp/operator-controls/pipettes/application/plan',
-            request,
-        )
-    ).data,
-});
+export const usePlanBioXpPipetteApplication = (generation = 0, connected = true) =>
+    useDirectLiquid<BioXpPipetteApplicationPlanRequest, BioXpPipetteApplicationPlan>('application_plan', '/api/bioxp/operator-controls/pipettes/application/plan', generation, connected);
 
 export const useBioXpOperatorActionAdmission = (
     actionId: string | null,

@@ -20,6 +20,7 @@ export default defineConfig({
             './tests/vitest/bioxpCameraMounted.test.tsx',
             './tests/vitest/bioxpOperatorGenerationPayload.test.ts',
             './tests/vitest/bioxpOperatorCriticalControlsMounted.test.tsx',
+            './tests/vitest/bioxpDirectLiquidIdempotency.test.ts',
             './tests/vitest/bioxpOperatorPipetteMounted.test.tsx',
             './tests/vitest/bioxpReceiptTerminality.test.ts',
             './tests/vitest/bioxpHistoryPolling.test.tsx',

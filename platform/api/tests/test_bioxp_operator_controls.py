@@ -114,6 +114,7 @@ def pipette_readback(*, include_data: bool = False) -> dict:
         "include_data": include_data,
         "live_query_performed": True,
         "truth_source": "live_hardware_queries",
+        "hardware_truth_level": "hardware_query",
         "delivery_verified": False,
         "controller_acknowledged": False,
         "completion_verified": False,
@@ -122,6 +123,7 @@ def pipette_readback(*, include_data: bool = False) -> dict:
         "oem_source_anchor": "ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData",
         "receipt_id": "a" * 32,
         "receipt_truth": {
+            "semantic_query_response_verified": False,
             "delivery_verified": False,
             "controller_acknowledged": False,
             "completion_verified": False,
@@ -727,6 +729,7 @@ class FakeRobotClient:
                 "blocker": "application_dependencies_unbound",
                 "receipt_id": "0123456789abcdef0123456789abcdef",
                 "receipt_truth": {
+                    "semantic_query_response_verified": False,
                     "delivery_verified": False,
                     "controller_acknowledged": False,
                     "completion_verified": False,
@@ -781,6 +784,9 @@ class FakeRobotClient:
 
     async def request(self, route_name, **kwargs):
         self.calls.append((route_name, kwargs))
+        if route_name == "pipette_readback":
+            result = self.responses[route_name]
+            return {**result, "semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]}
         return self.responses[route_name]
 
 
@@ -1374,7 +1380,8 @@ def test_typed_pipette_application_proxy_is_plan_only(monkeypatch):
 
     status = client.get("/api/bioxp/operator-controls/pipettes/application/status")
     plan = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"operation": "detect_fluid", "fluid_class": "RC"},
     )
 
@@ -1393,7 +1400,8 @@ def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch)
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False},
     )
 
@@ -1401,7 +1409,7 @@ def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch)
     assert response.json()["channels_constructed_unconditionally"] == [0, 1, 2, 3]
     assert response.json()["live_query_performed"] is True
     assert runtime.connection.client.calls == [
-        ("pipette_readback", {"json_data": {"include_data": False}}),
+        ("pipette_readback", {"json_data": {"include_data": False, "idempotency_key": "pipette-test-12345678"}}),
     ]
 
 
@@ -1423,7 +1431,8 @@ def test_pipette_active_readback_rejects_malformed_or_inflated_evidence(monkeypa
     runtime.connection.client.responses["pipette_readback"] = payload
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False},
     )
 
@@ -1434,7 +1443,8 @@ def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False, "operation": "aspirate"},
     )
 
@@ -1607,7 +1617,8 @@ def test_pipette_plan_request_rejects_irrelevant_or_missing_operation_fields(mon
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json=payload,
     )
 
@@ -1636,13 +1647,14 @@ def test_pipette_plan_forwards_only_selected_operation_fields(monkeypatch, paylo
     )
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json=payload,
     )
 
     assert response.status_code == 200
     assert runtime.connection.client.calls == [
-        ("pipette_application_plan", {"json_data": forwarded}),
+        ("pipette_application_plan", {"json_data": {**forwarded, "idempotency_key": "pipette-test-12345678"}}),
     ]
 
 

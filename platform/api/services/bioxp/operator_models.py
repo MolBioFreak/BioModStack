@@ -3296,6 +3296,7 @@ class OperatorDashboardPipetteLastError(BaseModel):
 
 class PipetteReceiptTruth(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    semantic_query_response_verified: StrictBool
     delivery_verified: StrictBool
     controller_acknowledged: StrictBool
     completion_verified: StrictBool
@@ -3468,6 +3469,7 @@ class PipetteReadbackChannel(BaseModel):
 
 class PipetteReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    hardware_truth_level: Literal["hardware_query"]
     ok: StrictBool
     semantic_ok: StrictBool
     available: StrictBool
@@ -3638,6 +3640,211 @@ class PipetteApplicationPlanResponse(BaseModel):
         )
         if self.blocker != expected_blocker:
             raise ValueError("application plan blocker does not match dependency status")
+        return self
+
+
+class PipetteDirectReleaseSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    commit: str | None
+    tree: str | None
+    mode: str | None
+    root: str | None
+    host_path: str | None = None
+    manifest_sha256: str | None
+    aggregate_sha256: str | None
+
+
+class PipetteDirectReleaseBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    service_unit: str | None
+    unit_path: str | None
+    unit_sha256: str | None
+    launcher_path: str | None
+    launcher_sha256: str | None
+    configuration_sha256: str | None
+    oem_lock_path: str | None
+    oem_lock_sha256: str | None
+    declared_listener: "OperatorReportListenerV1 | None"
+    observed_listener: "OperatorReportListenerV1 | None"
+    database_root: str | None
+    systemd_invocation_id: str | None
+    udocker_path: str | None = None
+    udocker_sha256: str | None = None
+    udocker_tree_sha256: str | None = None
+    launcher_pid: StrictInt | None = None
+    launcher_cgroup_sha256: str | None = None
+
+
+class PipetteDirectReleaseObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    pid: StrictInt
+    cgroup: str | None
+    cgroup_sha256: str | None
+    started_at: StrictFloat | StrictInt | None
+    listener: "OperatorReportListenerV1 | None"
+    database_root: str | None
+
+
+class PipetteDirectRuntimeReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    receipt_id: str | None
+    receipt_sha256: str | None
+    recorded_at: StrictFloat | StrictInt | None
+
+
+class PipetteDirectReleaseIdentity(BaseModel):
+    """Private producer envelope, validated then omitted, never public authority."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_name: Literal["bioxp.runtime.release_identity.v1"] = Field(alias="schema")
+    status: Literal["verified", "unverified"]
+    verified: StrictBool
+    reason: str | None
+    release_id: str | None
+    source: PipetteDirectReleaseSource
+    image: "OperatorReportReleaseImageV1"
+    deployment: "OperatorReportReleaseDeploymentV1"
+    binding: PipetteDirectReleaseBinding
+    runtime_release_receipt: PipetteDirectRuntimeReceipt | None
+    observation: PipetteDirectReleaseObservation
+
+
+class PipetteDirectSourceIdentity(PipetteReceiptSourceIdentity):
+    release_identity: PipetteDirectReleaseIdentity
+
+
+class PipetteDirectPostMetadata(BaseModel):
+    """Explicit service/replay envelope; never a science-field catch-all."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_identity: PipetteDirectSourceIdentity | None = None
+    callback_session_id: str = Field(default="", max_length=160)
+    command_id: str = Field(default="", max_length=160)
+    pipette_operation_id: str = Field(default="", max_length=160)
+    replayed: StrictBool = False
+    status: str = Field(default="", max_length=120)
+
+
+class PipetteReadbackPostEnvelope(PipetteReadbackResponse, PipetteDirectPostMetadata):
+    semantic_query_response_verified: StrictBool
+
+    @model_validator(mode="after")
+    def validate_semantic_receipt_truth(self):
+        if self.semantic_query_response_verified != self.receipt_truth.semantic_query_response_verified:
+            raise ValueError("readback semantic envelope must match receipt truth")
+        return self
+
+
+class PipetteApplicationPlanPostEnvelope(PipetteApplicationPlanResponse, PipetteDirectPostMetadata):
+    pass
+
+
+class PipetteDirectPlanInputs(BaseModel):
+    """Robot producer normalization, distinct from the narrower BMS POST union."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]
+    home_z_after: StrictBool
+    tip_tray: str | None = Field(default=None, max_length=120)
+    tip_well: str | None = Field(default=None, max_length=32)
+    tip_type: StrictInt | None = None
+    tip_location: Literal[0, 1, 2, 3] | None = None
+    fluid_class: Literal["TC", "MS", "OC", "RC", "STRIP"] | None = None
+
+    @model_validator(mode="after")
+    def validate_required_inputs(self):
+        if self.operation == "load_tip" and any(getattr(self, name) is None for name in ("tip_tray", "tip_well", "tip_type", "tip_location")):
+            raise ValueError("incomplete load-tip input binding")
+        if self.operation == "detect_fluid" and self.fluid_class is None:
+            raise ValueError("missing fluid class")
+        return self
+
+
+class PipetteDirectReadbackInputs(PipetteReadbackRequest):
+    include_data: StrictBool = Field(...)
+
+
+class PipetteDirectRequestRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    command_id: str = Field(min_length=1, max_length=160)
+    pipette_operation_id: str | None = Field(min_length=1, max_length=160)
+    canonical_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation: str = Field(min_length=1, max_length=160)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=160)
+    control_class: str = Field(min_length=1, max_length=160)
+    action_id: str = Field(min_length=1, max_length=240)
+    command_status: str = Field(min_length=1, max_length=120)
+    pipette_status: str | None = Field(min_length=1, max_length=120)
+    outcome: str | None = Field(min_length=1, max_length=120)
+    failure_code: str | None = Field(min_length=1, max_length=240)
+    ownership_generation: StrictInt = Field(ge=0)
+    connection_generation: StrictInt | None = Field(ge=0)
+    requested_inputs: PipetteDirectReadbackInputs | PipetteDirectPlanInputs
+    result: PipetteReadbackResponse | PipetteApplicationPlanResponse | None
+
+
+class PipetteDirectRequestLookupResponse(BaseModel):
+    """Historical evidence only; a lookup never permits resubmission."""
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    schema_version: Literal["bioxp.direct-liquid.lookup.v1"] = Field(alias="schema")
+    request_kind: Literal["readback", "application_plan"]
+    idempotency_key: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$")
+    lookup_state: Literal["unknown", "pending", "incomplete", "resolved", "conflict", "unavailable"]
+    reason: Literal["identity_not_found", "nonterminal", "outcome_unresolved", "receipt_incomplete", "identity_scope_conflict", "store_unavailable", "stored_binding_invalid"] | None
+    retry_forbidden: Literal[True]
+    live_query_performed: Literal[False]
+    record: PipetteDirectRequestRecord | None
+
+    @model_validator(mode="after")
+    def validate_lookup_binding(self):
+        reasons = {
+            "unknown": {"identity_not_found"}, "pending": {"nonterminal"},
+            "incomplete": {"outcome_unresolved", "receipt_incomplete"}, "resolved": {None},
+            "conflict": {"identity_scope_conflict"},
+            "unavailable": {"store_unavailable", "stored_binding_invalid"},
+        }
+        if self.reason not in reasons[self.lookup_state]:
+            raise ValueError("lookup state/reason mismatch")
+        if self.lookup_state in {"unknown", "conflict", "unavailable"}:
+            if self.record is not None:
+                raise ValueError("lookup cannot disclose a record")
+            return self
+        r = self.record
+        if r is None:
+            raise ValueError("lookup requires recorded identity")
+        readback = self.request_kind == "readback"
+        if readback:
+            if not isinstance(r.requested_inputs, PipetteReadbackRequest):
+                raise ValueError("wrong readback request binding")
+            family = ("live_readback", "direct.liquid.readback", "direct_api", "hardware_query")
+            if r.result is not None and (not isinstance(r.result, PipetteReadbackResponse) or r.result.include_data != r.requested_inputs.include_data):
+                raise ValueError("wrong original readback result")
+        else:
+            if not isinstance(r.requested_inputs, PipetteDirectPlanInputs):
+                raise ValueError("wrong plan request binding")
+            family = ("application_plan:" + r.requested_inputs.operation, "legacy.record", "legacy", "pipette_state_command")
+            if r.result is not None and (not isinstance(r.result, PipetteApplicationPlanResponse) or r.result.operation != r.requested_inputs.operation):
+                raise ValueError("wrong original plan result")
+        if (r.operation, r.entrypoint_id, r.caller_class, r.control_class) != family or r.action_id != "pipette." + r.operation:
+            raise ValueError("wrong direct-liquid producer")
+        if self.lookup_state != "resolved" and r.result is not None:
+            raise ValueError("nonterminal lookup cannot associate result")
+        # receipt_id is independently allocated; it is NOT the child row ID.
+        pending = {"reserved", "queued", "admitted", "dispatched", "acknowledged", "executing", "running", "blocked"}
+        terminal = {"completed", "observed", "failed", "rejected", "cleared", "cancelled"}
+        if (r.pipette_operation_id is None) != (r.pipette_status is None):
+            raise ValueError("missing child identity/status mismatch")
+        if self.lookup_state == "pending":
+            if r.command_status not in pending or r.pipette_status not in pending:
+                raise ValueError("pending lookup requires nonterminal rows")
+        if self.lookup_state == "resolved":
+            if r.outcome is None:
+                raise ValueError("resolved lookup requires a recorded outcome")
+            if r.command_status not in terminal or r.command_status != r.pipette_status:
+                raise ValueError("resolved lookup requires consistent terminal rows")
+            if r.command_status in {"completed", "observed"} and r.result is None:
+                raise ValueError("successful terminal lookup requires complete receipt")
+        if self.lookup_state == "incomplete" and self.reason == "receipt_incomplete":
+            if r.pipette_operation_id is not None and not (r.command_status in terminal and r.command_status == r.pipette_status):
+                raise ValueError("receipt incomplete requires terminal rows or a missing child")
         return self
 
 

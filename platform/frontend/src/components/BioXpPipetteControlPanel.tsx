@@ -96,10 +96,22 @@ function ChannelCard({ channelId, channel }: { channelId: 0 | 1 | 2 | 3; channel
     );
 }
 
+function DirectLiquidEvidence({ owner }: { owner: Pick<ReturnType<typeof useReadBioXpPipetteReadback>, 'submission' | 'lookup' | 'detached' | 'identityConflict' | 'recoveryError' | 'refreshRecovery' | 'retainedHistory'> }) {
+    if (!owner.submission) return null;
+    return <div className="mt-2 text-xs text-slate-300">
+        <p>Request {owner.submission.idempotencyKey} · connection {owner.submission.expectedConnectionGeneration}</p>
+        <p>Lookup: {owner.detached ? 'detached — target changed' : owner.identityConflict ? 'identity conflict' : owner.recoveryError ? 'unavailable' : owner.lookup?.lookup_state ?? 'not requested'}</p>
+        <p>Stored evidence only; never permission to resend or proof of physical success.</p>
+        {owner.lookup?.record && <p>Command {owner.lookup.record.command_id} · pipette {owner.lookup.record.pipette_operation_id ?? 'missing'} · {owner.lookup.record.command_status} / {owner.lookup.record.pipette_status ?? 'missing'}</p>}
+        <button type="button" disabled={owner.detached || owner.identityConflict} onClick={() => void owner.refreshRecovery()} className="mt-1 underline disabled:opacity-50">Refresh stored evidence</button>
+        {(owner.retainedHistory ?? []).map((record) => <p key={record.idempotencyKey}>Retained prior request: {record.idempotencyKey} · connection {record.expectedConnectionGeneration}</p>)}
+    </div>;
+}
+
 export function BioXpPipetteControlPanel({ generation = 0, connected = true, pipettes, freshness, actions = [], catalogLoading = false, invokePending = false, invokeAction }: Props) {
     const status = useBioXpPipetteApplicationStatus(generation, connected);
-    const planner = usePlanBioXpPipetteApplication();
-    const readback = useReadBioXpPipetteReadback();
+    const planner = usePlanBioXpPipetteApplication(generation, connected);
+    const readback = useReadBioXpPipetteReadback(generation, connected);
     const [includeData, setIncludeData] = useState(false);
     const [operation, setOperation] = useState<BioXpPipetteApplicationOperation>('move_to_waste');
     const [tipTray, setTipTray] = useState('');
@@ -146,7 +158,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
     const freshnessState = freshness?.state ?? 'missing';
     const freshnessLabel = `${freshnessState.charAt(0).toUpperCase()}${freshnessState.slice(1)} snapshot · age ${typeof freshness?.age_s === 'number' ? `${freshness.age_s} s` : 'unavailable'}`;
 
-    const submitPlan = () => {
+    const submitPlan = (newOperation = false) => {
         setLocalError(null);
         let payload: BioXpPipetteApplicationPlanRequest;
         if (operation === 'load_tip') {
@@ -171,7 +183,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
         } else {
             payload = { operation: 'plunger_down' };
         }
-        planner.mutate(payload);
+        if (newOperation) planner.newOperation(payload);
+        else planner.mutate(payload);
     };
 
     return (
@@ -205,7 +218,7 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                     </div>
                     <div className="flex items-center gap-3">
                         <label className="text-slate-300"><input type="checkbox" checked={includeData} onChange={(event) => setIncludeData(event.target.checked)} /> Include OEM data sweep</label>
-                        <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
+                        <button type="button" disabled={!connected || readback.isPending || Boolean(readback.submission)} onClick={() => readback.mutate({ include_data: includeData })} className="rounded bg-cyan-700 px-3 py-1 text-white disabled:opacity-50">
                             {readback.isPending ? 'Reading hardware…' : 'Read live hardware'}
                         </button>
                     </div>
@@ -220,6 +233,8 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                     </div>
                 )}
                 {readback.error && <p className="mt-2 text-red-300">Readback failed: {bioXpErrorText(readback.error)}</p>}
+                <DirectLiquidEvidence owner={readback} />
+                {readback.submission && <button type="button" disabled={!connected || readback.isPending} onClick={() => readback.newOperation({ include_data: includeData })}>New operation — read hardware</button>}
             </div>
 
             <dl className="mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2 xl:grid-cols-3">
@@ -295,9 +310,11 @@ export function BioXpPipetteControlPanel({ generation = 0, connected = true, pip
                         </select>
                     </label>
                 )}
-                <button type="button" disabled={!connected || planner.isPending} onClick={submitPlan} className="mt-3 rounded bg-amber-700 px-3 py-1 text-xs text-white disabled:opacity-50">
+                <button type="button" disabled={!connected || planner.isPending || Boolean(planner.submission)} onClick={() => submitPlan()} className="mt-3 rounded bg-amber-700 px-3 py-1 text-xs text-white disabled:opacity-50">
                     {planner.isPending ? 'Building plan…' : 'Build no-motion plan'}
                 </button>
+                <DirectLiquidEvidence owner={planner} />
+                {planner.submission && <button type="button" disabled={!connected || planner.isPending} onClick={() => submitPlan(true)}>New operation — build plan</button>}
             </div>
 
             {localError && <p className="mt-2 text-xs text-red-300">{localError}</p>}
