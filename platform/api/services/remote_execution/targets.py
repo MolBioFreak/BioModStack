@@ -313,6 +313,8 @@ class AttachmentController:
                 if row.state == "probing" and not row.leased_job_id:
                     phase = (row.provider_metadata or {}).get("setup", {}).get("phase", "checking")
                     message = f"Remote setup interrupted during {phase}; retry Attach" if isinstance(exc, asyncio.CancelledError) else f"Remote setup failed during {phase}; retry Attach"
+                    if isinstance(exc, ExecutionTargetError):
+                        message = str(exc)
                     await set_setup(session, row, "failed", message)
                     row.state, row.active, row.last_error = "unavailable", False, message
                     await session.commit()
@@ -419,6 +421,15 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                    (connection.host, connection.port, connection.username, connection.remote_root)):
             raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
         return await operation(*args, **kwargs)
+
+    async def checked_verification(argv, failure: str, *, timeout: int):
+        try:
+            return await checked_io(run_remote, connection, argv, timeout=timeout)
+        except RemoteTransportError as exc:
+            if str(exc) in {"Remote transport timed out", "Remote SSH host key changed"}:
+                raise
+            raise RemoteTransportError(failure) from exc
+
     try:
         host_key_line, fingerprint = await checked_io(capture_host_key, connection.host, connection.port)
         if target.host_key_sha256 and target.host_key_sha256 != fingerprint:
@@ -474,15 +485,16 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
             raise RemoteTransportError("Remote runner transfer failed integrity verification")
         await set_setup(session, target, "verifying", "Verifying Nextflow and CUDA inside a pinned container")
         expected_version = resolve_nextflow_version()
-        version = await checked_io(run_remote, connection,
-            ["env", "NXF_OFFLINE=true", f"NXF_VER={expected_version}", f"{connection.remote_root}/runner/nextflow", "-version"], timeout=120)
+        version = await checked_verification(
+            ["env", "NXF_OFFLINE=true", f"NXF_VER={expected_version}", f"{connection.remote_root}/runner/nextflow", "-version"],
+            "Pinned Nextflow version verification failed", timeout=120)
         if f"version {expected_version}" not in version.stdout:
             raise RemoteTransportError("Pinned Nextflow version verification failed")
-        cuda = await checked_io(run_remote, connection, [
+        cuda = await checked_verification([
             "apptainer", "exec", "--nv",
             "docker://python@sha256:97983fa8cc88343512862c62307159a82261c3528dc025f79e5a3f7af43e50b4",
             "python", "-c", "import ctypes; c=ctypes.CDLL('libcuda.so.1'); assert c.cuInit(0)==0; n=ctypes.c_int(); assert c.cuDeviceGetCount(ctypes.byref(n))==0 and n.value>0; print('BMS_CUDA_OK')",
-        ], timeout=3600)
+        ], "CUDA container verification failed", timeout=3600)
         if "BMS_CUDA_OK" not in cuda.stdout.splitlines():
             raise RemoteTransportError("CUDA container verification failed")
     except (RemoteTransportError, OSError) as exc:

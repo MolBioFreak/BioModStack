@@ -98,8 +98,11 @@ def test_bootstrap_failure_whitelist_rejects_untrusted_detail():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('version,busy', [('25.10.1', False), ('25.10.2', False), ('25.10.1', True)])
-async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store, monkeypatch, tmp_path, version, busy):
+@pytest.mark.parametrize('version,busy,failed_command', [
+    ('25.10.1', False, None), ('25.10.2', False, None), ('25.10.1', True, None),
+    ('25.10.1', False, 'env'), ('25.10.1', False, 'apptainer'),
+])
+async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store, monkeypatch, tmp_path, version, busy, failed_command):
     session, factory = store
     inventory(monkeypatch, ['49674511'])
     launcher = tmp_path / 'nextflow'
@@ -112,6 +115,8 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store,
     async def noop(*args, **kwargs): pass
     async def run(conn, argv, **kw):
         calls.append((argv, kw))
+        if argv[0] == failed_command:
+            raise targets.RemoteTransportError('Untrusted remote stderr with a secret token')
         async with factory() as other:
             row = await targets.get_target(other, 'vast:49674511')
             assert not row.active
@@ -134,6 +139,14 @@ async def test_full_attach_bootstraps_transfers_and_verifies_before_ready(store,
     monkeypatch.setattr(targets, '_sha256_file', lambda p: 'hash')
     async def probe(*args): return {'gpus': ['gpu']}
     monkeypatch.setattr(targets, 'probe_readiness', probe)
+    if failed_command:
+        detail = 'Pinned Nextflow version verification failed' if failed_command == 'env' else 'CUDA container verification failed'
+        with pytest.raises(targets.ExecutionTargetError, match=detail):
+            await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+        row = await targets.get_target(session, 'vast:49674511')
+        assert row.last_error == row.provider_metadata['setup']['message'] == detail
+        assert row.state == 'unavailable' and not row.active
+        return
     if busy:
         with pytest.raises(targets.ExecutionTargetError, match='active'):
             await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
@@ -225,6 +238,25 @@ async def test_transport_failure_is_specific_and_cannot_overwrite_racing_lease(s
         await targets.activate_target(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
     row = await targets.get_target(session, 'vast:49674511')
     assert row.state == 'ready' and row.active and row.leased_job_id == 'racing'
+
+
+@pytest.mark.asyncio
+async def test_controller_preserves_controlled_inventory_failure(store, monkeypatch):
+    session, factory = store
+    inventory(monkeypatch, ['49674511'])
+    detail = 'Vast inventory or endpoint changed during attachment'
+    async def fail(*args):
+        raise targets.ExecutionTargetError(detail)
+    monkeypatch.setattr(targets, 'finish_activation', fail)
+    controller = targets.AttachmentController(factory)
+    try:
+        await controller.attach(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+        await asyncio.gather(*controller.tasks.values())
+        row = await targets.get_target(session, 'vast:49674511')
+        assert row.last_error == row.provider_metadata['setup']['message'] == detail
+        assert row.state == 'unavailable' and not row.active
+    finally:
+        await controller.close()
 
 
 @pytest.mark.asyncio
