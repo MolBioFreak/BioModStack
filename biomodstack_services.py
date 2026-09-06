@@ -546,6 +546,92 @@ def operator_frontend_url(project_root: Path | None = None, runtime_mode: str | 
     return runtime_frontend_url(operator_runtime_mode(project_root=project_root, runtime_mode=runtime_mode), project_root=project_root)
 
 
+STORAGE_COMPUTE_ROOT_FIELDS = (
+    "data_root", "dev_data_root", "container_dir", "weights_root", "inputs_dir",
+    "results_dir", "db_path", "work_dir", "analysis_cache_dir", "colabfold_db",
+    "msa_cache_dir", "sabdab_cache_dir", "dev_results_dir",
+)
+STORAGE_COMPUTE_APPLY_NOTICE = (
+    "Saved configuration only. Existing files and running jobs are unchanged. "
+    "Configured values are not proof of currently applied limits. After all work drains, "
+    "use the existing service manager install/application path and restart the affected runtime "
+    "to apply paths and local budgets; no automatic restart or relocation is performed. "
+    "Remote instance resources remain independently owned."
+)
+
+
+def storage_compute_settings(project_root: Path | None = None) -> dict[str, object]:
+    """Read-only launcher preview; GPU discovery is bounded and query-only."""
+    from biomodstack_local_resources import GIB, configured_local_policy, detect_local_capacity
+    from biomodstack_runtime_profile import load_install_profile, resolve_runtime_paths
+    profile = load_install_profile()
+    resolved = resolve_runtime_paths(project_root=project_root, profile=profile, environ={})
+    capacity = detect_local_capacity()
+    defaults = configured_local_policy({})
+    validation_error = ""
+    try:
+        configured = configured_local_policy(profile)
+        configured_threads = configured.cpu_threads
+        configured_memory_gib = configured.memory_bytes / GIB
+    except (ValueError, TypeError) as exc:
+        # A profile moved to a smaller machine must remain editable. This is a
+        # preview, never validation for save, service start or admission.
+        validation_error = str(exc)
+        configured_threads = profile.get("local_cpu_threads", defaults.cpu_threads)
+        configured_memory_gib = profile.get("local_memory_gib", defaults.memory_bytes / GIB)
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        detail = result.stdout.strip()[:1000]
+        cuda = f"NVIDIA driver visible: {detail}. CUDA execution not tested." if result.returncode == 0 and detail else "CUDA driver discovery unavailable; no GPU work was run."
+    except (OSError, subprocess.TimeoutExpired):
+        cuda = "CUDA driver discovery unavailable; no GPU work was run."
+    applied = "Applied workflow slice limits unavailable (not inferred from saved configuration)."
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "show", "biomodstack-workflows.slice",
+             "--property=ActiveState,CPUQuotaPerSecUSec,MemoryMax"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        fields = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if result.returncode == 0 and fields.get("ActiveState") == "active":
+            applied = (f"Applied workflow slice: CPU quota {fields.get('CPUQuotaPerSecUSec', 'unknown')} "
+                       f"CPU-time per second; RAM maximum {fields.get('MemoryMax', 'unknown')} bytes.")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return {
+        "applied_limits_status": applied,
+        "roots": {key: resolved[key] for key in STORAGE_COMPUTE_ROOT_FIELDS},
+        "detected_cpu_threads": capacity.cpu_threads,
+        "detected_memory_gib": capacity.memory_bytes / GIB,
+        "configured_cpu_threads": configured_threads,
+        "configured_memory_gib": configured_memory_gib,
+        "validation_error": validation_error,
+        "default_cpu_threads": defaults.cpu_threads,
+        "default_memory_gib": defaults.memory_bytes / GIB,
+        "cuda_status": cuda,
+        "apply_notice": STORAGE_COMPUTE_APPLY_NOTICE,
+    }
+
+
+def save_storage_compute_settings(values: Mapping[str, object], project_root: Path | None = None) -> str:
+    """Persist only explicitly edited fields. Never install/reload/restart units."""
+    from biomodstack_runtime_profile import save_install_profile
+    allowed = {*STORAGE_COMPUTE_ROOT_FIELDS, "local_cpu_threads", "local_memory_gib"}
+    if set(values) - allowed:
+        raise ServiceManagerError("Unsupported Storage and compute setting")
+    for key in STORAGE_COMPUTE_ROOT_FIELDS:
+        if key in values and not str(values[key] or "").strip():
+            raise ServiceManagerError(f"{key} must not be empty")
+    try:
+        save_install_profile(values, project_root=project_root)
+    except (ValueError, TypeError, OSError) as exc:
+        raise ServiceManagerError(str(exc)) from exc
+    return STORAGE_COMPUTE_APPLY_NOTICE
+
+
 def _coerce_host_port(value: int | str | None, *, label: str) -> int | None:
     if value is None or value == "":
         return None
@@ -1147,16 +1233,18 @@ def render_workflow_parent_slice() -> str:
 
 
 def render_workflow_root_slice() -> str:
+    from biomodstack_local_resources import configured_local_policy
+    policy = configured_local_policy()
     return dedent(
-        """\
+        f"""\
         [Unit]
         Description=BioModStack aggregate workflow resource envelope
 
         [Slice]
         CPUAccounting=yes
-        CPUQuota=2400%
+        CPUQuota={policy.cpu_threads * 100}%
         MemoryAccounting=yes
-        MemoryMax=96G
+        MemoryMax={policy.memory_bytes}
         TasksAccounting=yes
         """
     )
@@ -1230,6 +1318,30 @@ def _ont_comparison_runtime_identity(
     return runtime_id, runtime_id.removeprefix("sha256:")
 
 
+def systemd_value(value: object) -> str:
+    """One systemd.syntax token, with literal specifiers (not shell quoting)."""
+    text = str(value).replace("%", "%%")
+    if any(char in text for char in "\n\r\x00"):
+        raise ValueError("systemd values cannot contain line breaks or NUL")
+    if any(char.isspace() or char in "\\\"'" for char in text):
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return text
+
+
+def systemd_exec_arg(value: object) -> str:
+    return systemd_value(str(value).replace("$", "$$"))
+
+
+def desktop_exec_arg(value: object) -> str:
+    """One Desktop Entry Exec token; preserve literal percent field codes."""
+    text = str(value).replace("%", "%%")
+    if any(char in text for char in "\n\r\x00"):
+        raise ValueError("desktop arguments cannot contain line breaks or NUL")
+    for char in ("\\", '"', '`', '$'):
+        text = text.replace(char, "\\\\" + char)
+    return '"' + text + '"'
+
+
 def render_user_units(project_root: Path | None = None, runtime_mode: str | None = None) -> dict[str, str]:
     root = (project_root or get_project_root()).resolve()
     mode = resolve_runtime_mode(runtime_mode)
@@ -1243,6 +1355,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     build_id = build_identity["build_id"]
     build_time = build_identity["build_time"]
     log_rotator = root / "scripts" / "rotate_biomodstack_logs.py"
+    from biomodstack_local_resources import configured_local_policy
+    local_policy = configured_local_policy()
     shared_data_root = Path(str(resolved.get("data_root", Path("/mnt/BioModStack")))).expanduser().resolve()
     expected_telemetry_db = (shared_data_root / "telemetry" / "telemetry.sqlite3").resolve()
     resolved_jobs_db = Path(str(resolved.get("db_path", shared_data_root / "biomodstack.db"))).expanduser().resolve()
@@ -1262,20 +1376,20 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
-        Environment=BMS_HOME={root}
-        Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_TELEMETRY_DB_PATH={telemetry_db}")}
         Environment=PYTHONUNBUFFERED=1
-        WorkingDirectory={root / 'platform' / 'api'}
-        ExecStartPre=/usr/bin/env python3 {log_rotator}
-        ExecStartPre=/usr/bin/mkdir -p {Path(telemetry_db).parent}
-        ExecStart={root / 'platform' / 'api' / '.venv' / 'bin' / 'python'} -m tools.telemetry_collector
+        WorkingDirectory={systemd_value(root / 'platform' / 'api')}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(Path(telemetry_db).parent)}
+        ExecStart={systemd_exec_arg(root / 'platform' / 'api' / '.venv' / 'bin' / 'python')} -m tools.telemetry_collector
         Restart=on-failure
         RestartSec=5
         TimeoutStopSec=15
         KillMode=control-group
         {telemetry_limits}
-        StandardOutput=append:{TELEMETRY_LOG}
-        StandardError=append:{TELEMETRY_LOG}
+        StandardOutput=append:{systemd_value(TELEMETRY_LOG)}
+        StandardError=append:{systemd_value(TELEMETRY_LOG)}
 
         [Install]
         WantedBy=default.target
@@ -1312,32 +1426,34 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
             [Service]
             Type=simple
-            Environment=BMS_HOME={root}
-            Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
-            Environment=BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}
+            Environment={systemd_value(f"BMS_HOME={root}")}
+            Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
+            Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
-            Environment=BMS_STATE_DIR={production_state_root}
-            Environment=BMS_DATA={production_state_root}
-            Environment=BMS_INPUTS={production_inputs_dir}
-            Environment=BMS_DB_PATH={production_db_path}
-            Environment=BMS_WORK={production_work_dir}
-            Environment=BMS_RESULTS_DIR={production_results_root}
-            Environment=BMS_RESULTS_ROOT={production_results_root}
-            Environment=BMS_CONTAINER_DIR={production_container_dir}
+            Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
+            Environment={systemd_value(f"BMS_DATA={production_state_root}")}
+            Environment={systemd_value(f"BMS_INPUTS={production_inputs_dir}")}
+            Environment={systemd_value(f"BMS_DB_PATH={production_db_path}")}
+            Environment={systemd_value(f"BMS_WORK={production_work_dir}")}
+            Environment={systemd_value(f"BMS_RESULTS_DIR={production_results_root}")}
+            Environment={systemd_value(f"BMS_RESULTS_ROOT={production_results_root}")}
+            Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
+            Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
+            Environment={systemd_value(f"BMS_CONTAINER_DIR={production_container_dir}")}
             Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
-            Environment=BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}
-            Environment=BMS_BUILD_SHA={build_revision}
-            Environment=BMS_BUILD_ID={build_id}
-            Environment=BMS_BUILD_TIME={build_time}
-            ExecStartPre=/usr/bin/env python3 {log_rotator}
-            ExecStart={adapter_runner}
+            Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={PRODUCTION_WORKFLOW_ADAPTER_PORT}")}
+            Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+            Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
+            Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
+            ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+            ExecStart={systemd_exec_arg(adapter_runner)}
             Restart=on-failure
             RestartSec=10
             TimeoutStopSec=20
             KillMode=control-group
             {adapter_limits}
-            StandardOutput=append:{PRODUCTION_WORKFLOW_ADAPTER_LOG}
-            StandardError=append:{PRODUCTION_WORKFLOW_ADAPTER_LOG}
+            StandardOutput=append:{systemd_value(PRODUCTION_WORKFLOW_ADAPTER_LOG)}
+            StandardError=append:{systemd_value(PRODUCTION_WORKFLOW_ADAPTER_LOG)}
 
             [Install]
             WantedBy={TARGET_UNIT}
@@ -1357,28 +1473,30 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
             [Service]
             Type=simple
-            Environment=BMS_HOME={root}
-            Environment=BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}
-            Environment=BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}
+            Environment={systemd_value(f"BMS_HOME={root}")}
+            Environment={systemd_value(f"BMS_RUNTIME_MODE={CONTAINER_RUNTIME_MODE}")}
+            Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={PRODUCTION_LANE}")}
             Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
-            Environment=BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}
-            Environment=BMS_STATE_DIR={production_state_root}
-            Environment=BMS_DB_PATH={production_db_path}
+            Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(PRODUCTION_LANE)}")}
+            Environment={systemd_value(f"BMS_STATE_DIR={production_state_root}")}
+            Environment={systemd_value(f"BMS_DB_PATH={production_db_path}")}
             Environment=BMS_TELEMETRY_DB_PATH=/var/lib/biomodstack/telemetry/telemetry.sqlite3
-            Environment=BMS_WORK={production_work_dir}
-            Environment=BMS_RESULTS_DIR={production_results_root}
-            Environment=BMS_RESULTS_ROOT={production_results_root}
-            Environment=BMS_CONTAINER_DIR={production_container_dir}
-            ExecStartPre={core_runner} preflight
-            ExecStart={core_runner} supervise
-            ExecStop={core_runner} down
+            Environment={systemd_value(f"BMS_WORK={production_work_dir}")}
+            Environment={systemd_value(f"BMS_RESULTS_DIR={production_results_root}")}
+            Environment={systemd_value(f"BMS_RESULTS_ROOT={production_results_root}")}
+            Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
+            Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
+            Environment={systemd_value(f"BMS_CONTAINER_DIR={production_container_dir}")}
+            ExecStartPre={systemd_exec_arg(core_runner)} preflight
+            ExecStart={systemd_exec_arg(core_runner)} supervise
+            ExecStop={systemd_exec_arg(core_runner)} down
             Restart=no
             TimeoutStartSec=180
             TimeoutStopSec=60
             KillMode=control-group
             {core_limits}
-            StandardOutput=append:{CORE_RUNTIME_LOG}
-            StandardError=append:{CORE_RUNTIME_LOG}
+            StandardOutput=append:{systemd_value(CORE_RUNTIME_LOG)}
+            StandardError=append:{systemd_value(CORE_RUNTIME_LOG)}
 
             [Install]
             WantedBy={TARGET_UNIT}
@@ -1427,7 +1545,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_msa_cache_dir = str(resolved.get("dev_msa_cache_dir", Path(dev_data_root) / "msa_cache"))
     dev_sabdab_cache_dir = str(resolved.get("dev_sabdab_cache_dir", Path(dev_data_root) / "sabdab_cache"))
     dev_container_dir = str(
-        resolved.get("dev_container_dir", shared_data_root / "apptainer")
+        resolved.get("container_dir", shared_data_root / "apptainer")
     )
     dev_confornets_container = str(
         os.environ.get("BMS_DEV_CM_CONFORNETS_CONTAINER_PATH")
@@ -1484,8 +1602,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=oneshot
-        Environment=BMS_HOME={root}
-        ExecStart=/usr/bin/env python3 {tailnet_global_installer}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        ExecStart=/usr/bin/env python3 {systemd_exec_arg(tailnet_global_installer)}
         # Tailnet is installed only after an explicit Development or Production
         # selection has proved that environment live. It is never a prerequisite
         # for starting either runtime.
@@ -1509,25 +1627,25 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
-        Environment=BMS_HOME={root}
-        Environment=BMS_MOBILE_UI_UPDATES_DIR={shared_data_root / 'mobile-ui-updates'}
-        Environment=BMS_MOBILE_APK_UPDATES_DIR={shared_data_root / 'mobile-apk-updates'}
-        Environment=BMS_MOBILE_UPDATE_PUBLISHER_PORT={MOBILE_UPDATE_PUBLISHER_PORT}
-        EnvironmentFile=-{MOBILE_UPDATE_PUBLISHER_ENV}
-        Environment=BMS_BUILD_SHA={build_revision}
-        Environment=BMS_BUILD_ID={build_id}
-        Environment=BMS_BUILD_TIME={build_time}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_MOBILE_UI_UPDATES_DIR={shared_data_root / 'mobile-ui-updates'}")}
+        Environment={systemd_value(f"BMS_MOBILE_APK_UPDATES_DIR={shared_data_root / 'mobile-apk-updates'}")}
+        Environment={systemd_value(f"BMS_MOBILE_UPDATE_PUBLISHER_PORT={MOBILE_UPDATE_PUBLISHER_PORT}")}
+        EnvironmentFile=-{systemd_value(MOBILE_UPDATE_PUBLISHER_ENV)}
+        Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
+        Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
         Environment=PYTHONUNBUFFERED=1
-        ExecStartPre=/usr/bin/mkdir -p {shared_data_root / 'mobile-ui-updates'} {shared_data_root / 'mobile-apk-updates'}
-        ExecStartPre=/usr/bin/env python3 {log_rotator}
-        ExecStart={mobile_update_publisher_runner}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(shared_data_root / 'mobile-ui-updates')} {systemd_exec_arg(shared_data_root / 'mobile-apk-updates')}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStart={systemd_exec_arg(mobile_update_publisher_runner)}
         Restart=on-failure
         RestartSec=5
         TimeoutStopSec=15
         KillMode=control-group
         {mobile_update_publisher_limits}
-        StandardOutput=append:{MOBILE_UPDATE_PUBLISHER_LOG}
-        StandardError=append:{MOBILE_UPDATE_PUBLISHER_LOG}
+        StandardOutput=append:{systemd_value(MOBILE_UPDATE_PUBLISHER_LOG)}
+        StandardError=append:{systemd_value(MOBILE_UPDATE_PUBLISHER_LOG)}
 
         [Install]
         WantedBy=default.target
@@ -1546,35 +1664,37 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
-        Environment=BMS_HOME={root}
-        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
-        Environment=BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
-        Environment=BMS_STATE_DIR={dev_data_root}
-        Environment=BMS_DATA={dev_data_root}
-        Environment=BMS_INPUTS={dev_inputs_dir}
-        Environment=BMS_DB_PATH={dev_db_path}
-        Environment=BMS_WORK={dev_work_dir}
-        Environment=BMS_RESULTS_DIR={dev_results_root}
-        Environment=BMS_RESULTS_ROOT={dev_results_root}
-        Environment=BMS_CONTAINER_DIR={dev_container_dir}
-        Environment=BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}
-        Environment=BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}
+        Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
+        Environment={systemd_value(f"BMS_DATA={dev_data_root}")}
+        Environment={systemd_value(f"BMS_INPUTS={dev_inputs_dir}")}
+        Environment={systemd_value(f"BMS_DB_PATH={dev_db_path}")}
+        Environment={systemd_value(f"BMS_WORK={dev_work_dir}")}
+        Environment={systemd_value(f"BMS_RESULTS_DIR={dev_results_root}")}
+        Environment={systemd_value(f"BMS_RESULTS_ROOT={dev_results_root}")}
+        Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
+        Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
+        Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
+        Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
+        Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
-        Environment=BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}
-        Environment=BMS_BUILD_SHA={build_revision}
-        Environment=BMS_BUILD_ID={build_id}
-        Environment=BMS_BUILD_TIME={build_time}
-        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_container_dir}
-        ExecStartPre=/usr/bin/env python3 {log_rotator}
-        ExecStart={root / 'scripts' / 'run_biomodstack_workflow_adapter.sh'}
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
+        Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
+        Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(dev_data_root)} {systemd_exec_arg(dev_inputs_dir)} {systemd_exec_arg(dev_work_dir)} {systemd_exec_arg(dev_results_root)} {systemd_exec_arg(dev_container_dir)}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStart={systemd_exec_arg(root / 'scripts' / 'run_biomodstack_workflow_adapter.sh')}
         Restart=on-failure
         RestartSec=10
         TimeoutStopSec=20
         KillMode=control-group
         {dev_adapter_limits}
-        StandardOutput=append:{DEVELOPMENT_WORKFLOW_ADAPTER_LOG}
-        StandardError=append:{DEVELOPMENT_WORKFLOW_ADAPTER_LOG}
+        StandardOutput=append:{systemd_value(DEVELOPMENT_WORKFLOW_ADAPTER_LOG)}
+        StandardError=append:{systemd_value(DEVELOPMENT_WORKFLOW_ADAPTER_LOG)}
 
         [Install]
         WantedBy={DEV_TARGET_UNIT}
@@ -1595,60 +1715,62 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
-        EnvironmentFile={proxy_identity_env}
-        Environment=BMS_HOME={root}
-        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
-        Environment=BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}
+        EnvironmentFile={systemd_value(proxy_identity_env)}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_LANE={DEVELOPMENT_LANE}")}
         Environment=BMS_REQUIRE_TRANSIENT_WORKFLOW_UNITS=1
-        Environment=BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}
-        Environment=BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/
+        Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_URL={workflow_adapter_url_for_lane(DEVELOPMENT_LANE)}")}
+        Environment={systemd_value(f"BMS_FRONTEND_HEALTH_URL=http://127.0.0.1:{dev_web_host_port}/")}
         Environment=BMS_API_MODE=dev
         Environment=BMS_API_RELOAD=0
-        Environment=BMS_API_BIND_PORT={dev_api_host_port}
-        Environment=BMS_DATA={dev_data_root}
-        Environment=BMS_STATE_DIR={dev_data_root}
-        Environment=BMS_INPUTS={dev_inputs_dir}
-        Environment=BMS_DB_PATH={dev_db_path}
-        Environment=BMS_TELEMETRY_DB_PATH={telemetry_db}
-        Environment=BMS_WORK={dev_work_dir}
-        Environment=BMS_RESULTS_DIR={dev_results_root}
-        Environment=BMS_RESULTS_ROOT={dev_results_root}
-        Environment=BMS_CONTAINER_DIR={dev_container_dir}
-        Environment=BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}
-        Environment=BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}
-        Environment=BMS_WEIGHTS={dev_weights_root}
-        Environment=BMS_COLABFOLD_DB={dev_colabfold_db}
-        Environment=BMS_MSA_CACHE={dev_msa_cache_dir}
-        Environment=BMS_SABDAB_CACHE={dev_sabdab_cache_dir}
+        Environment={systemd_value(f"BMS_API_BIND_PORT={dev_api_host_port}")}
+        Environment={systemd_value(f"BMS_DATA={dev_data_root}")}
+        Environment={systemd_value(f"BMS_STATE_DIR={dev_data_root}")}
+        Environment={systemd_value(f"BMS_INPUTS={dev_inputs_dir}")}
+        Environment={systemd_value(f"BMS_DB_PATH={dev_db_path}")}
+        Environment={systemd_value(f"BMS_TELEMETRY_DB_PATH={telemetry_db}")}
+        Environment={systemd_value(f"BMS_WORK={dev_work_dir}")}
+        Environment={systemd_value(f"BMS_RESULTS_DIR={dev_results_root}")}
+        Environment={systemd_value(f"BMS_RESULTS_ROOT={dev_results_root}")}
+        Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
+        Environment={systemd_value(f"BMS_LOCAL_MEMORY_BYTES={local_policy.memory_bytes}")}
+        Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
+        Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
+        Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
+        Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
+        Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}
+        Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}
+        Environment={systemd_value(f"BMS_SABDAB_CACHE={dev_sabdab_cache_dir}")}
         Environment=BMS_CPU_POWER_STRICT=0
-        Environment=BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}
-        Environment=BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}
-        Environment=BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}
-        Environment=BMS_ONT_SQUIGUALISER_IMAGE={ont_squigualiser_image}
-        Environment=BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={ont_squigualiser_digest}
-        Environment=BMS_ONT_SQUIGULATOR_IMAGE={ont_squigulator_image}
-        Environment=BMS_ONT_SQUIGULATOR_IMAGE_DIGEST={ont_squigulator_digest}
-        Environment=BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE={ont_comparison_image}
-        Environment=BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST={ont_comparison_digest}
-        Environment=BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}
-        Environment=BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}
-        Environment=BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}
-        Environment=BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}
-        Environment=BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}
-        Environment=BMS_BUILD_SHA={build_revision}
-        Environment=BMS_BUILD_ID={build_id}
-        Environment=BMS_BUILD_TIME={build_time}
+        Environment={systemd_value(f"BMS_ONT_CONTAINER_RUNTIME={ont_container_runtime}")}
+        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE={ont_runtime_image}")}
+        Environment={systemd_value(f"BMS_ONT_SLOW5TOOLS_IMAGE_DIGEST={ont_runtime_digest}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE={ont_squigualiser_image}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_IMAGE_DIGEST={ont_squigualiser_digest}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE={ont_squigulator_image}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGULATOR_IMAGE_DIGEST={ont_squigulator_digest}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE={ont_comparison_image}")}
+        Environment={systemd_value(f"BMS_ONT_SQUIGUALISER_COMPARISON_IMAGE_DIGEST={ont_comparison_digest}")}
+        Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_STAGING_ROOT={ont_staging_root}")}
+        Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_ACQUISITION_PRESSURE={ont_acquisition_pressure}")}
+        Environment={systemd_value(f"BMS_ONT_BLOW5_CONVERSION_QUALIFIED={ont_conversion_qualified}")}
+        Environment={systemd_value(f"BMS_ONT_LIVE_CONVERSION_ENABLED={ont_live_conversion_enabled}")}
+        Environment={systemd_value(f"BMS_ONT_RAW_SIGNAL_RETENTION_POLICY={ont_retention_policy}")}
+        Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"BMS_BUILD_ID={build_id}")}
+        Environment={systemd_value(f"BMS_BUILD_TIME={build_time}")}
         Environment=PYTHONUNBUFFERED=1
-        ExecStartPre=/usr/bin/mkdir -p {dev_data_root} {dev_inputs_dir} {dev_work_dir} {dev_results_root} {dev_weights_root} {dev_msa_cache_dir} {dev_sabdab_cache_dir} {dev_container_dir} {ont_staging_root}
-        ExecStartPre=/usr/bin/env python3 {log_rotator}
-        ExecStart={api_runner}
+        ExecStartPre=/usr/bin/mkdir -p {systemd_exec_arg(dev_data_root)} {systemd_exec_arg(dev_inputs_dir)} {systemd_exec_arg(dev_work_dir)} {systemd_exec_arg(dev_results_root)} {systemd_exec_arg(dev_weights_root)} {systemd_exec_arg(dev_msa_cache_dir)} {systemd_exec_arg(dev_sabdab_cache_dir)} {systemd_exec_arg(dev_container_dir)} {systemd_exec_arg(ont_staging_root)}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStart={systemd_exec_arg(api_runner)}
         Restart=on-failure
         RestartSec=10
         TimeoutStopSec=20
         KillMode=process
         {api_limits}
-        StandardOutput=append:{API_LOG}
-        StandardError=append:{API_LOG}
+        StandardOutput=append:{systemd_value(API_LOG)}
+        StandardError=append:{systemd_value(API_LOG)}
 
         [Install]
         WantedBy={DEV_TARGET_UNIT}
@@ -1667,24 +1789,24 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
 
         [Service]
         Type=simple
-        EnvironmentFile={proxy_identity_env}
-        Environment=BMS_HOME={root}
-        Environment=BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}
+        EnvironmentFile={systemd_value(proxy_identity_env)}
+        Environment={systemd_value(f"BMS_HOME={root}")}
+        Environment={systemd_value(f"BMS_RUNTIME_MODE={DEV_RUNTIME_MODE}")}
         Environment=BMS_FRONTEND_MODE=dev
-        Environment=BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}
-        Environment=BMS_DEV_WEB_HOST_PORT={dev_web_host_port}
-        Environment=VITE_BMS_BUILD_SHA={build_revision}
-        Environment=VITE_BMS_BUILD_ID={build_id}
-        Environment=VITE_BMS_BUILD_TIME={build_time}
-        ExecStartPre=/usr/bin/env python3 {log_rotator}
-        ExecStart={frontend_runner}
+        Environment={systemd_value(f"BMS_DEV_API_PROXY_TARGET=http://127.0.0.1:{dev_api_host_port}")}
+        Environment={systemd_value(f"BMS_DEV_WEB_HOST_PORT={dev_web_host_port}")}
+        Environment={systemd_value(f"VITE_BMS_BUILD_SHA={build_revision}")}
+        Environment={systemd_value(f"VITE_BMS_BUILD_ID={build_id}")}
+        Environment={systemd_value(f"VITE_BMS_BUILD_TIME={build_time}")}
+        ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(log_rotator)}
+        ExecStart={systemd_exec_arg(frontend_runner)}
         Restart=on-failure
         RestartSec=10
         TimeoutStopSec=20
         KillMode=control-group
         {frontend_limits}
-        StandardOutput=append:{FRONTEND_LOG}
-        StandardError=append:{FRONTEND_LOG}
+        StandardOutput=append:{systemd_value(FRONTEND_LOG)}
+        StandardError=append:{systemd_value(FRONTEND_LOG)}
 
         [Install]
         WantedBy={DEV_TARGET_UNIT}

@@ -1,7 +1,9 @@
 {
-  "content_sha256": "00c0abe01c3165e6a442e4e67798228d855b00a3b43ccf88d231275557b2eab9",
+  "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
   "paths": [
     "apptainer/dorado.def",
+    "biomodstack_local_resources.py",
+    "biomodstack_runtime_profile.py",
     "biomodstack_services.py",
     "config/ngs/dorado_v1.3.1.lock.json",
     "docker/ont-raw-signal.Dockerfile",
@@ -153,6 +155,7 @@
     "platform/api/services/scientific_artifacts/writer.py",
     "platform/api/services/sqlite_schema_attestation.py",
     "platform/api/services/workflow_adapter.py",
+    "platform/api/telemetry_store.py",
     "platform/api/tests/test_biomodstack_services.py",
     "platform/api/tests/test_core_runtime_workflow_guard.py",
     "platform/api/tests/test_migration_runner_version_reconciliation.py",

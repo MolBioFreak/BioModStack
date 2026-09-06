@@ -63,8 +63,7 @@ LANE_ADAPTER_PORTS: dict[str, int] = {
     DEVELOPMENT_LANE: 18001,
     PRODUCTION_LANE: 18101,
 }
-JOB_CPU_QUOTA = "2400%"
-WORKFLOW_MEMORY_MAX = "96G"
+from biomodstack_local_resources import applied_local_policy
 UNIT_PREFIX = "biomodstack"
 CGROUP_ROOT = Path("/sys/fs/cgroup")
 
@@ -698,16 +697,17 @@ def build_systemd_run_command(
 ) -> list[str]:
     """Build the only supported command shape for a new workflow job."""
     identity = unit_identity(lane, job_id, attempt)
+    policy = applied_local_policy()
     if not command:
         raise ExecutionOwnershipError("A workflow command is required")
     if cpu_threads is not None and (
-        type(cpu_threads) is not int or not 1 <= cpu_threads <= 24
+        type(cpu_threads) is not int or not 1 <= cpu_threads <= policy.cpu_threads
     ):
-        raise ExecutionOwnershipError("workflow CPU admission must be between 1 and 24 threads")
+        raise ExecutionOwnershipError(f"workflow CPU admission must be between 1 and {policy.cpu_threads} threads")
     if memory_max_bytes is not None and (
-        type(memory_max_bytes) is not int or not 1 <= memory_max_bytes <= 96 * 1024**3
+        type(memory_max_bytes) is not int or not 1 <= memory_max_bytes <= policy.memory_bytes
     ):
-        raise ExecutionOwnershipError("workflow memory admission must be between 1 byte and 96 GiB")
+        raise ExecutionOwnershipError(f"workflow memory admission must be between 1 byte and {policy.memory_bytes} bytes")
     if type(deny_physical_devices) is not bool:
         raise ExecutionOwnershipError("workflow device-denial policy must be boolean")
     allowed_devices: tuple[str, ...] | None = None
@@ -722,8 +722,8 @@ def build_systemd_run_command(
             or any(not item.startswith("/dev/") or any(character.isspace() for character in item) for item in allowed_devices)
         ):
             raise ExecutionOwnershipError("workflow physical-device allowlist is malformed")
-    cpu_quota = f"{cpu_threads * 100}%" if cpu_threads is not None else JOB_CPU_QUOTA
-    memory_max = str(memory_max_bytes) if memory_max_bytes is not None else WORKFLOW_MEMORY_MAX
+    cpu_quota = f"{cpu_threads * 100}%" if cpu_threads is not None else f"{policy.cpu_threads * 100}%"
+    memory_max = str(memory_max_bytes) if memory_max_bytes is not None else str(policy.memory_bytes)
 
     rendered = [
         "systemd-run",
@@ -1035,7 +1035,7 @@ def owner_receipt(
         "attempt": identity.attempt,
         "type": "exec",
         "kill_mode": "control-group",
-        "cpu_quota": JOB_CPU_QUOTA,
+        "cpu_quota": f"{applied_local_policy().cpu_threads * 100}%",
         "command": [str(item) for item in command],
     }
 

@@ -13,6 +13,8 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from paths import get_container_path
+
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _SAFE_CHAIN_RE = re.compile(r"[A-Za-z0-9]")
@@ -41,7 +43,9 @@ class FrustraMPNNRuntimeIdentity:
 
 FRUSTRAMPNN_RUNTIME_IDENTITY = FrustraMPNNRuntimeIdentity(
     sif_name="frustrampnn.sif",
-    configured_sif_path="/mnt/BioModStack/apptainer/frustrampnn.sif",
+    # Snapshot installation authority at process startup, just like the immutable
+    # registry below. Configuration changes require a new runtime process.
+    configured_sif_path=str(get_container_path("frustrampnn.sif")),
     sif_sha256="c4bd2ad605d49eee37d836f718d3d826d52c8b237a37e6081be2952ac3be72da",
     executable_path="/opt/venv/bin/frustrampnn",
     executable_sha256="32089d959f619c08a550c0e7d0fc7b66b508d009ec3179d007f13773a170212f",

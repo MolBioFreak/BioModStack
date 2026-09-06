@@ -133,9 +133,10 @@ def render_sync_units(project_root: Path, executable_path: Path | None = None) -
 
 
 def _run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    # Keep HOME/XDG installation selection while discarding lane-process
+    # overrides; the manager must resolve the persisted installation itself.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("BMS_")}
     env["HOME"] = str(Path.home())
-    env.pop("XDG_CONFIG_HOME", None)
     env.pop("GIT_INDEX_FILE", None)
     return subprocess.run(
         list(args),

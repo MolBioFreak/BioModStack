@@ -1104,6 +1104,59 @@ def test_collection_freshness_is_bound_to_latest_typed_sample(tmp_path: Path) ->
     assert future["status"] == "future"
 
 
+@pytest.mark.parametrize(
+    ("valid_age_ms", "expected_status", "expected_ready"),
+    [(1_000, "fresh", True), (16_000, "stale", False), (None, "future", False)],
+)
+def test_collection_freshness_after_clock_rollback_preserves_future_history(
+    tmp_path: Path,
+    valid_age_ms: int | None,
+    expected_status: str,
+    expected_ready: bool,
+) -> None:
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    now = 1_700_000_000_000
+    future_time = now + 28_800_000
+    store.append_sample(sample(future_time, 10.0))
+    if valid_age_ms is not None:
+        store.append_sample(sample(now - valid_age_ms, 20.0))
+    with open_read_only(store.path) as connection:
+        before = connection.execute("SELECT * FROM raw_samples ORDER BY timestamp_ms").fetchall()
+
+    freshness = store.read_freshness(now_ms=now, stale_after_ms=15_000)
+
+    assert freshness["status"] == expected_status
+    assert freshness["ready"] is expected_ready
+    assert freshness["future_sample_count"] == 1
+    assert freshness["latest_future_timestamp_ms"] == future_time
+    if valid_age_ms is not None:
+        assert freshness["latest_timestamp_ms"] == now - valid_age_ms
+        assert freshness["age_ms"] == valid_age_ms
+    with open_read_only(store.path) as connection:
+        after = connection.execute("SELECT * FROM raw_samples ORDER BY timestamp_ms").fetchall()
+    assert [tuple(row) for row in before] == [tuple(row) for row in after]
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_future_history_after_clock_recovery(tmp_path: Path, monkeypatch) -> None:
+    import readiness
+
+    store = TelemetryStore(tmp_path / "telemetry.sqlite3")
+    store.initialize()
+    now = int(telemetry_store_module.time.time() * 1000)
+    store.append_sample(sample(now - 1_000, 20.0))
+    store.append_sample(sample(now + 28_800_000, 10.0))
+    monkeypatch.setattr(readiness, "telemetry_db_path", lambda: store.path)
+
+    ready, status, metadata = await readiness.telemetry_collection_readiness()
+
+    assert ready is True
+    assert status == "fresh"
+    assert metadata["future_sample_count"] == 1
+    assert metadata["latest_future_timestamp_ms"] == now + 28_800_000
+
+
 def test_request_reads_skip_global_foreign_key_scan_but_explicit_integrity_runs_it(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

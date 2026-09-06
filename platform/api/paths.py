@@ -61,6 +61,19 @@ def resolve_runtime_data_path(path: str | Path) -> Path:
     if candidate.exists():
         return candidate
 
+    # Current container receives explicit host aliases for independently mounted
+    # storage. Translate persisted host identity before the legacy root aliases.
+    if os.getenv("BMS_HOST_DATA"):
+        from biomodstack_runtime_profile import core_runtime_path_mappings
+        mappings = sorted(core_runtime_path_mappings(_runtime_paths(), os.environ),
+                          key=lambda pair: len(pair[1]), reverse=True)
+        for internal, host in mappings:
+            try:
+                relative = candidate.relative_to(Path(host))
+            except ValueError:
+                continue
+            return Path(internal) / relative
+
     current_data_root = get_data_root().resolve()
     alias_roots: list[Path] = [current_data_root]
 
@@ -108,18 +121,18 @@ def get_results_dir() -> Path:
     configured = os.getenv("BMS_RESULTS_DIR") or os.getenv("BMS_RESULTS_ROOT")
     if configured:
         return _resolve_path(configured)
-    return get_data_root() / "bms_results"
+    return Path(str(_runtime_paths()["results_dir"]))
 
 
 def get_analysis_cache_dir() -> Path:
-    return get_data_root() / "analysis_cache"
+    return Path(str(_runtime_paths()["analysis_cache_dir"]))
 
 
 def get_work_dir() -> Path:
     configured = os.getenv("BMS_WORK")
     if configured:
         return _resolve_path(configured)
-    return get_data_root() / "work"
+    return Path(str(_runtime_paths()["work_dir"]))
 
 
 def get_mobile_ui_updates_dir() -> Path:

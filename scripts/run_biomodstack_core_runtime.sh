@@ -81,6 +81,13 @@ elif [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then
     compose_extra_args=(--env-file "$LEGACY_CORE_RUNTIME_ENV_FILE")
 fi
 for key in "${!_BMS_LAUNCH_ENV[@]}"; do
+    # Persisted installation storage wins over a selecting Development process.
+    # Explicit alternative installations use BMS_CORE_RUNTIME_ENV_FILE.
+    case "$key" in
+        BMS_DATA|BMS_STATE_DIR|BMS_INPUTS|BMS_DB_PATH|BMS_DB_PARENT|BMS_RESULTS_DIR|BMS_RESULTS_ROOT|BMS_CONTAINER_DIR|BMS_WEIGHTS|BMS_COLABFOLD_DB|BMS_MSA_CACHE|BMS_SABDAB_CACHE|BMS_WORK|BMS_ANALYSIS_CACHE|BMS_CONTAINER_STATE_PATH|BMS_INPUTS_CONTAINER_PATH|BMS_DB_CONTAINER_PATH)
+            if [ -f "$CORE_RUNTIME_ENV_FILE" ] || [ -f "$LEGACY_CORE_RUNTIME_ENV_FILE" ]; then continue; fi
+            ;;
+    esac
     export "$key=${_BMS_LAUNCH_ENV[$key]}"
 done
 load_root_owned_mk1d_recovery_gid
@@ -92,6 +99,14 @@ fi
 if [ ! -d "$BMS_STATE_DIR" ]; then
     echo "BioModStack stable runtime is blocked: configured BMS_STATE_DIR is not a directory: $BMS_STATE_DIR" >&2
     exit 78
+fi
+export BMS_DATA="$BMS_STATE_DIR"
+export BMS_DB_PARENT="$(dirname "${BMS_DB_PATH:-$BMS_STATE_DIR/biomodstack.db}")"
+# Validate every configured directory bind without making directories or moving data.
+# Settings save remains configuration-only; provision missing roots intentionally
+# before managed startup. Docker itself also fails closed (create_host_path:false).
+if [[ "$ACTION" =~ ^(supervise|preflight|up|restart)$ ]]; then
+    PYTHONPATH="$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c 'from biomodstack_runtime_profile import resolve_runtime_paths, validate_core_runtime_storage; validate_core_runtime_storage(resolve_runtime_paths())'
 fi
 export BMS_CONTAINER_STATE_PATH="${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}"
 export BMS_API_HOST_PORT="${BMS_API_HOST_PORT:-18000}"

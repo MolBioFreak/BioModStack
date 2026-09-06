@@ -156,6 +156,8 @@ async def telemetry_collection_readiness() -> tuple[bool, str, dict[str, Any]]:
             "latest_timestamp_ms": freshness["latest_timestamp_ms"],
             "age_ms": freshness["age_ms"],
             "stale_after_ms": freshness["stale_after_ms"],
+            "future_sample_count": freshness["future_sample_count"],
+            "latest_future_timestamp_ms": freshness["latest_future_timestamp_ms"],
         }
         return bool(freshness["ready"]), str(freshness["status"]), metadata
 

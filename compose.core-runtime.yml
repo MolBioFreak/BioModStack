@@ -31,6 +31,22 @@ services:
     network_mode: host
     environment:
       BMS_HOME: /app
+      BMS_HOST_DATA: ${BMS_STATE_DIR}
+      BMS_HOST_DB_PATH: ${BMS_DB_PATH:-${BMS_STATE_DIR}/biomodstack.db}
+      BMS_HOST_INPUTS_DIR: ${BMS_INPUTS:-${BMS_STATE_DIR}/inputs}
+      BMS_HOST_RESULTS_DIR: ${BMS_RESULTS_DIR:-${BMS_STATE_DIR}/bms_results}
+      BMS_HOST_WEIGHTS_ROOT: ${BMS_WEIGHTS:-${BMS_STATE_DIR}/weights}
+      BMS_HOST_COLABFOLD_DB: ${BMS_COLABFOLD_DB:-${BMS_STATE_DIR}/colabfold_db}
+      BMS_HOST_MSA_CACHE_DIR: ${BMS_MSA_CACHE:-${BMS_STATE_DIR}/msa_cache}
+      BMS_HOST_SABDAB_CACHE_DIR: ${BMS_SABDAB_CACHE:-${BMS_STATE_DIR}/sabdab_cache}
+      BMS_HOST_WORK_DIR: ${BMS_WORK:-${BMS_STATE_DIR}/work}
+      BMS_HOST_ANALYSIS_CACHE_DIR: ${BMS_ANALYSIS_CACHE:-${BMS_STATE_DIR}/analysis_cache}
+      BMS_HOST_CONTAINER_DIR: ${BMS_CONTAINER_DIR:-${BMS_STATE_DIR}/apptainer}
+      BMS_ANALYSIS_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/analysis_cache
+      BMS_CONTAINER_DIR: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/apptainer
+      # Optional profile exports; unresolved keys stay unset, not empty strings.
+      BMS_LOCAL_CPU_THREADS:
+      BMS_LOCAL_MEMORY_BYTES:
       BMS_STATE_DIR: ${BMS_STATE_DIR:-/mnt/BioModStack}
       BMS_NVIDIA_SMI_PATH: ${BMS_NVIDIA_SMI_PATH:-/usr/bin/nvidia-smi}
       BMS_GPU_CONFIG_PATH: /app/platform/api/config/gpu_power_limits.json
@@ -41,8 +57,8 @@ services:
       BMS_INPUTS: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
       BMS_DB_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
       BMS_TELEMETRY_DB_PATH: ${BMS_TELEMETRY_DB_CONTAINER_PATH:-/var/lib/biomodstack/telemetry/telemetry.sqlite3}
-      BMS_RESULTS_DIR: ${BMS_RESULTS_CONTAINER_PATH:-/var/lib/biomodstack/bms_results}
-      BMS_RESULTS_ROOT: ${BMS_RESULTS_CONTAINER_PATH:-/var/lib/biomodstack/bms_results}
+      BMS_RESULTS_DIR: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
+      BMS_RESULTS_ROOT: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
       BMS_WEIGHTS: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights
       BMS_COLABFOLD_DB: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db
       BMS_MSA_CACHE: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache
@@ -91,12 +107,66 @@ services:
       BMS_DOCKER_COMPOSE_PROJECT: ${BMS_DOCKER_COMPOSE_PROJECT:-biomodstack-core-runtime}
     volumes:
       - type: bind
-        source: ${BMS_STATE_DIR:-/mnt/BioModStack}
+        source: ${BMS_STATE_DIR:?Configure BMS_STATE_DIR}
         target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}
+        bind:
+          create_host_path: false
       - type: bind
-        source: ${BMS_MK1D_RECOVERY_SOCKET_DIR:-/run/biomodstack}
+        source: ${BMS_INPUTS:-${BMS_STATE_DIR}/inputs}
+        target: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_RESULTS_DIR:-${BMS_STATE_DIR}/bms_results}
+        target: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_WEIGHTS:-${BMS_STATE_DIR}/weights}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_COLABFOLD_DB:-${BMS_STATE_DIR}/colabfold_db}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/colabfold_db
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_MSA_CACHE:-${BMS_STATE_DIR}/msa_cache}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/msa_cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_SABDAB_CACHE:-${BMS_STATE_DIR}/sabdab_cache}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/sabdab_cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_WORK:-${BMS_STATE_DIR}/work}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/work
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_ANALYSIS_CACHE:-${BMS_STATE_DIR}/analysis_cache}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/analysis_cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_CONTAINER_DIR:-${BMS_STATE_DIR}/apptainer}
+        target: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/apptainer
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${BMS_DB_PARENT:-${BMS_STATE_DIR}}
+        target: /var/lib/biomodstack-db
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/biomodstack
         target: /run/biomodstack
         read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test:
         [

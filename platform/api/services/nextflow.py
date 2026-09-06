@@ -1222,11 +1222,15 @@ def _normalize_protenix_msa_backend(value: object) -> str:
 
 
 def _dynamic_gpu_cpu_pool_threads() -> int:
-    total_threads = os.cpu_count() or 48
-    return max(1, total_threads - CPU_RESERVED_THREADS)
+    from biomodstack_local_resources import applied_local_policy
+    return applied_local_policy().cpu_threads
 
 
 async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, Any]) -> Optional[int]:
+    # Remote instance capacity is owned by its execution target, not this controller.
+    if getattr(job, "execution_target_id", None):
+        return None
+    local_limit = _dynamic_gpu_cpu_pool_threads()
     scheduler_config = read_scheduler_config()
     global_config = scheduler_config.get("global", {})
     configured_share = global_config.get("cpu_threads_per_job")
@@ -1234,14 +1238,14 @@ async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, 
     auto_cpu_thread_job_threshold = global_config.get("auto_cpu_thread_job_threshold", 2)
     try:
         if not auto_cpu_threads and configured_share is not None:
-            return max(1, min(24, int(configured_share)))
+            return max(1, min(local_limit, int(configured_share)))
     except (TypeError, ValueError):
         pass
 
     try:
-        max_cpu_share = max(1, min(24, int(configured_share))) if configured_share is not None else 24
+        max_cpu_share = max(1, min(local_limit, int(configured_share))) if configured_share is not None else local_limit
     except (TypeError, ValueError):
-        max_cpu_share = 24
+        max_cpu_share = local_limit
     try:
         job_threshold = max(1, int(auto_cpu_thread_job_threshold))
     except (TypeError, ValueError):

@@ -75,6 +75,8 @@ _LEGACY_CORS_ORIGIN_MIGRATIONS = {
 }
 
 _PATH_FIELDS = (
+    "development_project_root",
+    "production_project_root",
     "data_root",
     "results_dir",
     "inputs_dir",
@@ -86,6 +88,8 @@ _PATH_FIELDS = (
     "colabfold_db",
     "msa_cache_dir",
     "sabdab_cache_dir",
+    "work_dir",
+    "analysis_cache_dir",
 )
 _CONFIG_FIELDS = (
     "container_state_path",
@@ -190,7 +194,8 @@ def _normalize_optional_features(value: object) -> dict[str, bool] | None:
     return normalized or None
 
 
-def _resolve_features(profile: Mapping[str, object]) -> dict[str, bool]:
+def _resolve_features(profile: Mapping[str, object], environ: Mapping[str, str] | None = None) -> dict[str, bool]:
+    env = os.environ if environ is None else environ
     resolved = dict(_FEATURE_DEFAULTS)
     profile_features = profile.get("features")
     if isinstance(profile_features, Mapping):
@@ -203,9 +208,9 @@ def _resolve_features(profile: Mapping[str, object]) -> dict[str, bool]:
                 resolved[key] = parsed
 
     for key, env_name in _FEATURE_ENV_NAMES.items():
-        if os.getenv(env_name) is None:
+        if env.get(env_name) is None:
             continue
-        parsed = _normalize_optional_bool(os.getenv(env_name))
+        parsed = _normalize_optional_bool(env.get(env_name))
         if parsed is not None:
             resolved[key] = parsed
     return resolved
@@ -318,6 +323,10 @@ def normalize_install_profile(raw: Mapping[str, object] | None) -> dict[str, obj
             value = _LEGACY_PORT_MIGRATIONS.get(key, {}).get(value, value)
             normalized[key] = value
 
+    for key in ("local_cpu_threads", "local_memory_gib"):
+        if raw.get(key) is not None:
+            normalized[key] = raw[key]
+
     cors_origins = _normalize_cors_origins(raw.get("cors_origins"))
     if cors_origins is not None:
         normalized["cors_origins"] = [
@@ -348,8 +357,8 @@ def load_install_profile() -> dict[str, object]:
     return normalize_install_profile(data)
 
 
-def _coerce_env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
+def _coerce_env_int(name: str, default: int, environ: Mapping[str, str] | None = None) -> int:
+    value = (os.environ if environ is None else environ).get(name)
     if value is None or not str(value).strip():
         return default
     port = int(value)
@@ -363,8 +372,8 @@ def _coerce_env_int(name: str, default: int) -> int:
     return port
 
 
-def _coerce_env_bool(name: str, default: bool) -> bool:
-    value = os.getenv(name)
+def _coerce_env_bool(name: str, default: bool, environ: Mapping[str, str] | None = None) -> bool:
+    value = (os.environ if environ is None else environ).get(name)
     if value is None or not str(value).strip():
         return default
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
@@ -380,11 +389,19 @@ def _profile_data_base(profile: Mapping[str, object]) -> Path:
 def resolve_runtime_paths(
     project_root: Path | None = None,
     profile: Mapping[str, object] | None = None,
+    *, environ: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    root = get_project_root(project_root)
+    env = os.environ if environ is None else environ
+    root = get_project_root(Path(project_root or env.get("BMS_HOME") or Path(__file__).resolve().parent))
+    def env_int(name, default):
+        return _coerce_env_int(name, default, environ=env)
+
+    def env_bool(name, default):
+        return _coerce_env_bool(name, default, environ=env)
+
     normalized_profile = normalize_install_profile(profile if profile is not None else load_install_profile())
 
-    data_root = _resolve_path(os.environ["BMS_DATA"]) if os.getenv("BMS_DATA") else None
+    data_root = _resolve_path(env["BMS_DATA"]) if env.get("BMS_DATA") else None
     if data_root is None:
         profile_data_root = normalized_profile.get("data_root")
         if isinstance(profile_data_root, str) and profile_data_root.strip():
@@ -392,8 +409,8 @@ def resolve_runtime_paths(
         else:
             data_root = _heuristic_data_root(root)
 
-    if os.getenv("BMS_INPUTS"):
-        inputs_dir = _resolve_path(os.environ["BMS_INPUTS"])
+    if env.get("BMS_INPUTS"):
+        inputs_dir = _resolve_path(env["BMS_INPUTS"])
     else:
         profile_inputs_dir = normalized_profile.get("inputs_dir")
         if isinstance(profile_inputs_dir, str) and profile_inputs_dir.strip():
@@ -403,11 +420,11 @@ def resolve_runtime_paths(
         else:
             inputs_dir = root / "platform" / "api" / "inputs"
 
-    db_url = os.getenv("DATABASE_URL")
+    db_url = env.get("DATABASE_URL")
     db_path = _sqlite_path_from_url(db_url) if db_url else None
     if db_path is None:
-        if os.getenv("BMS_DB_PATH"):
-            db_path = _resolve_path(os.environ["BMS_DB_PATH"])
+        if env.get("BMS_DB_PATH"):
+            db_path = _resolve_path(env["BMS_DB_PATH"])
         else:
             profile_db_path = normalized_profile.get("db_path")
             if isinstance(profile_db_path, str) and profile_db_path.strip():
@@ -424,8 +441,8 @@ def resolve_runtime_paths(
                 else:
                     db_path = repo_root_db
 
-    if os.getenv("BMS_CONTAINER_DIR"):
-        container_dir = _resolve_path(os.environ["BMS_CONTAINER_DIR"])
+    if env.get("BMS_CONTAINER_DIR"):
+        container_dir = _resolve_path(env["BMS_CONTAINER_DIR"])
     else:
         profile_container_dir = normalized_profile.get("container_dir")
         if isinstance(profile_container_dir, str) and profile_container_dir.strip():
@@ -434,8 +451,8 @@ def resolve_runtime_paths(
             container_dir = data_root / "apptainer"
 
     def resolve_data_like(env_name: str, profile_key: str, leaf: str) -> Path:
-        if os.getenv(env_name):
-            return _resolve_path(os.environ[env_name])
+        if env.get(env_name):
+            return _resolve_path(env[env_name])
         profile_value = normalized_profile.get(profile_key)
         if isinstance(profile_value, str) and profile_value.strip():
             return Path(profile_value).expanduser().resolve()
@@ -456,22 +473,25 @@ def resolve_runtime_paths(
     dev_results_dir = (
         Path(profile_dev_results_dir).expanduser().resolve()
         if isinstance(profile_dev_results_dir, str) and profile_dev_results_dir.strip()
-        else Path(os.getenv("BMS_DEV_RESULTS_DIR", "")).expanduser().resolve()
-        if os.getenv("BMS_DEV_RESULTS_DIR")
+        else Path(env.get("BMS_DEV_RESULTS_DIR", "")).expanduser().resolve()
+        if env.get("BMS_DEV_RESULTS_DIR")
         else dev_data_root / "bms_results"
     )
 
-    container_state_path = os.getenv("BMS_CONTAINER_STATE_PATH") or str(
+    container_state_path = env.get("BMS_CONTAINER_STATE_PATH") or str(
         normalized_profile.get("container_state_path") or DEFAULT_CONTAINER_STATE_PATH
     )
-    inputs_container_path = os.getenv("BMS_INPUTS_CONTAINER_PATH") or str(
+    inputs_container_path = env.get("BMS_INPUTS_CONTAINER_PATH") or str(
         normalized_profile.get("inputs_container_path") or f"{container_state_path.rstrip('/')}/inputs"
     )
-    db_container_path = os.getenv("BMS_DB_CONTAINER_PATH") or str(
+    db_container_path = env.get("BMS_DB_CONTAINER_PATH") or str(
         normalized_profile.get("db_container_path") or f"{container_state_path.rstrip('/')}/biomodstack.db"
     )
 
-    cors_origins = os.getenv("CORS_ORIGINS")
+    if db_container_path == f"{container_state_path.rstrip('/')}/biomodstack.db" and db_path != data_root / "biomodstack.db":
+        db_container_path = f"/var/lib/biomodstack-db/{db_path.name}"
+
+    cors_origins = env.get("CORS_ORIGINS")
     if cors_origins:
         resolved_cors_origins = [item.strip() for item in cors_origins.split(",") if item.strip()]
     else:
@@ -481,21 +501,21 @@ def resolve_runtime_paths(
         else:
             resolved_cors_origins = list(DEFAULT_CORS_ORIGINS)
 
-    development_workflow_adapter_url = os.getenv("BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL") or str(
+    development_workflow_adapter_url = env.get("BMS_DEVELOPMENT_WORKFLOW_ADAPTER_URL") or str(
         normalized_profile.get("development_workflow_adapter_url") or DEFAULT_DEVELOPMENT_WORKFLOW_ADAPTER_URL
     )
-    production_workflow_adapter_url = os.getenv("BMS_PRODUCTION_WORKFLOW_ADAPTER_URL") or str(
+    production_workflow_adapter_url = env.get("BMS_PRODUCTION_WORKFLOW_ADAPTER_URL") or str(
         normalized_profile.get("production_workflow_adapter_url") or DEFAULT_PRODUCTION_WORKFLOW_ADAPTER_URL
     )
-    workflow_adapter_url = os.getenv("BMS_WORKFLOW_ADAPTER_URL") or str(
+    workflow_adapter_url = env.get("BMS_WORKFLOW_ADAPTER_URL") or str(
         normalized_profile.get("workflow_adapter_url") or production_workflow_adapter_url
     )
-    compose_project_name = os.getenv("COMPOSE_PROJECT_NAME") or str(
+    compose_project_name = env.get("COMPOSE_PROJECT_NAME") or str(
         normalized_profile.get("compose_project_name") or DEFAULT_COMPOSE_PROJECT_NAME
     )
-    features = _resolve_features(normalized_profile)
+    features = _resolve_features(normalized_profile, environ=env)
     image_selectors = {
-        field: os.getenv(env_name) or normalized_profile.get(field)
+        field: env.get(env_name) or normalized_profile.get(field)
         for field, env_name in _IMAGE_ENV_FIELDS.items()
     }
 
@@ -504,8 +524,8 @@ def resolve_runtime_paths(
         "data_root": str(data_root),
         "inputs_dir": str(inputs_dir),
         "results_dir": str(results_dir),
-        "analysis_cache_dir": str(data_root / "analysis_cache"),
-        "work_dir": str(data_root / "work"),
+        "analysis_cache_dir": str(resolve_data_like("BMS_ANALYSIS_CACHE", "analysis_cache_dir", "analysis_cache")),
+        "work_dir": str(resolve_data_like("BMS_WORK", "work_dir", "work")),
         "db_path": str(db_path),
         "container_dir": str(container_dir),
         "weights_root": str(weights_root),
@@ -524,18 +544,19 @@ def resolve_runtime_paths(
         "container_state_path": container_state_path,
         "inputs_container_path": inputs_container_path,
         "db_container_path": db_container_path,
+        "results_container_path": env.get("BMS_RESULTS_CONTAINER_PATH") or f"{container_state_path.rstrip('/')}/bms_results",
         # The production API image is deliberately pinned to the registry port. Do not
         # advertise a configurable host port that Docker cannot honor.
         "api_host_port": DEFAULT_API_HOST_PORT,
-        "dev_api_host_port": _coerce_env_int(
+        "dev_api_host_port": env_int(
             "BMS_DEV_API_HOST_PORT",
             int(normalized_profile.get("dev_api_host_port") or DEFAULT_DEV_API_HOST_PORT),
         ),
-        "dev_web_host_port": _coerce_env_int(
+        "dev_web_host_port": env_int(
             "BMS_DEV_WEB_HOST_PORT",
             int(normalized_profile.get("dev_web_host_port") or DEFAULT_DEV_WEB_HOST_PORT),
         ),
-        "web_host_port": _coerce_env_int("BMS_WEB_HOST_PORT", int(normalized_profile.get("web_host_port") or DEFAULT_WEB_HOST_PORT)),
+        "web_host_port": env_int("BMS_WEB_HOST_PORT", int(normalized_profile.get("web_host_port") or DEFAULT_WEB_HOST_PORT)),
         "cors_origins": resolved_cors_origins,
         "workflow_adapter_url": workflow_adapter_url,
         "development_workflow_adapter_url": development_workflow_adapter_url,
@@ -543,7 +564,7 @@ def resolve_runtime_paths(
         "compose_project_name": compose_project_name,
         "features": features,
         **image_selectors,
-        "core_runtime_mode": _coerce_env_bool(
+        "core_runtime_mode": env_bool(
             "BMS_CORE_RUNTIME_MODE",
             bool(normalized_profile.get("core_runtime_mode", True)),
         ),
@@ -590,6 +611,8 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
     return [
         "#!/bin/bash",
         "# Generated by BioModStack install-profile management. Explicit environment variables still win.",
+        f'export BMS_LOCAL_CPU_THREADS="${{BMS_LOCAL_CPU_THREADS:-{resolved["local_cpu_threads"]}}}"',
+        f'export BMS_LOCAL_MEMORY_BYTES="${{BMS_LOCAL_MEMORY_BYTES:-{resolved["local_memory_bytes"]}}}"',
         f'export BMS_DATA="${{BMS_DATA:-{resolved["data_root"]}}}"',
         f'export BMS_INPUTS="${{BMS_INPUTS:-{resolved["inputs_dir"]}}}"',
         f'export BMS_DB_PATH="${{BMS_DB_PATH:-{resolved["db_path"]}}}"',
@@ -622,6 +645,82 @@ def _compat_env_lines(resolved: Mapping[str, object]) -> list[str]:
     ]
 
 
+# The same ordered directory-bind contract owns export, provenance and translation.
+# Bind the database directory, not SQLite's file: WAL/SHM and atomic replacement
+# must share its filesystem. The standard database remains in the state mount.
+_STORAGE_DIRS = (
+    ("inputs_dir", "BMS_INPUTS", "inputs"),
+    ("results_dir", "BMS_RESULTS_DIR", "bms_results"),
+    ("weights_root", "BMS_WEIGHTS", "weights"),
+    ("colabfold_db", "BMS_COLABFOLD_DB", "colabfold_db"),
+    ("msa_cache_dir", "BMS_MSA_CACHE", "msa_cache"),
+    ("sabdab_cache_dir", "BMS_SABDAB_CACHE", "sabdab_cache"),
+    ("work_dir", "BMS_WORK", "work"),
+    ("analysis_cache_dir", "BMS_ANALYSIS_CACHE", "analysis_cache"),
+    ("container_dir", "BMS_CONTAINER_DIR", "apptainer"),
+)
+
+
+def core_runtime_storage_mounts(resolved: Mapping[str, object]) -> list[dict[str, object]]:
+    state = str(resolved["container_state_path"]).rstrip("/")
+    pairs = [(str(resolved["data_root"]), state)]
+    for key, _, leaf in _STORAGE_DIRS:
+        target = str(resolved["inputs_container_path"]) if key == "inputs_dir" else str(resolved["results_container_path"]) if key == "results_dir" else f"{state}/{leaf}"
+        pairs.append((str(resolved[key]), target))
+    pairs.append((str(Path(str(resolved["db_path"])).parent), "/var/lib/biomodstack-db"))
+    return [dict(type="bind", source=source, target=target, read_only=False,
+                 bind={"create_host_path": False}) for source, target in pairs] + [
+        dict(type="bind", source="/run/biomodstack", target="/run/biomodstack",
+             read_only=True, bind={"create_host_path": False})]
+
+
+def core_runtime_path_mappings(resolved: Mapping[str, object], environ: Mapping[str, str]) -> list[tuple[str, str]]:
+    """Container-to-host aliases. Host identity is explicitly exported by Compose."""
+    state = str(resolved["container_state_path"]).rstrip("/")
+    host_state = environ.get("BMS_HOST_DATA") or environ.get("BMS_STATE_DIR") or str(resolved["data_root"])
+    mappings = [(str(resolved["db_container_path"]), environ.get("BMS_HOST_DB_PATH") or str(Path(host_state) / "biomodstack.db")),
+                (str(resolved["inputs_container_path"]), environ.get("BMS_HOST_INPUTS_DIR") or str(Path(host_state) / "inputs")),
+                (state, host_state)]
+    for key, _, leaf in _STORAGE_DIRS:
+        host = environ.get(f"BMS_HOST_{key.upper()}")
+        if host:
+            target = str(resolved["inputs_container_path"]) if key == "inputs_dir" else str(resolved["results_container_path"]) if key == "results_dir" else f"{state}/{leaf}"
+            mappings.append((target, host))
+    return sorted(set(mappings), key=lambda pair: len(pair[0]), reverse=True)
+
+
+def core_runtime_storage_environment(resolved: Mapping[str, object]) -> dict[str, str]:
+    values = {"BMS_HOST_DATA": str(resolved["data_root"]),
+              "BMS_HOST_DB_PATH": str(resolved["db_path"]),
+              "BMS_DB_PARENT": str(Path(str(resolved["db_path"])).parent)}
+    for key, _, _ in _STORAGE_DIRS:
+        values[f"BMS_HOST_{key.upper()}"] = str(resolved[key])
+    return values
+
+
+def resolve_installed_core_runtime_paths(project_root: Path | None = None) -> dict[str, object]:
+    """Installation-owned Production configuration, never a Development process's paths."""
+    env_path = Path(os.getenv("BMS_CORE_RUNTIME_ENV_FILE") or get_core_runtime_env_path())
+    env: dict[str, str] = {}
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                env[key] = value
+    if env.get("BMS_STATE_DIR"):
+        env["BMS_DATA"] = env["BMS_STATE_DIR"]
+    profile = load_install_profile()
+    if not env.get("BMS_DATA") and not profile.get("data_root"):
+        raise ValueError("Production data_root must be explicitly configured")
+    return resolve_runtime_paths(project_root, profile=profile, environ=env)
+
+
+def validate_core_runtime_storage(resolved: Mapping[str, object]) -> None:
+    for mount in core_runtime_storage_mounts(resolved):
+        if not Path(str(mount["source"])).is_dir():
+            raise ValueError(f"Configured bind source is not an existing directory: {mount['source']}")
+
+
 def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
     cors_origins = ",".join(str(item) for item in resolved["cors_origins"])
     core_runtime_mode = "1" if bool(resolved["core_runtime_mode"]) else "0"
@@ -633,6 +732,9 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
     return [
         "# Generated by BioModStack install-profile management.",
         *image_lines,
+        *(f"{key}={value}" for key, value in core_runtime_storage_environment(resolved).items()),
+        f'BMS_LOCAL_CPU_THREADS={resolved["local_cpu_threads"]}',
+        f'BMS_LOCAL_MEMORY_BYTES={resolved["local_memory_bytes"]}',
         f'BMS_STATE_DIR={resolved["data_root"]}',
         f'BMS_DATA={resolved["data_root"]}',
         f'BMS_INPUTS={resolved["inputs_dir"]}',
@@ -645,6 +747,7 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
         f'BMS_MSA_CACHE={resolved["msa_cache_dir"]}',
         f'BMS_SABDAB_CACHE={resolved["sabdab_cache_dir"]}',
         f'BMS_WORK={resolved["work_dir"]}',
+        f'BMS_ANALYSIS_CACHE={resolved["analysis_cache_dir"]}',
         f'BMS_CONTAINER_STATE_PATH={resolved["container_state_path"]}',
         f'BMS_INPUTS_CONTAINER_PATH={resolved["inputs_container_path"]}',
         f'BMS_DB_CONTAINER_PATH={resolved["db_container_path"]}',
@@ -667,7 +770,10 @@ def _core_runtime_env_lines(resolved: Mapping[str, object]) -> list[str]:
 
 def export_install_profile(profile: Mapping[str, object] | None = None, project_root: Path | None = None) -> dict[str, str]:
     normalized_profile = normalize_install_profile(profile if profile is not None else load_install_profile())
-    resolved = resolve_runtime_paths(project_root=project_root, profile=normalized_profile)
+    resolved = resolve_runtime_paths(project_root=project_root, profile=normalized_profile, environ={})
+    from biomodstack_local_resources import configured_local_policy
+    local_policy = configured_local_policy(normalized_profile)
+    resolved.update(local_cpu_threads=local_policy.cpu_threads, local_memory_bytes=local_policy.memory_bytes)
     validate_runtime_port_contract(resolved)
 
     compat_env_path = get_compat_env_path()
@@ -707,8 +813,17 @@ def save_install_profile(raw: Mapping[str, object], project_root: Path | None = 
         raise ValueError(
             f"api_host_port is fixed at {DEFAULT_API_HOST_PORT}: the stable container image binds that port"
         )
-    normalized = normalize_install_profile(raw)
-    resolved = resolve_runtime_paths(project_root=project_root, profile=normalized)
+    profile_path = get_install_profile_path()
+    existing = json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.exists() else {}
+    if not isinstance(existing, dict):
+        raise ValueError("install profile must be a JSON object")
+    merged = {**existing, **{key: value for key, value in raw.items() if value is not None}}
+    if isinstance(raw.get("features"), Mapping):
+        merged["features"] = {**existing.get("features", {}), **raw["features"]}
+    from biomodstack_local_resources import configured_local_policy
+    configured_local_policy(merged)  # validate before any profile/export write
+    normalized = {**existing, **normalize_install_profile(merged)}
+    resolved = resolve_runtime_paths(project_root=project_root, profile=normalized, environ={})
     validate_runtime_port_contract(resolved)
     profile_path = get_install_profile_path()
     profile_path.parent.mkdir(parents=True, exist_ok=True)
