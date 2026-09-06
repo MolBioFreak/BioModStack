@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "5412c2229ade39b9ac088cd730c0a8aeff4e7477069a53c959a05b1a9153df58",
+  "content_sha256": "24e4a6a37e2c3dea986fbff8b0b47a0be415d6b614d4f89cab7001b8c5b00e27",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -309,8 +309,8 @@
     },
     {
       "path": "platform/api/main.py",
-      "sha256": "a03f48a7181ae8cd83bc3bc5eb68403722c65491d9520c581dd3ed8eec669051",
-      "size_bytes": 19298
+      "sha256": "266b0d1167f1075ab31f7fa9f3d655f4fb14904ea89b4db833da8ddbb6405da5",
+      "size_bytes": 19622
     },
     {
       "path": "platform/api/migrations/add_ont_external_move_bam_receipts.py",
@@ -1069,8 +1069,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "fe74aad4f4aeddc6f3db9280e7cda6167034c4e42d32902d40e1283ded6338ae",
-      "size_bytes": 202090
+      "sha256": "5999b4548a04c43a72adb7751cd4dc07c8c19f4f154ed155b9501a7d8de92e98",
+      "size_bytes": 202802
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "71be693cce541696686bdc6c27dc4d91b3032cbba70fd4c83ef23b0af62e2b16",
-      "size_bytes": 3633
+      "sha256": "6e08172fe91e884199ff949d0228b7b6f89e12e2298afe166fee4a34f3b0956c",
+      "size_bytes": 3695
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "9f21dec6fa95b20733f01a94746557a615c1f97b",
-  "successor_source_tree": "dce3dcce50b507bc07553aed89d3421697a4379f",
+  "successor_source_commit": "0ba5d9df21254e48c93a6e5c1de8cf75d02104eb",
+  "successor_source_tree": "31aad3ed1ee2e4e0bcef1a4d5b885635fc3cad45",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
