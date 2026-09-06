@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "cd6d84fea93f70aa8520683afa8e3d9aed849b7b9da5e8f61b43234351b976e1",
+  "content_sha256": "90f7d58c1a6e0feec64641873a660b92a0519589d248e8daeb24a2e98d6e687b",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -179,8 +179,8 @@
     },
     {
       "path": "nextflow.config",
-      "sha256": "9b1d3f8989967c82b084419617701173727c57177b14e69912162a75aa9c45f0",
-      "size_bytes": 96921
+      "sha256": "84d61ff782eeb887994d2fd37c1fbea1e79d44cc1accb918482a1bf249d85c72",
+      "size_bytes": 97066
     },
     {
       "path": "packages/sequence-utils/src/index.js",
@@ -454,8 +454,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "4e723c5ab0004e9ede696741c036401fa1fadb84a58be71530b4afc02192bf1d",
-      "size_bytes": 419858
+      "sha256": "3778fcedf158bca57a44154334f65ec47e55e6175a2922362aa3e6b0e9f37cf3",
+      "size_bytes": 421060
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -514,8 +514,8 @@
     },
     {
       "path": "platform/api/routers/queue.py",
-      "sha256": "62781280e7388f5945249c817e798c0c468aa559e745c42835f5e7167d4d0af7",
-      "size_bytes": 33760
+      "sha256": "022fd212b9e589c1e2747b7ee0badaeb41c3f641f0922d633698cdb5d0aeb0dc",
+      "size_bytes": 33999
     },
     {
       "path": "platform/api/routers/rna_structure.py",
@@ -604,8 +604,8 @@
     },
     {
       "path": "platform/api/services/gpu_orchestrator.py",
-      "sha256": "daaf5a5da7777934648631499cc17cc34d5fbde12b500f1105103c7a5c144a42",
-      "size_bytes": 171667
+      "sha256": "b1c2aa24bef1b4a9d7578fdb1cbd7b0304cf1f6cf317c56f6ea56c9faf15c320",
+      "size_bytes": 173039
     },
     {
       "path": "platform/api/services/job_control.py",
@@ -644,8 +644,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "b0df2a909ce229e0477c213631f9dc559053761fa5b37ca7a56aa8dda3b42577",
-      "size_bytes": 217318
+      "sha256": "98c6a2eb1ab768357c7197271bd735b59c710af6ccfd2873568e1491013d1c7d",
+      "size_bytes": 218586
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -1069,8 +1069,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "bd73c5eeede4b36bf9933cde9dca3cd15d8d04a12747aa9e349e5566c547434e",
-      "size_bytes": 201964
+      "sha256": "8817431d08c8af77e88b5caa3e86de5cabe235c4a9564fe457d2afda2c5cfb51",
+      "size_bytes": 201993
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "31c29ef3078ff73a95f251b4b7a9b7cee7b6ad0f",
-  "successor_source_tree": "5f307b99694430e0720bb4e468cd8e95b86b61e7",
+  "successor_source_commit": "4c2caeee30ff50b5bed8e010db91c08d52d2deae",
+  "successor_source_tree": "b634a699b445a35d626adafb110b840b1b9e68b1",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
