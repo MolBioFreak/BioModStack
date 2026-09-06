@@ -544,6 +544,9 @@ class OperatorDashboardXTmclFrame(BaseModel):
     data: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
+    receive_sequence: StrictInt | None = None
+    receive_owner: str | None = None
+    owner_generation: StrictInt | None = None
 
 
 class OperatorDashboardXTmclSkippedFrame(BaseModel):
@@ -554,6 +557,9 @@ class OperatorDashboardXTmclSkippedFrame(BaseModel):
     data: list[StrictInt | OperatorDashboardXOmissionMarker] | None = Field(default=None, max_length=64)
     raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
+    receive_sequence: StrictInt | None = None
+    receive_owner: str | None = None
+    owner_generation: StrictInt | None = None
     error: str | None = Field(default=None, max_length=1000)
 
 
@@ -579,6 +585,20 @@ class OperatorDashboardXTmclWaitPolicy(BaseModel):
         if (self.apartment_equivalence is None) == (self.source_anchor is None):
             raise ValueError("TMCL wait policy requires exactly one authority field")
         return self
+
+
+class OperatorDashboardXTmclAttempt(BaseModel):
+    """Attempt observations retain same-call response ambiguity."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    attempt_ordinal: StrictInt = Field(ge=1)
+    tx_timestamp: StrictFloat | StrictInt
+    tx_write_completed_at: StrictFloat | StrictInt
+    wait_signaled: StrictBool
+    outcome: str = Field(min_length=1, max_length=80)
+    response_present: StrictBool
+    receive_sequence: StrictInt | None
+    response_attempt_attribution: Literal["single_write", "same_call_ambiguous"]
 
 
 class OperatorDashboardXTmclProvenance(BaseModel):
@@ -621,6 +641,7 @@ class OperatorDashboardXTmclProvenance(BaseModel):
     skipped_count: StrictInt | None = Field(default=None, ge=0)
     skipped_frames: list[OperatorDashboardXTmclSkippedFrame] = Field(default_factory=list, max_length=256)
     skipped_frames_truncated: StrictBool | None = None
+    attempts: list[OperatorDashboardXTmclAttempt] | None = None
 
 
 class OperatorDashboardXTmclAck(BaseModel):
