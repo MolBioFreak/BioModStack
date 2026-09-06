@@ -4748,6 +4748,76 @@ class OperatorReceiptErrorV2(BaseModel):
     detail: OperatorReceiptFailureDetailV2 | None = None
 
 
+class OperatorTransportExceptionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, serialize_by_alias=True)
+
+    exception_class: str = Field(alias="class", min_length=1)
+    message: str = Field(max_length=512)
+
+
+class OperatorTransportRetentionErrorV2(OperatorTransportExceptionV2):
+    stage: str = Field(min_length=1)
+
+
+class OperatorTransportExchangeV2(BaseModel):
+    """Caller-local F06 evidence; grants no delivery or physical authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    exchange_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    attempt_ordinal: StrictInt = Field(ge=1)
+    response_attempt_attribution: Literal["single_write", "same_call_ambiguous"]
+    owner_generation: StrictInt | None
+    matcher: str | None
+    registration_timestamp: StrictFloat | None
+    tx_timestamp: StrictFloat | None
+    tx_write_completed_at: StrictFloat | None
+    timeout_ms: StrictInt | None
+    tx_raw: list[Annotated[StrictInt, Field(ge=0, le=255)]] | None
+    command_family: Literal["tmcl"]
+    tx_id: StrictInt | None
+    tx_dlc: StrictInt | None
+    expected_board: StrictInt | None
+    expected_command: StrictInt | None
+    write_attempted: StrictBool
+    write_returned: StrictBool
+    wait_signaled: StrictBool
+    response_present: StrictBool
+    observed_status: StrictInt | None
+    observed_rx_raw: list[Annotated[StrictInt, Field(ge=0, le=255)]] | None
+    observed_rx_id: StrictInt | None
+    observed_rx_dlc: StrictInt | None
+    receive_timestamp: StrictFloat | None
+    receive_sequence: StrictInt | None
+    outcome: str
+    router_outcome: str
+    exception: OperatorTransportExceptionV2 | None
+    finalized_at: StrictFloat
+    physical_effect_verified: StrictBool
+    command_id: str | None
+    trace_id: str = Field(min_length=1)
+    transport_call_ordinal: StrictInt = Field(ge=1)
+    durable_ownership_claimed: StrictBool
+
+    @field_validator(
+        "registration_timestamp", "tx_timestamp", "tx_write_completed_at",
+        "receive_timestamp", "finalized_at",
+    )
+    @classmethod
+    def finite_transport_times(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("transport evidence times must be finite")
+        return value
+
+    @field_validator("physical_effect_verified", "durable_ownership_claimed")
+    @classmethod
+    def evidence_has_no_authority(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("caller-local transport evidence cannot confer authority")
+        return value
+
+
 class OperatorActionReceiptV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4770,6 +4840,8 @@ class OperatorActionReceiptV2(BaseModel):
     completion_class: str | None
     physical_effect_verified: StrictBool
     error: OperatorReceiptErrorV2 | None
+    transport_exchanges: list[OperatorTransportExchangeV2] = Field(default_factory=list)
+    transport_retention_errors: list[OperatorTransportRetentionErrorV2] = Field(default_factory=list)
 
     @field_validator("accepted_at", "queued_at", "dispatched_at", "finished_at")
     @classmethod
