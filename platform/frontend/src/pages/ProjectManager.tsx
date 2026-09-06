@@ -1,6 +1,6 @@
 import { isAxiosError } from 'axios';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { fetchMolBioNgsDomainState, fetchProjectHub } from '../lib/api';
 import {
@@ -28,7 +28,7 @@ import {
 } from '../lib/projectManager';
 import { ProjectAttachmentDialog } from '../components/project-manager/ProjectAttachmentDialog';
 import { ManagerDialog, type ManagerDialogMode } from '../components/project-manager/ManagerDialog';
-import { ProjectInspector } from '../components/project-manager/ProjectInspector';
+import { ProjectInspector, hasDomainWorkspace } from '../components/project-manager/ProjectInspector';
 import { DNASequenceProjectWorkspace } from '../components/project-manager/DNASequenceProjectWorkspace';
 import { ProjectTree } from '../components/project-manager/ProjectTree';
 import { RelationshipMap } from '../components/project-manager/RelationshipMap';
@@ -255,7 +255,7 @@ function ProjectsIndex() {
                     <input aria-label="Search Projects" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, objective, owner, or tag" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-sm text-content" />
                     <select aria-label="Project status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="all">All statuses</option><option value="draft">Draft</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option></select>
                     <select aria-label="Archive filter" value={archiveFilter} onChange={(event) => setArchiveFilter(event.target.value)} className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content"><option value="active">Current only</option><option value="archived">Archived only</option><option value="all">Current and archived</option></select>
-                    <span aria-label="Project order" className="rounded-lg border border-border-primary bg-surface px-3 py-2 text-xs text-content">Recent activity</span>
+                    <span aria-label="Project order" className="text-xs text-content-muted">Sorted by recent activity</span>
                 </section>
 
                 {projectsQuery.isLoading ? (
@@ -320,8 +320,44 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const [decisionCursor, setDecisionCursor] = useState<string | undefined>();
     const [datasetCursor, setDatasetCursor] = useState<string | undefined>();
     const [activityCursor, setActivityCursor] = useState<string | undefined>();
-    const [treeOpen, setTreeOpen] = useState(true);
-    const [inspectorOpen, setInspectorOpen] = useState(true);
+    const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+    const [treeOpen, setTreeOpen] = useState(() => window.innerWidth >= 768);
+    const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
+    const drawerRef = useRef<HTMLDivElement>(null);
+    const viewRef = useRef<HTMLDetailsElement>(null);
+    const creationRef = useRef<HTMLDetailsElement>(null);
+    const runActionLock = useRef(false);
+    const overlay = treeOpen && viewportWidth < 768 ? 'tree' : inspectorOpen && viewportWidth < 1280 ? 'inspector' : null;
+    const closeDrawer = useCallback(() => { setTreeOpen((open) => window.innerWidth < 768 ? false : open); setInspectorOpen((open) => window.innerWidth < 1280 ? false : open); }, []);
+    useEffect(() => {
+        let previous = window.innerWidth;
+        const resize = () => {
+            const width = window.innerWidth;
+            if (width < 768 && previous >= 768) setTreeOpen(false);
+            if (width < 1280 && previous >= 1280) setInspectorOpen(false);
+            setViewportWidth(width);
+            previous = width;
+        };
+        window.addEventListener('resize', resize);
+        return () => window.removeEventListener('resize', resize);
+    }, []);
+    useEffect(() => {
+        if (!overlay) return;
+        const previous = document.activeElement as HTMLElement | null;
+        const drawer = drawerRef.current;
+        drawer?.querySelector<HTMLElement>('button')?.focus();
+        const onKey = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') { event.preventDefault(); closeDrawer(); }
+            if (event.key === 'Tab' && drawer) {
+                const items = Array.from(drawer.querySelectorAll<HTMLElement>('button:not(:disabled), input, a[href], summary, [tabindex="0"]')).filter((item) => !item.closest('details:not([open])') || item.tagName === 'SUMMARY');
+                const first = items[0]; const last = items.at(-1);
+                if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+            }
+        };
+        document.addEventListener('keydown', onKey);
+        return () => { document.removeEventListener('keydown', onKey); if (previous?.isConnected && !previous.closest('details:not([open])')) previous.focus(); else viewRef.current?.querySelector('summary')?.focus(); };
+    }, [overlay, closeDrawer]);
     const [treeWidth, setTreeWidth] = useState(272);
     const [inspectorWidth, setInspectorWidth] = useState(368);
     const [attachOpen, setAttachOpen] = useState(false);
@@ -378,9 +414,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         queryFn: ({ signal }) => getProjectSummary(projectId, { mapLimit: MAP_LIMIT, runLimit: RUN_LIMIT, signal }),
         enabled: invalidSelection,
     });
-    const rawSummary = summaryQuery.isPlaceholderData
-        ? fallbackQuery.data
-        : summaryQuery.data ?? fallbackQuery.data;
+    // React Query owns the previous snapshot. Keep the tree mounted while a
+    // same-project selection is validated; never borrow another project's data.
+    const candidateSummary = invalidSelection ? fallbackQuery.data : summaryQuery.data;
+    const rawSummary = candidateSummary?.project.id === projectId ? candidateSummary : undefined;
+    const selectionPending = summaryQuery.isPlaceholderData;
+    const selectionReady = Boolean(rawSummary) && !selectionPending && !invalidSelection;
     const globalLinksQuery = useQuery({
         queryKey: ['project-manager', 'local-project-links', projectId, 'existence'],
         queryFn: () => listNgsMolBioProjectLinks(projectId, 1),
@@ -396,7 +435,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
     const collectionContextKey = `${mapContextKey}:${selectedDomainScope}`;
 
     useEffect(() => {
-        if (!rawSummary) return;
+        if (!rawSummary || selectionPending) return;
         setAccumulatedMap((current) => {
             if (!current || current.contextKey !== mapContextKey) {
                 return { contextKey: mapContextKey, nodes: rawSummary.map.nodes, edges: rawSummary.map.edges };
@@ -411,20 +450,20 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 edges: Array.from(edges.values()),
             };
         });
-    }, [mapContextKey, rawSummary]);
+    }, [mapContextKey, rawSummary, selectionPending]);
 
     useEffect(() => {
-        if (!rawSummary) return;
+        if (!rawSummary || selectionPending) return;
         setAccumulatedRuns((current) => {
             if (!current || current.contextKey !== mapContextKey) return { contextKey: mapContextKey, items: rawSummary.runs.items };
             const items = new Map(current.items.map((item) => [item.run_id, item]));
             for (const item of rawSummary.runs.items) items.set(item.run_id, item);
             return { contextKey: mapContextKey, items: Array.from(items.values()) };
         });
-    }, [mapContextKey, rawSummary]);
+    }, [mapContextKey, rawSummary, selectionPending]);
 
     useEffect(() => {
-        if (!rawSummary) return;
+        if (!rawSummary || selectionPending) return;
         const pages = rawSummary.pagination;
         const incoming = {
             results: pages.results.items,
@@ -446,7 +485,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 activity: mergeJsonPages(current.activity, incoming.activity),
             };
         });
-    }, [collectionContextKey, rawSummary]);
+    }, [collectionContextKey, rawSummary, selectionPending]);
 
     const summary = useMemo(() => {
         if (!rawSummary) return undefined;
@@ -512,12 +551,13 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         setDecisionCursor(undefined);
         setDatasetCursor(undefined);
         setActivityCursor(undefined);
-        setInspectorOpen(true);
+        if (window.innerWidth >= 1280) setInspectorOpen(true);
+        if (window.innerWidth < 768) setTreeOpen(false);
     }, [searchParams, setSearchParams, summary]);
 
     const surfaceMutation = useMutation({
         mutationFn: async () => {
-            if (!summary) throw new Error('No validated selection is available.');
+            if (!summary || !selectionReady) throw new Error('No validated selection is available.');
             const surface = summary.selection.canonical_surface ?? await (async () => {
                 const receiptId = summary.selection.canonical_identity.receipt_id;
                 if (typeof receiptId !== 'string') throw new Error('The server did not issue a receipt-backed canonical surface.');
@@ -604,7 +644,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
 
     const runActionMutation = useMutation({
         mutationFn: async ({ action, run }: { action: string; run: ProjectManagerReadModel['runs']['items'][number] }) => {
-            if (!summary) throw new Error('No validated Project context is available.');
+            if (!summary || !selectionReady) throw new Error('No validated Project context is available.');
             const workflowNodeKey = `workflow:${run.workflow_id}`;
             const domainExperimentId = domainExperimentForNode(summary, workflowNodeKey);
             if (action === 'launch_molecular_dynamics') {
@@ -813,6 +853,13 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         },
     });
 
+    const requestRunAction = (action: string, run: ProjectManagerReadModel['runs']['items'][number]) => {
+        // Synchronous lock also covers two clicks before React rerenders.
+        if (runActionLock.current || runActionMutation.isPending || !selectionReady) return;
+        runActionLock.current = true;
+        runActionMutation.mutate({ action, run }, { onSettled: () => { runActionLock.current = false; } });
+    };
+
     const selectFolderRecord = (folder: FolderKind, item: JsonObject) => {
         const id = typeof item.id === 'string' ? item.id : typeof item.resource_id === 'string' ? item.resource_id : null;
         const receiptId = typeof item.receipt_id === 'string' ? item.receipt_id : null;
@@ -860,7 +907,7 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
         return <ProjectManagerErrorState error={globalLinksQuery.error} onRetry={() => void globalLinksQuery.refetch()} />;
     }
 
-    const selectionUnavailable = invalidSelection ? projectManagerErrorMessage(summaryQuery.error) : null;
+    const selectionUnavailable = invalidSelection ? projectManagerErrorMessage(summaryQuery.error) : selectionPending ? 'Validating selected item…' : null;
     const busy = summaryQuery.isFetching || fallbackQuery.isFetching;
     const isStandaloneNativeProject = summary.project.project_scope === 'ngs_molbio_local'
         && globalLinksQuery.isSuccess
@@ -917,11 +964,21 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     {busy && <span role="status" className="text-[10px] font-medium text-accent">Refreshing…</span>}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    {summary.project.project_scope === 'global' && <button type="button" onClick={() => setNewExperimentOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</button>}
-                    <button type="button" onClick={() => setAttachOpen(true)} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
-                    {!isStandaloneNativeProject && <button type="button" onClick={() => setTreeOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{treeOpen ? 'Hide tree' : 'Show tree'}</button>}
-                    {!isStandaloneNativeProject && <button type="button" onClick={() => setInspectorOpen((value) => !value)} className="rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>}
-                    {!isStandaloneNativeProject && summary.allowed_actions.includes('create_global_experiment') && <button type="button" onClick={() => setDialogMode('create_global')} className="rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New Global Experiment</button>}
+                    {summary.project.project_scope === 'global' && <details ref={creationRef} className="relative">
+                        <summary className="cursor-pointer rounded-lg bg-accent px-3 py-2 text-xs font-semibold text-white focus:ring-2 focus:ring-accent">New experiment</summary>
+                        <div className="absolute right-0 z-40 mt-2 w-72 max-w-[85vw] space-y-2 rounded-lg border border-border-primary bg-surface-secondary p-3 shadow-xl">
+                            <button type="button" disabled={!selectionReady} onClick={() => { if (creationRef.current) creationRef.current.open = false; setNewExperimentOpen(true); }} className="w-full rounded-lg p-2 text-left text-sm font-semibold text-content hover:bg-surface">Protein experiment<span className="mt-1 block text-xs font-normal text-content-secondary">Choose a Protein workflow and continue to its setup.</span></button>
+                            {summary.allowed_actions.includes('create_global_experiment') && <button type="button" disabled={!selectionReady} onClick={() => { if (creationRef.current) creationRef.current.open = false; setDialogMode('create_global'); }} className="w-full rounded-lg p-2 text-left text-sm font-semibold text-content hover:bg-surface">Empty experiment group<span className="mt-1 block text-xs font-normal text-content-secondary">Create a Global Experiment, then add its domain experiments.</span></button>}
+                        </div>
+                    </details>}
+                    <button type="button" disabled={!selectionReady} onClick={() => setAttachOpen(true)} className="rounded-lg border border-border-primary px-3 py-2 text-xs font-semibold text-content-secondary focus:ring-2 focus:ring-accent">{isStandaloneNativeProject ? 'Link Project or attach record' : 'Attach existing record'}</button>
+                    {!isStandaloneNativeProject && <details ref={viewRef} className="relative">
+                        <summary className="cursor-pointer rounded-lg border border-border-primary px-3 py-2 text-xs text-content-secondary focus:ring-2 focus:ring-accent">View</summary>
+                        <div className="absolute right-0 z-40 mt-2 w-44 rounded-lg border border-border-primary bg-surface-secondary p-2 shadow-xl">
+                            <button type="button" aria-pressed={treeOpen} onClick={() => { setTreeOpen(!treeOpen); if (!treeOpen && viewportWidth < 768) setInspectorOpen(false); if (viewRef.current) viewRef.current.open = false; }} className="w-full rounded p-2 text-left text-xs text-content-secondary">{treeOpen ? 'Hide tree' : 'Show tree'}</button>
+                            <button type="button" aria-pressed={inspectorOpen} onClick={() => { setInspectorOpen(!inspectorOpen); if (!inspectorOpen && viewportWidth < 768) setTreeOpen(false); if (viewRef.current) viewRef.current.open = false; }} className="w-full rounded p-2 text-left text-xs text-content-secondary">{inspectorOpen ? 'Hide inspector' : 'Show inspector'}</button>
+                        </div>
+                    </details>}
                 </div>
             </header>
 
@@ -939,11 +996,12 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                 className={`relative grid min-h-0 flex-1 grid-cols-1 ${gridClass}`}
                 style={{ '--tree-width': `${treeWidth}px`, '--inspector-width': `${inspectorWidth}px` } as CSSProperties}
             >
+                {overlay && <button type="button" aria-label="Close panel backdrop" onClick={closeDrawer} className="fixed inset-0 z-[65] bg-black/40" />}
                 {projectTreeVisible && (
-                    <div className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
+                    <div ref={overlay === 'tree' ? drawerRef : undefined} role={overlay === 'tree' ? 'dialog' : undefined} aria-modal={overlay === 'tree' || undefined} aria-label={overlay === 'tree' ? 'Project tree drawer' : undefined} className="fixed inset-y-0 left-0 z-[70] w-[min(88vw,25rem)] shadow-2xl md:static md:z-auto md:w-auto md:shadow-none">
                         <ProjectTree
                             nodes={summary.tree.nodes}
-                            selectedNodeKey={summary.selection.node_key}
+                            selectedNodeKey={selectedNodeKey ?? summary.selection.node_key}
                             onSelect={(nodeKey) => {
                                 const node = summary.tree.nodes.find((item) => item.node_key === nodeKey);
                                 if (node) setSelection(node.node_key, node.node_type, node.subject_id);
@@ -953,29 +1011,31 @@ function ProjectWorkspace({ projectId, routeFocusId, routeDomainId }: { projectI
                     </div>
                 )}
                 {projectTreeVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project tree" tabIndex={0} onPointerDown={(event) => startRailResize('tree', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setTreeWidth((value) => Math.max(208, value - 16)); if (event.key === 'ArrowRight') setTreeWidth((value) => Math.min(400, value + 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent md:block" />}
-                <main className="flex min-h-0 min-w-0 flex-col">
+                <main className="flex min-h-0 min-w-0 flex-col overflow-y-auto">
                     <NativeProjectDataPanel summary={summary} stateRevisionId={stateRevisionId} />
                     {!isStandaloneNativeProject && (
                         <>
                             <RelationshipMap
                                 summary={summary}
-                                selectedNodeKey={summary.selection.node_key}
+                                onOpenWorkspace={selectionReady && hasDomainWorkspace(summary) ? openNgsMolBioWorkspace : undefined}
+                                selectedNodeKey={selectedNodeKey ?? summary.selection.node_key}
                                 onSelect={(node: ProjectMapNode) => setSelection(node.node_key, node.node_type, typeof node.canonical_identity.entity_id === 'string' ? node.canonical_identity.entity_id : null)}
                                 onLoadMore={summary.map.next_cursor ? () => setMapCursor(summary.map.next_cursor ?? undefined) : undefined}
                             />
-                            <div className="p-3">
+                            <div className="shrink-0 p-3">
                                 <VirtualFolderPanel folder={folderKind} summary={summary} onLoadMore={loadMoreFolder} onSelectRecord={selectFolderRecord} loading={busy} />
                             </div>
-                            <RunPanel runs={summary.runs.items} selectedNodeKey={summary.selection.node_key} onSelect={inspectExecution} onAction={(action, run) => runActionMutation.mutate({ action, run })} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
+                            <RunPanel runs={summary.runs.items} selectedNodeKey={selectedNodeKey ?? summary.selection.node_key} onSelect={inspectExecution} onAction={requestRunAction} actionsDisabled={!selectionReady} pendingAction={runActionMutation.isPending && runActionMutation.variables ? { runId: runActionMutation.variables.run.run_id, action: runActionMutation.variables.action } : null} onLoadMore={summary.runs.next_cursor ? () => setRunCursor(summary.runs.next_cursor ?? undefined) : undefined} />
                         </>
                     )}
                 </main>
                 {projectInspectorVisible && <div role="separator" aria-orientation="vertical" aria-label="Resize Project inspector" tabIndex={0} onPointerDown={(event) => startRailResize('inspector', event)} onKeyDown={(event) => { if (event.key === 'ArrowLeft') setInspectorWidth((value) => Math.min(520, value + 16)); if (event.key === 'ArrowRight') setInspectorWidth((value) => Math.max(288, value - 16)); }} className="hidden cursor-col-resize bg-border-primary outline-none focus:bg-accent xl:block" />}
                 {projectInspectorVisible && (
-                    <div className="fixed inset-y-0 right-0 z-[70] w-[min(100vw,32rem)] shadow-2xl xl:static xl:z-auto xl:w-auto xl:shadow-none">
+                    <div ref={overlay === 'inspector' ? drawerRef : undefined} role={overlay === 'inspector' ? 'dialog' : undefined} aria-modal={overlay === 'inspector' || undefined} aria-label={overlay === 'inspector' ? 'Project inspector drawer' : undefined} className="fixed inset-y-0 right-0 z-[70] w-[min(92vw,32rem)] shadow-2xl xl:static xl:z-auto xl:w-auto xl:shadow-none">
                         <ProjectInspector
                             summary={summary}
                             busy={busy}
+                            actionsDisabled={!selectionReady}
                             selectionUnavailable={selectionUnavailable}
                             onClose={() => setInspectorOpen(false)}
                             onOpenCanonical={() => surfaceMutation.mutate()}
@@ -1021,7 +1081,7 @@ export function ProjectManager() {
     if (projectId && experimentId && domainId && searchParams.get('workspace') === 'protein') {
         return <ProteinProjectWorkspace projectId={projectId} globalExperimentId={experimentId} domainExperimentId={domainId} />;
     }
-    return projectId ? <ProjectWorkspace projectId={projectId} routeFocusId={experimentId} routeDomainId={domainId} /> : <ProjectsIndex />;
+    return projectId ? <ProjectWorkspace key={projectId} projectId={projectId} routeFocusId={experimentId} routeDomainId={domainId} /> : <ProjectsIndex />;
 }
 
 export default ProjectManager;
