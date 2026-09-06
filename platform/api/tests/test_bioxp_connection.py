@@ -785,7 +785,7 @@ def test_dns_failure_deactivates_and_records_operator_visible_error(tmp_path: Pa
 @pytest.mark.parametrize("lane", ["enqueue", "interrupt"])
 def test_timed_out_dispatched_v2_work_keeps_lane_and_generation_lease_until_remote_exit(tmp_path: Path, lane: str) -> None:
     _, BioXpProfile, _, _ = _load()
-    from services.bioxp.errors import RobotTimeoutError
+    from services.bioxp.errors import ConnectionStateError, RobotTimeoutError
 
     clients: list[FakeRobotClient] = []
     service = _service(
@@ -845,9 +845,10 @@ def test_timed_out_dispatched_v2_work_keeps_lane_and_generation_lease_until_remo
         assert disconnect.done() is False
 
         robot.request_release.set()
-        await second
+        with pytest.raises(ConnectionStateError, match="no robot request was started"):
+            await second
         await disconnect
-        assert len(robot.request_calls) == 2
+        assert len(robot.request_calls) == 1
         assert robot.closed is True
 
     asyncio.run(scenario())
@@ -1181,6 +1182,168 @@ def test_v2_rebind_does_not_wait_for_or_cache_old_generation_read(tmp_path: Path
         assert len(clients[1].request_calls) == 1
         await service.close()
         assert old.closed
+
+    asyncio.run(scenario())
+
+
+class _ObservedLaneLock(asyncio.Lock):
+    """Expose when a real retained request queues behind an occupied lane."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waiting = asyncio.Event()
+
+    async def acquire(self):
+        if self.locked():
+            self.waiting.set()
+        return await super().acquire()
+
+
+def _retained_request(service, lane: str, generation: int):
+    if lane == "enqueue":
+        return service.request_active_v2_enqueue(
+            "invoke_operator_action_v2",
+            expected_generation=generation,
+            json_data={"idempotency_key": "original-request", "expected_generation": generation},
+        )
+    return service.request_active_safety_interrupt(
+        "interrupt_operator_action_v1",
+        expected_generation=generation,
+        path_params={"action_id": "oem.x.stop"},
+        json_data={"idempotency_key": "original-request", "expected_generation": generation},
+    )
+
+
+@pytest.mark.parametrize("lane", ["enqueue", "interrupt"])
+@pytest.mark.parametrize("transition", ["disconnect", "profile", "reconnect"])
+def test_retained_queued_request_rejects_drained_generation(tmp_path: Path, lane: str, transition: str) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import ConnectionStateError
+
+    service = _service(tmp_path, clients := [])
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        old = clients[0]
+        lock = _ObservedLaneLock()
+        setattr(service, "_v2_enqueue_lock" if lane == "enqueue" else "_interrupt_lock", lock)
+        await lock.acquire()
+        request = asyncio.create_task(_retained_request(service, lane, generation))
+        disconnect = None
+        try:
+            await asyncio.wait_for(lock.waiting.wait(), 1)
+            assert service._generation_leases[generation].lease_count == 1
+            if transition == "disconnect":
+                # Acquiring the transition lock after this event proves the
+                # disconnect has marked its generation draining and yielded.
+                entered = asyncio.Event()
+
+                async def disconnect_now():
+                    entered.set()
+                    return await service.disconnect()
+
+                disconnect = asyncio.create_task(disconnect_now())
+                await asyncio.wait_for(entered.wait(), 1)
+                async with service._transition_lock:
+                    assert service.snapshot().active is False
+                assert not disconnect.done()
+            elif transition == "profile":
+                await service.save_profile(BioXpProfile(api_url="https://robot:8123"))
+                await service.connect()
+            else:
+                await service.connect()
+            assert service._generation_leases[generation].state == "DRAINING"
+            assert old.closed is False
+            lock.release()
+            result = (await asyncio.wait_for(asyncio.gather(request, return_exceptions=True), 1))[0]
+            assert old.request_calls == [], "queued request dispatched after its generation drained"
+            assert all(client.request_calls == [] for client in clients[1:]), "request redirected to replacement"
+            assert isinstance(result, ConnectionStateError)
+            assert "no robot request was started" in str(result)
+        finally:
+            if lock.locked():
+                lock.release()
+            await asyncio.gather(request, return_exceptions=True)
+            if disconnect is not None:
+                await asyncio.wait_for(disconnect, 1)
+            await service.close()
+        assert old.closed is True
+        assert generation not in service._generation_leases
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lane", ["enqueue", "interrupt"])
+def test_retained_inflight_timeout_keeps_original_target_and_identity(tmp_path: Path, lane: str) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import RobotTimeoutError
+
+    service = _service(tmp_path, clients := [], v2_enqueue_timeout_seconds=0.05, interrupt_timeout_seconds=0.05)
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        old = clients[0]
+        old.request_started, old.request_release = asyncio.Event(), asyncio.Event()
+        request = asyncio.create_task(_retained_request(service, lane, generation))
+        try:
+            await asyncio.wait_for(old.request_started.wait(), 1)
+            await service.save_profile(BioXpProfile(api_url="https://robot:8123"))
+            current = await service.connect()
+            assert current.generation != generation
+            assert old.closed is False
+            with pytest.raises(RobotTimeoutError) as captured:
+                await request
+            assert captured.value.dispatched is True
+            assert captured.value.dispatch_state == "outcome_ambiguous"
+            assert captured.value.caller_can_retry is False
+            retained = tuple(service._remote_request_tasks)
+            assert len(retained) == 1
+            old.request_release.set()
+            result = (await asyncio.wait_for(asyncio.gather(*retained), 1))[0]
+            assert result["kwargs"]["json_data"] == {
+                "idempotency_key": "original-request", "expected_generation": generation,
+            }
+            assert len(old.request_calls) == 1
+            assert old.target.api_url == "http://robot:8123"
+            assert clients[1].target.api_url == "https://robot:8123"
+            assert clients[1].request_calls == []
+        finally:
+            old.request_release.set()
+            await asyncio.gather(request, return_exceptions=True)
+            await service.close()
+        assert old.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_retained_queued_interrupt_does_not_require_fresh_status(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    service = _service(tmp_path, clients := [], clock=lambda: now)
+
+    async def scenario():
+        nonlocal now
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        now += timedelta(days=1)
+        assert service.snapshot().observation_fresh is False
+        lock = _ObservedLaneLock()
+        service._interrupt_lock = lock
+        await lock.acquire()
+        request = asyncio.create_task(_retained_request(service, "interrupt", generation))
+        try:
+            await asyncio.wait_for(lock.waiting.wait(), 1)
+            lock.release()
+            response = await asyncio.wait_for(request, 1)
+            assert response["route_name"] == "interrupt_operator_action_v1"
+            assert len(clients[0].request_calls) == 1
+        finally:
+            if lock.locked():
+                lock.release()
+            await asyncio.gather(request, return_exceptions=True)
+            await service.close()
 
     asyncio.run(scenario())
 

@@ -580,6 +580,18 @@ class BioXpConnectionService:
         async def owned_request() -> dict[str, Any]:
             try:
                 async with lane_lock:
+                    # Waiting for the lane retains the client, not permission
+                    # to start work after disconnect/replacement. There is no
+                    # await between this target-binding check and dispatch.
+                    if (
+                        lease.state != "OPEN"
+                        or lease.generation != self._generation
+                        or lease.client is not self._client
+                        or self._generation_leases.get(lease.generation) is not lease
+                    ):
+                        raise ConnectionStateError(
+                            "BioXP connection generation changed before dispatch; no robot request was started"
+                        )
                     dispatched.set()
                     self._invalidate_v2_query_cache()
                     return await self._request_client(
