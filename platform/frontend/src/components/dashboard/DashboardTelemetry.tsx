@@ -120,40 +120,38 @@ export function DashboardTelemetry() {
                     )}
                 </div>
 
-                {scope !== 'vast' && (
-                    <div className="flex items-center gap-2">
-                        <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-muted)]">
-                            Panel Size
-                        </span>
-                        <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1">
-                            {TELEMETRY_SIZE_OPTIONS.map((option) => {
-                                const active = telemetrySize === option.value;
-                                return (
-                                    <button
-                                        key={option.value}
-                                        type="button"
-                                        onClick={() => setTelemetrySizePreference(option.value)}
-                                        className={`min-w-9 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                                            active
-                                                ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
-                                                : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
-                                        }`}
-                                        style={active ? {
-                                            backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-tertiary))',
-                                        } : undefined}
-                                        title={option.title}
-                                    >
-                                        {option.label}
-                                    </button>
-                                );
-                            })}
-                        </div>
+                <div className="flex items-center gap-2">
+                    <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-muted)]">
+                        Panel Size
+                    </span>
+                    <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-primary)] p-1">
+                        {TELEMETRY_SIZE_OPTIONS.map((option) => {
+                            const active = telemetrySize === option.value;
+                            return (
+                                <button
+                                    key={option.value}
+                                    type="button"
+                                    onClick={() => setTelemetrySizePreference(option.value)}
+                                    className={`min-w-9 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                                        active
+                                            ? 'border-[var(--accent-primary)] text-[var(--text-primary)]'
+                                            : 'border-[var(--border-primary)] bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:bg-[var(--card-hover)]'
+                                    }`}
+                                    style={active ? {
+                                        backgroundColor: 'color-mix(in srgb, var(--accent-primary) 18%, var(--bg-tertiary))',
+                                    } : undefined}
+                                    title={option.title}
+                                >
+                                    {option.label}
+                                </button>
+                            );
+                        })}
                     </div>
-                )}
+                </div>
             </div>
 
             {scope === 'local' && localTelemetry}
-            {scope === 'vast' && <RemoteGpuTelemetry />}
+            {scope === 'vast' && <RemoteGpuTelemetry dashboardSize={telemetrySize} />}
             {scope === 'combined' && activeVastTarget && (
                 <div className="space-y-5" data-bms-telemetry-combined="true">
                     <section className="space-y-3">
@@ -166,7 +164,7 @@ export function DashboardTelemetry() {
                         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                             Vast · {activeVastLabel}
                         </h2>
-                        <RemoteGpuTelemetry />
+                        <RemoteGpuTelemetry dashboardSize={telemetrySize} />
                     </section>
                 </div>
             )}
