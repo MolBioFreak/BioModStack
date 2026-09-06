@@ -4365,6 +4365,48 @@ class OperatorMigratedOutcomeUnknownReceipt(BaseModel):
     status: Literal["outcome_unknown"]
 
 
+class OperatorLegacyPipetteReceiptTruth(BaseModel):
+    """Recorded truth before semantic-query evidence was added to v1.
+
+    The absent field stays absent, not false/null or inferred from outcome.
+    This closed shape is accepted only by the read-only history projection;
+    current mutation receipts still require PipetteReceiptTruth in full.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    physical_effect_claim_suppressed: Literal[True]
+
+
+class OperatorLegacyHistoryPipetteReceipt(BaseModel):
+    """Closed pre-semantic-query indexed receipt, for history reads only."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    schema_name: Literal["bioxp.pipette.receipt.v1"] = Field(alias="schema")
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    created_at: str = Field(min_length=1, max_length=120)
+    operation: str = Field(min_length=1, max_length=120)
+    requested_inputs: dict[str, JsonValue]
+    effective_inputs: dict[str, JsonValue]
+    result: dict[str, JsonValue]
+    truth: OperatorLegacyPipetteReceiptTruth
+    runtime_binding: dict[str, JsonValue]
+    ownership_epoch: StrictInt
+    source_identity: PipetteReceiptSourceIdentity
+    deployment_identity: PipetteReceiptDeploymentIdentity
+    response: dict[str, JsonValue]
+    stage_receipts: list[dict[str, JsonValue]] = Field(max_length=256)
+    status: str = Field(min_length=1, max_length=80)
+    outcome: str = Field(min_length=1, max_length=2000)
+    controller_acknowledged: StrictBool
+    physical_effect_verified: Literal[False]
+
+
 class OperatorHistoryPipetteReceipt(PipetteReceipt):
     """Indexed pipette receipt with schema-5 history projection fields."""
 
@@ -4442,6 +4484,7 @@ class OperatorActionHistory(BaseModel):
         | OperatorRecordedActionReceipt
         | PipetteReceipt
         | OperatorHistoryPipetteReceipt
+        | OperatorLegacyHistoryPipetteReceipt
         | OperatorLegacyReconciliationReceipt
         | OperatorMigratedOutcomeUnknownReceipt
         | OperatorLegacyUnindexedPipetteReceipt
