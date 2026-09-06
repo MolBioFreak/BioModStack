@@ -22,10 +22,11 @@ const PREFERENCES_STORAGE_KEY = 'bms_infra_live_telemetry_preferences_v1';
 
 test('viewer reads compact incremental server-bucketed telemetry without browser history writes', () => {
     const telemetrySource = readFileSync('src/components/InfraLiveTelemetry.tsx', 'utf8');
+    const plotSource = readFileSync('src/components/telemetryMetricPlot.tsx', 'utf8');
     const historySource = readFileSync('src/components/infraTelemetryHistory.ts', 'utf8');
     const apiSource = readFileSync('src/lib/api.ts', 'utf8');
     assert.doesNotMatch(telemetrySource, /react-plotly\.js|plotly\.js/);
-    assert.match(telemetrySource, /function TimeSeriesPlot[\s\S]*?<svg/);
+    assert.match(plotSource, /function TimeSeriesPlot[\s\S]*?<svg/);
     assert.match(telemetrySource, /fetchTelemetryChartHistory\([\s\S]*?stableStartMs,[\s\S]*?requestEndMs,[\s\S]*?bucketIntervalMs,[\s\S]*?cursor/);
     assert.match(telemetrySource, /resolveTelemetryChartCursor\(/);
     assert.match(telemetrySource, /mergeTelemetryChartHistory\(/);
@@ -68,8 +69,8 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.match(telemetrySource, /Live status unavailable\. Historical charts remain available\./);
     assert.match(telemetrySource, /<HistoricalTelemetryFallback/);
     assert.match(telemetrySource, /Telemetry collection is stale/);
-    assert.match(telemetrySource, /const xMin = xDomain\?\.\[0\]/);
-    assert.match(telemetrySource, /const xMax = xDomain\?\.\[1\]/);
+    assert.match(plotSource, /const xMin = xDomain\?\.\[0\]/);
+    assert.match(plotSource, /const xMax = xDomain\?\.\[1\]/);
     assert.match(telemetrySource, /persistTelemetryPreferences/);
     assert.doesNotMatch(telemetrySource, /persistTelemetryState|appendRetainedTelemetrySample|subscribeSharedTelemetryCollectorState/);
     assert.doesNotMatch(historySource, /bms_infra_live_telemetry_v1|samples: LiveSample\[\]|persistTelemetryState/);

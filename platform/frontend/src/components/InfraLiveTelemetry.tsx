@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { TimeSeriesPlot } from './telemetryMetricPlot';
 import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,7 +28,7 @@ import type {
     TelemetryChartHistoryResponse,
     TelemetryChartPoint,
 } from '../lib/telemetryChart';
-import { resolveCpuFrequencyScaleMhz, resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
+import { resolveCpuPowerScaleWatts } from './infraTelemetryScaling';
 import {
     isTelemetryHistoryFresh,
     isValidPollPreset,
@@ -40,7 +41,6 @@ import {
     resolveTelemetryGapBreakMs,
     resolveTelemetryNominalDomain,
     resolveTelemetryPlotDomain,
-    resolveTelemetryPlotX,
     resolveTelemetryStaleAfterMs,
     resolveTelemetryWindowBounds,
 } from './infraTelemetryHistory';
@@ -72,42 +72,6 @@ const WINDOW_PRESETS: ReadonlyArray<{ value: WindowPreset; label: string }> = [
     { value: 30, label: '30m' },
     { value: 60, label: '1h' },
 ];
-
-
-interface AxisConfig {
-    title: string;
-    color: string;
-    range?: [number, number];
-    suffix?: string;
-    decimals?: number;
-}
-
-interface TimeSeriesLine {
-    x?: Array<string | number | null>;
-    y?: Array<number | null>;
-    customdata?: unknown[];
-    name?: string;
-    mode?: string;
-    line?: {
-        color?: string;
-        width?: number;
-        shape?: string;
-        simplify?: boolean;
-    };
-    hovertemplate?: string;
-}
-
-interface TimeSeriesPlotProps {
-    height: number;
-    samples: LiveSample[];
-    yAxis: AxisConfig;
-    series: TimeSeriesLine[];
-    showXAxisLabels?: boolean;
-    traceType?: 'scatter' | 'scattergl';
-    compact?: boolean;
-    redrawKey?: string | number;
-    xDomain?: [number, number];
-}
 
 
 export interface InfraLiveTelemetryProps {
@@ -232,10 +196,7 @@ function PanelFrame({
     );
 }
 
-const PLOT_GRID = 'var(--chart-grid, var(--border-primary))';
-const PLOT_FONT = 'var(--chart-legend, var(--text-secondary))';
 const PLOT_TICK = 'var(--chart-axis, var(--text-muted))';
-const PLOT_PANEL_BG = 'var(--surface-plot, var(--bg-secondary))';
 
 const UI_ACCENT = 'var(--accent-primary)';
 const UI_SUCCESS = 'var(--success)';
@@ -391,16 +352,6 @@ function buildGapAwareTraceData<T = number>(
     }
 
     return customForSample ? { x, y, customdata } : { x, y };
-}
-
-function getTempBandColor(temp: number | null): string {
-    if (temp == null) return UI_LINK;
-    if (temp < 35) return '#3b82f6';
-    if (temp < 50) return '#22d3ee';
-    if (temp < 65) return '#22c55e';
-    if (temp < 75) return '#eab308';
-    if (temp < 85) return '#f97316';
-    return '#ef4444';
 }
 
 function toPercent(value: number, maxValue: number): number {
@@ -850,175 +801,6 @@ function GpuInlinePowerControl({
     );
 }
 
-function parseSeriesTimestamp(value: string | number | null | undefined): number | null {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-    if (typeof value !== 'string') return null;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-}
-
-function buildTelemetrySvgPath(
-    line: TimeSeriesLine,
-    xMin: number,
-    xMax: number,
-    yMin: number,
-    yMax: number,
-): string {
-    const xValues = line.x ?? [];
-    const yValues = line.y ?? [];
-    const yRange = Math.max(Number.EPSILON, yMax - yMin);
-    let path = '';
-    let drawing = false;
-
-    for (let index = 0; index < Math.min(xValues.length, yValues.length); index += 1) {
-        const timestampMs = parseSeriesTimestamp(xValues[index]);
-        const value = yValues[index];
-        const x = timestampMs == null ? null : resolveTelemetryPlotX(timestampMs, xMin, xMax);
-        if (x == null || value == null || !Number.isFinite(value)) {
-            drawing = false;
-            continue;
-        }
-
-        const y = Math.max(0, Math.min(100, 100 - ((value - yMin) / yRange) * 100));
-        path += `${drawing ? ' L' : ' M'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-        drawing = true;
-    }
-
-    return path;
-}
-
-function formatAxisValue(value: number, axis: AxisConfig): string {
-    const decimals = axis.decimals ?? (Number.isInteger(value) ? 0 : 1);
-    return `${value.toFixed(decimals)}${axis.suffix ?? ''}`;
-}
-
-function TimeSeriesPlot({
-    height,
-    samples,
-    yAxis,
-    series,
-    showXAxisLabels = true,
-    compact = false,
-    xDomain,
-}: TimeSeriesPlotProps) {
-    const firstTimestampMs = samples[0]?.timestampMs ?? Date.now() - 1;
-    const lastTimestampMs = samples[samples.length - 1]?.timestampMs ?? firstTimestampMs + 1;
-    const xMin = xDomain?.[0] ?? Math.min(firstTimestampMs, lastTimestampMs - 1);
-    const xMax = xDomain?.[1] ?? Math.max(lastTimestampMs, firstTimestampMs + 1);
-    const finiteValues = series.flatMap((line) => (line.y ?? []).filter(
-        (value): value is number => value != null && Number.isFinite(value),
-    ));
-    const yMin = yAxis.range?.[0] ?? (finiteValues.length > 0 ? Math.min(...finiteValues) : 0);
-    const computedYMax = yAxis.range?.[1] ?? (finiteValues.length > 0 ? Math.max(...finiteValues) : 1);
-    const yMax = computedYMax > yMin ? computedYMax : yMin + 1;
-    const middleY = yMin + (yMax - yMin) / 2;
-    const legendHeight = compact ? 22 : 26;
-    const xLabelHeight = showXAxisLabels ? 18 : 4;
-
-    return (
-        <div
-            className="relative w-full overflow-hidden rounded-lg border border-[var(--border-primary)]"
-            style={{ height, background: PLOT_PANEL_BG }}
-            role="img"
-            aria-label={`${yAxis.title} telemetry history`}
-            data-bms-telemetry-plot="true"
-        >
-            <div
-                className={`absolute left-11 right-2 top-1 z-10 flex min-w-0 items-center overflow-hidden whitespace-nowrap ${compact ? 'gap-2 text-[9px]' : 'gap-3 text-[10px]'}`}
-                style={{ color: PLOT_FONT }}
-                data-bms-telemetry-legend="true"
-            >
-                {series.map((line, index) => (
-                    <span key={`${line.name ?? 'series'}:${index}`} className="inline-flex min-w-0 items-center gap-1">
-                        <span
-                            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-                            style={{ background: line.line?.color ?? UI_LINK }}
-                        />
-                        <span className="truncate">{line.name ?? `Series ${index + 1}`}</span>
-                    </span>
-                ))}
-            </div>
-
-            <div className="absolute inset-0 min-h-0" data-bms-telemetry-canvas="true">
-            <div
-                className="absolute bottom-1 left-1 top-6 flex w-9 flex-col justify-between text-right text-[9px] tabular-nums"
-                style={{ color: PLOT_TICK }}
-                aria-hidden="true"
-                data-bms-telemetry-axis="true"
-            >
-                <span>{formatAxisValue(yMax, yAxis)}</span>
-                <span>{formatAxisValue(middleY, yAxis)}</span>
-                <span>{formatAxisValue(yMin, yAxis)}</span>
-            </div>
-
-            <div
-                className="absolute left-11 right-2"
-                style={{ top: legendHeight, bottom: xLabelHeight }}
-                data-bms-telemetry-lines="true"
-            >
-                <svg
-                    className="h-full w-full"
-                    viewBox="0 0 1000 100"
-                    preserveAspectRatio="none"
-                    aria-hidden="true"
-                >
-                    {[0, 25, 50, 75, 100].map((y) => (
-                        <line
-                            key={`h:${y}`}
-                            x1="0"
-                            x2="1000"
-                            y1={y}
-                            y2={y}
-                            stroke={PLOT_GRID}
-                            strokeWidth="1"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    ))}
-                    {[0, 200, 400, 600, 800, 1000].map((x) => (
-                        <line
-                            key={`v:${x}`}
-                            x1={x}
-                            x2={x}
-                            y1="0"
-                            y2="100"
-                            stroke={PLOT_GRID}
-                            strokeWidth="1"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    ))}
-                    {series.map((line, index) => {
-                        const path = buildTelemetrySvgPath(line, xMin, xMax, yMin, yMax);
-                        return path ? (
-                            <path
-                                key={`${line.name ?? 'series'}:${index}`}
-                                d={path}
-                                fill="none"
-                                stroke={line.line?.color ?? UI_LINK}
-                                strokeWidth={line.line?.width ?? 1.5}
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                vectorEffect="non-scaling-stroke"
-                            />
-                        ) : null;
-                    })}
-                </svg>
-            </div>
-
-            {showXAxisLabels ? (
-                <div
-                    className="absolute bottom-0 left-11 right-2 flex justify-between text-[9px] tabular-nums"
-                    style={{ color: PLOT_TICK }}
-                    aria-hidden="true"
-                >
-                    <span>{Number.isFinite(xMin) ? formatClock(new Date(xMin).toISOString()) : '--:--:--'}</span>
-                    <span>{Number.isFinite(xMax) ? formatClock(new Date(xMax).toISOString()) : '--:--:--'}</span>
-                </div>
-            ) : null}
-            </div>
-        </div>
-    );
-}
-
 function CpuPanel({
     current,
     samples,
@@ -1042,28 +824,19 @@ function CpuPanel({
     redrawKey: string | number;
     xDomain: [number, number];
 }) {
-    const powerScale = resolveCpuPowerScaleWatts(current, samples);
-    const frequencyScale = resolveCpuFrequencyScaleMhz(current, samples);
-    const tempColor = getTempBandColor(current.temperature);
-    const cpuPowerTelemetry = current.power_telemetry;
-    const scaleSubtitle = [
-        powerScale != null ? `Power scale ${powerScale.toFixed(0)}W` : null,
-        `Freq scale ${(frequencyScale / 1000).toFixed(2)}GHz`,
-    ].filter(Boolean).join(' · ');
-    const cpuPowerSubtitle = cpuPowerTelemetry && !cpuPowerTelemetry.available
-        ? `CPU power n/a: ${cpuPowerTelemetry.message}`
-        : scaleSubtitle;
+    const cpuPowerSubtitle = current.power_telemetry && !current.power_telemetry.available
+        ? `CPU power n/a: ${current.power_telemetry.message}` : undefined;
     const cpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.cpuUtil);
     const cpuFreqTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.cpuFreqMhz, frequencyScale),
+        (sample) => sample.cpuFreqMhz / 1000,
         (sample) => sample.cpuFreqMhz / 1000,
     );
     const cpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => sample.cpuPower == null || powerScale == null ? null : toPercent(sample.cpuPower, powerScale),
+        (sample) => sample.cpuPower,
         (sample) => sample.cpuPower == null ? null : sample.cpuPower,
     );
     const cpuTempTrace = buildGapAwareTraceData(
@@ -1075,11 +848,11 @@ function CpuPanel({
 
     return (
         <PanelFrame title={current.name} subtitle={cpuPowerSubtitle} compact={compact}>
-            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
                     xDomain={xDomain}
@@ -1087,6 +860,7 @@ function CpuPanel({
                         {
                             x: cpuUtilTrace.x,
                             y: cpuUtilTrace.y,
+                            axis: { title: 'CPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             mode: 'lines',
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
                             line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
@@ -1095,6 +869,7 @@ function CpuPanel({
                         {
                             x: cpuFreqTrace.x,
                             y: cpuFreqTrace.y,
+                            axis: { title: 'Frequency', color: PLOT_TICK, suffix: ' GHz' },
                             customdata: cpuFreqTrace.customdata,
                             mode: 'lines',
                             name: legendName('Freq', `${(current.frequency_current_mhz / 1000).toFixed(2)} GHz`),
@@ -1104,6 +879,7 @@ function CpuPanel({
                         {
                             x: cpuPowerTrace.x,
                             y: cpuPowerTrace.y,
+                            axis: { title: 'Package power', color: PLOT_TICK, suffix: ' W' },
                             customdata: cpuPowerTrace.customdata,
                             mode: 'lines',
                             name: legendName('Power', current.power_watts != null ? `${current.power_watts.toFixed(0)}W` : 'n/a'),
@@ -1113,10 +889,11 @@ function CpuPanel({
                         {
                             x: cpuTempTrace.x,
                             y: cpuTempTrace.y,
+                            axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             customdata: cpuTempTrace.customdata,
                             mode: 'lines',
                             name: legendName('Temp', current.temperature != null ? `${current.temperature.toFixed(1)}C` : 'n/a'),
-                            line: { color: tempColor, width: 1.4, shape: 'linear', simplify: false },
+                            line: { color: '#f472b6', width: 1.4, shape: 'linear', simplify: false },
                             hovertemplate: 'Temp %{customdata:.1f} C<extra></extra>',
                         },
                     ]}
@@ -1154,13 +931,13 @@ function RamPanel({
     const ramUsedTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.ramUsed, Math.max(current.total_gb, 1)),
+        (sample) => sample.ramUsed,
         (sample) => sample.ramUsed,
     );
     const ramFreeTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.ramFree, Math.max(current.total_gb, 1)),
+        (sample) => sample.ramFree,
         (sample) => sample.ramFree,
     );
     const ramUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.ramUtil);
@@ -1168,11 +945,11 @@ function RamPanel({
 
     return (
         <PanelFrame title="System Memory" compact={compact}>
-            <div style={{ height: panelHeight ?? (compact ? 270 : 288) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 270 : 288) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 270 : 288)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
                     xDomain={xDomain}
@@ -1180,6 +957,7 @@ function RamPanel({
                         {
                             x: ramUsedTrace.x,
                             y: ramUsedTrace.y,
+                            axis: { title: 'Used memory', color: PLOT_TICK, suffix: ' GB' },
                             customdata: ramUsedTrace.customdata,
                             mode: 'lines',
                             name: legendName('Used', `${current.used_gb.toFixed(1)} GB`),
@@ -1189,6 +967,7 @@ function RamPanel({
                         {
                             x: ramFreeTrace.x,
                             y: ramFreeTrace.y,
+                            axis: { title: 'Available memory', color: PLOT_TICK, suffix: ' GB' },
                             customdata: ramFreeTrace.customdata,
                             mode: 'lines',
                             name: legendName('Free', `${current.available_gb.toFixed(1)} GB`),
@@ -1198,6 +977,7 @@ function RamPanel({
                         {
                             x: ramUtilTrace.x,
                             y: ramUtilTrace.y,
+                            axis: { title: 'RAM utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             mode: 'lines',
                             name: legendName('Util', `${current.utilization.toFixed(1)}%`),
                             line: { color: UI_WARNING, width: 1.4, shape: 'linear', simplify: false },
@@ -1206,6 +986,7 @@ function RamPanel({
                         {
                             x: ramSwapTrace.x,
                             y: ramSwapTrace.y,
+                            axis: { title: 'Swap utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             mode: 'lines',
                             name: legendName('Swap', `${current.swap_percent.toFixed(1)}%`),
                             line: { color: UI_ACCENT, width: 1.4, shape: 'linear', simplify: false },
@@ -1247,19 +1028,17 @@ function GpuPanel({
 }) {
     const totalGb = gpu.memory_total_mb / 1024;
     const currentVramGb = (gpu.memory_used_mb + gpu.reserved_memory_mb) / 1024;
-    const powerLimit = powerControls?.currentLimit ?? (gpu.power_limit_w > 0 ? gpu.power_limit_w : Math.max(gpu.max_power_watts, 1));
-    const tempColor = getTempBandColor(gpu.temperature);
     const gpuUtilTrace = buildGapAwareTraceData(samples, gapBreakMs, (sample) => sample.gpu[gpu.index]?.util ?? null);
     const gpuVramTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.gpu[gpu.index]?.vram ?? 0, Math.max(totalGb, 1)),
+        (sample) => sample.gpu[gpu.index]?.vram ?? null,
         (sample) => sample.gpu[gpu.index]?.vram ?? null,
     );
     const gpuPowerTrace = buildGapAwareTraceData(
         samples,
         gapBreakMs,
-        (sample) => toPercent(sample.gpu[gpu.index]?.power ?? 0, powerLimit),
+        (sample) => sample.gpu[gpu.index]?.power ?? null,
         (sample) => sample.gpu[gpu.index]?.power ?? null,
     );
     const gpuTempTrace = buildGapAwareTraceData(
@@ -1275,11 +1054,11 @@ function GpuPanel({
             {!compact ? <GpuProcessList gpu={gpu} compact={compact} /> : null}
             {compact && !powerControls ? <GpuProcessList gpu={gpu} compact /> : null}
 
-            <div style={{ height: panelHeight ?? (compact ? 240 : 256) }}>
+            <div style={{ minHeight: panelHeight ?? (compact ? 240 : 256) }}>
                 <TimeSeriesPlot
                     height={plotHeight ?? (compact ? 240 : 256)}
                     samples={samples}
-                    yAxis={{ title: 'Scale %', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
+                    yAxis={{ title: 'Metrics', color: PLOT_TICK, range: [0, 100], suffix: '%' }}
                     compact={compact}
                     redrawKey={redrawKey}
                     xDomain={xDomain}
@@ -1287,6 +1066,7 @@ function GpuPanel({
                         {
                             x: gpuUtilTrace.x,
                             y: gpuUtilTrace.y,
+                            axis: { title: 'GPU utilization', color: PLOT_TICK, suffix: ' %', range: [0, 100] },
                             mode: 'lines',
                             name: legendName('Util', `${gpu.utilization.toFixed(0)}%`),
                             line: { color: UI_SUCCESS, width: 1.55, shape: 'linear', simplify: false },
@@ -1295,6 +1075,7 @@ function GpuPanel({
                         {
                             x: gpuVramTrace.x,
                             y: gpuVramTrace.y,
+                            axis: { title: 'VRAM used + reserved', color: PLOT_TICK, suffix: ' GB' },
                             customdata: gpuVramTrace.customdata,
                             mode: 'lines',
                             name: legendName('VRAM', `${currentVramGb.toFixed(1)} / ${totalGb.toFixed(0)} GB`),
@@ -1304,6 +1085,7 @@ function GpuPanel({
                         {
                             x: gpuPowerTrace.x,
                             y: gpuPowerTrace.y,
+                            axis: { title: 'Power draw', color: PLOT_TICK, suffix: ' W' },
                             customdata: gpuPowerTrace.customdata,
                             mode: 'lines',
                             name: legendName('Power', `${gpu.power_draw_w.toFixed(1)}W`),
@@ -1313,10 +1095,11 @@ function GpuPanel({
                         {
                             x: gpuTempTrace.x,
                             y: gpuTempTrace.y,
+                            axis: { title: 'Temperature', color: PLOT_TICK, suffix: ' °C' },
                             customdata: gpuTempTrace.customdata,
                             mode: 'lines',
                             name: legendName('Temp', `${gpu.temperature.toFixed(0)}C`),
-                            line: { color: tempColor, width: 1.4, shape: 'linear', simplify: false },
+                            line: { color: '#f472b6', width: 1.4, shape: 'linear', simplify: false },
                             hovertemplate: 'Temp %{customdata:.0f} C<extra></extra>',
                         },
                     ]}
