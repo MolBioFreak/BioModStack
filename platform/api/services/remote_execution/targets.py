@@ -625,77 +625,17 @@ async def deactivate_target(
 
 
 async def remote_target_telemetry(target: ExecutionTarget) -> dict[str, Any]:
-    observed_at = datetime.utcnow().isoformat() + "Z"
-    if not target_eligible(target):
-        return {"source": "active_vast", "available": False, "target": None, "gpus": [],
-                "error": "Vast inventory is absent, unknown or expired"}
-    connection = RemoteConnection.from_target(target)
-    query = (
-        "index,uuid,name,memory.total,memory.used,utilization.gpu,temperature.gpu,"
-        "power.draw"
-    )
-    try:
-        response = await run_remote(
-            connection,
-            [
-                "nvidia-smi",
-                f"--query-gpu={query}",
-                "--format=csv,noheader,nounits",
-            ],
-            timeout=15,
-        )
-    except RemoteTransportError as exc:
-        return {
-            "source": "active_vast",
-            "available": False,
-            "target": _target_response(target).model_dump(mode="json"),
-            "observed_at": observed_at,
-            "gpus": [],
-            "error": str(exc),
-        }
-    gpus: list[dict[str, Any]] = []
-    for raw_line in response.stdout.splitlines():
-        parts = [part.strip() for part in raw_line.split(",")]
-        if len(parts) != 8:
-            continue
-        try:
-            index = int(parts[0])
-            gpus.append(
-                {
-                    "id": f"{target.id}:gpu:{index}",
-                    "execution_target_id": target.id,
-                    "index": index,
-                    "uuid": parts[1],
-                    "name": parts[2],
-                    "memory_total_mb": int(float(parts[3])),
-                    "memory_used_mb": int(float(parts[4])),
-                    "utilization": float(parts[5]),
-                    "temperature": _optional_float(parts[6]),
-                    "power_draw_w": _optional_float(parts[7]),
-                    "controls": {"fan": False, "power": False},
-                }
-            )
-        except ValueError:
-            continue
-    if not gpus:
-        return {
-            "source": "active_vast",
-            "available": False,
-            "target": _target_response(target).model_dump(mode="json"),
-            "observed_at": observed_at,
-            "gpus": [],
-            "error": "Remote GPU telemetry returned no valid GPU rows",
-        }
-    return {
-        "source": "active_vast",
-        "available": True,
-        "target": _target_response(target).model_dump(mode="json"),
-        "observed_at": observed_at,
-        "gpus": gpus,
-    }
+    """Admission reads only fresh, identity-bound cached VRAM; never polls SSH."""
+    from .telemetry import remote_telemetry
+    sample = remote_telemetry.read(target, include_history=False)
+    if any(gpu.get('memory_total_mb') is None or gpu.get('memory_used_mb') is None
+           or gpu.get('memory_total_mb', 0) <= 0
+           for gpu in sample['gpus']):
+        sample.update(available=False, error='Remote VRAM readings unavailable')
+    return sample
 
 
-async def active_remote_telemetry(session: AsyncSession) -> dict[str, Any]:
+async def active_remote_telemetry(session: AsyncSession, since: str | None = None) -> dict[str, Any]:
     result = await session.execute(
         select(ExecutionTarget).where(
             ExecutionTarget.active.is_(True),
@@ -703,6 +643,5 @@ async def active_remote_telemetry(session: AsyncSession) -> dict[str, Any]:
         )
     )
     target = result.scalar_one_or_none()
-    if target is None or not target_eligible(target):
-        return {"source": "active_vast", "available": False, "target": None, "gpus": []}
-    return await remote_target_telemetry(target)
+    from .telemetry import remote_telemetry
+    return remote_telemetry.read(target, since)

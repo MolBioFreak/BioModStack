@@ -67,5 +67,5 @@ async def deactivate_execution_target(
 
 
 @router.get("/active/telemetry")
-async def execution_target_telemetry(session: AsyncSession = Depends(get_session)):
-    return await active_remote_telemetry(session)
+async def execution_target_telemetry(session: AsyncSession = Depends(get_session), since: str | None = None):
+    return await active_remote_telemetry(session, since)

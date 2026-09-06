@@ -130,6 +130,11 @@ async def lifespan(app: FastAPI):
     vast_inventory_task = asyncio.create_task(
         run_vast_inventory_refresh(async_session, vast_inventory_stop), name="vast-inventory-refresh"
     )
+    from services.remote_execution.telemetry import remote_telemetry
+    remote_telemetry_stop = asyncio.Event()
+    remote_telemetry_task = asyncio.create_task(
+        remote_telemetry.run(async_session, remote_telemetry_stop), name="remote-telemetry"
+    )
     await init_experiment_db()
     await init_molbio_db()
     await init_molbio_ngs_db()
@@ -240,6 +245,8 @@ async def lifespan(app: FastAPI):
     yield
     
     # Cleanup on shutdown
+    remote_telemetry_stop.set()
+    await remote_telemetry_task
     await app.state.attachment_controller.close()
     vast_inventory_stop.set()
     await vast_inventory_task

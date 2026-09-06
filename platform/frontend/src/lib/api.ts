@@ -433,7 +433,20 @@ export interface DiscoveredExecutionTarget {
     started_at: string | null;
 }
 
-export interface RemoteGpuTelemetry {
+export interface RemoteTelemetrySample {
+    sequence?: number;
+    observed_at?: string;
+    available: boolean;
+    gpus: RemoteGpuTelemetry['gpus'];
+    cpu?: { scope?: string; allocated_cores?: number; utilization?: number | null };
+    ram?: { scope?: string; used_bytes?: number | null; limit_bytes?: number | null };
+    disk?: { path?: string; free_bytes?: number | null; total_bytes?: number | null };
+    network?: Array<{ interface: string; rx_bytes_per_second: number | null; tx_bytes_per_second: number | null }>;
+}
+export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> {
+    cursor?: string;
+    reset?: boolean;
+    history?: RemoteTelemetrySample[];
     source: 'active_vast';
     available: boolean;
     target: ExecutionTarget | null;
@@ -443,9 +456,9 @@ export interface RemoteGpuTelemetry {
         index: number;
         uuid: string;
         name: string;
-        utilization: number;
-        memory_used_mb: number;
-        memory_total_mb: number;
+        utilization: number | null;
+        memory_used_mb: number | null;
+        memory_total_mb: number | null;
         temperature: number | null;
         power_draw_w: number | null;
         controls: { fan: false; power: false };
@@ -487,8 +500,8 @@ export const deactivateExecutionTarget = (executionTargetId: string) =>
         `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
     );
 
-export const fetchActiveRemoteGpuTelemetry = () =>
-    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry');
+export const fetchActiveRemoteGpuTelemetry = (since?: string) =>
+    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry', { params: { since } });
 
 export interface CPUPowerTelemetry {
     source: 'rapl' | string;
