@@ -168,6 +168,40 @@ export interface BioXpOperatorDashboardAxis {
     physical_position_verified?: false | null;
 }
 
+export interface BioXpOperatorDashboardXPreparationAttempt {
+    ok: boolean;
+    observed_generation: number;
+    board_lifecycle_generation: number | null;
+    board_preparation_verified: boolean;
+    initialize_without_motion_verified: boolean;
+    board_lifecycle_reused?: boolean;
+    physical_motion: false;
+    motor_output_state: 'unknown';
+    motor_torque_verified: false;
+    receipt: BioXpJsonValue;
+    axis: 'x';
+    source_method?: 'ClassControlInterface.initializeMotorsWithoutMotion' | null;
+    reference_state?: 'desynced' | null;
+    source_anchor: 'ClassControlInterface.initializeMotorsWithoutMotion:3187-3195';
+    source_exact: false;
+    initializer_source_exact: true;
+    literal_switch_mask_writes: [];
+}
+
+export interface BioXpOperatorDashboardXPreparationRejection {
+    ok: false;
+    observed_generation: number;
+    physical_motion: false;
+    blocker: 'ownership_generation_changed_before_preparation';
+    axis: 'x';
+    source_method?: 'ClassControlInterface.initializeMotorsWithoutMotion' | null;
+    reference_state?: 'desynced' | null;
+    source_anchor: 'ClassControlInterface.initializeMotorsWithoutMotion:3187-3195';
+    source_exact: false;
+    initializer_source_exact: true;
+    literal_switch_mask_writes: [];
+}
+
 export interface BioXpOperatorDashboardXAxis {
     status: BioXpOperatorDashboardAxis | null;
     provider: {
@@ -186,6 +220,7 @@ export interface BioXpOperatorDashboardXAxis {
             reference_state?: string;
             generation?: number | null;
             board_lifecycle_generation?: number | null;
+            prepared_receipt?: BioXpOperatorDashboardXPreparationAttempt | BioXpOperatorDashboardXPreparationRejection | null;
             awaiting_observation_receipt_id?: string | null;
             last_failure?: unknown;
             latest_receipt?: Record<string, unknown> | null;
@@ -299,8 +334,21 @@ export interface BioXpOperatorReceiptFailureDetailV2 {
     reference_state: string;
 }
 
+export type BioXpJsonValue = null | boolean | number | string | BioXpJsonValue[] | { [key: string]: BioXpJsonValue };
+
+export interface BioXpOperatorInterruptEvidenceV2 {
+    source_call_completed: boolean | null;
+    source_return_ok: boolean | null;
+    controller_stop_acknowledged: boolean | null;
+    controller_terminal_state_verified: boolean | null;
+    physical_effect_verified: false;
+    persistence_state: string;
+    details: BioXpJsonValue;
+}
+
 export interface BioXpOperatorReceiptV2 {
     schema_version: 'bioxp.operator_action_receipt.v2';
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
     command_id: string;
     action_id: string;
     status: BioXpOperatorReceiptV2Status;
@@ -455,7 +503,7 @@ export interface BioXpOperatorControlCatalogV2 {
     actions: Array<{
         action_id: string;
         request_schema_version: 'bioxp.operator_action_request.v2' | 'bioxp.operator_interrupt_request.v1';
-        response_schema_version: 'bioxp.operator_action_receipt.v2' | 'bioxp.operator_interrupt_receipt.v1';
+        response_schema_version: 'bioxp.operator_action_receipt.v2';
         interrupt: boolean;
         enabled: boolean;
         disabled_reason: string | null;
@@ -791,6 +839,51 @@ export interface BioXpOperatorActionReceipt {
     stage_receipts: Record<string, unknown>[];
 }
 
+export interface BioXpOperatorSourceIdentity {
+    robot_identity: string;
+    release_id: string;
+    source_manifest_sha256: string;
+    source_aggregate_sha256: string;
+    release_verified: boolean;
+    registry_sha256: string;
+    evidence_lock_sha256: string;
+    evidence_lock_identity_verified: boolean;
+}
+
+export interface BioXpOperatorRecordedActionReceipt extends Omit<BioXpOperatorActionReceipt, 'status'> {
+    status: BioXpOperatorActionReceipt['status'] | 'outcome_unknown';
+    completion_ambiguous: boolean;
+    completion_verified: boolean;
+    delivery_verified: boolean;
+    hardware_postcondition_verified: boolean;
+    hardware_precondition_verified: boolean;
+    reconciliation_required: boolean;
+    retry_forbidden: boolean;
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+}
+
+export interface BioXpOperatorLiveSourceActionReceipt extends BioXpOperatorActionReceipt {
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+}
+
+export interface BioXpOperatorLiveTimeoutActionReceipt extends Omit<BioXpOperatorActionReceipt, 'status'> {
+    status: 'outcome_unknown';
+    interrupt_evidence?: BioXpOperatorInterruptEvidenceV2 | null;
+    source_identity: BioXpOperatorSourceIdentity;
+    automatic_retry: false;
+    physical_outcome: 'ambiguous';
+    completion_ambiguous: true;
+    reconciliation_required: true;
+    retry_forbidden: true;
+}
+
+export type BioXpOperatorLiveActionReceipt = BioXpOperatorActionReceipt
+    | BioXpOperatorLiveSourceActionReceipt
+    | BioXpOperatorRecordedActionReceipt
+    | BioXpOperatorLiveTimeoutActionReceipt;
+
 export interface BioXpOperatorLegacyReconciliationReceipt {
     action_id: string;
     automatic_retry: false;
@@ -835,7 +928,7 @@ export interface BioXpOperatorLegacyUnindexedPipetteReceipt {
 }
 
 export type BioXpOperatorHistoryReceipt =
-    | BioXpOperatorActionReceipt
+    | BioXpOperatorLiveActionReceipt
     | BioXpPipetteReceipt
     | BioXpOperatorLegacyReconciliationReceipt
     | BioXpOperatorLegacyUnindexedPipetteReceipt;
@@ -1249,10 +1342,14 @@ function nestedOperatorDetail(value: unknown, depth = 0): string | null {
     }
     if (typeof value !== 'object') return null;
     const record = value as Record<string, unknown>;
-    for (const key of ['detail', 'error', 'message', 'reason', 'block_reason', 'startup_error']) {
+    for (const key of ['detail', 'message', 'reason', 'block_reason', 'startup_error', 'error']) {
         if (key in record) {
             const found = nestedOperatorDetail(record[key], depth + 1);
-            if (found) return found;
+            if (found) {
+                const code = typeof record.code === 'string' ? record.code
+                    : typeof record.error === 'string' ? record.error : null;
+                return code && code !== found ? boundedOperatorText(`${found} (${code})`) : found;
+            }
         }
     }
     return null;
@@ -1538,17 +1635,19 @@ export const bioXpPostDispatchCommandIdentity = (error: unknown): BioXpPostDispa
 export const useInterruptBioXpOperatorActionV1 = () => {
     const queryClient = useQueryClient();
     return useMutation({
-        mutationFn: async ({ actionId, request }: { actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all'; request: BioXpOperatorInterruptV1Request }) => {
+        mutationFn: async ({ actionId, request }: { actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.abort_all'; request: BioXpOperatorInterruptV1Request }) => {
             assertCanonicalBoardEpochMap(request.observed_board_epoch_by_board);
             return (
-                await api.post<BioXpOperatorInterruptReceiptV1>(
+                await api.post<BioXpOperatorReceiptV2>(
                     `/api/bioxp/operator-controls/v2/interrupts/${encodeURIComponent(actionId)}`,
                     request,
                 )
             ).data;
         },
-        onSuccess: () => {
+        onSettled: () => {
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
+            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
+            void queryClient.invalidateQueries({ queryKey: operatorHistoryKey });
         },
     });
 };
@@ -2320,7 +2419,7 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 
-const updateBioXpHistoryCaches = (queryClient: QueryClient, generation: number, receipt: BioXpOperatorActionReceipt) => {
+const updateBioXpHistoryCaches = (queryClient: QueryClient, generation: number, receipt: BioXpOperatorLiveActionReceipt) => {
     for (const query of queryClient.getQueryCache().findAll({ queryKey: [...operatorHistoryKey, generation] })) {
         const limit = query.queryKey[operatorHistoryKey.length + 1];
         if (typeof limit !== 'number') continue;
@@ -2340,7 +2439,7 @@ export const useInvokeBioXpOperatorAction = () => {
             ownershipGeneration: number;
             inputs: Record<string, unknown>;
         }) => (
-            await api.post<BioXpOperatorActionReceipt>(
+            await api.post<BioXpOperatorLiveActionReceipt>(
                 `/api/bioxp/operator-controls/actions/${encodeURIComponent(actionId)}`,
                 {
                     ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),
@@ -2351,6 +2450,9 @@ export const useInvokeBioXpOperatorAction = () => {
         ).data,
         onMutate: async () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
+        },
+        onSettled: () => {
+            void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
         onSuccess: (receipt, variables) => {
             updateBioXpHistoryCaches(queryClient, variables.connectionGeneration, receipt);
@@ -2372,7 +2474,7 @@ export const useAssessBioXpOperatorAction = () => {
             verdict: 'pass' | 'fail';
             note: string;
         }) => (
-            await api.post<BioXpOperatorActionReceipt>(
+            await api.post<BioXpOperatorLiveActionReceipt>(
                 `/api/bioxp/operator-controls/receipts/${encodeURIComponent(commandId)}/assessment`,
                 {
                     ...bioXpOperatorGenerationPayload(connectionGeneration, ownershipGeneration),

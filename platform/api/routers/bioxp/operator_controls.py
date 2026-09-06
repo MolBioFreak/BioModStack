@@ -5,13 +5,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTimeoutError, RobotTransportError
 from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionInvokeRequest,
-    OperatorActionReceipt,
+    OperatorLiveActionReceipt,
     OperatorAdmission,
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
@@ -28,7 +28,6 @@ from services.bioxp.operator_models import (
     OperatorMoveXYInputsV2,
     OperatorDeckMoveInputsV1,
     OperatorInterruptRequestV1,
-    OperatorInterruptReceiptV1,
     OperatorMethodRequestV1,
     OperatorMethodV1,
     OperatorYMoveAbsoluteInputsV2,
@@ -71,6 +70,16 @@ from services.bioxp.runtime import BioXpRuntime
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter()
+
+
+def _validate_live_action_receipt(payload: Any) -> OperatorLiveActionReceipt:
+    try:
+        return TypeAdapter(OperatorLiveActionReceipt).validate_python(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
 
 
 def _is_exact_xz_action(action_id: str) -> bool:
@@ -274,7 +283,7 @@ def _resolve_action_quarantine(action_id: str) -> str | None:
     # transaction is still holding the robot's provider-state lock. The robot
     # invocation still enforces the connection and ownership generations and
     # dispatches only the finite X/Z stop and aggregate-abort actions.
-    if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort", "oem.y.stop"}:
+    if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.y.stop"}:
         return None
     # The action-ID quarantine registry is the local authority for these two
     # routes. The robot admission request below still enforces both connection
@@ -515,6 +524,7 @@ def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
             "command_id": command_id,
             "status_path": status_path,
             "outcome": "uncertain",
+            "message": "Command dispatched but receipt validation failed. Outcome unknown; do not resubmit.",
             "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
             "reconciliation": "Poll the command receipt until terminal; if unavailable, require operator reconciliation.",
             "robot_evidence": payload,
@@ -597,7 +607,7 @@ async def invoke_operator_action_v2(
 
 @router.post(
     "/operator-controls/v2/interrupts/{action_id}",
-    response_model=OperatorInterruptReceiptV1,
+    response_model=OperatorActionReceiptV2,
     status_code=200,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
@@ -605,8 +615,8 @@ async def interrupt_operator_action_v1(
     action_id: str,
     request: OperatorInterruptRequestV1,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorInterruptReceiptV1:
-    if action_id not in {"oem.x.stop", "oem.y.stop", "oem.z.stop", "oem.z.abort", "oem.abort_all"}:
+) -> OperatorActionReceiptV2:
+    if action_id not in {"oem.x.stop", "oem.y.stop", "oem.z.stop", "oem.abort_all"}:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 interrupt action")
     try:
         payload = await runtime.connection.request_active_safety_interrupt(
@@ -617,9 +627,23 @@ async def interrupt_operator_action_v1(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorInterruptReceiptV1, payload)
+    try:
+        receipt = OperatorActionReceiptV2.model_validate(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail={
+            "error": "post_dispatch_receipt_validation_failed",
+            "message": "Interrupt request sent; receipt invalid. Physical outcome unknown. Do not resubmit.",
+            "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
+            "robot_evidence": payload,
+        }) from exc
     if receipt.action_id != action_id:
-        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched interrupt receipt")
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty
+        raise HTTPException(status_code=502, detail="Interrupt request sent; receipt identity mismatched. Physical outcome unknown. Do not resubmit.")
     return receipt
 
 
@@ -917,14 +941,16 @@ async def operator_action_admission(
 
 @router.post(
     "/operator-controls/actions/{action_id}",
-    response_model=OperatorActionReceipt,
+    response_model=OperatorLiveActionReceipt,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
 async def invoke_operator_action(
     action_id: str,
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
+    if action_id == "oem.z.abort":
+        raise HTTPException(status_code=410, detail="oem.z.abort is retired; use oem.abort_all")
     quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
@@ -934,7 +960,7 @@ async def invoke_operator_action(
         "inputs": request.inputs,
     }
     try:
-        if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort", "oem.y.stop"}:
+        if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.y.stop"}:
             payload = await runtime.connection.request_active_safety_interrupt(
                 "invoke_operator_action",
                 expected_generation=request.expected_connection_generation,
@@ -958,7 +984,7 @@ async def invoke_operator_action(
             )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.action_id != action_id or receipt.idempotency_key != request.idempotency_key:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched operator-action receipt")
     return receipt
@@ -982,11 +1008,11 @@ async def operator_action_history(
     return _validate(OperatorActionHistory, payload)
 
 
-@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorActionReceipt)
+@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorLiveActionReceipt)
 async def operator_action_receipt(
     command_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
     snapshot = runtime.connection.snapshot()
     try:
         payload = await runtime.connection.request_active_query(
@@ -997,7 +1023,7 @@ async def operator_action_receipt(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched command receipt")
     return receipt
@@ -1005,14 +1031,14 @@ async def operator_action_receipt(
 
 @router.post(
     "/operator-controls/receipts/{command_id}/assessment",
-    response_model=OperatorActionReceipt,
+    response_model=OperatorLiveActionReceipt,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
 async def assess_operator_action(
     command_id: str,
     request: OperatorAssessmentRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
     try:
         payload = await runtime.connection.request_active(
             "assess_operator_action",
@@ -1028,7 +1054,7 @@ async def assess_operator_action(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched assessed receipt")
     return receipt

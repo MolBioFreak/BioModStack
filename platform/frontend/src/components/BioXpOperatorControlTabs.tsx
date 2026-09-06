@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import {
-    type BioXpOperatorActionReceipt,
+    type BioXpOperatorLiveActionReceipt,
     type BioXpOperatorActionSpec,
     type BioXpOperatorHistoryReceipt,
     bioXpErrorText,
@@ -165,7 +165,7 @@ function ReceiptCard({ receipt }: { receipt: BioXpOperatorHistoryReceipt }) {
     );
 }
 
-function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): receipt is BioXpOperatorActionReceipt {
+function isCurrentActionReceipt(receipt: BioXpOperatorHistoryReceipt): receipt is BioXpOperatorLiveActionReceipt {
     return 'schema_version' in receipt && receipt.schema_version === 'bioxp.operator_action_receipt.v1';
 }
 

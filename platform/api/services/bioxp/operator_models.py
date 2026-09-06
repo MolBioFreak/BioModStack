@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, StrictBool, StrictFloat, StrictInt, field_validator, model_validator
 
@@ -840,7 +840,10 @@ class OperatorDashboardXPreparationRejection(BaseModel):
     blocker: Literal["ownership_generation_changed_before_preparation"]
     axis: Literal["x"]
     source_anchor: Literal["ClassControlInterface.initializeMotorsWithoutMotion:3187-3195"]
-    source_exact: Literal[True]
+    source_exact: Literal[False]
+    initializer_source_exact: Literal[True]
+    source_method: Literal["ClassControlInterface.initializeMotorsWithoutMotion"] | None = None
+    reference_state: Literal["desynced"] | None = None
     literal_switch_mask_writes: list[StrictInt] = Field(max_length=0)
 
 
@@ -858,7 +861,10 @@ class OperatorDashboardXPreparationAttempt(BaseModel):
     receipt: OperatorDashboardXPreparationEvidence | OperatorDashboardXOmissionMarker
     axis: Literal["x"]
     source_anchor: Literal["ClassControlInterface.initializeMotorsWithoutMotion:3187-3195"]
-    source_exact: Literal[True]
+    source_exact: Literal[False]
+    initializer_source_exact: Literal[True]
+    source_method: Literal["ClassControlInterface.initializeMotorsWithoutMotion"] | None = None
+    reference_state: Literal["desynced"] | None = None
     literal_switch_mask_writes: list[StrictInt] = Field(max_length=0)
 
 
@@ -2002,10 +2008,120 @@ class OperatorDashboardXAggregateAbortFailure(BaseModel):
         return self
 
 
+class OperatorAggregateStopComponentV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    component: Literal["x", "y", "z", "g", "door"]
+    board: StrictInt
+    motor: StrictInt
+    status: Literal["stopped", "failed"]
+    delivery_attempted: Literal[True]
+    stop_acknowledged: StrictBool
+    zero_speed_verified: StrictBool
+    terminal_speed: StrictInt | None
+    applicable: Literal[True]
+    stop: JsonValue
+    terminal_readback: JsonValue
+    source_anchor: Literal["ClassMotor.StopMotor line 161+"]
+
+
+class OperatorAggregateAbsentComponentV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    component: Literal["x", "y", "z", "g", "door"]
+    board: StrictInt
+    motor: StrictInt
+    status: Literal["not_present_by_authority"]
+    delivery_attempted: Literal[False]
+    stop_acknowledged: Literal[False]
+    zero_speed_verified: Literal[False]
+    applicable: Literal[False]
+    authority: OperatorDashboardXControllerAuthority
+
+
+class OperatorPhysicalAggregateStopV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["bioxp.physical_aggregate_stop.v1"]
+    ok: StrictBool
+    state: Literal["stopped", "failed_ambiguous"]
+    machine_serial: Literal[206]
+    controller_evidence: OperatorDashboardXControllerAuthority
+    components: list[OperatorAggregateStopComponentV1 | OperatorAggregateAbsentComponentV1]
+    stage_receipts: list[OperatorAggregateStopComponentV1 | OperatorAggregateAbsentComponentV1]
+    delivery_attempted: StrictBool
+    oem_24v_latch: JsonValue
+    abort_latch_completed: StrictBool | None = None
+    controller_terminal_state_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    physical_effect_verification_required: Literal[True]
+    source_anchors: list[str]
+
+
+class OperatorDashboardXSourceStopResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    axis: Literal["x"]
+    intent: Literal["stop"]
+    source_call_completed: StrictBool
+    source_return_ok: StrictBool
+    controller_command_acknowledged: StrictBool
+    controller_terminal_state_verified: Literal[False]
+    timeout_s_omitted_by_source: StrictFloat
+    physical_motion: Literal[False]
+    physical_effect_verified: Literal[False]
+    failure: Literal["x_stop_source_return_failure", "x_stop_source_call_failed"] | None
+    source_noop: Literal["board_null", "board_not_initialized"] | None = None
+    stop: JsonValue | None = None
+    wait: None = None
+    source_return_code: StrictInt | None = None
+    interrupt_epoch: StrictInt | None = Field(default=None, ge=0)
+    interrupted_command_ids: list[str] | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def bind_source_result(self):
+        if self.ok != self.source_return_ok or (self.failure is None) != self.ok:
+            raise ValueError("X stop success must reflect the source return, not controller/physical proof")
+        if self.source_noop is None and not {"stop", "wait", "source_return_code"} <= self.model_fields_set:
+            raise ValueError("issued X source stop requires its actual leaf return evidence")
+        if self.source_noop is not None and (self.stop is not None or self.source_return_code is not None):
+            raise ValueError("source no-op cannot invent issued-stop evidence")
+        if (self.interrupt_epoch is None) != (self.interrupted_command_ids is None):
+            raise ValueError("X source stop interrupt overlay must be complete")
+        return self
+
+
+class OperatorDashboardXSourceAggregateAbortResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    axis_context: Literal["x"]
+    intent: Literal["aggregate_oem_abort"]
+    physical_scope: Literal["aggregate_oem_all_present_boards"]
+    x_only: Literal[False]
+    logical_abort: OperatorPhysicalAggregateStopV1 | OperatorDashboardXOmissionMarker
+    x_terminal_stop: None
+    reference_desync: OperatorDashboardXReferenceAuthorityEffect | None
+    source_call_completed: StrictBool
+    source_return_ok: StrictBool
+    controller_command_acknowledged: StrictBool
+    controller_terminal_state_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    failure: Literal["x_abort_source_return_failure", "x_abort_source_call_failed"] | None
+    interrupt_epoch: StrictInt | None = Field(default=None, ge=0)
+    interrupted_command_ids: list[str] | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def bind_source_result(self):
+        if self.ok != self.source_return_ok or (self.failure is None) != self.ok:
+            raise ValueError("aggregate source return and failure disagree")
+        if (self.interrupt_epoch is None) != (self.interrupted_command_ids is None):
+            raise ValueError("X source abort interrupt overlay must be complete")
+        return self
+
+
 class OperatorDashboardXInterruptResult(
     RootModel[
         OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXInterruptExceptionResult
         | OperatorDashboardXInterruptNonMappingResult
         | OperatorDashboardXOmissionMarker
@@ -2047,6 +2163,8 @@ class OperatorDashboardXSafetyInterruptReceipt(BaseModel):
                 expected = OperatorDashboardXInterruptExceptionResult
             elif raw_result.get("failure") in {"x_stop_result_not_mapping", "x_abort_result_not_mapping"}:
                 expected = OperatorDashboardXInterruptNonMappingResult
+            elif "source_call_completed" in raw_result:
+                expected = OperatorDashboardXSourceStopResult if intent == "stop" else OperatorDashboardXSourceAggregateAbortResult
             else:
                 expected = OperatorDashboardXStopFailure if intent == "stop" else OperatorDashboardXAggregateAbortFailure
             value = dict(value)
@@ -2056,11 +2174,11 @@ class OperatorDashboardXSafetyInterruptReceipt(BaseModel):
     @model_validator(mode="after")
     def bind_status_and_intent(self):
         result = self.result.root
-        if isinstance(result, OperatorDashboardXStopFailure) and self.intent != "stop":
+        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXSourceStopResult)) and self.intent != "stop":
             raise ValueError("stop result requires stop interrupt intent")
-        if isinstance(result, OperatorDashboardXAggregateAbortFailure) and self.intent != "abort":
+        if isinstance(result, (OperatorDashboardXAggregateAbortFailure, OperatorDashboardXSourceAggregateAbortResult)) and self.intent != "abort":
             raise ValueError("abort result requires abort interrupt intent")
-        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXAggregateAbortFailure)):
+        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXAggregateAbortFailure, OperatorDashboardXSourceStopResult, OperatorDashboardXSourceAggregateAbortResult)):
             succeeded = result.ok is True
             if self.status != ("completed" if succeeded else "failed"):
                 raise ValueError("interrupt receipt status does not match result")
@@ -2969,6 +3087,8 @@ class OperatorDashboardXPrimitiveOperationResult(
         | OperatorDashboardXStartupHomeFailure
         | OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXAbsolutePositionUnavailable
         | OperatorDashboardXAccelerationSetupFailure
         | OperatorDashboardXAbsoluteNoopFailure
@@ -3018,6 +3138,8 @@ class OperatorDashboardXLifecycleLastFailure(
         | OperatorDashboardXStartupHomeFailure
         | OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXAbsolutePositionUnavailable
         | OperatorDashboardXAccelerationSetupFailure
         | OperatorDashboardXAbsoluteNoopFailure
@@ -4073,7 +4195,10 @@ class OperatorAssessmentRequest(BaseModel):
     note: str = Field(min_length=1, max_length=4000)
 
 
-class OperatorActionReceipt(BaseModel):
+ReceiptStatusT = TypeVar("ReceiptStatusT", bound=str)
+
+
+class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     model_config = ConfigDict(extra="forbid", strict=True)
     transport_exchanges: list[OperatorTransportExchangeV2] | None = Field(
         default=None, exclude_if=lambda value: value is None,
@@ -4093,7 +4218,7 @@ class OperatorActionReceipt(BaseModel):
     action_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.-]*$")
     kind: ActionKind
     safety_class: ActionSafety
-    status: ActionStatus
+    status: ReceiptStatusT
     idempotency_key: str = Field(min_length=8, max_length=128)
     idempotency_replay_enabled: StrictBool = True
     ownership_generation: StrictInt = Field(ge=0)
@@ -4303,6 +4428,10 @@ class OperatorActionReceipt(BaseModel):
         return self
 
 
+class OperatorActionReceipt(OperatorActionReceiptFields[ActionStatus]):
+    """Original strict v1 receipt; linked authority status remains unchanged."""
+
+
 class OperatorLegacyReconciliationReceipt(BaseModel):
     """Known schema-2 command row retained by the v1 history projection."""
 
@@ -4477,12 +4606,46 @@ class OperatorHistorySourceIdentity(BaseModel):
     source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
-class OperatorRecordedActionReceipt(OperatorActionReceipt):
+class OperatorInterruptEvidenceV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_call_completed: StrictBool | None
+    source_return_ok: StrictBool | None
+    controller_stop_acknowledged: StrictBool | None
+    controller_terminal_state_verified: StrictBool | None
+    physical_effect_verified: Literal[False]
+    persistence_state: str = Field(min_length=1, max_length=160)
+    details: JsonValue
+
+
+class OperatorRecordedActionReceipt(OperatorActionReceiptFields[ActionStatus | Literal["outcome_unknown"]]):
     """Legacy ledger evidence extension; never used for mutation receipts.
 
     Require the complete observed extension rather than defaulting missing
     evidence, dropping producer fields, or deriving authority from status.
     """
+
+    status: ActionStatus | Literal["outcome_unknown"]
+    completion_ambiguous: StrictBool
+    completion_verified: StrictBool
+    delivery_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    reconciliation_required: StrictBool
+    retry_forbidden: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveSourceActionReceipt(OperatorActionReceipt):
+    """Persisted admission/exception producer: source identity, no outcome extension."""
+
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveCompletedActionReceipt(OperatorActionReceiptFields[ActionStatus | Literal["outcome_unknown"]]):
+    """The invoke_action normal-return producer, including its entire truth extension."""
 
     completion_ambiguous: StrictBool
     completion_verified: StrictBool
@@ -4491,7 +4654,28 @@ class OperatorRecordedActionReceipt(OperatorActionReceipt):
     hardware_precondition_verified: StrictBool
     reconciliation_required: StrictBool
     retry_forbidden: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
     source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveTimeoutActionReceipt(OperatorActionReceiptFields[Literal["outcome_unknown"]]):
+    """The invoke_action TimeoutError producer; no fabricated completion fields."""
+
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+    automatic_retry: Literal[False]
+    physical_outcome: Literal["ambiguous"]
+    completion_ambiguous: Literal[True]
+    reconciliation_required: Literal[True]
+    retry_forbidden: Literal[True]
+
+
+OperatorLiveActionReceipt = (
+    OperatorActionReceipt
+    | OperatorLiveSourceActionReceipt
+    | OperatorLiveCompletedActionReceipt
+    | OperatorLiveTimeoutActionReceipt
+)
 
 
 class OperatorActionHistory(BaseModel):
@@ -4500,6 +4684,8 @@ class OperatorActionHistory(BaseModel):
     receipts: list[
         OperatorActionReceipt
         | OperatorRecordedActionReceipt
+        | OperatorLiveSourceActionReceipt
+        | OperatorLiveTimeoutActionReceipt
         | PipetteReceipt
         | OperatorHistoryPipetteReceipt
         | OperatorLegacyHistoryPipetteReceipt
@@ -4921,6 +5107,7 @@ class OperatorActionReceiptV2(BaseModel):
     terminal_receipt_id: str | None
     completion_class: str | None
     physical_effect_verified: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
     error: OperatorReceiptErrorV2 | None
     transport_exchanges: list[OperatorTransportExchangeV2] = Field(default_factory=list)
     transport_retention_errors: list[OperatorTransportRetentionErrorV2] = Field(default_factory=list)
@@ -5193,10 +5380,7 @@ class OperatorActionSpecV2(BaseModel):
         "bioxp.operator_action_request.v2",
         "bioxp.operator_interrupt_request.v1",
     ]
-    response_schema_version: Literal[
-        "bioxp.operator_action_receipt.v2",
-        "bioxp.operator_interrupt_receipt.v1",
-    ]
+    response_schema_version: Literal["bioxp.operator_action_receipt.v2"]
     interrupt: StrictBool
     enabled: StrictBool
     disabled_reason: str | None
@@ -5213,11 +5397,7 @@ class OperatorActionSpecV2(BaseModel):
             if self.interrupt
             else "bioxp.operator_action_request.v2"
         )
-        expected_response = (
-            "bioxp.operator_interrupt_receipt.v1"
-            if self.interrupt
-            else "bioxp.operator_action_receipt.v2"
-        )
+        expected_response = "bioxp.operator_action_receipt.v2"
         if self.request_schema_version != expected_request or self.response_schema_version != expected_response:
             raise ValueError("catalog request/response schemas do not match interrupt classification")
         deck_fields = (
