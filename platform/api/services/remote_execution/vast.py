@@ -49,15 +49,17 @@ def _datetime(value: Any) -> datetime | None:
 
 
 def _instances(payload: Any) -> list[dict[str, Any]]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise VastInventoryError("Vast inventory success is not confirmed")
+    value = payload.get("instances")
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise VastInventoryError("Vast returned an invalid instance inventory")
-    for key in ("instances", "offers", "results"):
-        value = payload.get(key)
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    raise VastInventoryError("Vast returned no instance inventory array")
+    if payload.get("next_token") not in (None, "") or payload.get("has_more", False) is not False:
+        raise VastInventoryError("Vast inventory is incomplete; pagination is not supported")
+    for key in ("total_instances", "instances_found"):
+        if key in payload and (type(payload[key]) is not int or payload[key] != len(value)):
+            raise VastInventoryError("Vast inventory count does not confirm completeness")
+    return value
 
 
 def _valid_port(value: Any) -> int | None:
@@ -94,8 +96,8 @@ def _ssh_endpoint(item: dict[str, Any]) -> tuple[str | None, int | None]:
 
 def _normalize(item: dict[str, Any]) -> DiscoveredExecutionTarget:
     raw_id = item.get("id") or item.get("instance_id") or item.get("contract_id")
-    if raw_id is None:
-        raise VastInventoryError("Vast instance is missing its provider identity")
+    if type(raw_id) not in (str, int) or not str(raw_id).strip():
+        raise VastInventoryError("Vast instance is missing a valid provider identity")
     provider_state = str(
         item.get("actual_status") or item.get("status") or item.get("state") or "unknown"
     ).strip().lower()
@@ -164,12 +166,13 @@ def _fetch_owned_instances() -> ExecutionTargetInventoryResponse:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VastInventoryError("Vast returned invalid JSON") from exc
-    normalized: list[DiscoveredExecutionTarget] = []
-    for item in _instances(payload):
-        try:
-            normalized.append(_normalize(item))
-        except VastInventoryError:
-            continue
+    try:
+        normalized = [_normalize(item) for item in _instances(payload)]
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise VastInventoryError("Vast inventory contains malformed entries") from exc
+    identities = [item.provider_instance_id for item in normalized]
+    if len(identities) != len(set(identities)):
+        raise VastInventoryError("Vast inventory contains duplicate identities")
     return ExecutionTargetInventoryResponse(
         provider="vast",
         available=True,

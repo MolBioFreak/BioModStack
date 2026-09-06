@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExecutionTargetPicker } from '../../src/components/ExecutionTargetPicker';
 import { InfraLiveTelemetry } from '../../src/components/InfraLiveTelemetry';
@@ -127,6 +127,10 @@ const hardwareDiscovery = {
     timestamp: '2026-09-01T12:00:00Z',
 };
 
+beforeEach(() => {
+    api.defaults.adapter = async () => { throw new Error('offline test dependency'); };
+});
+
 afterEach(() => {
     document.body.replaceChildren();
     window.sessionStorage.clear();
@@ -134,6 +138,43 @@ afterEach(() => {
 });
 
 describe('remote execution operator surfaces', () => {
+    it.each([true, false])('shows current empty or unknown inventory and clears saved placement on Dashboard (available=%s)', async (available) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, readyTarget.id);
+        api.defaults.adapter = async (config) => {
+            if (config.url === '/api/execution-targets') {
+                if (!available) throw new Error('Inventory unknown');
+                return response([]);
+            }
+            if (config.url === '/api/execution-targets/providers/vast/refresh') {
+                return response({ provider: 'vast', available, credential_configured: available, message: 'fixture inventory', instances: [] });
+            }
+            throw new Error('offline dependency');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        await act(async () => {
+            root.render(<QueryClientProvider client={client}><InfraLiveTelemetry variant="dashboard" /></QueryClientProvider>);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        const button = [...container.querySelectorAll('button')].find((node) => node.textContent === 'Discover running Vast');
+        await act(async () => {
+            button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        expect(window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY)).toBeNull();
+        expect(container.textContent).not.toContain('Remote 4090');
+        expect(container.textContent).toContain(available ? 'No owned Vast instances' : 'Vast inventory unavailable');
+        if (!available) {
+            expect(container.textContent).not.toContain('Vast discovery complete');
+            const receipt = [...container.querySelectorAll('[role="status"]')].find((node) => node.textContent?.includes('Vast inventory unavailable'));
+            expect(receipt?.className).toContain('amber');
+            expect(receipt?.className).not.toContain('emerald');
+        }
+        await act(async () => root.unmount());
+        client.clear();
+    });
     it('gives both compact Dashboard discovery actions visible success receipts', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         const requests: string[] = [];

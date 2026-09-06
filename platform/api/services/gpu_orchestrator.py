@@ -1410,12 +1410,26 @@ async def _claim_remote_job(
     target_id = str(getattr(job, "execution_target_id", "") or "").strip()
     if not target_id:
         return None
+    from services.remote_execution.targets import ExecutionTargetError, get_ready_target
+    try:
+        await get_ready_target(session, target_id)
+    except ExecutionTargetError:
+        return None
+    from datetime import timedelta
+    from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
+    claim_now = datetime.utcnow()
     lease_transition = await session.execute(
         update(ExecutionTarget)
         .where(
             ExecutionTarget.id == target_id,
             ExecutionTarget.active.is_(True),
             ExecutionTarget.state == "ready",
+            ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
+            ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+            ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
+            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
+                (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
             ExecutionTarget.leased_job_id.is_(None),
         )
         .values(

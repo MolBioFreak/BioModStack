@@ -24,7 +24,10 @@ router = APIRouter()
 
 @router.get("", response_model=list[ExecutionTargetResponse])
 async def execution_targets(session: AsyncSession = Depends(get_session)):
-    return await list_targets(session)
+    try:
+        return await list_targets(session)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post(

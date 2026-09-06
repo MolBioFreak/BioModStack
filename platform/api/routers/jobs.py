@@ -5513,12 +5513,10 @@ async def _create_job(
         selected_execution_target = await session.get(
             ExecutionTarget,
             str(job_data.execution_target_id),
+            populate_existing=True,
         )
-        if (
-            selected_execution_target is None
-            or not selected_execution_target.active
-            or selected_execution_target.state != "ready"
-        ):
+        from services.remote_execution.targets import target_eligible
+        if selected_execution_target is None or not target_eligible(selected_execution_target):
             raise HTTPException(
                 status_code=422,
                 detail="execution_target_id is not an active ready execution target",

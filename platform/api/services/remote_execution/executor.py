@@ -28,7 +28,7 @@ from .bundle import (
     resolve_job_result_contract,
 )
 from .contracts import RemoteAttemptStatus, RemoteResultManifest
-from .targets import ExecutionTargetError, get_ready_target
+from .targets import ExecutionTargetError, get_ready_target, target_eligible
 from .transport import (
     RemoteConnection,
     RemoteTransportError,
@@ -530,6 +530,8 @@ async def launch_remote_job(
 
 
 def _connection_for_attempt(target: ExecutionTarget, job: Job) -> tuple[RemoteConnection, str]:
+    if not target_eligible(target):
+        raise RemoteExecutionError("Remote inventory is absent, unknown or expired; attempt evidence is retained")
     connection = RemoteConnection.from_target(target)
     receipt = (
         dict(job.provenance.get("remote_execution_receipt") or {})
@@ -598,7 +600,7 @@ async def _release_remote_target_lease(session: AsyncSession, job: Job) -> None:
 async def remote_status(session: AsyncSession, job: Job) -> RemoteAttemptStatus:
     if not job.execution_target_id or not job.remote_attempt_id:
         raise RemoteExecutionError("Job has no complete remote attempt identity")
-    target = await session.get(ExecutionTarget, str(job.execution_target_id))
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
     if target is None:
         raise RemoteExecutionError("Remote execution target record is missing")
     connection, attempt_dir = _connection_for_attempt(target, job)
@@ -753,7 +755,7 @@ async def collect_remote_results(
     job: Job,
     status: RemoteAttemptStatus,
 ) -> tuple[RemoteResultManifest, Path]:
-    target = await session.get(ExecutionTarget, str(job.execution_target_id))
+    target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
     if target is None:
         raise RemoteCollectionPending("Remote execution target record is missing")
     connection, attempt_dir = _connection_for_attempt(target, job)
@@ -918,7 +920,7 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
     if job.status != JobStatus.RUNNING.value or job.queue_status != "running":
         return False
     if status.state == "prepared":
-        target = await session.get(ExecutionTarget, str(job.execution_target_id))
+        target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
         if target is None:
             raise RemoteExecutionError("Remote execution target record is missing")
         connection, attempt_dir = _connection_for_attempt(target, job)
@@ -1117,7 +1119,7 @@ async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0)
     if not job.execution_target_id or not job.remote_attempt_id:
         return False
     async with async_session() as session:
-        target = await session.get(ExecutionTarget, str(job.execution_target_id))
+        target = await session.get(ExecutionTarget, str(job.execution_target_id), populate_existing=True)
         if target is None:
             return False
         try:
@@ -1133,7 +1135,7 @@ async def cancel_remote_job(job: Job, *, graceful_timeout_seconds: float = 30.0)
                 ),
                 timeout=max(45.0, graceful_timeout_seconds + 20.0),
             )
-        except RemoteTransportError:
+        except (RemoteTransportError, RemoteExecutionError):
             return False
         status = _parse_status(response.stdout)
         if status.state == "cancelled":

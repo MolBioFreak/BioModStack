@@ -1709,6 +1709,14 @@ export function InfraLiveTelemetry({
     const currentLimits = powerControlData?.data.limits ?? {};
     const currentFanControls = fanControlData?.data.gpus ?? {};
     const gpuOverrides = schedulerConfigData?.data?.overrides ?? {};
+    useEffect(() => {
+        if (executionTargetsQuery.isPending) return;
+        const saved = window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY);
+        const ready = !executionTargetsQuery.isError && executionTargetsQuery.data?.data.some(
+            (target) => target.id === saved && target.active && target.state === 'ready',
+        );
+        if (saved && !ready) window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
+    }, [executionTargetsQuery.data, executionTargetsQuery.isError, executionTargetsQuery.isPending]);
     const vastTargets = executionTargetsQuery.isError
         ? []
         : (executionTargetsQuery.data?.data ?? []).filter((target) => target.provider === 'vast');
@@ -1803,9 +1811,17 @@ export function InfraLiveTelemetry({
                 </div>
             )}
             {vastDiscoverMutation.isSuccess && (
-                <div className="mb-3 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 p-3 text-sm text-emerald-200" role="status">
-                    Vast discovery complete: {vastDiscoverMutation.data.data.message}
+                <div className={`mb-3 rounded-2xl border p-3 text-sm ${vastDiscoverMutation.data.data.available
+                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-500/25 bg-amber-500/10 text-amber-200'}`} role="status">
+                    {vastDiscoverMutation.data.data.available ? 'Vast discovery complete' : 'Vast inventory unavailable'}: {vastDiscoverMutation.data.data.message}
                 </div>
+            )}
+            {executionTargetsQuery.isSuccess && vastTargets.length === 0 && (
+                <div role="status" className="mb-3 text-sm text-[var(--text-muted)]">No owned Vast instances. Local execution is available.</div>
+            )}
+            {executionTargetsQuery.isError && (
+                <div role="alert" className="mb-3 text-sm text-amber-200">Vast inventory unavailable or expired. Discover again; Local remains available.</div>
             )}
             {vastTargets.length > 0 && (
                 <div className="mb-4 space-y-2" aria-label="Vast workers">
