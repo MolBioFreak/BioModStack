@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "e973e7e48a12c82a413a977d0d10bf2a616e9193feaa9a5bdec1929021bdeac5",
+  "content_sha256": "cd6d84fea93f70aa8520683afa8e3d9aed849b7b9da5e8f61b43234351b976e1",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -1049,8 +1049,8 @@
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectInspector.tsx",
-      "sha256": "5052d54eb7aa61a236e5845085c77e17994f99f2ca338e12c91b8292c616e344",
-      "size_bytes": 12872
+      "sha256": "6310d28921a83a5887122d70d2edec9bb895842b93fd5d8922bb164b2e5101e1",
+      "size_bytes": 14675
     },
     {
       "path": "platform/frontend/src/components/project-manager/ProjectReturnBanner.tsx",
@@ -1114,8 +1114,8 @@
     },
     {
       "path": "platform/frontend/src/pages/ProjectManager.tsx",
-      "sha256": "31792a7babf38b923b2f9cbd8633a2738b2e7f72a9ca6f08ed6d35fed71ccbfb",
-      "size_bytes": 64718
+      "sha256": "4c0838df2bb805a1b085eca58ee7a2e7f2cf25555edc6976c3b19ea546a6aa0e",
+      "size_bytes": 70841
     },
     {
       "path": "platform/frontend/tests/ngsAlignmentSession.test.ts",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "bfb26e77faad540df423f77e2a12fd38ffec02ad",
-  "successor_source_tree": "b32f2b319836bd6d31d089331cccb67f2f221d0f",
+  "successor_source_commit": "31c29ef3078ff73a95f251b4b7a9b7cee7b6ad0f",
+  "successor_source_tree": "5f307b99694430e0720bb4e468cd8e95b86b61e7",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
