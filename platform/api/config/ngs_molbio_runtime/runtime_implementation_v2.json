@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "90f7d58c1a6e0feec64641873a660b92a0519589d248e8daeb24a2e98d6e687b",
+  "content_sha256": "b48eeb8dd4d2930dc0924bd519d9f32e07a5fe0b36d67300796d4f2ed8adced7",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "2873cfb83dad7ca16a274e703a95d62c5a19bc862c3a833431389a8d4f7c155a",
-      "size_bytes": 3566
+      "sha256": "71be693cce541696686bdc6c27dc4d91b3032cbba70fd4c83ef23b0af62e2b16",
+      "size_bytes": 3633
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "4c2caeee30ff50b5bed8e010db91c08d52d2deae",
-  "successor_source_tree": "b634a699b445a35d626adafb110b840b1b9e68b1",
+  "successor_source_commit": "65c2099cdb8bd5a4af0441d310a481095e09c904",
+  "successor_source_tree": "5af99b8bc9138edfec2314c9298ee16aba522395",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
