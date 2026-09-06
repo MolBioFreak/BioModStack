@@ -4175,11 +4175,43 @@ class OperatorLegacyUnindexedPipetteReceipt(BaseModel):
     physical_effect_verified: Literal[False]
 
 
+class OperatorHistorySourceIdentity(BaseModel):
+    """Producer-recorded identity, not current runtime authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    evidence_lock_identity_verified: StrictBool
+    evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    release_id: str = Field(min_length=1, max_length=128)
+    release_verified: StrictBool
+    robot_identity: str = Field(min_length=1, max_length=128)
+    source_aggregate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class OperatorRecordedActionReceipt(OperatorActionReceipt):
+    """Legacy ledger evidence extension; never used for mutation receipts.
+
+    Require the complete observed extension rather than defaulting missing
+    evidence, dropping producer fields, or deriving authority from status.
+    """
+
+    completion_ambiguous: StrictBool
+    completion_verified: StrictBool
+    delivery_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    reconciliation_required: StrictBool
+    retry_forbidden: StrictBool
+    source_identity: OperatorHistorySourceIdentity
+
+
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
     receipts: list[
         OperatorActionReceipt
+        | OperatorRecordedActionReceipt
         | PipetteReceipt
         | OperatorHistoryPipetteReceipt
         | OperatorLegacyReconciliationReceipt
