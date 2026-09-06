@@ -396,9 +396,31 @@ export interface BioXpOperatorReceiptDetailV2 extends BioXpOperatorReceiptV2 {
         target: string;
         target_label: string | null;
         source_branch: string | null;
+        resolved_location_id: number | null;
+        destination_catalog_revision: string | null;
+        position_table_revision: string | null;
+        authority_snapshot_digest: string | null;
+        complete_authority_digest: string | null;
+        plan_digest: string | null;
+        source_anchors: string[];
+        delivery_attempted: boolean | null;
+        controller_command_acknowledged: boolean | null;
         controller_completion_verified: boolean | null;
+        hardware_postcondition_verified: boolean | null;
         semantic_state_committed: boolean | null;
         physical_observation_verified: boolean | null;
+        transition_revision: number | null;
+        ambiguity_state: 'none' | 'failed' | 'ambiguous' | 'recovery_required' | null;
+        stages: Array<{
+            order: number;
+            operation: string;
+            source_anchor: string;
+            resources: string[];
+            arguments: Record<string, unknown>;
+            dependencies: number[];
+            terminal_state: 'planned' | 'completed' | 'failed' | 'ambiguous' | 'stopped' | 'aborted';
+            terminal_evidence: unknown | null;
+        }>;
     } | null;
 }
 
@@ -479,22 +501,24 @@ export interface BioXpOperatorDashboardV2 {
     telemetry: BioXpOperatorDashboard | null;
     deck?: {
         current_location: string | null;
-        current_well: string | null;
-        position_table_revision: string;
-        destination_catalog_revision: string;
+        current_well: number | null;
+        position_table_revision: string | null;
+        destination_catalog_revision: string | null;
         semantic_state_revision: number;
-        ownership_generation: number;
-        expected_board_epoch_by_board: Record<string, number>;
-        destinations: BioXpDeckDestinationV1[];
+        ambiguity_state: 'none' | 'recovery_required';
     } | null;
 }
 
 export interface BioXpDeckDestinationV1 {
-    key: string;
+    target: string;
     label: string;
     aliases: string[];
+    location_id: number;
     branch_kind: 'ordinary' | 'barcode' | 'park';
-    camera_offset_supported: boolean;
+    camera_offset_option: boolean;
+    source_anchors: string[];
+    enabled: boolean;
+    disabled_reason: string | null;
 }
 
 export interface BioXpOperatorControlCatalogV2 {
@@ -509,9 +533,10 @@ export interface BioXpOperatorControlCatalogV2 {
         disabled_reason: string | null;
         destination_catalog_revision?: string | null;
         position_table_revision?: string | null;
-        required_board_ids?: Array<4 | 5> | null;
+        required_boards?: Array<4 | 5> | null;
         expected_board_epoch_by_board?: Record<string, number> | null;
-        destinations?: BioXpDeckDestinationV1[] | null;
+        required_references?: Array<'x' | 'y' | 'z' | 'g'> | null;
+        destination_options?: BioXpDeckDestinationV1[] | null;
     }>;
 }
 

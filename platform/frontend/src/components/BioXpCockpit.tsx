@@ -113,16 +113,12 @@ const nextIdempotencyKey = (prefix: string): string => {
     return `${prefix}-${fallbackIdempotencySequence}`;
 };
 
-const numericRecordEqual = (
-    left: Record<string, number> | null | undefined,
-    right: Record<string, number> | null | undefined,
-): boolean => {
-    if (left == null || right == null) return false;
-    const leftEntries = Object.entries(left).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-    const rightEntries = Object.entries(right).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
-    return leftEntries.length === rightEntries.length
-        && leftEntries.every(([key, value], index) => key === rightEntries[index][0] && value === rightEntries[index][1]);
-};
+const CANONICAL_DECK_ACTION_IDS = new Set([
+    'oem.deck.move_to_location',
+    'oem.deck._mov_execution',
+    'oem.deck._finite_operation',
+]);
+
 
 const integerMinimum = (input: BioXpOperatorInputSpec | undefined): number | undefined => {
     if (typeof input?.minimum === 'number') return Math.ceil(input.minimum);
@@ -292,7 +288,24 @@ export function BioXpCockpit() {
     const yReceiptQuery = useBioXpOperatorReceiptV2(yReceiptCommandId, generation, robotControlReady);
     const zHomeReceiptQuery = useBioXpOperatorReceiptV2(currentZHomeCommandId, generation, robotControlReady);
     const lifecycleReceiptQuery = useBioXpOperatorReceiptV2(currentLifecycleCommandId, generation, linkConnected);
-    const deckReceiptQuery = useBioXpOperatorReceiptV2(deckCommandId, generation, robotControlReady);
+    const dashboardDeckReceipt = [
+        ...(currentDashboardV2?.active_commands ?? []),
+        ...(currentDashboardV2?.latest_receipts ?? []),
+    ]
+        .filter((receipt) => CANONICAL_DECK_ACTION_IDS.has(receipt.action_id)
+            && (receipt.terminal === false
+                || receipt.status === 'ambiguous'
+                || receipt.completion_class === 'recovery_required'
+                || receipt.error?.code === 'reconciliation_required'))
+        .sort((left, right) => right.sequence - left.sequence)[0];
+    const effectiveDeckCommandId = dashboardDeckReceipt?.command_id ?? deckCommandId ?? null;
+    useEffect(() => {
+        if (dashboardDeckReceipt != null && deckCommandId != null
+            && dashboardDeckReceipt.command_id !== deckCommandId) {
+            setDeckCommandId(null);
+        }
+    }, [dashboardDeckReceipt, deckCommandId]);
+    const deckReceiptQuery = useBioXpOperatorReceiptV2(effectiveDeckCommandId, generation, robotControlReady);
     const invokeLifecycleActionMutation = useInvokeBioXpOperatorActionV2();
     const invokeYAction = useInvokeBioXpOperatorActionV2();
     const invokeDeckAction = useInvokeBioXpDeckActionV2();
@@ -434,27 +447,21 @@ export function BioXpCockpit() {
         && catalogDeck != null
         && dashboardDeck != null
         && currentCatalogV2?.dashboard.ownership_generation === currentDashboardV2?.ownership_generation
-        && catalogDeck.ownership_generation === currentDashboardV2?.ownership_generation
-        && dashboardDeck.ownership_generation === currentDashboardV2?.ownership_generation
         && deckAction.destination_catalog_revision === catalogDeck.destination_catalog_revision
         && catalogDeck.destination_catalog_revision === dashboardDeck.destination_catalog_revision
         && deckAction.position_table_revision === catalogDeck.position_table_revision
-        && catalogDeck.position_table_revision === dashboardDeck.position_table_revision
-        && numericRecordEqual(deckAction.expected_board_epoch_by_board, catalogDeck.expected_board_epoch_by_board)
-        && numericRecordEqual(catalogDeck.expected_board_epoch_by_board, dashboardDeck.expected_board_epoch_by_board)
-        && JSON.stringify(deckAction.destinations) === JSON.stringify(catalogDeck.destinations)
-        && JSON.stringify(catalogDeck.destinations) === JSON.stringify(dashboardDeck.destinations);
-    const deckDestinations = useMemo(() => deckAction?.destinations ?? [], [deckAction]);
-    const selectedDeckDestination = deckDestinations.find((destination) => destination.key === deckTarget)
+        && catalogDeck.position_table_revision === dashboardDeck.position_table_revision;
+    const deckDestinations = useMemo(() => deckAction?.destination_options ?? [], [deckAction]);
+    const selectedDeckDestination = deckDestinations.find((destination) => destination.target === deckTarget)
         ?? deckDestinations[0];
     useEffect(() => {
         if (deckDestinations.length === 0) {
             setDeckTarget('');
             return;
         }
-        setDeckTarget((current) => deckDestinations.some((destination) => destination.key === current)
+        setDeckTarget((current) => deckDestinations.some((destination) => destination.target === current)
             ? current
-            : deckDestinations[0].key);
+            : deckDestinations[0].target);
     }, [deckDestinations]);
     const v2InterruptActionById = (actionId: string) => v2CatalogActionById(actionId)
         && (currentCatalogV2?.actions ?? []).find(
@@ -769,6 +776,16 @@ export function BioXpCockpit() {
             expected_board_epoch_by_board: {},
         };
     };
+    const deckReceiptActionMismatch = deckReceiptQuery.data != null
+        && !CANONICAL_DECK_ACTION_IDS.has(deckReceiptQuery.data.action_id);
+    const deckReceipt = deckReceiptActionMismatch ? undefined : deckReceiptQuery.data;
+    const deckReceiptUnavailable = effectiveDeckCommandId !== null && deckReceipt == null;
+    const deckPending = deckReceipt?.terminal === false;
+    const deckAmbiguous = deckReceiptActionMismatch || deckReceipt?.status === 'ambiguous';
+    const deckRecoveryRequired = deckReceiptActionMismatch
+        || deckAmbiguous
+        || deckReceipt?.error?.code === 'reconciliation_required'
+        || deckReceipt?.completion_class === 'recovery_required';
     const deckDisabledReason = !v2AuthorityCoherent
         ? 'Fresh v2 catalog or dashboard authority is unavailable.'
         : !deckAuthorityCoherent
@@ -777,9 +794,17 @@ export function BioXpCockpit() {
             ? 'Robot deck movement action is unavailable.'
             : deckAction.enabled !== true
                 ? deckAction.disabled_reason ?? 'Robot deck movement action is unavailable.'
-                : selectedDeckDestination == null
-                    ? 'Robot destination catalog is empty.'
-                    : null;
+                : dashboardDeck?.ambiguity_state !== 'none'
+                    ? `Robot deck ambiguity: ${dashboardDeck?.ambiguity_state ?? 'unknown'}.`
+                    : selectedDeckDestination == null
+                        ? 'Robot destination catalog is empty.'
+                        : selectedDeckDestination.enabled !== true
+                            ? selectedDeckDestination.disabled_reason ?? 'Robot destination is disabled.'
+                            : invokeDeckAction.isPending
+                                ? 'Deck enqueue is pending.'
+                                : effectiveDeckCommandId !== null && (deckReceiptUnavailable || deckPending || deckAmbiguous || deckRecoveryRequired)
+                                    ? 'Existing deck command requires reconciliation; do not resubmit.'
+                                    : null;
     const invokeDeckMove = () => {
         if (deckDisabledReason !== null || selectedDeckDestination == null || deckAction?.expected_board_epoch_by_board == null) return;
         const envelope = v2NormalEnvelope();
@@ -788,7 +813,7 @@ export function BioXpCockpit() {
             ...envelope,
             action_id: 'oem.deck.move_to_location',
             expected_board_epoch_by_board: deckAction.expected_board_epoch_by_board,
-            inputs: { target: selectedDeckDestination.key, camera_offset: false },
+            inputs: { target: selectedDeckDestination.target, camera_offset: false },
         });
     };
     const invokeYMoveSteps = (steps: number) => {
@@ -893,16 +918,7 @@ export function BioXpCockpit() {
         : undefined;
     const zHomeFailureDetail = zHomeReceipt?.error?.detail;
     const currentDeckInvokeError = deckMutationGeneration === generation ? invokeDeckAction.error : null;
-    const deckReceiptActionMismatch = deckReceiptQuery.data != null
-        && deckReceiptQuery.data.action_id !== 'oem.deck.move_to_location';
-    const deckReceipt = deckReceiptActionMismatch ? undefined : deckReceiptQuery.data;
-    const deckReceiptUnavailable = deckCommandId !== null && deckReceipt == null;
-    const deckPending = deckReceipt?.terminal === false;
-    const deckAmbiguous = deckReceiptActionMismatch || deckReceipt?.status === 'ambiguous';
-    const deckRecoveryRequired = deckReceiptActionMismatch
-        || deckAmbiguous
-        || deckReceipt?.error?.code === 'reconciliation_required'
-        || deckReceipt?.completion_class === 'recovery_required';
+
     const truthLabel = (value: boolean | null | undefined, positive: string, negative: string) => value === true
         ? positive
         : value === false
@@ -1030,18 +1046,18 @@ export function BioXpCockpit() {
                     <label className="text-sm text-slate-300">
                         Robot destination
                         <select
-                            value={selectedDeckDestination?.key ?? ''}
-                            disabled={deckDestinations.length === 0 || invokeDeckAction.isPending}
+                            value={selectedDeckDestination?.target ?? ''}
+                            disabled={deckDisabledReason !== null}
                             onChange={(event) => setDeckTarget(event.target.value)}
                             className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100"
                         >
                             {deckDestinations.map((destination) => (
-                                <option key={destination.key} value={destination.key}>{destination.label} · {destination.key}</option>
+                                <option key={destination.target} value={destination.target}>{destination.label} · {destination.target}</option>
                             ))}
                         </select>
                     </label>
                     <div className="rounded bg-slate-950/60 p-3 text-sm">
-                        <p>Canonical key: <span className="font-mono">{selectedDeckDestination?.key ?? '—'}</span></p>
+                        <p>Canonical key: <span className="font-mono">{selectedDeckDestination?.target ?? '—'}</span></p>
                         <p>Operator label: {selectedDeckDestination?.label ?? '—'}</p>
                     </div>
                 </div>
@@ -1067,7 +1083,7 @@ export function BioXpCockpit() {
                     </p>
                 )}
                 <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="font-mono">{deckCommandId ?? '—'}</dd></div>
+                    <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Command ID</dt><dd className="font-mono">{effectiveDeckCommandId ?? '—'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Lifecycle</dt><dd className="font-mono">{deckReceipt?.status ?? (deckReceiptUnavailable ? 'unavailable' : '—')}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Pending</dt><dd>{deckPending ? 'pending' : deckReceipt ? 'not pending' : 'unknown'}</dd></div>
                     <div className="rounded bg-slate-950/60 p-2"><dt className="text-slate-400">Receipt availability</dt><dd>{deckReceiptUnavailable ? 'unavailable' : deckReceipt ? 'available' : 'not requested'}</dd></div>
