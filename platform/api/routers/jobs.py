@@ -727,7 +727,8 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
 
 
 class ResumeJobRequest(BaseModel):
-    """Optional payload for resume calls that need runtime param overrides."""
+    """Resume overrides; omitted placement inherits, explicit null selects Local."""
+    execution_target_id: Optional[str] = None
     from_stage: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     name_suffix: Optional[str] = None
@@ -9147,6 +9148,57 @@ async def resume_job(
             detail=f"Cannot resume job with status: {job.status}"
         )
     
+    # Resolve placement before filesystem writes or domain continuation side effects.
+    source_target_id = job.execution_target_id or None
+    execution_target_id = source_target_id
+    if request and "execution_target_id" in request.model_fields_set:
+        execution_target_id = request.execution_target_id
+        if execution_target_id is not None:
+            execution_target_id = execution_target_id.strip()
+            if not execution_target_id:
+                raise HTTPException(status_code=422, detail="Use null to select Local execution")
+    target_changed = execution_target_id != source_target_id
+    # Mirrors StructurePredictionUiState's GPU launcher model/mode mapping.
+    placement_supported = (
+        job.model_id in {"boltz2", "protenix", "esmfold2"} and job.mode in {"predict", "complex"}
+    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design")
+    fresh_execution_supported = (
+        placement_supported
+        and job.status in {"failed", "cancelled"}
+        and not (job.parent_job_id or job.child_stage or job.awaiting_input)
+    )
+    if target_changed and not fresh_execution_supported:
+        raise HTTPException(
+            status_code=422,
+            detail="Execution placement changes require a terminal structure root; child and interactive continuations must retain their target",
+        )
+    execution_source_revision = None
+    execution_source_tree = None
+    source_changed = False
+    if execution_target_id:
+        from services.remote_execution.targets import target_eligible
+        target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+        if not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
+            raise HTTPException(status_code=409, detail="Remote source Job is missing its immutable source identity")
+        try:
+            from services.remote_execution.bundle import current_source_identity
+            execution_source_revision, execution_source_tree = current_source_identity()
+        except Exception as exc:
+            logger.exception("Unable to capture the re-orchestrated Job source identity")
+            raise HTTPException(status_code=503, detail="Committed BMS source identity is unavailable") from exc
+        source_changed = bool(source_target_id) and (
+            execution_source_revision != job.execution_source_revision
+            or execution_source_tree != job.execution_source_tree
+        )
+        if source_changed and not fresh_execution_supported:
+            raise HTTPException(
+                status_code=409,
+                detail="BMS source changed; child, interactive, and unsupported-domain continuations cannot reuse historical execution state. Submit a new supported root job with the current source instead.",
+            )
+    fresh_execution = target_changed or source_changed
+
     completed = job.completed_stages or []
     # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
 
@@ -9155,6 +9207,8 @@ async def resume_job(
     if isinstance(effective_from_stage, str):
         effective_from_stage = effective_from_stage.strip() or None
     requested_overrides = dict(request.param_overrides) if request else {}
+    if "execution_target_id" in requested_overrides:
+        raise HTTPException(status_code=422, detail="execution_target_id must be a top-level resume field")
     requested_name_suffix = request.name_suffix if request else None
 
     # Prevent callers from overriding resume control fields directly.
@@ -9321,16 +9375,35 @@ async def resume_job(
     
     # True resume should keep the original execution directory so Nextflow can
     # reuse cached task hashes that depend on params.out_dir/publishDir paths.
-    output_dir = job.output_dir
+    output_dir = str(get_results_dir() / new_job_id) if fresh_execution else job.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    
+
     merged_params = {
         **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
         **param_overrides,
     }
+    if fresh_execution:
+        # Placement or source drift starts fresh, never reusing historical runtime/cache state.
+        runtime_keys = {
+            "batch_name", "job_name", "out_dir", "output_dir", "work_dir", "stage_work_dir",
+            "cache_dir", "nxf_cache_dir", "NXF_CACHE_DIR", "lineage_root_job_id",
+            "execution_target_id", "execution_source_revision", "execution_source_tree",
+            "data_root", "code_root", "weights_root", "container_dir", "msa_cache_dir",
+        }
+        hardware_keys = {
+            "pinned_gpus", "gpu_ids", "bcp_gpu_ids", "gpu_id", "gpu_device",
+            "cuda_visible_devices", "CUDA_VISIBLE_DEVICES", "msa_preferred_gpu_ids",
+            "msa_excluded_gpus",
+        }
+        merged_params = {
+            key: value for key, value in merged_params.items()
+            if not key.startswith("resume_") and key not in runtime_keys
+            and (not target_changed or key not in hardware_keys or key in param_overrides)
+        }
+        merged_params["reorchestrated_from_job_id"] = job_id
     merged_params = _ensure_job_resume_identity(
-        job_name=(job.params or {}).get("job_name") or base_name,
-        job_id=_coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+        job_name=new_name if fresh_execution else (job.params or {}).get("job_name") or base_name,
+        job_id=new_job_id if fresh_execution else _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
         model_id=job.model_id,
         mode=job.mode,
         params=merged_params,
@@ -9340,7 +9413,7 @@ async def resume_job(
         job,
         _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
     )
-    if resolved_child_batch_name:
+    if resolved_child_batch_name and not fresh_execution:
         merged_params["batch_name"] = resolved_child_batch_name
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
@@ -9362,11 +9435,12 @@ async def resume_job(
         mode=job.mode,
         params={
             **merged_params,
-            "resume_job_id": job_id,
-            "resume_work_dir": resume_work_dir,
-            "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
-            "resume_requested_stage": effective_from_stage,
-            # We don't need manual stage skipping params because we use -resume
+            **({} if fresh_execution else {
+                "resume_job_id": job_id,
+                "resume_work_dir": resume_work_dir,
+                "resume_source_dir": job.output_dir,
+                "resume_requested_stage": effective_from_stage,
+            }),
         },
         output_dir=output_dir,
         batch_id=job.batch_id,
@@ -9384,7 +9458,11 @@ async def resume_job(
         queue_status='queued',
         vram_estimate_mb=job.vram_estimate_mb,
         sequence_length=job.sequence_length,
-        pinned_gpu=job.pinned_gpu,
+        pinned_gpu=None if target_changed else job.pinned_gpu,
+        execution_target_id=execution_target_id,
+        execution_source_revision=execution_source_revision,
+        execution_source_tree=execution_source_tree,
+        lineage_root_job_id=new_job_id if fresh_execution else job.lineage_root_job_id,
         priority=job.priority,
     )
 
@@ -9415,13 +9493,21 @@ async def resume_job(
     )
     
     return {
-        "message": f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "message": "Job re-orchestrated with current source and a fresh cache" if fresh_execution else f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "execution_target_id": execution_target_id,
+        "placement_changed": target_changed,
+        "source_changed": source_changed,
+        "fresh_execution": fresh_execution,
         "original_job_id": job_id,
         "new_job_id": new_job_id,
         "new_job_name": new_name,
         "resume_from_stage": effective_from_stage or "auto",
-        "resume_stage_mode": "hint",
-        "resume_stage_note": "Stage selection is advisory; cache hits determine exact task reuse.",
+        "resume_stage_mode": "fresh" if fresh_execution else "hint",
+        "resume_stage_note": (
+            "BMS source changed; prior task caches are not reused." if source_changed
+            else "Execution target changed; prior task caches are not reused." if target_changed
+            else "Stage selection is advisory; cache hits determine exact task reuse."
+        ),
         "preserved_stages": [],
         "applied_overrides": sorted(param_overrides.keys())
     }

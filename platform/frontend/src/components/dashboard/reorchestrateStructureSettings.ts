@@ -21,6 +21,15 @@ export type StructureBoltzCpOutputFormat = 'mmcif' | 'pdb';
 
 type StructureRetryJob = Pick<Job, 'model_id' | 'mode' | 'params'>;
 
+// Placement is narrower than legacy predictor-hint retry controls.
+export const canChangeStructureExecutionTarget = (job: Job): boolean => (
+    ['failed', 'cancelled'].includes(job.status)
+    && ((['boltz2', 'protenix', 'esmfold2'].includes(job.model_id) && ['predict', 'complex'].includes(job.mode))
+        || (job.model_id === 'boltz_cp_experimental' && job.mode === 'design'))
+    && !job.parent_job_id && !job.child_stage && !job.awaiting_input
+    && !isLegacyRf3StructureJob(job)
+);
+
 export interface StructureReorchestrateSettings {
     predictors: StructurePredictor[];
     msaProvider: StructureMsaProvider;
@@ -298,6 +307,7 @@ export const deriveStructureReorchestrateSettings = (job: StructureRetryJob): St
 export const buildStructureReorchestrateOverrides = (
     job: StructureRetryJob,
     next: StructureReorchestrateSettings,
+    targetFallbackGpuIds?: string,
 ): Record<string, unknown> => {
     if (isLegacyRf3StructureJob(job)) {
         throw new Error('RF3 is retained for historical result review only and cannot be retried.');
@@ -339,7 +349,7 @@ export const buildStructureReorchestrateOverrides = (
         const nextLaunch = deriveBoltzCpGpuLaunchSettings({
             pinnedGpus: next.boltzCp.pinnedGpus,
             requestedSizeCp: next.boltzCp.sizeCp,
-            fallbackGpuIds,
+            fallbackGpuIds: targetFallbackGpuIds ?? fallbackGpuIds,
         });
         const previousParams = buildBoltzCpSubmitParams({
             outputFormat: previous.boltzCp.outputFormat,
@@ -366,8 +376,14 @@ export const buildStructureReorchestrateOverrides = (
             next.boltzCp.pinnedGpus.length > 0 ? next.boltzCp.lockGpus : false,
             previous.boltzCp.pinnedGpus.length > 0 ? previous.boltzCp.lockGpus : false,
         );
-        maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
-        maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
+        if (targetFallbackGpuIds !== undefined) {
+            // Ordinal equality across workers does not preserve physical placement.
+            overrides.bcp_size_cp = nextParams.bcp_size_cp;
+            overrides.bcp_gpu_ids = nextParams.bcp_gpu_ids ?? null;
+        } else {
+            maybeSet('bcp_size_cp', nextParams.bcp_size_cp, previousParams.bcp_size_cp);
+            maybeSet('bcp_gpu_ids', nextParams.bcp_gpu_ids ?? null, previousParams.bcp_gpu_ids ?? null);
+        }
         maybeSet('bcp_output_format', nextParams.bcp_output_format, previousParams.bcp_output_format);
         maybeSet('bcp_write_full_pae', nextParams.bcp_write_full_pae, previousParams.bcp_write_full_pae);
         maybeSet('bcp_seed', nextParams.bcp_seed ?? null, previousParams.bcp_seed ?? null);

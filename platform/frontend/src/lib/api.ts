@@ -44,6 +44,7 @@ export interface Job {
     batch_name?: string | null;
     // Parent-child relationship for exploration mode
     parent_job_id?: string | null;
+    child_stage?: string | null;
     lineage_root_job_id?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
@@ -1517,12 +1518,14 @@ export const resumeJob = (
     jobId: string,
     fromStage?: string,
     paramOverrides?: Record<string, unknown>,
-    nameSuffix?: string
+    nameSuffix?: string,
+    executionTargetId?: string | null,
 ) => {
     const hasOverrides = !!paramOverrides && Object.keys(paramOverrides).length > 0;
     const hasNameSuffix = !!nameSuffix && nameSuffix.trim().length > 0;
-    const requestBody = (hasOverrides || hasNameSuffix)
+    const requestBody = (hasOverrides || hasNameSuffix || executionTargetId !== undefined)
         ? {
+            ...(executionTargetId !== undefined ? { execution_target_id: executionTargetId } : {}),
             ...(hasOverrides ? { param_overrides: paramOverrides } : {}),
             ...(hasNameSuffix ? { name_suffix: nameSuffix } : {}),
         }
