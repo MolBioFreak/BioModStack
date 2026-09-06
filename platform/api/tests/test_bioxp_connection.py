@@ -1008,3 +1008,202 @@ def test_connect_candidate_cannot_publish_after_saved_profile_revision_changes(t
         assert clients[1].closed is False
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("slow_route", ["operator_command_history_v2", "operator_command_receipt_v2", "operator_control_catalog_v2"])
+@pytest.mark.parametrize("warm", [False, True])
+def test_v2_dashboard_not_blocked_by_unrelated_read(tmp_path: Path, slow_route: str, warm: bool) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients = []
+    service = _service(tmp_path, clients)
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        if warm:
+            await service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation)
+        robot = clients[0]
+        robot.blocking_route_name = slow_route
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        slow = asyncio.create_task(service.request_active_v2_query(slow_route, expected_generation=generation))
+        await asyncio.wait_for(robot.request_started.wait(), 1)
+        try:
+            result = await asyncio.wait_for(service.request_active_v2_query(
+                "operator_dashboard_v2", expected_generation=generation), 0.2)
+            assert result["route_name"] == "operator_dashboard_v2"
+            assert not slow.done()
+        finally:
+            robot.request_release.set()
+            await slow
+            await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("route", ["operator_dashboard_v2", "operator_control_catalog_v2"])
+def test_v2_duplicate_reads_coalesce(tmp_path: Path, route: str) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients = []
+    service = _service(tmp_path, clients)
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        robot = clients[0]
+        robot.request_started = asyncio.Event()
+        robot.request_release = asyncio.Event()
+        tasks = [asyncio.create_task(service.request_active_v2_query(route, expected_generation=generation)) for _ in range(4)]
+        await asyncio.wait_for(robot.request_started.wait(), 1)
+        await asyncio.sleep(0)
+        assert len(robot.request_calls) == 1
+        robot.request_release.set()
+        results = await asyncio.gather(*tasks)
+        assert all(result == results[0] for result in results)
+        assert len(robot.request_calls) == 1
+        assert robot.request_calls[0][1]["timeout_override"] == 12.0
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("lane", ["v1", "oem", "enqueue", "interrupt", "workflow"])
+def test_v2_mutation_invalidates_cached_and_inflight_reads(tmp_path: Path, lane: str) -> None:
+    _, BioXpProfile, _, _ = _load()
+    clients = []
+    service = _service(tmp_path, clients)
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        robot = clients[0]
+        started, release = asyncio.Event(), asyncio.Event()
+        version = 0
+        block = False
+        async def request(route_name, **kwargs):
+            nonlocal version
+            if route_name in {"operator_dashboard_v2", "operator_control_catalog_v2"}:
+                observed = version
+                if block and route_name == "operator_dashboard_v2" and observed == 0:
+                    started.set()
+                    await release.wait()
+                return {"version": observed}
+            version += 1
+            return {"ok": True}
+        robot.request = request
+        await service.request_active_v2_query("operator_control_catalog_v2", expected_generation=generation)
+        block = True
+        stale = asyncio.create_task(service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation))
+        await asyncio.wait_for(started.wait(), 1)
+        kwargs = dict(expected_generation=generation, json_data={}, path_params={"action_id": "oem.x.stop"})
+        try:
+            if lane == "v1":
+                await service.request_active("invoke_operator_action", **kwargs)
+            elif lane == "oem":
+                await service.request_active_oem_action("invoke_operator_action", **kwargs)
+            elif lane == "enqueue":
+                await service.request_active_v2_enqueue("invoke_operator_action_v2", **kwargs)
+            elif lane == "interrupt":
+                await service.request_active_safety_interrupt("interrupt_operator_action_v1", **kwargs)
+            else:
+                async with service.workflow_lease(generation) as client:
+                    await client.request("invoke_operator_action")
+            catalog = await asyncio.wait_for(service.request_active_v2_query(
+                "operator_control_catalog_v2", expected_generation=generation), 0.2)
+            assert catalog == {"version": 1}
+            dashboard = await asyncio.wait_for(service.request_active_v2_query(
+                "operator_dashboard_v2", expected_generation=generation), 0.2)
+            assert dashboard == {"version": 1}
+        finally:
+            release.set()
+            await stale
+        assert await service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation) == {"version": 1}
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_v2_late_mutation_exit_invalidates_reads_after_caller_timeout(tmp_path: Path, fails: bool) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import RobotTimeoutError
+    service = _service(tmp_path, clients := [], v2_enqueue_timeout_seconds=0.01)
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        release = asyncio.Event()
+        version = 0
+        async def request(route_name, **kwargs):
+            nonlocal version
+            if route_name == "operator_dashboard_v2":
+                return {"version": version}
+            await release.wait()
+            version = 1
+            if fails:
+                raise RuntimeError("response lost after mutation")
+            return {"ok": True}
+        clients[0].request = request
+        with pytest.raises(RobotTimeoutError):
+            await service.request_active_v2_enqueue("invoke_operator_action_v2", expected_generation=generation, json_data={})
+        assert await service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation) == {"version": 0}
+        pending = tuple(service._remote_request_tasks)
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        assert await service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation) == {"version": 1}
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_v2_rebind_does_not_wait_for_or_cache_old_generation_read(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    from services.bioxp.errors import ConnectionStateError
+    service = _service(tmp_path, clients := [])
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        old = clients[0]
+        old.request_started, old.request_release = asyncio.Event(), asyncio.Event()
+        stale = asyncio.create_task(service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation))
+        await asyncio.wait_for(old.request_started.wait(), 1)
+        new_generation = (await service.connect()).generation
+        try:
+            assert not old.closed
+            await asyncio.wait_for(service.request_active_v2_query("operator_dashboard_v2", expected_generation=new_generation), 0.2)
+            with pytest.raises(ConnectionStateError):
+                await service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation)
+        finally:
+            old.request_release.set()
+            await stale
+        await service.request_active_v2_query("operator_dashboard_v2", expected_generation=new_generation)
+        assert len(clients[1].request_calls) == 1
+        await service.close()
+        assert old.closed
+
+    asyncio.run(scenario())
+
+
+def test_v2_cancelled_read_releases_coalescing_lock_and_generation_lease(tmp_path: Path) -> None:
+    _, BioXpProfile, _, _ = _load()
+    service = _service(tmp_path, clients := [])
+
+    async def scenario():
+        await service.save_profile(BioXpProfile(api_url="http://robot:8123"))
+        generation = (await service.connect()).generation
+        robot = clients[0]
+        robot.request_started, robot.request_release = asyncio.Event(), asyncio.Event()
+        first = asyncio.create_task(service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation))
+        await asyncio.wait_for(robot.request_started.wait(), 1)
+        second = asyncio.create_task(service.request_active_v2_query("operator_dashboard_v2", expected_generation=generation))
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        robot.request_release.set()
+        await asyncio.wait_for(second, 1)
+        assert len(robot.request_calls) == 2
+        assert service._generation_leases[generation].lease_count == 0
+        await service.close()
+
+    asyncio.run(scenario())

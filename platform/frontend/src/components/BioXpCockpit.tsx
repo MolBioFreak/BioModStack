@@ -22,6 +22,9 @@ import {
     useInvokeBioXpDeckActionV2,
     useInvokeBioXpOperatorAction,
     useSubmitBioXpOperatorMethodV1,
+    useBioXpOperatorMethodV1,
+    bioXpMethodV1IsTerminal,
+    type BioXpOperatorMethodV1,
     type BioXpOperatorActionV2Request,
     type BioXpOperatorActionReceipt,
     type BioXpOperatorDashboardXAxis,
@@ -222,11 +225,9 @@ export function BioXpCockpit() {
         ? dashboardQuery.data
         : undefined;
     const currentTelemetry = currentDashboardV2?.telemetry ?? undefined;
-    const dashboardAuthorityVersion = currentDashboardV2 === undefined ? null : 'fresh-v2-dashboard';
     const catalogV2Query = useBioXpOperatorControlCatalogV2(
         generation,
         linkConnected,
-        dashboardAuthorityVersion,
     );
     const [yCommandId, setYCommandId] = useState<string | null>(null);
     const [zHomeCommandId, setZHomeCommandId] = useState<string | null>(null);
@@ -271,12 +272,22 @@ export function BioXpCockpit() {
     const interruptZAbort = useInterruptBioXpOperatorActionV1();
     const interruptAggregateAbort = useInterruptBioXpOperatorActionV1();
     const invokeXYMethod = useSubmitBioXpOperatorMethodV1();
-    const historyQuery = useBioXpOperatorActionHistory(generation, false, historyLimit);
+    const [xySubmission, setXYSubmission] = useState<{ generation: number; receipt: BioXpOperatorMethodV1 } | null>(null);
+    const currentXYSubmission = linkConnected && xySubmission?.generation === generation ? xySubmission.receipt : null;
+    const xyMethodQuery = useBioXpOperatorMethodV1(currentXYSubmission?.method_id ?? null, generation, linkConnected);
+    const xyMethodReceipt = currentXYSubmission == null ? null
+        : xyMethodQuery.data?.method_id === currentXYSubmission.method_id ? xyMethodQuery.data : currentXYSubmission;
+    const xyMethodPending = invokeXYMethod.isPending || (xyMethodReceipt != null && !bioXpMethodV1IsTerminal(xyMethodReceipt));
+    const acceptXYSubmission = (receipt: BioXpOperatorMethodV1) => {
+        if (currentGenerationRef.current !== generation) return;
+        setXYSubmission({ generation, receipt });
+    };
+    const historyQuery = useBioXpOperatorActionHistory(generation, linkConnected, historyLimit);
     const connect = useConnectBioXp();
     const disconnect = useDisconnectBioXp();
     const operatorCatalog = useBioXpOperatorControlCatalog(
         generation,
-        linkConnected && advancedOpen,
+        linkConnected,
         null,
     );
     const invokeOperatorAction = useInvokeBioXpOperatorAction();
@@ -350,6 +361,7 @@ export function BioXpCockpit() {
         resetInterruptZAbort();
         resetInterruptAggregateAbort();
         resetInvokeXYMethod();
+        setXYSubmission(null);
     }, [generation, linkConnected, resetInterruptAggregateAbort, resetInterruptXStop, resetInterruptYStop, resetInterruptZAbort, resetInterruptZStop, resetInvokeDeckAction, resetInvokeLifecycleAction, resetInvokeXYMethod, resetInvokeYAction]);
     const interruptMutation = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all') => {
         if (actionId === 'oem.x.stop') return interruptXStop;
@@ -360,8 +372,8 @@ export function BioXpCockpit() {
     };
     const interruptPending = (actionId: 'oem.x.stop' | 'oem.y.stop' | 'oem.z.stop' | 'oem.z.abort' | 'oem.abort_all') => interruptMutation(actionId).isPending;
     const interruptAnyPending = interruptXStop.isPending || interruptYStop.isPending || interruptZStop.isPending || interruptZAbort.isPending || interruptAggregateAbort.isPending;
-    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || invokeXYMethod.isPending || interruptAnyPending || emergencyAction.isPending;
-    const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? invokeXYMethod.data ?? invokeOperatorAction.data;
+    const busy = invokeOperatorAction.isPending || invokeLifecycleActionMutation.isPending || invokeYAction.isPending || invokeDeckAction.isPending || xyMethodPending || interruptAnyPending || emergencyAction.isPending;
+    const latestOperatorReceipt = interruptAggregateAbort.data ?? interruptZAbort.data ?? interruptZStop.data ?? interruptYStop.data ?? interruptXStop.data ?? invokeDeckAction.data ?? invokeLifecycleActionMutation.data ?? invokeYAction.data ?? xyMethodReceipt ?? invokeOperatorAction.data;
     const connectedLabel = active
         ? connection?.reachable === false ? 'Connection error' : 'Connected'
         : 'Disconnected';
@@ -784,23 +796,23 @@ export function BioXpCockpit() {
     };
     const invokeXYMove = () => {
         const envelope = xyMethodEnvelope();
-        if (!envelope || !xAbsoluteTargetInRange || !yTargetInputValid) return;
+        if (!envelope || xyMethodPending || !xAbsoluteTargetInRange || !yTargetInputValid) return;
         invokeXYMethod.mutate({
             ...envelope,
             method_action_id: 'oem.xy.move_absolute',
             inputs: { x_steps: absoluteTargets.x, y_steps: yTargetInput },
-        });
+        }, { onSuccess: acceptXYSubmission });
     };
     const invokeXYHome = () => {
         const envelope = xyMethodEnvelope();
-        if (!envelope) return;
-        invokeXYMethod.mutate({ ...envelope, method_action_id: 'oem.xy.home', inputs: {} });
+        if (!envelope || xyMethodPending) return;
+        invokeXYMethod.mutate({ ...envelope, method_action_id: 'oem.xy.home', inputs: {} }, { onSuccess: acceptXYSubmission });
     };
     const xyMoveDisabled = !v2AuthorityCoherent
-        || invokeXYMethod.isPending
+        || xyMethodPending
         || !xAbsoluteTargetInRange
         || !yTargetInputValid;
-    const xyHomeDisabled = !v2AuthorityCoherent || invokeXYMethod.isPending;
+    const xyHomeDisabled = !v2AuthorityCoherent || xyMethodPending;
     const yMutationDisabled = (actionId: string) =>
         !v2AuthorityCoherent
         || invokeYAction.isPending
@@ -1142,7 +1154,10 @@ export function BioXpCockpit() {
                             <button type="button" disabled={xyHomeDisabled} onClick={invokeXYHome} className={actionClass}>Home X + Y</button>
                         </div>
                         <YOperatorError label="XY method" error={invokeXYMethod.error} />
-                        {invokeXYMethod.data && <details className="mt-2 text-xs"><summary>Latest XY method receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(invokeXYMethod.data, null, 2)}</pre></details>}
+                        {xyMethodPending && <p role="status" className="mt-2 text-sm text-amber-200">XY method pending · {xyMethodReceipt?.status ?? 'submitting'} · Do not retry.</p>}
+                        {xyMethodReceipt && !xyMethodPending && <p role="status" className="mt-2 text-sm">XY method {xyMethodReceipt.status}</p>}
+                        {currentXYSubmission && xyMethodQuery.error && <p role="alert" className="mt-2 text-sm text-amber-200">XY method status unavailable: {bioXpErrorText(xyMethodQuery.error)}. Do not retry until the outcome is reconciled.</p>}
+                        {xyMethodReceipt && <details className="mt-2 text-xs"><summary>Latest XY method receipt</summary><pre className="mt-1 overflow-auto whitespace-pre-wrap">{JSON.stringify(xyMethodReceipt, null, 2)}</pre></details>}
                     </article>
                     {AXES.map(({ axis, label, controls }) => (
                         <article key={axis} style={{ order: axis === 'x' ? 3 : axis === 'z' ? 4 : axis === 'g' ? 5 : 6 }} className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">

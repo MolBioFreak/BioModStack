@@ -46,7 +46,7 @@ test('cockpit keeps bounded status and compact dashboard freshness loops', () =>
     assert.match(cockpit, /useBioXpOperatorDashboardV2\(generation, robotControlReady\)/u);
     assert.match(cockpit, /!robotControlReady \|\| dashboardQuery\.isError \? undefined/u);
     assert.match(quickDashboard, /\{connected && data && \(/u);
-    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, false, historyLimit\)/u);
+    assert.match(cockpit, /useBioXpOperatorActionHistory\(generation, linkConnected, historyLimit\)/u);
     assert.match(cockpit, /!linkConnected \|\| operatorCatalog\.isError \? undefined/u);
     assert.match(cockpit, /!linkConnected \|\| historyQuery\.isError \? \[\]/u);
 });
@@ -82,7 +82,8 @@ test('operator mutations fence history races and refresh every authority project
     assert.match(invoke, /invalidateQueries\(\{ queryKey: operatorCatalogKey \}\)/u);
     for (const source of [invoke, assess]) {
         assert.match(source, /cancelQueries\(\{ queryKey: operatorHistoryKey \}\)/u);
-        for (const key of ['operatorDashboardKey', 'operatorHistoryKey']) {
+        assert.match(source, /updateBioXpHistoryCaches\(queryClient, variables.connectionGeneration, receipt\)/u);
+        for (const key of ['operatorDashboardKey']) {
             assert.match(source, new RegExp(`invalidateQueries\\(\\{ queryKey: ${key} \\}\\)`));
         }
     }

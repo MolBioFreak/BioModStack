@@ -137,7 +137,8 @@ class BioXpConnectionService:
         self._probe_lock = asyncio.Lock()
         self._v1_workflow_lock = asyncio.Lock()
         self._v2_enqueue_lock = asyncio.Lock()
-        self._v2_query_lock = asyncio.Lock()
+        self._v2_query_locks: dict[str, asyncio.Lock] = {}
+        self._v2_query_revision = 0
         self._v2_query_cache: dict[str, tuple[int, float, dict[str, Any]]] = {}
         self._interrupt_lock = asyncio.Lock()
         self._client: RobotClientProtocol | None = None
@@ -476,14 +477,19 @@ class BioXpConnectionService:
         params: dict[str, Any] | None = None,
         path_params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"}
+        # Only the parameter-free dashboard/catalog representations are cached.
+        cacheable = route_name in {"operator_control_catalog_v2", "operator_dashboard_v2"} and not params and not path_params
         async with self.active_query_lease(
             expected_generation=expected_generation,
             require_fresh=True,
         ) as client:
             try:
                 async with asyncio.timeout(15.0):
-                    async with self._v2_query_lock:
+                    revision = self._v2_query_revision
+                    # Uncached reads never queue behind other queries. Only
+                    # duplicate cacheable reads share a lock, within this epoch.
+                    lock = self._v2_query_locks.setdefault(route_name, asyncio.Lock()) if cacheable else asyncio.Lock()
+                    async with lock:
                         now = asyncio.get_running_loop().time()
                         if cacheable:
                             cached = self._v2_query_cache.get(route_name)
@@ -498,7 +504,12 @@ class BioXpConnectionService:
                             path_params=path_params,
                             timeout_override=12.0,
                         )
-                        if cacheable:
+                        if (
+                            cacheable
+                            and revision == self._v2_query_revision
+                            and expected_generation == self._generation
+                            and client is self._client
+                        ):
                             self._v2_query_cache[route_name] = (
                                 expected_generation,
                                 asyncio.get_running_loop().time(),
@@ -570,6 +581,7 @@ class BioXpConnectionService:
             try:
                 async with lane_lock:
                     dispatched.set()
+                    self._invalidate_v2_query_cache()
                     return await self._request_client(
                         lease.client,
                         route_name,
@@ -578,6 +590,8 @@ class BioXpConnectionService:
                         path_params=path_params,
                     )
             finally:
+                if dispatched.is_set():
+                    self._invalidate_v2_query_cache()
                 await self._release_lease(lease)
 
         task = asyncio.create_task(owned_request(), name=f"bioxp-retained-{route_name}")
@@ -637,10 +651,19 @@ class BioXpConnectionService:
         """Hold one active connection generation across a remote transaction."""
         async with self._transition_lock:
             lease = self._acquire_lease_locked(expected_generation, require_fresh=require_fresh)
+        self._invalidate_v2_query_cache()
         try:
             yield lease.client
         finally:
+            self._invalidate_v2_query_cache()
             await self._release_lease(lease)
+
+    def _invalidate_v2_query_cache(self) -> None:
+        # Invalidate at mutation entry and remote exit (including late failures),
+        # so reads spanning either boundary cannot publish stale observations.
+        self._v2_query_revision += 1
+        self._v2_query_cache.clear()
+        self._v2_query_locks.clear()
 
     def _acquire_lease_locked(self, expected_generation: int, *, require_fresh: bool) -> _GenerationLease:
         if self._client is None or self._active_target is None:
@@ -880,6 +903,7 @@ class BioXpConnectionService:
                 self._apply_probe_payload(payload)
 
     def _clear_observation(self) -> None:
+        self._invalidate_v2_query_cache()
         self._observed_at = None
         self._last_reachable = None
         self._last_runtime_ready = None
@@ -888,7 +912,6 @@ class BioXpConnectionService:
         self._hardware_observation_fresh = None
         self._hardware_evidence_error = None
         self._automatic_snapshot_refresh = None
-        self._v2_query_cache.clear()
         self._capabilities = ()
         self._startup_lifecycle = None
         self._maintenance_state = None

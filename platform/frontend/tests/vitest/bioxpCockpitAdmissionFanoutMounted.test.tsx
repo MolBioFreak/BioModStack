@@ -6,6 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
     stableReset: vi.fn(),
     admissionCalls: 0,
+    catalogArgs: [] as unknown[][],
+    methodReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown },
+    methodHookArgs: [] as unknown[][],
+    methodCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void },
+    historyEnabled: false,
+    pipetteProps: null as Record<string, unknown> | null,
     v1DashboardEnabled: null as boolean | null,
     v1CatalogEnabled: null as boolean | null,
     invokeCalls: [] as Array<Record<string, unknown>>,
@@ -320,8 +326,10 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         state.v1DashboardEnabled = enabled;
         return state.dashboard;
     },
-    useBioXpOperatorDashboardV2: () => state.v2Dashboard,
-    useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
+    useBioXpOperatorDashboardV2: () => ({ ...state.v2Dashboard, data: { ...state.v2Dashboard.data, telemetry: state.dashboard.data } }),
+    useBioXpOperatorControlCatalogV2: (...args: unknown[]) => { state.catalogArgs.push(args); return state.v2Catalog; },
+    useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
+    bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
         if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
@@ -331,6 +339,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     },
     useBioXpOperatorActionHistory: (...args: unknown[]) => {
         state.historyCalls.push(args[2] as number);
+        state.historyEnabled = args[1] as boolean;
         return state.history;
     },
     bioXpReceiptIsNonTerminal: (receipt: { status?: unknown } | null | undefined): boolean =>
@@ -342,7 +351,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         && receipt.status !== 'cleared',
     useBioXpOperatorControlCatalog: (_generation: number, enabled: boolean) => {
         state.v1CatalogEnabled = enabled;
-        return state.catalog;
+        return enabled ? state.catalog : { data: undefined };
     },
     useBioXpOperatorActionAdmission: () => {
         state.admissionCalls += 1;
@@ -433,7 +442,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         data: undefined,
         error: null,
         isPending: false,
-        mutate: (payload: Record<string, unknown>) => state.methodCalls.push(payload),
+        mutate: (payload: Record<string, unknown>, callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void }) => { state.methodCalls.push(payload); state.methodCallbacks = callbacks ?? null; },
         reset: state.stableReset,
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
@@ -453,11 +462,78 @@ vi.mock('../../src/lib/bioxpClient', () => ({
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
-vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null }));
+vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
 vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: () => null }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
+
+describe('primary cockpit query ownership', () => {
+    it('fetches the primary catalog and history without opening Advanced', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(state.v1CatalogEnabled).toBe(true);
+        expect(state.historyEnabled).toBe(true);
+        const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
+        expect([...x.querySelectorAll('button')].find(node => node.textContent === 'Move +')?.disabled).toBe(false);
+    });
+    it('preserves published emergency and pipette admission with Advanced closed', async () => {
+        const emergency = { ...xHomeAction(), action_id: 'meta.emergency_stop', enabled: true };
+        const pipette = { ...xHomeAction(), action_id: 'pipette.connect', enabled: false, disabled_reason: 'Robot refused' };
+        state.catalog.data.actions.push(emergency, pipette);
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => node.textContent === 'Emergency Stop')!;
+        expect(emergencyButton().disabled).toBe(false);
+        const disclosure = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Pipette controls')!;
+        await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+        expect(state.pipetteProps?.connected).toBe(true);
+        expect(state.pipetteProps?.actions).toContain(pipette);
+        expect(pipette.enabled).toBe(false);
+        emergency.enabled = false;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(emergencyButton().disabled).toBe(true);
+        expect([...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Advanced Full Command Catalog')?.open).toBe(false);
+    });
+    it('rejects a late XY submission callback after generation replacement', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).click(); });
+        const callback = state.methodCallbacks;
+        state.connectionGeneration = 2;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { callback?.onSuccess?.({ method_id: 'old-generation', status: 'active' }); });
+        expect(state.methodHookArgs.at(-1)).toEqual([null, 2, true]);
+        expect(container.textContent).not.toContain('old-generation');
+    });
+    it('keeps catalog identity stable during dashboard freshness changes but blocks normal controls', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const original = state.catalogArgs.at(-1);
+        state.v2Dashboard.isStale = true;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(state.catalogArgs.at(-1)).toEqual(original);
+        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(true);
+    });
+    it.each(['completed', 'failed', 'interrupted', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        await act(async () => { button().click(); state.methodCallbacks?.onSuccess?.({ method_id: 'xy-one', status: 'queued' }); });
+        expect(state.methodHookArgs.at(-1)).toEqual(['xy-one', 1, true]);
+        expect(button().disabled).toBe(true);
+        state.methodReceipt.data = { method_id: 'other', status: 'completed' };
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(button().disabled).toBe(true);
+        state.methodReceipt.error = new Error('status unavailable');
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain('Do not retry');
+        state.methodReceipt = { data: { method_id: 'xy-one', status }, error: null };
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain(`XY method ${status}`);
+        expect(button().disabled).toBe(false);
+        state.connectionGeneration = 2;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).not.toContain(`XY method ${status}`);
+        expect(state.methodHookArgs.at(-1)).toEqual([null, 2, true]);
+    });
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -522,6 +598,10 @@ const xReceipt = (status: string, index = 0) => ({
 
 beforeEach(() => {
     state.admissionCalls = 0;
+    state.catalogArgs = [];
+    state.methodHookArgs = [];
+    state.methodReceipt = { data: undefined, error: null };
+    state.methodCallbacks = null;
     state.v1DashboardEnabled = null;
     state.v1CatalogEnabled = null;
     state.connectionGeneration = 1;
@@ -1319,7 +1399,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         expect(state.admissionCalls).toBe(0);
-        expect(state.v1DashboardEnabled).toBe(true);
+        expect(state.v1DashboardEnabled).toBeNull();
         expect(state.v1CatalogEnabled).toBe(true);
         expect(document.body.textContent).not.toContain('Checking exact robot admission.');
 
