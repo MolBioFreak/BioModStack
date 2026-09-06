@@ -241,6 +241,81 @@ async def test_transport_failure_is_specific_and_cannot_overwrite_racing_lease(s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['stopped', 'endpoint'])
+@pytest.mark.parametrize('restart', [False, True])
+async def test_inventory_interruption_finishes_setup_without_replacing_inventory(store, monkeypatch, change, restart):
+    session, factory = store
+    inventory(monkeypatch, ['49674511'])
+    saved = {}
+    async def interrupt(db, identifier):
+        row = await targets.get_target(db, identifier)
+        await targets.set_setup(db, row, 'installing', 'Installing tools')
+        inventory(monkeypatch, ['49674511'], state='stopped' if change == 'stopped' else 'running',
+                  host='203.0.113.99' if change == 'endpoint' else '203.0.113.10')
+        async with factory() as other:
+            await targets.refresh_vast_targets(other)
+            current = await targets.get_target(other, identifier)
+            saved.update(state=current.state, active=current.active, host=current.host,
+                         error=current.last_error, inventory=dict(current.provider_metadata['inventory']))
+        raise targets.ExecutionTargetError('Vast inventory or endpoint changed during attachment')
+    controller = targets.AttachmentController(factory)
+    request = ExecutionTargetActivateRequest(provider_instance_id='49674511')
+    try:
+        if restart:
+            result = await targets.begin_activation(session, request)
+            with pytest.raises(targets.ExecutionTargetError):
+                await interrupt(session, result.id)
+            await controller.recover()
+        else:
+            monkeypatch.setattr(targets, 'finish_activation', interrupt)
+            await controller.attach(session, request)
+            await asyncio.gather(*controller.tasks.values())
+        async with factory() as other:
+            row = await targets.get_target(other, 'vast:49674511')
+            assert row.provider_metadata['setup']['phase'] == 'failed'
+            assert (row.state, row.active, row.host, row.last_error) == (saved['state'], saved['active'], saved['host'], saved['error'])
+            assert row.provider_metadata['inventory'] == saved['inventory']
+            assert row.leased_job_id is None
+    finally:
+        await controller.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('new_owner', ['successor', 'lease'])
+async def test_old_setup_cleanup_preserves_new_owner(store, monkeypatch, new_owner):
+    session, factory = store
+    inventory(monkeypatch, ['49674511'])
+    saved = {}
+    async def replaced(db, identifier):
+        row = await targets.get_target(db, identifier)
+        await targets.set_setup(db, row, 'transferring', 'Transferring old attempt')
+        async with factory() as other:
+            inventory(monkeypatch, ['49674511'], host='203.0.113.99')
+            await targets.refresh_vast_targets(other)
+            current = await targets.get_target(other, identifier)
+            if new_owner == 'successor':
+                await targets.begin_activation(other, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+                await other.refresh(current)
+            else:
+                current.leased_job_id = 'new-lease'
+                await other.commit()
+            saved.update(state=current.state, active=current.active, error=current.last_error,
+                         setup=dict(current.provider_metadata['setup']), lease=current.leased_job_id)
+        raise targets.ExecutionTargetError('Vast inventory or endpoint changed during attachment')
+    monkeypatch.setattr(targets, 'finish_activation', replaced)
+    controller = targets.AttachmentController(factory)
+    try:
+        await controller.attach(session, ExecutionTargetActivateRequest(provider_instance_id='49674511'))
+        await asyncio.gather(*controller.tasks.values())
+        async with factory() as other:
+            row = await targets.get_target(other, 'vast:49674511')
+            assert row.provider_metadata['setup'] == saved['setup']
+            assert (row.state, row.active, row.last_error, row.leased_job_id) == (saved['state'], saved['active'], saved['error'], saved['lease'])
+    finally:
+        await controller.close()
+
+
+@pytest.mark.asyncio
 async def test_controller_preserves_controlled_inventory_failure(store, monkeypatch):
     session, factory = store
     inventory(monkeypatch, ['49674511'])

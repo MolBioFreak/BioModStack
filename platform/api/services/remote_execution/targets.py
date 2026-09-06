@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import ExecutionTarget, Job
@@ -272,14 +272,42 @@ async def _refresh_vast_targets(session: AsyncSession) -> ExecutionTargetInvento
     return inventory
 
 
-async def set_setup(session, target, phase: str, message: str) -> None:
+SETUP_ACTIVE_PHASES = ("checking", "installing", "transferring", "verifying")
+
+
+async def fail_setup(session, identifier, started_at, message: str) -> None:
+    """End only this setup attempt; retain inventory-owned state and errors."""
+    probing = ExecutionTarget.state == "probing"
+    now = datetime.utcnow()
+    await session.execute(update(ExecutionTarget).where(
+        ExecutionTarget.id == identifier, ExecutionTarget.leased_job_id.is_(None),
+        ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
+        or_(probing, ExecutionTarget.provider_metadata["setup"]["phase"].as_string().in_(SETUP_ACTIVE_PHASES)),
+    ).values(
+        provider_metadata=func.json_set(ExecutionTarget.provider_metadata,
+            "$.setup.phase", "failed", "$.setup.message", message, "$.setup.updated_at", now.isoformat()),
+        state=case((probing, "unavailable"), else_=ExecutionTarget.state),
+        active=case((probing, False), else_=ExecutionTarget.active),
+        last_error=case((probing, message), else_=ExecutionTarget.last_error),
+        updated_at=now,
+    ).execution_options(synchronize_session=False))
+    await session.commit()
+
+
+async def set_setup(session, target, phase: str, message: str, *, expected_started_at=None) -> None:
     await session.refresh(target)
     now = datetime.utcnow().isoformat()
     previous = (target.provider_metadata or {}).get("setup", {})
     setup = {"phase": phase, "message": message, "started_at": previous.get("started_at", now), "updated_at": now}
-    await session.execute(update(ExecutionTarget).where(ExecutionTarget.id == target.id).values(
+    predicate = ExecutionTarget.id == target.id
+    if expected_started_at is not None:
+        predicate = predicate & (ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == expected_started_at)
+    published = await session.execute(update(ExecutionTarget).where(predicate).values(
         provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.setup", func.json(json.dumps(setup)))
     ).execution_options(synchronize_session=False))
+    if published.rowcount != 1:
+        await session.rollback()
+        raise ExecutionTargetError("Setup attempt was replaced; current attempt preserved")
     await session.commit()
     await session.refresh(target)
 
@@ -299,25 +327,24 @@ class AttachmentController:
             if self.tasks:
                 raise ExecutionTargetError("An attachment is already in progress")
             result = await begin_activation(session, request)
-            task = asyncio.create_task(self._run(result.id), name=f"attach-{result.id}")
+            if result.setup is None or result.setup.started_at is None:
+                raise ExecutionTargetError("Setup admission did not publish an attempt identity")
+            task = asyncio.create_task(self._run(result.id, result.setup.started_at.isoformat()), name=f"attach-{result.id}")
             self.tasks[result.id] = task
             return result
 
-    async def _run(self, identifier):
+    async def _run(self, identifier, started_at):
         try:
             async with self.session_factory() as session:
                 await finish_activation(session, identifier)
         except BaseException as exc:
             async with self.session_factory() as session:
                 row = await get_target(session, identifier)
-                if row.state == "probing" and not row.leased_job_id:
-                    phase = (row.provider_metadata or {}).get("setup", {}).get("phase", "checking")
-                    message = f"Remote setup interrupted during {phase}; retry Attach" if isinstance(exc, asyncio.CancelledError) else f"Remote setup failed during {phase}; retry Attach"
-                    if isinstance(exc, ExecutionTargetError):
-                        message = str(exc)
-                    await set_setup(session, row, "failed", message)
-                    row.state, row.active, row.last_error = "unavailable", False, message
-                    await session.commit()
+                phase = (row.provider_metadata or {}).get("setup", {}).get("phase", "checking")
+                message = f"Remote setup interrupted during {phase}; retry Attach" if isinstance(exc, asyncio.CancelledError) else f"Remote setup failed during {phase}; retry Attach"
+                if isinstance(exc, ExecutionTargetError):
+                    message = str(exc)
+                await fail_setup(session, identifier, started_at, message)
             if isinstance(exc, asyncio.CancelledError):
                 raise
         finally:
@@ -326,12 +353,12 @@ class AttachmentController:
     async def recover(self):
         async with self.session_factory() as session:
             rows = (await session.scalars(select(ExecutionTarget).where(
-                ExecutionTarget.state == "probing", ExecutionTarget.leased_job_id.is_(None)))).all()
+                or_(ExecutionTarget.state == "probing",
+                    ExecutionTarget.provider_metadata["setup"]["phase"].as_string().in_(SETUP_ACTIVE_PHASES)),
+                ExecutionTarget.leased_job_id.is_(None)))).all()
             for row in rows:
                 message = "Remote setup interrupted by service restart; retry Attach"
-                await set_setup(session, row, "failed", message)
-                row.state, row.active, row.last_error = "unavailable", False, message
-            await session.commit()
+                await fail_setup(session, row.id, (row.provider_metadata or {}).get("setup", {}).get("started_at"), message)
 
     async def close(self):
         self.closed = True
@@ -395,6 +422,10 @@ async def begin_activation(
         username=request.username or instance.username or "root", remote_root=request.remote_root,
         capabilities=_capabilities(instance), pricing=_pricing(instance),
         last_seen_at=now, updated_at=now, last_error=None,
+        provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.setup", func.json(json.dumps({
+            "phase": "checking", "message": "Checking remote worker compatibility",
+            "started_at": now.isoformat(), "updated_at": now.isoformat(),
+        }))),
     ).execution_options(synchronize_session=False))
     if admitted.rowcount != 1:
         await session.rollback()
@@ -402,13 +433,14 @@ async def begin_activation(
     await session.commit()
     target = await get_target(session, identifier)
 
-    await set_setup(session, target, "checking", "Checking remote worker compatibility")
+    await session.refresh(target)
     return _target_response(target)
 
 
 async def finish_activation(session: AsyncSession, identifier: str) -> ExecutionTargetResponse:
     target = await get_target(session, identifier)
     connection = RemoteConnection.from_target(target)
+    started_at = (target.provider_metadata or {}).get("setup", {}).get("started_at")
 
     async def checked_io(operation, *args, **kwargs):
         await session.refresh(target)
@@ -417,6 +449,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                 or target.provider_metadata["inventory"].get("running") is not True
 
                 or target.state != "probing" or target.leased_job_id
+                or (target.provider_metadata or {}).get("setup", {}).get("started_at") != started_at
                 or (target.host, target.port, target.username, target.remote_root) !=
                    (connection.host, connection.port, connection.username, connection.remote_root)):
             raise ExecutionTargetError("Vast inventory or endpoint changed during attachment")
@@ -437,10 +470,10 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         await persist_host_key(host_key_line, fingerprint)
         script = Path(__file__).with_name("bootstrap_worker.sh").read_bytes()
         await checked_io(run_remote, connection, ["bash", "-s", "--", "check", connection.remote_root], input_bytes=script, timeout=60)
-        await set_setup(session, target, "installing", "Installing missing worker tools (up to 30 minutes)")
+        await set_setup(session, target, "installing", "Installing missing worker tools (up to 30 minutes)", expected_started_at=started_at)
         await checked_io(run_remote, connection, ["bash", "-s", "--", "install", connection.remote_root], input_bytes=script, timeout=3600)
         probe = await checked_io(probe_readiness, connection)
-        await set_setup(session, target, "transferring", "Transferring verified runner and Nextflow; slow links may take up to one hour")
+        await set_setup(session, target, "transferring", "Transferring verified runner and Nextflow; slow links may take up to one hour", expected_started_at=started_at)
         runner = Path(__file__).resolve().parents[2] / "tools" / "bms_remote_worker.py"
         from services.nextflow import resolve_nextflow_executable, resolve_nextflow_version
 
@@ -483,7 +516,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         ]
         if observed_hashes != [runner_sha256, nextflow_sha256]:
             raise RemoteTransportError("Remote runner transfer failed integrity verification")
-        await set_setup(session, target, "verifying", "Verifying Nextflow and CUDA inside a pinned container")
+        await set_setup(session, target, "verifying", "Verifying Nextflow and CUDA inside a pinned container", expected_started_at=started_at)
         expected_version = resolve_nextflow_version()
         version = await checked_verification(
             ["env", "NXF_OFFLINE=true", f"NXF_VER={expected_version}", f"{connection.remote_root}/runner/nextflow", "-version"],
@@ -512,6 +545,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
                  "message": message, "updated_at": datetime.utcnow().isoformat()}
         await session.execute(update(ExecutionTarget).where(
             ExecutionTarget.id == identifier, ExecutionTarget.state == "probing",
+            ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
             ExecutionTarget.leased_job_id.is_(None), ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port, ExecutionTarget.username == connection.username,
             ExecutionTarget.remote_root == connection.remote_root,
@@ -543,6 +577,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         update(ExecutionTarget).where(
             ExecutionTarget.id == identifier,
             ExecutionTarget.state == "probing",
+            ExecutionTarget.provider_metadata["setup"]["started_at"].as_string() == started_at,
             ExecutionTarget.leased_job_id.is_(None),
             ExecutionTarget.host == connection.host,
             ExecutionTarget.port == connection.port,
