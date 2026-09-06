@@ -4070,6 +4070,19 @@ class OperatorAssessmentRequest(BaseModel):
 
 class OperatorActionReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    transport_exchanges: list[OperatorTransportExchangeV2] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    transport_retention_errors: list[OperatorTransportRetentionErrorV2] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("transport_exchanges", "transport_retention_errors", mode="before")
+    @classmethod
+    def reject_null_transport_evidence(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("present transport evidence must be an array")
+        return value
     schema_version: Literal["bioxp.operator_action_receipt.v1"]
     command_id: str = Field(min_length=1, max_length=128)
     action_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.-]*$")

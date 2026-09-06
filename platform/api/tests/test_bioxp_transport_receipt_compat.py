@@ -4,7 +4,8 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from services.bioxp.operator_models import OperatorActionReceiptV2, OperatorDashboardV2
+from services.bioxp.operator_models import OperatorActionReceiptV2, OperatorDashboardV2, OperatorActionReceipt
+from test_bioxp_operator_controls import receipt as legacy_receipt
 from test_serial206_bioxp_v2_models import compact_payload, dashboard_payload
 from test_bioxp_operator_controls import make_client
 
@@ -32,6 +33,30 @@ def evidence():
     return {"transport_exchanges": [exchange_payload()], "transport_retention_errors": [
         {"stage": "sink", "class": "OSError", "message": "retention unavailable"}
     ]}
+
+
+@pytest.mark.parametrize("populated", [False, True])
+def test_v1_transport_evidence_survives_receipt_parsing(populated):
+    payload = legacy_receipt()
+    payload.update(evidence() if populated else {
+        "transport_exchanges": [], "transport_retention_errors": []})
+    result = OperatorActionReceipt.model_validate(payload).model_dump(mode="json")
+    for key in ("transport_exchanges", "transport_retention_errors"):
+        assert result[key] == payload[key]
+
+
+def test_old_v1_receipts_keep_absent_transport_evidence_absent():
+    result = OperatorActionReceipt.model_validate(legacy_receipt()).model_dump(mode="json")
+    assert "transport_exchanges" not in result
+    assert "transport_retention_errors" not in result
+
+
+@pytest.mark.parametrize("key", ["transport_exchanges", "transport_retention_errors"])
+def test_v1_rejects_explicit_null_transport_evidence(key):
+    payload = legacy_receipt()
+    payload[key] = None
+    with pytest.raises(ValidationError):
+        OperatorActionReceipt.model_validate(payload)
 
 
 @pytest.mark.parametrize("populated", [False, True])
