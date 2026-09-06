@@ -1471,14 +1471,14 @@ async def _claim_remote_job(
             Job.nextflow_run_id.is_(None),
         )
         .values(
-            status="running",
-            queue_status="running",
-            started_at=datetime.utcnow(),
+            status="queued",
+            queue_status="preparing",
+            started_at=None,
             assigned_gpu=gpu_id,
             vram_estimate_mb=int(vram_estimate_mb),
             params=scheduler_params,
             provenance=provenance,
-            remote_state="staging",
+            remote_state="preparing",
             error_message=None,
         )
         .execution_options(synchronize_session=False)
@@ -1487,14 +1487,14 @@ async def _claim_remote_job(
         await session.rollback()
         await session.refresh(job)
         return None
-    job.status = "running"
-    job.queue_status = "running"
-    job.started_at = job.started_at or datetime.utcnow()
+    job.status = "queued"
+    job.queue_status = "preparing"
+    job.started_at = None
     job.assigned_gpu = gpu_id
     job.vram_estimate_mb = int(vram_estimate_mb)
     job.params = scheduler_params
     job.provenance = provenance
-    job.remote_state = "staging"
+    job.remote_state = "preparing"
     job.error_message = None
     await session.commit()
     return scheduler_params
@@ -3168,28 +3168,48 @@ class GPUOrchestrator:
                 from sqlalchemy import select, func
                 from database import Job, Design
                 
-                # Get jobs that are currently running
+                # Recovery for older finalizers/crashes after terminal commit.
+                # Only a lease still owned by the exact terminal target/job pair
+                # is releasable; never rewrite immutable terminal job history.
+                from sqlalchemy import update
+                from database import ExecutionTarget
+                terminal_owner = select(Job.id).where(
+                    Job.id == ExecutionTarget.leased_job_id,
+                    Job.execution_target_id == ExecutionTarget.id,
+                    Job.status.in_(("completed", "failed", "cancelled")),
+                    Job.queue_status.in_(("completed", "failed", "cancelled")),
+                ).exists()
+                await session.execute(update(ExecutionTarget).where(terminal_owner).values(
+                    leased_job_id=None, lease_acquired_at=None,
+                ).execution_options(synchronize_session=False))
+                await session.commit()
+                # Preparing claims are durable work, not scheduler-claimable jobs.
                 result = await session.execute(
                     select(Job).where(
-                        Job.queue_status.in_(("running", "cancelling"))
+                        Job.queue_status.in_(("running", "cancelling", "preparing"))
                     )
                 )
                 running_jobs = result.scalars().all()
 
-                remote_jobs = [job for job in running_jobs if job.execution_target_id]
-                if remote_jobs:
+                remote_ids = [str(job.id) for job in running_jobs if job.execution_target_id]
+                running_jobs = [job for job in running_jobs if not job.execution_target_id]
+                if remote_ids:
                     from services.remote_execution.executor import reconcile_remote_job
 
-                    for remote_job in remote_jobs:
+                    # Reconciliation rolls back/commits by design. Isolate its ORM
+                    # expiration and failures from following remote and local jobs.
+                    for remote_id in remote_ids:
                         try:
-                            await reconcile_remote_job(session, remote_job)
+                            async with self.db_session_factory() as remote_session:
+                                remote_job = await remote_session.get(Job, remote_id)
+                                if remote_job is not None:
+                                    await reconcile_remote_job(remote_session, remote_job)
                         except Exception as remote_error:
                             logger.warning(
                                 "[REMOTE COMPLETION] Job %s remains pending reconciliation: %s",
-                                remote_job.id,
+                                remote_id,
                                 remote_error,
                             )
-                    running_jobs = [job for job in running_jobs if not job.execution_target_id]
 
                 if not running_jobs:
                     return

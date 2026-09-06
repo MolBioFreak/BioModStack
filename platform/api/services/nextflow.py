@@ -2114,17 +2114,6 @@ async def launch_nextflow_job(
                 else "auto"
             )
 
-    launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
-    preflight_notes: List[str] = list(boltzgen_notes)
-    is_protenix = _is_protenix_job(model_id, launch_params)
-    if is_protenix:
-        launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
-        if preflight_notes:
-            logger.warning(
-                f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
-                + " | ".join(preflight_notes)
-            )
-    
     async with async_session() as session:
         # Update job to running
         result = await session.execute(select(Job).where(Job.id == job_id))
@@ -2132,6 +2121,25 @@ async def launch_nextflow_job(
         
         if not job:
             logger.error(f"Job {job_id} not found in database")
+            return
+
+        try:
+            launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
+            preflight_notes: List[str] = list(boltzgen_notes)
+            is_protenix = _is_protenix_job(model_id, launch_params)
+            if is_protenix:
+                launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
+                if preflight_notes:
+                    logger.warning(
+                        f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
+                        + " | ".join(preflight_notes)
+                    )
+        except Exception as exc:
+            if not job.execution_target_id:
+                raise
+            from services.remote_execution.executor import fail_remote_prestart
+
+            await fail_remote_prestart(session, job, str(exc))
             return
 
         if job.status == JobStatus.RUNNING.value and job.started_at is not None and not allow_running_job:
@@ -2148,7 +2156,13 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        needs_running_transition = job.status != JobStatus.RUNNING.value or job.started_at is None
+        remote_launch_authority = (
+            job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+            dict((job.provenance or {}).get("remote_execution_assignment") or {}),
+        ) if job.execution_target_id else None
+        needs_running_transition = not job.execution_target_id and (
+            job.status != JobStatus.RUNNING.value or job.started_at is None
+        )
         if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
@@ -2223,9 +2237,10 @@ async def launch_nextflow_job(
                 stage_report_token, stage_report_digest = stage_reporting.issue_stage_report_token()
                 provenance = dict(job.provenance or {})
                 provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = stage_report_digest
-                job.provenance = provenance
-                await session.commit()
-                from services.remote_execution.executor import launch_remote_job
+                from services.remote_execution.executor import launch_remote_job, _publish_remote_transition
+
+                if not await _publish_remote_transition(session, job, {"provenance": provenance}):
+                    return
 
                 remote_run_id = await launch_remote_job(
                     session,
@@ -3022,6 +3037,16 @@ async def launch_nextflow_job(
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
+            if job and remote_launch_authority is not None:
+                current_authority = (
+                    job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+                    dict((job.provenance or {}).get("remote_execution_assignment") or {}),
+                )
+                if current_authority == remote_launch_authority:
+                    from services.remote_execution.executor import fail_remote_prestart
+
+                    await fail_remote_prestart(session, job, str(e))
+                return
             if job:
                 # Don't overwrite if already cancelled
                 await session.refresh(job)

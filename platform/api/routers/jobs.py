@@ -8360,6 +8360,24 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
     }
 
 
+def _stage_callback_has_authority(job: Job) -> bool:
+    if job.awaiting_input:
+        return False
+    if job.status == "running" and job.queue_status == "running":
+        return True
+    # Stage reports are metadata, not a started/completed Job publication. An
+    # authenticated worker may report immediately after spawn, before its SSH
+    # start response arrives. Only the current immutable launch may do this.
+    receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    return bool(
+        job.execution_target_id and job.status == "queued" and job.queue_status == "preparing"
+        and job.remote_state in {"launch_requested", "launch_uncertain"}
+        and job.remote_attempt_id
+        and job.nextflow_run_id == f"remote:{job.remote_attempt_id}"
+        and receipt.get("attempt_id") == job.remote_attempt_id
+    )
+
+
 async def _publish_generic_stage_terminal(
     *,
     session: AsyncSession,
@@ -8377,11 +8395,7 @@ async def _publish_generic_stage_terminal(
             raise HTTPException(status_code=404, detail="Job not found")
         if not stage_reporting.token_is_authorized(current.provenance, token):
             raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-        if (
-            current.status != JobStatus.RUNNING.value
-            or current.queue_status != "running"
-            or current.awaiting_input
-        ):
+        if not _stage_callback_has_authority(current):
             raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
 
         original_completed = current.completed_stages
@@ -8408,8 +8422,13 @@ async def _publish_generic_stage_terminal(
 
         predicates = [
             Job.id == job_id,
-            Job.status == JobStatus.RUNNING.value,
-            Job.queue_status == "running",
+            Job.status == current.status,
+            Job.queue_status == current.queue_status,
+            *([
+                Job.remote_attempt_id == current.remote_attempt_id,
+                Job.nextflow_run_id == current.nextflow_run_id,
+                Job.remote_state == current.remote_state,
+            ] if getattr(current, "execution_target_id", None) else []),
             Job.awaiting_input.is_(False),
             Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
             Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
@@ -8909,11 +8928,7 @@ async def _publish_generic_stage_start(
             raise HTTPException(status_code=404, detail="Job not found")
         if not stage_reporting.token_is_authorized(current.provenance, token):
             raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-        if (
-            current.status != JobStatus.RUNNING.value
-            or current.queue_status != "running"
-            or current.awaiting_input
-        ):
+        if not _stage_callback_has_authority(current):
             raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
 
         original_current_stage = current.current_stage
@@ -8936,8 +8951,13 @@ async def _publish_generic_stage_start(
 
         predicates = [
             Job.id == job_id,
-            Job.status == JobStatus.RUNNING.value,
-            Job.queue_status == "running",
+            Job.status == current.status,
+            Job.queue_status == current.queue_status,
+            *([
+                Job.remote_attempt_id == current.remote_attempt_id,
+                Job.nextflow_run_id == current.nextflow_run_id,
+                Job.remote_state == current.remote_state,
+            ] if getattr(current, "execution_target_id", None) else []),
             Job.awaiting_input.is_(False),
             Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
             Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,

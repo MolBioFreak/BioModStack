@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -114,12 +115,35 @@ async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout
         stdin=asyncio.subprocess.PIPE if input_bytes is not None else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), timeout=timeout)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+    except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+        async def stop_group() -> None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+        cleanup = asyncio.create_task(stop_group())
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+        if isinstance(exc, asyncio.CancelledError):
+            raise
         raise RemoteTransportError("Remote transport timed out") from None
     return CommandResult(
         returncode=int(process.returncode or 0),
@@ -218,7 +242,6 @@ async def rsync_to_remote(
         "--archive",
         "--partial",
         "--protect-args",
-        "--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r",
     ]
     if source.is_dir() and delete:
         rsync_options.append("--delete")
@@ -306,14 +329,10 @@ async def rsync_selected_from_remote(
 
 async def probe_readiness(connection: RemoteConnection) -> dict[str, object]:
     root = connection.remote_root
-    canonical_data_root = str(get_data_root())
     script = (
         "set -eu; "
         f"mkdir -p {shlex.quote(root)}/{{revisions,runtimes,attempts,incoming,cache}}; "
         f"test -w {shlex.quote(root)}; "
-        f"mkdir -p {shlex.quote(canonical_data_root)}; test -w {shlex.quote(canonical_data_root)}; "
-        f"for p in apptainer weights runtime; do d={shlex.quote(canonical_data_root)}/\"$p\"; "
-        "test ! -e \"$d\" || test -L \"$d\" || { echo \"occupied:$d\"; exit 21; }; done; "
         "for c in python3 bash rsync tar sha256sum java apptainer nvidia-smi; do command -v \"$c\" >/dev/null || { echo \"missing:$c\"; exit 20; }; done; "
         "python3 -c 'import json,platform,shutil,subprocess; "
         "g=subprocess.run([\"nvidia-smi\",\"--query-gpu=index,uuid,name,memory.total\",\"--format=csv,noheader,nounits\"],capture_output=True,text=True,check=True); "
