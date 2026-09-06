@@ -3165,6 +3165,9 @@ class OperatorDashboardXProviderSuccess(BaseModel):
     motor: Literal[0]
     source_min_steps: Literal[0]
     source_max_steps: Literal[90263]
+    # Current robot projection publishes null: its production X profile has no
+    # axis_max_source key. Preserve unknown provenance, not invented authority.
+    source_limit_authority: None = None
     effective_absolute_min_steps: Literal[60]
     relative_limit_margin_steps: Literal[20]
     current_generation: StrictInt

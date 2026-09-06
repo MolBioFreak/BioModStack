@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { api } from './api.js';
 
@@ -1492,7 +1492,8 @@ const useInvokeBioXpOperatorActionV2Mutation = () => {
                 )
             ).data;
         },
-        onSettled: () => {
+        onSettled: (_receipt, _error, variables) => {
+            void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, variables.request.expected_connection_generation] });
             void queryClient.invalidateQueries({ queryKey: operatorV2DashboardKey });
             void queryClient.invalidateQueries({ queryKey: operatorV2CatalogKey });
         },
@@ -1598,19 +1599,29 @@ export const useBioXpOperatorMethodV1 = (
     methodId: string | null,
     connectionGeneration: number,
     enabled = true,
-) => useQuery({
-    queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
-    queryFn: async () => (
-        await api.get<BioXpOperatorMethodV1>(
-            `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
-        )
-    ).data,
-    enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
-    gcTime: 0,
-    retry: false,
-    refetchInterval: (query) => bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
-    refetchIntervalInBackground: false,
-});
+) => {
+    const queryClient = useQueryClient();
+    return useQuery({
+        queryKey: ['bioxp', 'operator-controls', 'v2', 'method', methodId, connectionGeneration],
+        queryFn: async () => {
+            const method = (await api.get<BioXpOperatorMethodV1>(
+                `/api/bioxp/operator-controls/v2/methods/${encodeURIComponent(methodId ?? '')}`,
+            )).data;
+            if (method.method_id !== methodId) throw new Error('XY method identity mismatch; outcome remains unresolved');
+            if (bioXpMethodV1IsTerminal(method)) {
+                void queryClient.invalidateQueries({ queryKey: [...operatorHistoryKey, connectionGeneration] });
+                void queryClient.invalidateQueries({ queryKey: [...operatorV2DashboardKey, connectionGeneration] });
+                void queryClient.invalidateQueries({ queryKey: [...operatorV2CatalogKey, connectionGeneration] });
+            }
+            return method;
+        },
+        enabled: enabled && Boolean(methodId) && connectionGeneration > 0,
+        gcTime: 0,
+        retry: false,
+        refetchInterval: (query) => query.state.data && bioXpMethodV1IsTerminal(query.state.data) ? false : 500,
+        refetchIntervalInBackground: false,
+    });
+};
 
 export const useBioXpOperatorCommandV2 = (
     commandId: string | null,
@@ -1696,13 +1707,15 @@ export const useBioXpOperatorActionHistory = (
     enabled = true,
     limit = 100,
 ) => useQuery({
-    queryKey: [...operatorHistoryKey, connectionGeneration, enabled, limit],
+    queryKey: [...operatorHistoryKey, connectionGeneration, limit],
     queryFn: async () => (
         await api.get<BioXpOperatorActionHistory>(`/api/bioxp/operator-controls/history?limit=${limit}`)
     ).data,
     enabled: enabled && connectionGeneration > 0,
     gcTime: 0,
     retry: false,
+    refetchInterval: (query) => query.state.data?.receipts.some(bioXpReceiptIsNonTerminal) ? 1000 : false,
+    refetchIntervalInBackground: false,
 });
 
 export const useBioXpOperatorReportSummary = (
@@ -2054,6 +2067,17 @@ export const useSubmitBioXpProtocol = () => useRefreshMutation(
 );
 
 
+const updateBioXpHistoryCaches = (queryClient: QueryClient, generation: number, receipt: BioXpOperatorActionReceipt) => {
+    for (const query of queryClient.getQueryCache().findAll({ queryKey: [...operatorHistoryKey, generation] })) {
+        const limit = query.queryKey[operatorHistoryKey.length + 1];
+        if (typeof limit !== 'number') continue;
+        queryClient.setQueryData<BioXpOperatorActionHistory>(query.queryKey, (current) => ({
+            schema_version: 'bioxp.operator_action_history.v1',
+            receipts: [receipt, ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id)].slice(0, limit),
+        }));
+    }
+};
+
 export const useInvokeBioXpOperatorAction = () => {
     const queryClient = useQueryClient();
     return useMutation({
@@ -2076,20 +2100,10 @@ export const useInvokeBioXpOperatorAction = () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
         onSuccess: (receipt, variables) => {
-            queryClient.setQueryData<BioXpOperatorActionHistory>(
-                [...operatorHistoryKey, variables.connectionGeneration, true],
-                (current) => ({
-                    schema_version: 'bioxp.operator_action_history.v1',
-                    receipts: [
-                        receipt,
-                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
-                    ].slice(0, 100),
-                }),
-            );
+            updateBioXpHistoryCaches(queryClient, variables.connectionGeneration, receipt);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorCatalogKey }),
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
         },
     });
@@ -2119,19 +2133,9 @@ export const useAssessBioXpOperatorAction = () => {
             await queryClient.cancelQueries({ queryKey: operatorHistoryKey });
         },
         onSuccess: (receipt, variables) => {
-            queryClient.setQueryData<BioXpOperatorActionHistory>(
-                [...operatorHistoryKey, variables.connectionGeneration, true],
-                (current) => ({
-                    schema_version: 'bioxp.operator_action_history.v1',
-                    receipts: [
-                        receipt,
-                        ...(current?.receipts ?? []).filter((row) => !('command_id' in row) || row.command_id !== receipt.command_id),
-                    ].slice(0, 100),
-                }),
-            );
+            updateBioXpHistoryCaches(queryClient, variables.connectionGeneration, receipt);
             void Promise.all([
                 queryClient.invalidateQueries({ queryKey: operatorDashboardKey }),
-                queryClient.invalidateQueries({ queryKey: operatorHistoryKey }),
             ]);
         },
     });
