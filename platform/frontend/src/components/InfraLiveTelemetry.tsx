@@ -1780,6 +1780,13 @@ export function InfraLiveTelemetry({
                     </div>
 
                     <div className={`grid xl:grid-cols-2 ${compact ? dashboardSizing.layoutGapClass : 'gap-6'}`}>
+                        {payload.gpus.length === 0 && (
+                            <div role={payload.gpu_error || liveStatusQuery.isError ? 'alert' : 'status'}
+                                className="col-span-full text-sm text-[var(--text-secondary)]">
+                                {liveStatusQuery.isError ? 'GPU status unavailable' : payload.gpu_error
+                                    ? `GPU telemetry unavailable: ${payload.gpu_error}` : 'No NVIDIA GPU installed'}
+                            </div>
+                        )}
                         {payload.gpus.map((gpu) => (
                             <GpuPanel
                                 key={gpu.index}

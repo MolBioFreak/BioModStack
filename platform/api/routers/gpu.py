@@ -1958,6 +1958,9 @@ _load_fan_state()
 
 def _collect_gpu_stats() -> tuple[List[GPUStatusEnhanced], Optional[str]]:
     """Get enhanced GPU statistics using pynvml, with nvidia-smi fallback."""
+    from services.nvidia_inventory import nvidia_gpu_present
+    if nvidia_gpu_present() is False:
+        return [], None
     def _load_active_gpu_reservations() -> tuple[Dict[int, int], Dict[int, List[tuple[Optional[str], Optional[str]]]]]:
         reservations: Dict[int, int] = {}
         gpu_job_info: Dict[int, List[tuple[Optional[str], Optional[str]]]] = {}
