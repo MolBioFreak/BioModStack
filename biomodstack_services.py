@@ -1534,6 +1534,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
     dev_inputs_dir = str(resolved.get("dev_inputs_dir", Path(dev_data_root) / "inputs"))
     dev_db_path = str(resolved.get("dev_db_path", Path(dev_data_root) / "biomodstack.db"))
     dev_work_dir = str(resolved.get("dev_work_dir", Path(dev_data_root) / "work"))
+    dev_analysis_cache_dir = str(Path(dev_data_root) / "analysis_cache")
     dev_results_root = str(resolved.get("dev_results_dir", Path(dev_data_root) / "bms_results"))
     # Model weights are immutable shared runtime assets, not lane-owned job
     # state.  Native Development keeps its DB/work/results isolated while
@@ -1673,6 +1674,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_INPUTS={dev_inputs_dir}")}
         Environment={systemd_value(f"BMS_DB_PATH={dev_db_path}")}
         Environment={systemd_value(f"BMS_WORK={dev_work_dir}")}
+        Environment={systemd_value(f"BMS_ANALYSIS_CACHE={dev_analysis_cache_dir}")}
         Environment={systemd_value(f"BMS_RESULTS_DIR={dev_results_root}")}
         Environment={systemd_value(f"BMS_RESULTS_ROOT={dev_results_root}")}
         Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}
@@ -1731,6 +1733,7 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_DB_PATH={dev_db_path}")}
         Environment={systemd_value(f"BMS_TELEMETRY_DB_PATH={telemetry_db}")}
         Environment={systemd_value(f"BMS_WORK={dev_work_dir}")}
+        Environment={systemd_value(f"BMS_ANALYSIS_CACHE={dev_analysis_cache_dir}")}
         Environment={systemd_value(f"BMS_RESULTS_DIR={dev_results_root}")}
         Environment={systemd_value(f"BMS_RESULTS_ROOT={dev_results_root}")}
         Environment={systemd_value(f"BMS_LOCAL_CPU_THREADS={local_policy.cpu_threads}")}

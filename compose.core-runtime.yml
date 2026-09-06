@@ -57,6 +57,7 @@ services:
       BMS_INPUTS: ${BMS_INPUTS_CONTAINER_PATH:-/var/lib/biomodstack/inputs}
       BMS_DB_PATH: ${BMS_DB_CONTAINER_PATH:-/var/lib/biomodstack/biomodstack.db}
       BMS_TELEMETRY_DB_PATH: ${BMS_TELEMETRY_DB_CONTAINER_PATH:-/var/lib/biomodstack/telemetry/telemetry.sqlite3}
+      BMS_RESULTS_CONTAINER_PATH: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
       BMS_RESULTS_DIR: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
       BMS_RESULTS_ROOT: ${BMS_RESULTS_CONTAINER_PATH:-${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/bms_results}
       BMS_WEIGHTS: ${BMS_CONTAINER_STATE_PATH:-/var/lib/biomodstack}/weights

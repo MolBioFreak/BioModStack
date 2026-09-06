@@ -42,16 +42,19 @@ def test_core_launcher_environment_ignores_development_storage(split, monkeypatc
 
 
 @pytest.mark.runtime_integration
-def test_split_profile_exports_compose_mounts_and_adapter_identity(split):
+@pytest.mark.parametrize("custom_results", [None, "/srv/separate-results"])
+def test_split_profile_exports_compose_mounts_and_adapter_identity(split, custom_results):
     profile.save_install_profile(split)
     assert profile.load_install_profile()['work_dir'] == split['work_dir']
     env = {k: v for k, v in os.environ.items() if not k.startswith('BMS_')}
+    if custom_results:
+        env['BMS_RESULTS_CONTAINER_PATH'] = custom_results
     rendered = subprocess.run(['docker', 'compose', '--env-file', str(profile.get_core_runtime_env_path()),
                                '-f', str(ROOT / 'compose.core-runtime.yml'), 'config', '--format', 'json'],
                               env=env, capture_output=True, text=True, check=True)
     api = json.loads(rendered.stdout)['services']['bms-api']
     mounts = api['volumes']
-    resolved = profile.resolve_runtime_paths(profile=split, environ={})
+    resolved = profile.resolve_runtime_paths(profile=split, environ={'BMS_RESULTS_CONTAINER_PATH': custom_results} if custom_results else {})
     expected = profile.core_runtime_storage_mounts(resolved)
     assert {(m['source'], m['target']) for m in mounts} == {(m['source'], m['target']) for m in expected}
     assert all(m.get('bind', {}).get('create_host_path', False) is False for m in mounts)
@@ -80,6 +83,23 @@ def test_split_profile_exports_compose_mounts_and_adapter_identity(split):
         os.environ.clear()
         os.environ.update(old)
     assert not Path(split['work_dir']).exists()
+
+
+@pytest.mark.parametrize("unit", ["biomodstack-api.service", "biomodstack-development-workflow-adapter.service"])
+def test_development_analysis_cache_ignores_production_setting(split, tmp_path, monkeypatch, unit):
+    import shlex
+    import biomodstack_services as manager
+    import paths
+    split["dev_data_root"] = str(tmp_path / "dev data 20%")
+    profile.save_install_profile(split)
+    rendered = manager.render_user_units(ROOT, runtime_mode="dev")[unit]
+    for line in rendered.splitlines():
+        if line.strip().startswith("Environment="):
+            for item in shlex.split(line.strip().split("=", 1)[1]):
+                key, value = item.split("=", 1)
+                monkeypatch.setenv(key, value.replace("%%", "%"))
+    assert paths.get_analysis_cache_dir() == Path(split["dev_data_root"]) / "analysis_cache"
+    assert not Path(split["analysis_cache_dir"]).exists()
 
 
 def test_split_sources_fail_closed_without_creation(split):
