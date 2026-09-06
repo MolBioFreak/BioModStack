@@ -99,10 +99,40 @@ export function resolveTelemetryPlotDomain(
     nominalDomain: readonly [number, number],
     latestPlottedTimestampMs: number | undefined,
     fresh: boolean,
+    firstPlottedTimestampMs?: number,
+    bucketIntervalMs = 0,
 ): [number, number] {
-    void latestPlottedTimestampMs;
-    void fresh;
-    return [nominalDomain[0], nominalDomain[1]];
+    const [start, end] = nominalDomain;
+    // Trim at most one bucket of cadence padding, never an outage or a
+    // partially collected window. Only real plotted points can own an edge.
+    if (!fresh || !Number.isFinite(bucketIntervalMs) || bucketIntervalMs <= 0
+        || firstPlottedTimestampMs == null || latestPlottedTimestampMs == null
+        || !Number.isFinite(firstPlottedTimestampMs) || !Number.isFinite(latestPlottedTimestampMs)
+        || firstPlottedTimestampMs < start || latestPlottedTimestampMs > end
+        || firstPlottedTimestampMs >= latestPlottedTimestampMs) return [start, end];
+    return [
+        firstPlottedTimestampMs - start <= bucketIntervalMs ? firstPlottedTimestampMs : start,
+        end - latestPlottedTimestampMs <= bucketIntervalMs ? latestPlottedTimestampMs : end,
+    ];
+}
+
+// A single deadline drives both the visible countdown and the actual request.
+// One-shot: the query must settle before its owner starts the next schedule.
+export function scheduleTelemetryRefresh(
+    intervalMs: number,
+    refresh: () => void,
+    countdown: (seconds: number) => void,
+): () => void {
+    const deadline = Date.now() + intervalMs;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+        const remainingMs = Math.max(0, deadline - Date.now());
+        countdown(Math.ceil(remainingMs / 1000));
+        if (remainingMs === 0) refresh();
+        else timer = setTimeout(tick, Math.min(1000, remainingMs));
+    };
+    tick();
+    return () => clearTimeout(timer);
 }
 
 export function resolveTelemetryPlotX(

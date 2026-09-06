@@ -33,7 +33,8 @@ test('viewer reads compact incremental server-bucketed telemetry without browser
     assert.match(apiSource, /\/api\/telemetry\/chart-history/);
     assert.match(telemetrySource, /placeholderData: \(previousData\)/);
     assert.doesNotMatch(telemetrySource, /'minute'|mergeMinuteHistoryWithRawTail|downsampleTelemetryTail|MINUTE_LIVE_TAIL_MS/);
-    assert.match(telemetrySource, /refetchInterval: displayIntervalMs/);
+    assert.match(telemetrySource, /refetchInterval: usesRangeAwareDisplay \? false : displayIntervalMs/);
+    assert.match(telemetrySource, /useTelemetryChartRefresh\(\s*historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes/);
     assert.match(telemetrySource, /const liveStatusQuery = useQuery\(\{[\s\S]*?queryKey: INFRA_LIVE_SHARED_QUERY_KEY/);
     assert.match(telemetrySource, /queryFn: fetchSystemStatus,[\s\S]*?refetchInterval: pollIntervalMs/);
     assert.match(telemetrySource, /const payload = liveStatusQuery\.data\?\.data;/);
@@ -129,9 +130,9 @@ test('fresh plotted telemetry reaches the right edge while stale telemetry prese
     assert.equal(isTelemetryHistoryFresh(undefined, 120_000, 10_000), false);
 
     assert.deepEqual(
-        resolveTelemetryPlotDomain(nominalDomain, 119_000, true),
-        nominalDomain,
-        'fresh telemetry must use the cadence-owned wall-clock domain instead of waiting for a bucket timestamp',
+        resolveTelemetryPlotDomain(nominalDomain, 119_000, true, 61_000, 1_000),
+        [61_000, 119_000],
+        'fresh telemetry trims only the cadence padding to actual plotted endpoints',
     );
     assert.deepEqual(
         resolveTelemetryPlotDomain(nominalDomain, 119_000, false),

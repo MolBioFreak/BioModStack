@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTelemetryChartRefresh } from './useTelemetryChartRefresh';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     activateExecutionTarget,
@@ -1009,8 +1010,8 @@ function TimeSeriesPlot({
                     style={{ color: PLOT_TICK }}
                     aria-hidden="true"
                 >
-                    <span>{samples[0]?.clock ?? '--:--:--'}</span>
-                    <span>{samples[samples.length - 1]?.clock ?? '--:--:--'}</span>
+                    <span>{Number.isFinite(xMin) ? formatClock(new Date(xMin).toISOString()) : '--:--:--'}</span>
+                    <span>{Number.isFinite(xMax) ? formatClock(new Date(xMax).toISOString()) : '--:--:--'}</span>
                 </div>
             ) : null}
             </div>
@@ -1550,10 +1551,13 @@ export function InfraLiveTelemetry({
                 stableEndMs,
             );
         },
-        refetchInterval: displayIntervalMs,
+        refetchInterval: usesRangeAwareDisplay ? false : displayIntervalMs,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: false,
     });
+    const chartRefreshLabel = useTelemetryChartRefresh(
+        historyQuery, usesRangeAwareDisplay, displayIntervalMs, windowMinutes,
+    );
     const liveStatusQuery = useQuery({
         queryKey: INFRA_LIVE_SHARED_QUERY_KEY,
         queryFn: fetchSystemStatus,
@@ -1594,10 +1598,14 @@ export function InfraLiveTelemetry({
         displayIntervalMs,
         historyQuery.isError || historyIsStale,
     );
+    const visibleSamples = samples.filter((sample) =>
+        sample.timestampMs >= nominalXDomain[0] && sample.timestampMs <= nominalXDomain[1]);
     const xDomain = resolveTelemetryPlotDomain(
         nominalXDomain,
-        samples.at(-1)?.timestampMs,
-        historyIsFresh,
+        visibleSamples.at(-1)?.timestampMs,
+        historyIsFresh && !historyQuery.isError,
+        visibleSamples[0]?.timestampMs,
+        bucketIntervalMs,
     );
 
     const { data: powerControlData } = useQuery({
@@ -1699,11 +1707,6 @@ export function InfraLiveTelemetry({
         return undefined;
     }, [pollIntervalMs, windowMinutes]);
 
-    const latestVisibleTimestampMs = samples.length > 0 ? samples[samples.length - 1].timestampMs : NaN;
-    const visibleSamples =
-        Number.isNaN(latestVisibleTimestampMs)
-            ? samples
-            : samples.filter((sample) => sample.timestampMs >= latestVisibleTimestampMs - windowMinutes * 60 * 1000);
     const plotRedrawKey = `${variant}:${traceType}:${showXAxisLabels ? 'x' : 'nx'}:${windowMinutes}`;
     const gapBreakMs = resolveTelemetryGapBreakMs(bucketIntervalMs, pollIntervalMs);
     const currentLimits = powerControlData?.data.limits ?? {};
@@ -1761,6 +1764,9 @@ export function InfraLiveTelemetry({
                             </div>
                             <div className={`rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] font-semibold text-[var(--text-primary)] ${compact ? 'px-2.5 py-1.5 text-[10px]' : 'px-3 py-2 text-sm'}`}>
                                 {displayIntervalMs / 1000}s
+                                <span className="ml-2 tabular-nums" data-bms-telemetry-refresh="true">
+                                    {chartRefreshLabel}
+                                </span>
                             </div>
                         </div>
                     ) : null}
