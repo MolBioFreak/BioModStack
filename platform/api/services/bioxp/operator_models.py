@@ -761,6 +761,9 @@ class OperatorDashboardXPreparationStage(BaseModel):
         "rail_24v_readback",
         "door_readback",
         "latch_readback",
+        "latch_solenoid",
+        "door_readback_after_latch",
+        "latch_readback_after_latch",
         "deactivateBoard",
         "activateBoard",
         "boardLifecycleGeneration",
@@ -806,6 +809,8 @@ class OperatorDashboardXPreparationStage(BaseModel):
 class OperatorDashboardXPreparationEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.oem_prepare_without_motion.v2"]
+    failure_stage: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=200)
     ok: StrictBool
     state: Literal["completed", "failed_closed"] | OperatorDashboardXOmissionMarker
     machine_serial: Literal[206]
