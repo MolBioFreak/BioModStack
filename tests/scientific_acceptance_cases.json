@@ -102,6 +102,10 @@
         {
           "selector": "platform/api/tests/test_core_protein_scientific_contract.py::test_candidate_document_and_source_must_match_external_authority",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "tests/test_fampnn_native_binding.py::test_native_foreign_same_run_artifact_fails",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "CT (see layer_limitations)"
@@ -278,6 +282,10 @@
         {
           "selector": "platform/frontend/tests/vitest/scientificViewerMounted.test.tsx::late residue response cannot overwrite the newer candidate, even without transport cancellation",
           "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/api/tests/test_viewer_closeout.py::test_cached_metric_binds_download_snapshot",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "ID (see layer_limitations)"
@@ -350,6 +358,10 @@
         {
           "selector": "tests/test_fampnn_strict_contract.py::test_probability_contract_rejects_malformed_rows",
           "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_closeout.py::test_foreign_artifact_rejected_by_analyzer",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "FA (see layer_limitations)"
@@ -366,6 +378,14 @@
         {
           "selector": "tests/test_fampnn_strict_contract.py::test_presence_does_not_redefine_selected_scope",
           "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "tests/test_fampnn_native_binding.py::test_native_missing_declared_sample_with_surviving_sibling",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
+        },
+        {
+          "selector": "tests/test_fampnn_closeout.py::test_declared_missing_pkl_is_not_silently_omitted",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "FA (see layer_limitations)"
@@ -522,6 +542,10 @@
         {
           "selector": "platform/api/tests/test_core_protein_candidates.py::test_direct_dispatch_invalid_last_structure_preserves_transaction",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_missing_candidate_has_typed_identity",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "CA (see layer_limitations)"
@@ -554,6 +578,14 @@
         {
           "selector": "platform/api/tests/test_boltzgen_candidate_accounting.py::test_whole_publication_validated_before_any_write",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_exact_scientific_inventory",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_inventory_revalidated_after_preparation",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "CA (see layer_limitations)"
@@ -746,6 +778,10 @@
         {
           "selector": "tests/test_wp06_openmm_transport.py::test_invalid_falsey_wrapper_value_never_executes",
           "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_source_inventory_first_ingestion",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "PT (see layer_limitations)"
@@ -766,6 +802,10 @@
         {
           "selector": "platform/frontend/tests/vitest/wp06ExecutionSettingsMounted.test.tsx::mounted %s job details show persisted ASGI receipt, not raw JSON",
           "layer": "mounted UI (test.each title template)"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_component_settings_inventory_first_ingestion",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "PT (see layer_limitations)"
@@ -830,6 +870,10 @@
         {
           "selector": "platform/frontend/tests/vitest/maturationEvidenceMounted.test.tsx::shows both coverage denominators, unmatched identities, distinct subset, and exact rank reason",
           "layer": "mounted UI"
+        },
+        {
+          "selector": "tests/test_g09_native_transport.py::test_real_native_parsers_and_fampnn_export_preserve_insertion_identity",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "MC (see layer_limitations)"
@@ -850,6 +894,10 @@
         {
           "selector": "scripts/test_maturation_correspondence.py::test_selected_interface_does_not_acquire_rmsd_gate",
           "layer": "helper / instrumented workflow"
+        },
+        {
+          "selector": "scripts/test_maturation_regressions.py::test_contradictory_domains_block_scorer_and_publication",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "MC (see layer_limitations)"
@@ -874,6 +922,14 @@
         {
           "selector": "platform/frontend/tests/vitest/boltzgenAnalyticsMounted.test.tsx::published BoltzGen %s reaches the actual dashboard",
           "layer": "mounted UI"
+        },
+        {
+          "selector": "platform/api/tests/test_viewer_closeout.py::test_unsupported_marked_owner_reason_survives_asgi",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
+        },
+        {
+          "selector": "platform/api/tests/test_closeout_analytics_sort_wire.py::test_native_rmsd_sort_wire",
+          "layer": "closeout production-boundary regression; synthetic fixtures"
         }
       ],
       "limitations": "AN (see layer_limitations)"

@@ -16,7 +16,11 @@
     "scripts/test_maturation_regressions.py",
     "tests/test_antibody_denovo_precollected_maturation_contract.py",
     "tests/test_scientific_alignment_transport.py",
-    "tests/test_scientific_acceptance_harness.py"
+    "tests/test_scientific_acceptance_harness.py",
+    "tests/test_fampnn_closeout.py",
+    "tests/test_fampnn_native_binding.py",
+    "tests/test_analyse_fampnn_seq_probs.py",
+    "tests/test_analyse_fampnn_mutation_scoring.py"
   ],
   "api": [
     "tests/test_boltzgen_analytics.py",
@@ -58,7 +62,9 @@
     "tests/test_analysis_runs.py",
     "tests/test_api_analysis_ingest_review_regressions.py",
     "tests/test_result_state_integrity.py",
-    "tests/test_closeout_accounting_settings.py"
+    "tests/test_closeout_accounting_settings.py",
+    "tests/test_viewer_closeout.py",
+    "tests/test_closeout_analytics_sort_wire.py"
   ],
   "frontend": [
     "tests/vitest/boltzgenAnalyticsMounted.test.tsx",
@@ -74,19 +80,25 @@
     "tests/vitest/scientificPairMatrixMounted.test.tsx",
     "tests/vitest/scientificViewerMounted.test.tsx",
     "tests/vitest/scientificViewerIdentity.test.ts",
-    "tests/vitest/candidateAccountingMounted.test.tsx"
+    "tests/vitest/candidateAccountingMounted.test.tsx",
+    "tests/vitest/closeoutAnalyticsMounted.test.tsx",
+    "tests/vitest/scientificStructureBytesMounted.test.tsx"
   ],
   "pure": [
     "tests/truthfulAnalytics.test.tsx",
     "tests/residueColorSelections.test.ts",
-    "tests/analyticsReviewAuthority.test.ts"
+    "tests/analyticsReviewAuthority.test.ts",
+    "tests/truthfulAnalyticsApi.test.ts",
+    "tests/molstarDirectSceneEngineAdapter.test.ts"
   ],
   "wires": [
     "tests/test_boltzgen_analytics.py",
     "tests/test_canonical_scientific_analytics.py",
     "tests/test_wp06_persisted_receipts.py",
     "tests/test_maturation_coverage_ingress.py",
-    "tests/test_boltzgen_candidate_accounting.py"
+    "tests/test_boltzgen_candidate_accounting.py",
+    "tests/test_viewer_closeout.py",
+    "tests/test_closeout_analytics_sort_wire.py"
   ],
   "wire_files": {
     "BMS_ANALYTICS_WIRE": "canonical.json",
@@ -95,7 +107,10 @@
     "BMS_WP06_WIRE": "wp06.json",
     "BMS_WP06_OPENMM_WIRE": "openmm.json",
     "BMS_G09_FRONTEND_FIXTURE": "g09.json",
-    "BMS_TEST_ACCOUNTING_WIRE": "accounting.json"
+    "BMS_TEST_ACCOUNTING_WIRE": "accounting.json",
+    "BMS_STRUCTURE_BYTES_WIRE": "structure-bytes.json",
+    "BMS_SORT_ANALYTICS_WIRE": "native-sort.json",
+    "BMS_UNSUPPORTED_ANALYTICS_WIRE": "unsupported.json"
   },
   "boltzgen_cases": [
     "zero",

@@ -214,14 +214,14 @@ def main(argv=None):
     try:
         for name, files, cwd, layer in (
             ('root', GATES['root'], root, 'root'),
-            ('wires', GATES['wires'], root / 'platform/api', 'api'),
+            ('wire-export', GATES['wires'], root / 'platform/api', 'api'),
             ('api', GATES['api'], root / 'platform/api', 'api'),
         ):
             report['gates'].append(run_gate(name, pytest_command(python, files, layer), cwd, env, output, files, True))
             if name == 'root':
                 report['openmm_command_receipt_sha256'] = digest(
                     require_path(env['BMS_WP06_OPENMM_RECEIPT'], 'fresh Nextflow OpenMM receipt'))
-            if name == 'wires':
+            if name == 'wire-export':
                 save(output / 'fresh-wire-hashes.json', wire_hashes(output, require=True))
         front = root / 'platform/frontend'
         wire_hashes(output, require=True)
