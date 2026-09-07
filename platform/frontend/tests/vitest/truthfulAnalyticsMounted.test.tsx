@@ -24,6 +24,6 @@ test('UI-only canonical fixture: zero remains measured, missing sorts last; abse
     expect(host.textContent).toContain('0');
     expect(host.textContent).toContain('unavailable: not_reported');
     expect(host.textContent).toContain('pae_overall / overall / angstrom');
-    await act(async () => { (host.querySelector('button') as HTMLButtonElement).click(); });
+    await act(async () => { const select=host.querySelector('select') as HTMLSelectElement; select.value='rmsd_overall'; select.dispatchEvent(new Event('change',{bubbles:true})); });
     expect(host.querySelector('tbody tr td')?.textContent).toBe('zero (zero)');
 });

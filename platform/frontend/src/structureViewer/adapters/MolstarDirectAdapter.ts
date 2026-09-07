@@ -1,3 +1,4 @@
+import { sha256Hex } from '../contracts/m6Reproducibility';
 import type { Loci } from 'molstar/lib/mol-model/loci';
 import {
     Queries,
@@ -54,6 +55,7 @@ export interface MolstarDirectDocument {
     readonly url: string;
     readonly format: MolstarDirectDocumentFormat;
     readonly isBinary?: boolean;
+    readonly expectedSha256?: string;
     readonly assemblyId?: string;
 }
 
@@ -407,10 +409,25 @@ export class MolstarDirectAdapter {
                         plugin.managers.structure.hierarchy.current.structures
                             .flatMap((entry) => entry.cell.obj?.data ? [entry.cell.obj.data] : []),
                     );
-                    const data = await plugin.builders.data.download({
-                        url: Asset.Url(document.url),
-                        isBinary: document.isBinary ?? false,
-                    }, { state: { isGhost: true } });
+                    // Scientific layers are authorized by the bytes parsed below,
+                    // not by headers, a prior GET, or cached document metadata.
+                    let data;
+                    if (document.expectedSha256 !== undefined) {
+                        const response = await fetch(document.url, { credentials: 'same-origin', cache: 'no-store' });
+                        if (!response.ok) throw new Error(`Scientific structure unavailable (${response.status})`);
+                        const bytes = new Uint8Array(await response.arrayBuffer());
+                        if (await sha256Hex(bytes) !== document.expectedSha256) {
+                            throw new Error('Scientific structure content hash mismatch');
+                        }
+                        this.assertSceneCurrent(generation);
+                        data = await plugin.builders.data.rawData({
+                            data: document.isBinary ? bytes : new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+                        }, { state: { isGhost: true } });
+                    } else {
+                        data = await plugin.builders.data.download({
+                            url: Asset.Url(document.url), isBinary: document.isBinary ?? false,
+                        }, { state: { isGhost: true } });
+                    }
                     this.assertSceneCurrent(generation);
 
                     const trajectory = await plugin.builders.structure.parseTrajectory(data, document.format);

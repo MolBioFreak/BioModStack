@@ -3,23 +3,30 @@ import type { ScientificCohort, ScientificPoint } from '../lib/scientificAnalyti
 
 /** The server owns native values, compatible cohorts and complete-case pairs. */
 export function ScientificAnalytics({points, cohorts}:{points:ScientificPoint[];cohorts:ScientificCohort[]}) {
-    const [sortRmsd,setSortRmsd]=useState(false);
+    const [sortMetrics,setSortMetrics]=useState<Record<string,string>>({});
     const keys=[...new Set(points.map(point=>point.cohort_key))];
     return <section aria-label="Scientific result analytics">
         <h2>Scientific result analytics</h2>
         <p>Revision 1. Each cohort uses compatible native metrics. Statistics describe this loaded selection.</p>
-        <button onClick={()=>setSortRmsd(!sortRmsd)}>Sort by RMSD (missing last)</button>
         {keys.map(key=>{
             const rows=points.filter(point=>point.cohort_key===key);
             const cohort=cohorts.find(cohort=>cohort.cohort_key===key);
-            const ordered=sortRmsd?[...rows].sort((a,b)=>{
-                const av=a.metric_states.rmsd_overall,bv=b.metric_states.rmsd_overall;
+            const metric=sortMetrics[key];
+            const ordered=metric?[...rows].sort((a,b)=>{
+                const av=a.metric_states[metric],bv=b.metric_states[metric];
                 if(av?.state!=='ok')return bv?.state==='ok'?1:0;
                 if(bv?.state!=='ok')return -1;
                 return av.value-bv.value;
             }):rows;
             return <section key={key} aria-label={`Cohort ${key}`}>
                 <h3>{key}</h3>
+                <label>Sort metric (ascending, missing last)
+                    <select aria-label={`Sort metric for ${key}`} value={metric??''} onChange={event=>setSortMetrics({...sortMetrics,[key]:event.target.value})}>
+                        <option value="">Publication order</option>
+                        {Object.entries(rows[0].metric_descriptors).map(([id,d])=><option key={id} value={id}>{id} / {d.scope} / {d.unit}</option>)}
+                    </select>
+                </label>
+                {rows.filter(row=>row.publication_state).map(row=><p key={row.id}>{row.name} ({row.id}): {row.publication_state!.state}: {row.publication_state!.reason_code}</p>)}
                 {cohort ? Object.entries(cohort.pairs).map(([name,pair])=>{
                     const xd=cohort.metrics[pair.x_metric].descriptor,yd=cohort.metrics[pair.y_metric].descriptor;
                     const xmax=Math.max(1,...pair.points.map(p=>p.x)),xmin=Math.min(0,...pair.points.map(p=>p.x));

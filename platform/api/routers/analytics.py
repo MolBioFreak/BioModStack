@@ -49,6 +49,7 @@ class DesignMetricPoint(BaseModel):
     metric_states: Dict[str, MetricState] | None = None
     metric_descriptors: Dict[str, MetricDescriptor] | None = None
     metric_sources: Dict[str, MetricSource | None] | None = None
+    publication_state: MetricState | None = None
     id: str
     name: str
     metrics: Dict[str, float]

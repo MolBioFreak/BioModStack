@@ -86,7 +86,7 @@ def _annotation_field(annotation: Any, field: str) -> Any:
     return getattr(annotation, field, None)
 
 
-def _design_chain_lists(design: Design) -> tuple[list[str], list[str]]:
+def _design_chain_lists(design: Design, *, allow_detected: bool = True) -> tuple[list[str], list[str]]:
     role_map = design.review_role_map if isinstance(design.review_role_map, dict) else {}
 
     def _chains(value: Any) -> list[str]:
@@ -95,7 +95,7 @@ def _design_chain_lists(design: Design) -> tuple[list[str], list[str]]:
 
     binder_chains = _chains(role_map.get("binder_chains") or role_map.get("antibody_chains"))
     target_chains = _chains(role_map.get("target_chains"))
-    if not binder_chains and str(role_map.get("result_role") or "").strip().lower() in {
+    if allow_detected and not binder_chains and str(role_map.get("result_role") or "").strip().lower() in {
         "antibody_binder",
         "binder",
     }:
@@ -412,7 +412,7 @@ def _compute_ipsae_interface(
             "document_id": producer_binding["document_id"], "identity_evidence": identity_evidence,
             "selected_model": 1, "selected_altloc": ""} if contract_revision == 1 else {}),
     )
-    binder_chains, target_chains = _design_chain_lists(design)
+    binder_chains, target_chains = _design_chain_lists(design, allow_detected=contract_revision != 1)
     if contract_revision == 1:
         available = {residue.chain_id for residue in artifact.residues}
         if (not binder_chains or not target_chains or set(binder_chains) & set(target_chains)

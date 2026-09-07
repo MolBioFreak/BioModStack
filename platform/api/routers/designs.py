@@ -485,6 +485,7 @@ class PlotlyMetricPoint(BaseModel):
     metric_states: Dict[str, MetricState] | None = None
     metric_descriptors: Dict[str, MetricDescriptor] | None = None
     metric_sources: Dict[str, MetricSource | None] | None = None
+    publication_state: MetricState | None = None
     id: str
     name: str
     metrics: Dict[str, float]
@@ -2886,6 +2887,18 @@ async def get_design_pdb(
     if not design.pdb_path:
         raise HTTPException(status_code=404, detail="No PDB file for this design")
     
+    owner = await session.get(Job, design.job_id)
+    if revision_for_job(owner) == 1 and owner.model_id in ('boltz', 'boltz2'):
+        from fastapi.responses import Response
+        from services.boltz_scientific_consumer import verified_boltz_design
+        try:
+            selected = await verified_boltz_design(design, session)
+        except (ValueError, TypeError, KeyError, IndexError, OSError, RuntimeError):
+            raise HTTPException(status_code=409, detail="invalid_scientific_structure_binding")
+        # Serve the very snapshot validated with the metric ledger, never reopen
+        # a mutable pathname via FileResponse after verification.
+        return Response(content=selected['snapshots']['structure'], media_type='chemical/x-pdb',
+                        headers={'Cache-Control': 'no-store'})
     pdb_path = resolve_runtime_data_path(design.pdb_path)
     return _structure_file_response(pdb_path, design.name)
 

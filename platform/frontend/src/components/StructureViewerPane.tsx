@@ -3010,6 +3010,7 @@ export default function StructureViewerPane({
                                 jobId={shapeMetrics ? undefined : governedWorkbenchContext?.jobId ?? activeJob?.id}
                                 artifactJobId={shapeMetrics ? undefined : governedWorkbenchContext?.artifactJobId ?? activeJob?.id}
                                 structureDocumentId={scientificRevision ? selectedDesign?.scientific_structure_document?.documentId : governedWorkbenchContext?.structureDocumentId}
+                                structureContentSha256={scientificRevision ? selectedDesign?.scientific_structure_document?.contentSha256 : undefined}
                                 derivedComponents={derivedComponents}
                                 activeMetricId={overlayView === 'pae' ? 'pae' : residueMetricLayer?.descriptor.id}
                                 showMetricWorkbench={!shapeMetrics && !isFullscreen && metricWorkbenchOpen}

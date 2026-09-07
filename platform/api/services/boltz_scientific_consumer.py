@@ -42,7 +42,14 @@ async def verified_boltz_design(design, session):
         if selected is None:
             raise ValueError('foreign selected design')
         _revalidate(root, receipt)
-        return dict(selected, publication_root=root, publication_receipt=receipt)
+        # Retain the exact served bytes and bind the snapshot to the verified
+        # producer hash. Later pathname changes cannot affect a Response body.
+        import hashlib
+        structure_bytes = Path(selected['artifacts']['structure']['path']).read_bytes()
+        if hashlib.sha256(structure_bytes).hexdigest() != selected['artifacts']['structure']['sha256']:
+            raise ValueError('scientific_structure_content_mismatch')
+        return dict(selected, snapshots={**selected['snapshots'], 'structure': structure_bytes},
+                    publication_root=root, publication_receipt=receipt)
 
 
 async def scientific_document(design, session):

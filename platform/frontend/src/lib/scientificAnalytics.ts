@@ -2,6 +2,7 @@ export type MetricState = {state:'ok'; value:number; reason_code:null} | {state:
 export interface MetricDescriptor {metric_id:string; source:'canonical_artifact'; scope:string; unit:string; direction:'higher'|'lower'|'none'; producer_version:string; derivation_version:string}
 export interface MetricSource {artifact_sha256:string; candidate_id:string; document_id:string}
 export interface ScientificPoint {
+    publication_state?:MetricState|null;
     id:string; name:string; contract_revision:1; source_job_id:string; cohort_key:string;
     metrics:Record<string,number>; metric_states:Record<string,MetricState>;
     metric_descriptors:Record<string,MetricDescriptor>; metric_sources:Record<string,MetricSource|null>;
@@ -34,9 +35,10 @@ function descriptor(value:unknown,key:string):MetricDescriptor {
     return value as MetricDescriptor;
 }
 export function parseScientificPoint(value:unknown):ScientificPoint {
-    const row=object(value);keys(row,['id','name','contract_revision','source_job_id','cohort_key','metrics','metric_states','metric_descriptors','metric_sources']);
+    const row=object(value);keys(row,['id','name','contract_revision','source_job_id','cohort_key','metrics','metric_states','metric_descriptors','metric_sources',...(Object.hasOwn(row,'publication_state')?['publication_state']:[])]);
     requireThat(row.contract_revision===1);text(row.id);text(row.name);text(row.source_job_id);text(row.cohort_key);
     requireThat(row.cohort_key.startsWith('v1:')&&row.cohort_key.endsWith(`:${row.source_job_id}`));
+    if(row.publication_state!=null)requireThat(parseMetricState(row.publication_state).state!=='ok');
     const states=object(row.metric_states),descriptors=object(row.metric_descriptors),metrics=object(row.metrics),sources=object(row.metric_sources);
     keys(descriptors,Object.keys(states));keys(sources,Object.keys(states));
     const observed:string[]=[];let binding:string|undefined;

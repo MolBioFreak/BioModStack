@@ -12,6 +12,7 @@ export interface DirectMolstarDocument {
     readonly url: string;
     readonly format: DirectMolstarDocumentFormat;
     readonly isBinary?: boolean;
+    readonly expectedSha256?: string;
 }
 
 export const documentsForDirectMolstar = (
@@ -26,6 +27,7 @@ export const documentsForDirectMolstar = (
             documents.push({
                 id: document.documentId,
                 url: document.sourceUrl,
+                ...(document.contentSha256 ? { expectedSha256: document.contentSha256 } : {}),
                 format: document.sourceKind,
             });
             continue;
@@ -34,6 +36,7 @@ export const documentsForDirectMolstar = (
             documents.push({
                 id: document.documentId,
                 url: document.sourceUrl,
+                ...(document.contentSha256 ? { expectedSha256: document.contentSha256 } : {}),
                 format: 'mmcif',
                 isBinary: true,
             });

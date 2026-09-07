@@ -23,7 +23,7 @@ def snapshot(row):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('damage', ['none', 'missing', 'unsupported', 'roles'])
+@pytest.mark.parametrize('damage', ['none', 'missing', 'unsupported', 'roles', 'detected_roles'])
 async def test_ipsae_real_dispatch(tmp_path, monkeypatch, damage):
     publication(tmp_path)
     factory, engine = await setup(tmp_path)
@@ -44,6 +44,9 @@ async def test_ipsae_real_dispatch(tmp_path, monkeypatch, damage):
                 row.confidence_metrics = {}
             elif damage == 'unsupported':
                 (await session.get(Job, 'job')).model_id = 'esmfold2'
+            elif damage == 'detected_roles':
+                row.review_role_map = {'result_role': 'binder', 'target_chains': ['T']}
+                row.detected_antibody_chains = 'H,L'
             elif damage == 'roles':
                 row.review_role_map = {}
             if damage != 'none':

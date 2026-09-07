@@ -135,6 +135,7 @@ def projection(design, *, records=(), invalid_reason=None, model_id=None):
     signature = json.dumps({k:d.model_dump() for k,d in sorted(descriptors.items())}, sort_keys=True, separators=(',',':'))
     key = hashlib.sha256(signature.encode()).hexdigest()
     return dict(contract_revision=1, source_job_id=design.job_id,
+        publication_state=MetricState(state='unavailable' if invalid_reason == 'missing_canonical_publication' else 'invalid', value=None, reason_code=invalid_reason) if invalid_reason else None,
         cohort_key=f'v1:{key}:{design.job_id}', metric_states=states,
         metric_descriptors=descriptors, metric_sources=sources,
         metrics={k:s.value for k,s in states.items() if s.state == 'ok'})

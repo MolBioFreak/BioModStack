@@ -73,6 +73,8 @@ export interface MolstarViewerProps {
     artifactJobId?: string;
     /** Governed primary structure identity used for cross-artifact registration. */
     structureDocumentId?: string;
+    /** Expected SHA-256 from the candidate-bound scientific metric document. */
+    structureContentSha256?: string;
     /** Public scene readiness emitted only by the implementation lifecycle. */
     onLoadStateChange?: (state: 'loading' | 'loaded' | 'failed', errorMessage?: string) => void;
 }
@@ -117,6 +119,7 @@ export default function MolstarViewer({
     onControllerReady,
     artifactJobId,
     structureDocumentId = 'primary',
+    structureContentSha256,
     onLoadStateChange,
 }: MolstarViewerProps) {
     const mountRef = useRef<HTMLDivElement>(null);
@@ -164,6 +167,7 @@ export default function MolstarViewer({
         const primary: MolstarDirectDocument = {
             id: structureDocumentId,
             url: absoluteUrl,
+            expectedSha256: structureContentSha256,
             format: toMolstarLoadFormat(format),
         };
         const overlays = (overlayStructures ?? []).flatMap((overlay) => {
@@ -175,7 +179,7 @@ export default function MolstarViewer({
             } satisfies MolstarDirectDocument] : [];
         });
         return [primary, ...overlays];
-    }, [absoluteUrl, format, overlayStructures, structureDocumentId]);
+    }, [absoluteUrl, format, overlayStructures, structureDocumentId, structureContentSha256]);
 
     const buildRequestedScene = useCallback(() => {
         const primaryDocument = documents[0];
@@ -193,6 +197,7 @@ export default function MolstarViewer({
                     ? 'pdb'
                     : document.format === 'sdf' ? 'sdf' : 'mmcif',
                 sourceUrl: document.url,
+                contentSha256: document.expectedSha256,
             })),
             ...(documents.length > 1 ? {
                 collection: {
