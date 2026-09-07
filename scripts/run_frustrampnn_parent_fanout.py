@@ -8,12 +8,20 @@ import hashlib
 import json
 import os
 import re
-import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
 
 import requests
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
+from component_runtime import (
+    GroupingLedger, ResultReference, durable_write, ordered_candidates, plan_frustrampnn,
+)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from plan_frustrampnn_groups import immutable_write, reconcile_tree, tree_authority
 
 DEFAULT_API_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
 WORKFLOW_CAPABILITY_ENV = "BMS_STAGE_REPORT_TOKEN"
@@ -83,25 +91,27 @@ def execute_parent_fanout(
     if _canonical_bytes(settings) != settings_json.encode("utf-8"):
         raise ValueError("settings_json must be compact canonical JSON")
 
-    dataset: list[tuple[tuple[str, str], dict[str, Any], tuple[str, bytes, str]]] = []
+    dataset: list[tuple[dict[str, Any], tuple[str, bytes, str]]] = []
     for raw_dir in candidate_dirs:
         metadata, source = _candidate_authority(Path(raw_dir), parent_job_id, parent_workflow_id)
         media_type = "chemical/x-mmcif" if source.suffix.lower() in {".cif", ".mmcif"} else "chemical/x-pdb"
-        ordering_identity = (
-            str(metadata["producer_candidate_key"]),
-            str(metadata["candidate_id"]),
-        )
-        dataset.append((ordering_identity, metadata, (source.name, source.read_bytes(), media_type)))
-    ordering_identities = [item[0] for item in dataset]
-    if len(set(ordering_identities)) != len(ordering_identities):
-        raise ValueError("terminal structure dataset has duplicate ordering identities")
-    dataset.sort(key=lambda item: item[0])
-    records = [item[1] for item in dataset]
-    files = [("structure_files", item[2]) for item in dataset]
+        dataset.append((metadata, (source.name, source.read_bytes(), media_type)))
+    dataset = list(ordered_candidates(dataset, lambda item: item[0]))
+    records = [item[0] for item in dataset]
+    files = [("structure_files", item[1]) for item in dataset]
     candidate_ids = [str(record["candidate_id"]) for record in records]
-    if len(set(candidate_ids)) != len(candidate_ids):
-        raise ValueError("terminal structure dataset has duplicate candidate IDs")
     manifest = {"candidates": records}
+    plan = plan_frustrampnn([
+        {**metadata, "input_sha256": hashlib.sha256(source[1]).hexdigest(),
+         "upload_filename": source[0], "upload_media_type": source[2],
+         "settings_value_origin": settings_value_origin}
+        for metadata, source in dataset
+    ], settings)
+    # The Nextflow task directory scopes the legacy local attempt. Explicit remote
+    # attempt identities are never inferred from parent job IDs.
+    ledger = GroupingLedger(output_receipt.with_suffix(".components.sqlite"),
+        attempt_id=str(output_receipt.resolve().parent), plan=plan)
+    ledger.check_active()
 
     endpoint = f"{api_url.rstrip('/')}/api/frustrampnn/jobs/{parent_job_id}/workflow-dataset/analyze"
     response = requests.post(
@@ -141,11 +151,13 @@ def execute_parent_fanout(
             fanout_candidate_ids.append(str(candidate["candidate_id"]))
     if fanout_candidate_ids != candidate_ids:
         raise RuntimeError("scheduler fan-out candidate order is invalid")
+    plan.require_groups([[str(c["candidate_id"]) for c in child["candidates"]] for child in children])
 
     status_endpoint = f"{api_url.rstrip('/')}/api/jobs/{parent_job_id}/children/status"
     started = time.monotonic()
     status_payload: dict[str, Any]
     while True:
+        ledger.check_active()
         status_response = requests.get(
             status_endpoint, params={"stage": "frustrampnn"}, timeout=30
         )
@@ -172,7 +184,11 @@ def execute_parent_fanout(
         if isinstance(item, dict)
     }
     receipts: list[dict[str, Any]] = []
-    output_bundles.mkdir(parents=True, exist_ok=False)
+    if output_bundles.is_symlink() or (output_bundles.exists() and not output_bundles.is_dir()):
+        raise ValueError("materialization bundle root is unsafe")
+    output_bundles.mkdir(parents=True, exist_ok=True)
+    if any(p.name not in candidate_ids for p in output_bundles.iterdir()):
+        raise ValueError("materialization contains a foreign bundle")
     copied_ids: list[str] = []
     for child, child_id in zip(children, child_ids, strict=True):
         receipt_response = requests.get(
@@ -206,15 +222,30 @@ def execute_parent_fanout(
                 not output_root.is_absolute()
                 or source_bundle.is_symlink()
                 or not source_bundle.is_dir()
-                or destination.exists()
             ):
                 raise RuntimeError("required FrustraMPNN child bundle is unavailable")
-            shutil.copytree(source_bundle, destination, symlinks=False)
+            authority = tree_authority(source_bundle)
+            immutable_write(output_receipt.parent / f"{output_receipt.stem}.bundle-{candidate_id}.json",
+                            _canonical_bytes(authority))
+            reconcile_tree(source_bundle, destination, authority,
+                           staging_root=output_bundles.parent / f".{output_bundles.name}.staging")
             copied_ids.append(candidate_id)
         receipts.append(receipt)
+        # Retain the exact validated native receipt, without rewriting scientific
+        # fields. The shared result ref is a separate placement-neutral binding.
+        reference_path = output_receipt.parent / f"{output_receipt.stem}.child-{len(receipts)-1}.json"
+        reference_bytes = _canonical_bytes(receipt)
+        if reference_path.exists() and reference_path.read_bytes() != reference_bytes:
+            raise RuntimeError("durable child receipt conflicts")
+        durable_write(reference_path, reference_bytes)
+        ledger.seal(ResultReference(plan.component_id(len(receipts)-1),
+            reference_path.name, hashlib.sha256(reference_bytes).hexdigest(),
+            len(reference_bytes), "frustrampnn-native-child-receipt"))
     if copied_ids != candidate_ids:
         raise RuntimeError("FrustraMPNN child bundle order/cardinality is incomplete")
 
+    for reference in ledger.join():
+        reference.resolve(output_receipt.parent)
     terminal = {
         "schema_name": "bms.frustrampnn.parent-fanout-terminal.v1",
         "schema_version": 1,
@@ -235,7 +266,7 @@ def execute_parent_fanout(
     }
     terminal["receipt_sha256"] = hashlib.sha256(_canonical_bytes(terminal)).hexdigest()
     payload = _canonical_bytes(terminal) + b"\n"
-    output_receipt.write_bytes(payload)
+    durable_write(output_receipt, payload)
     return {**terminal, "receipt_file_sha256": hashlib.sha256(payload).hexdigest()}
 
 

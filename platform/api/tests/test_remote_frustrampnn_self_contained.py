@@ -59,7 +59,7 @@ def test_remote_batch_preserves_v3_provenance_settings_and_cardinality(tmp_path,
     manifest, batch = remote.materialize_batch(list(reversed(dirs)), tmp_path / 'authority')
     assert batch['expected_cardinality'] == 2
     assert batch['settings_sha256'] == requests[0]['requested_settings_sha256']
-    assert [r['candidate_id'] for r in batch['records']] == sorted(r['candidate_id'] for r in requests)
+    assert [r['candidate_id'] for r in batch['records']] == [r['candidate_id'] for r in sorted(requests, key=lambda r: (r['source_artifact']['relative_path'], r['candidate_id']))]
     assert remote.grouped._read_batch(manifest) == batch
     work = tmp_path / 'work'
     work.mkdir()
@@ -210,8 +210,9 @@ def test_offline_nextflow_remote_dag_routes_exact_groups(tmp_path, enabled, size
         directory = tmp_path / f'input{i}'
         directory.mkdir()
         request = dict(candidate_id=f'candidate-{i}', parent_job_id='remote-parent', parent_workflow_id='structure_prediction',
-                       requested_settings=dict(batching_enabled=enabled, structures_per_job=size))
-        for name, content in zip(remote.FILES, (json.dumps(request), 'HEADER MOCK\n', '{}'), strict=True):
+                       requested_settings=dict(batching_enabled=enabled, structures_per_job=size),
+                       requiredness='required', source_artifact={'relative_path': f'producer/{count-i:03d}.pdb'})
+        for name, content in zip(remote.FILES, (canonical_json_bytes(request).decode(), 'HEADER MOCK\n', '{}'), strict=True):
             (directory / name).write_text(content)
         tuples.append("tuple(" + ','.join(f"file('/run/input{i}/{name}')" for name in remote.FILES) + ')')
     shim = tmp_path / 'mock-python'
@@ -223,6 +224,11 @@ def emit(root, request):
     root.mkdir(parents=True)
     (root/'workflow_component_result_v3.json').write_text(json.dumps({'candidate_id':request['candidate_id'],'status':'succeeded'}))
     (root/'frustrampnn_result_manifest_v3.json').write_text('{}')
+if args[0].endswith('plan_frustrampnn_groups.py'):
+    import runpy
+    sys.argv = args
+    runpy.run_path(args[0], run_name='__main__')
+    sys.exit(0)
 if args[0].endswith('run_frustrampnn_component.py'):
     requests=[json.loads(pathlib.Path(value('--request')).read_text())]
     emit(pathlib.Path('candidate_bundle'), requests[0])
@@ -248,9 +254,14 @@ singularity.enabled=false
 """)
     completed = subprocess.run(['docker','run','--rm','--network','none','-e','NXF_OFFLINE=true',
         '-e','NXF_DISABLE_CHECK_LATEST=true','-e','BMS_REMOTE_EXECUTION=1',
+        '-e','BMS_REMOTE_ATTEMPT_ID=offline-fixture',
         '-v',f'{ROOT}:/repo:ro','-v',f'{tmp_path}:/run:rw','-w','/run',image,
         'nextflow','run','main.nf','-offline','-w','/run/work'], capture_output=True, text=True, timeout=180)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     calls = [json.loads(path.read_text()) for path in (tmp_path / 'out').glob('call-*.json')]
     assert sorted(map(len, calls)) == expected_groups
+    from component_runtime import partition_ordered
+    expected = partition_ordered(list(reversed([f'candidate-{i}' for i in range(count)])),
+        batching_enabled=enabled, structures_per_job=size)
+    assert sorted(calls) == sorted([list(group) for group in expected])
     assert sorted(candidate for call in calls for candidate in call) == [f'candidate-{i}' for i in range(count)]

@@ -174,7 +174,7 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
 
     receipt_path = tmp_path / "terminal.json"
     bundle_root = tmp_path / "bundles"
-    receipt = module.execute_parent_fanout(
+    arguments = dict(
         parent_job_id="parent-1",
         parent_workflow_id="protein_design",
         settings_json=json.dumps(settings, sort_keys=True, separators=(",", ":")),
@@ -186,7 +186,40 @@ def test_shared_client_spawns_exact_grouped_children_waits_and_seals_terminal_ev
         capability="parent-fanout-capability",
     )
 
+    # A genuine interruption after one published candidate must be resumable.
+    original_reconcile = module.reconcile_tree
+    copied_count = 0
+    def interrupted_copy(*args, **kwargs):
+        nonlocal copied_count
+        original_reconcile(*args, **kwargs)
+        copied_count += 1
+        if copied_count == 1:
+            raise OSError("injected interruption")
+    monkeypatch.setattr(module, "reconcile_tree", interrupted_copy)
+    with pytest.raises(OSError, match="injected interruption"):
+        module.execute_parent_fanout(**arguments)
+    monkeypatch.setattr(module, "reconcile_tree", original_reconcile)
+    receipt = module.execute_parent_fanout(**arguments)
+    assert module.execute_parent_fanout(**arguments) == receipt
+    published = bundle_root / "candidate-0/workflow_component_result_v3.json"
+    published.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="conflict"):
+        module.execute_parent_fanout(**arguments)
+    published.write_bytes(b"{}\n")
+    source = output_roots["child-a"] / "frustrampnn/results/candidate-0/workflow_component_result_v3.json"
+    source.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="conflict"):
+        module.execute_parent_fanout(**arguments)
+    source.write_bytes(b"{}\n")
     assert receipt["status"] == "complete"
+    import sqlite3
+    with sqlite3.connect(receipt_path.with_suffix(".components.sqlite")) as db:
+        refs = [json.loads(row[0]) for row in db.execute("SELECT reference FROM results ORDER BY component")]
+    assert len(refs) == 2
+    for ref in refs:
+        payload = (receipt_path.parent / ref["relative_path"]).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == ref["sha256"]
+        assert len(payload) == ref["size_bytes"]
     assert receipt["candidate_count"] == 3
     assert receipt["child_job_ids"] == child_ids
     assert receipt["fanout"]["effective_structures_per_job"] == 2
@@ -276,14 +309,14 @@ def test_shared_client_canonicalizes_parent_dataset_order_across_arrival_orders(
         })
 
     copied: list[tuple[str, str]] = []
-    original_copytree = module.shutil.copytree
-    def recording_copytree(source, destination, **kwargs):
+    original_copytree = module.reconcile_tree
+    def recording_copytree(source, destination, authority, **kwargs):
         copied.append((Path(destination).parent.name, Path(destination).name))
-        return original_copytree(source, destination, **kwargs)
+        return original_copytree(source, destination, authority, **kwargs)
 
     monkeypatch.setattr(module.requests, "post", fake_post)
     monkeypatch.setattr(module.requests, "get", fake_get)
-    monkeypatch.setattr(module.shutil, "copytree", recording_copytree)
+    monkeypatch.setattr(module, "reconcile_tree", recording_copytree)
     settings_json = json.dumps(
         {"batching_enabled": True, "structures_per_job": 3},
         sort_keys=True,

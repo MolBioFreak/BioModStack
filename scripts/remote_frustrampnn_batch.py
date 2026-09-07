@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_frustrampnn_grouped_batch as grouped
 from services.frustrampnn.contracts import canonical_json_bytes
 from services.frustrampnn.manifests import validate_v3_input_closure
+from component_runtime import ordered_candidates, plan_frustrampnn
 
 FILES = ("workflow_component_request_v3.json", "canonical_source.pdb", "frustrampnn_structure_map_v1.json")
 
@@ -45,7 +46,7 @@ def prepare_record(record, *, authority_root, work_root):
 
 
 def materialize_batch(directories, authority_root):
-    candidates = sorted((read_candidate(path) for path in directories), key=lambda item: item[0]['candidate_id'])
+    candidates = ordered_candidates([read_candidate(path) for path in directories], lambda item: item[0])
     if not candidates:
         raise ValueError("remote batch has no candidates")
     first = candidates[0][0]
@@ -54,8 +55,8 @@ def materialize_batch(directories, authority_root):
     if settings['batching_enabled'] is not True or not 2 <= len(candidates) <= size:
         raise ValueError("remote batch cardinality disagrees with settings")
     ids = [request['candidate_id'] for request, _ in candidates]
-    if len(set(ids)) != len(ids):
-        raise ValueError("duplicate candidate identity")
+    plan = plan_frustrampnn([request for request, _ in candidates], settings)
+    plan.require_groups([ids])
     records = []
     for ordinal, (request, payloads) in enumerate(candidates):
         if any(request[key] != first[key] for key in ('parent_job_id', 'parent_workflow_id', 'requested_settings', 'requested_settings_sha256')):

@@ -50,6 +50,26 @@ process RemoteFrustraMPNNGroupedTask {
     """
 }
 
+process PlanRemoteFrustraMPNNGroups {
+    label 'CPU'
+    stageInMode 'copy'
+    errorStrategy 'terminate'
+    maxRetries 0
+    publishDir "${params.out_dir}/frustrampnn/component_groups", mode: 'copy', pattern: 'groups/grouping_plan_v1.json'
+    input:
+    path candidates
+    output:
+    path 'groups/group_*', emit: groups
+    path 'groups/components.sqlite', emit: ledger
+    path 'groups/grouping_plan_v1.json', emit: plan
+    script:
+    def candidateArgs = candidates.collect { "--candidate-dir '${it}'" }.join(' ')
+    """
+    set -euo pipefail
+    '${params.api_python}' '${params.code_root}/scripts/plan_frustrampnn_groups.py' ${candidateArgs}
+    """
+}
+
 workflow RemoteCanonicalFrustraMPNN {
     take:
     prepared
@@ -63,17 +83,9 @@ workflow RemoteCanonicalFrustraMPNN {
     }
     PackRemoteFrustraMPNNRequest(identified)
     // Collect once to make grouping deterministic despite producer completion order.
-    groups = PackRemoteFrustraMPNNRequest.out.candidate.collect().flatMap { paths ->
-        if (!paths) error('Required remote FrustraMPNN has no candidates')
-        def ordered = paths.sort { a, b -> a.name <=> b.name }
-        if (ordered.collect { it.name }.toSet().size() != ordered.size()) error('Duplicate remote candidate identity')
-        def requests = ordered.collect { new groovy.json.JsonSlurper().parse(it.resolve('workflow_component_request_v3.json')) }
-        def first = requests.first()
-        if (requests.any { it.parent_job_id != first.parent_job_id || it.parent_workflow_id != first.parent_workflow_id || it.requested_settings != first.requested_settings }) {
-            error('Remote candidates mix parent or settings authority')
-        }
-        def size = first.requested_settings.batching_enabled ? first.requested_settings.structures_per_job as int : 1
-        ordered.collate(size)
+    PlanRemoteFrustraMPNNGroups(PackRemoteFrustraMPNNRequest.out.candidate.collect())
+    groups = PlanRemoteFrustraMPNNGroups.out.groups.flatten().map { root ->
+        root.toFile().listFiles().sort { a, b -> a.name <=> b.name }.collect { file(it.toPath()) }
     }
     routed = groups.branch {
         single: it.size() == 1
