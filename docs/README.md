@@ -29,6 +29,8 @@ under `docs/plans/` and should not be mistaken for the product truth.
 
 ## Active plans
 
+- [Remote Bridge 1.0 specification](specs/remote-bridge-1.0.md) — approved design baseline, not a claim of deployed capability; Neurosnap integration deferred.
+
 - [Global FrustraMPNN 100% implementation plan](plans/2026-08-08-frustrampnn-global-100-implementation.md)
 
 - [Plans README](plans/README.md)
