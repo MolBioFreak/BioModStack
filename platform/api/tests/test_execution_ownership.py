@@ -43,7 +43,7 @@ def test_systemd_run_command_has_deterministic_lane_ownership(tmp_path: Path) ->
         log_path=tmp_path / "job.log",
     )
 
-    assert command[:8] == [
+    assert command[:7] == [
         "systemd-run",
         "--user",
         "--no-block",
@@ -51,8 +51,10 @@ def test_systemd_run_command_has_deterministic_lane_ownership(tmp_path: Path) ->
         "--slice=biomodstack-workflows-development.slice",
         "--property=Type=exec",
         "--property=KillMode=control-group",
-        "--property=CPUQuota=2400%",
     ]
+    from biomodstack_local_resources import applied_local_policy
+    assert f"--property=CPUQuota={applied_local_policy().cpu_threads * 100}%" in command
+    assert "--property=CPUAccounting=yes" in command
     assert f"--working-directory={(tmp_path / 'code').resolve()}" in command
     assert f"--property=StandardOutput=append:{(tmp_path / 'job.log').resolve()}" in command
     assert f"--setenv=BMS_STATE_DIR={tmp_path / 'state'}" in command
@@ -96,8 +98,9 @@ def test_workflow_slices_render_one_global_aggregate_limit_with_lane_children(tm
     expected_root = services.render_workflow_root_slice()
     assert development[services.WORKFLOW_ROOT_SLICE] == expected_root
     assert production[services.WORKFLOW_ROOT_SLICE] == expected_root
-    assert "CPUQuota=2400%" in expected_root
-    assert "MemoryMax=96G" in expected_root
+    from biomodstack_local_resources import configured_local_policy
+    assert f"CPUQuota={configured_local_policy().cpu_threads * 100}%" in expected_root
+    assert f"MemoryMax={configured_local_policy().memory_bytes}" in expected_root
     assert "CPUQuota=" not in development[services.DEVELOPMENT_WORKFLOW_SLICE]
     assert "MemoryMax=" not in development[services.DEVELOPMENT_WORKFLOW_SLICE]
     assert "CPUQuota=" not in production[services.PRODUCTION_WORKFLOW_SLICE]
@@ -427,7 +430,17 @@ def test_transient_runner_command_has_only_job_and_lane_arguments() -> None:
 
 def test_msa_batch_is_guarded_by_transient_runner_mode() -> None:
     source = (API_ROOT / "services" / "nextflow.py").read_text(encoding="utf-8")
-    msa_branch = source[source.index("if model_id == 'msa_batch':") :]
-    msa_branch = msa_branch[: msa_branch.index("# Use a mutable launch-params copy")]
-    assert "if not transient_runner" in msa_branch
-    assert "only permitted inside the transient workflow runner" in msa_branch
+    import ast
+
+    tree = ast.parse(source)
+    launcher = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "launch_nextflow_job")
+    guarded_branch = next(
+        node for node in ast.walk(launcher)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "model_id == 'msa_batch' and transient_runner"
+    )
+    assert "await launch_msa_batch_job(job_id, params, output_dir)" in ast.unparse(guarded_branch)
+    direct_launcher = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "launch_msa_batch_job")
+    direct_source = ast.unparse(direct_launcher)
+    assert "if not transient_workflow_runner_mode():" in direct_source
+    assert "msa_batch execution is only permitted inside the transient workflow runner" in direct_source

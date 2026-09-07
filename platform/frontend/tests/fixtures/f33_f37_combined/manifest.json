@@ -1,0 +1,252 @@
+{
+  "fixture_scope": "OFFLINE SYNTHETIC ONLY. Actual ASGI handlers/SQLite/FourPipetteTransport/planner, fake driver. Real release/evidence builders over local hashed synthetic authority packets; mocked privilege/service/process/image authority. No production, deployment, container, hardware or physical attestation.",
+  "wire": [
+    {
+      "name": "readback-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "6317",
+        "content-type": "application/json"
+      },
+      "sha256": "cb37e40290e11bfbb1d8074eee8a2070d89889bb442fad547c12039daa550a3b",
+      "file": "readback-post.json",
+      "bytes": 6317
+    },
+    {
+      "name": "readback-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "3340",
+        "content-type": "application/json"
+      },
+      "sha256": "38263a8f6a25e1ea0b11fad096852e570e544a1be2fbc8448e0a76667c88b7bd",
+      "file": "readback-get.json",
+      "bytes": 3340
+    },
+    {
+      "name": "readback-data-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "7072",
+        "content-type": "application/json"
+      },
+      "sha256": "4640539f48e296fb40e7ad7e2e2020628c0c10a624cb5afebc8ad07167a4365b",
+      "file": "readback-data-post.json",
+      "bytes": 7072
+    },
+    {
+      "name": "readback-data-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "4094",
+        "content-type": "application/json"
+      },
+      "sha256": "c6cca396ca76ab85762d2764498bfdecc6b59f143a5da24fa5906ecd12792737",
+      "file": "readback-data-get.json",
+      "bytes": 4094
+    },
+    {
+      "name": "plan-detect-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "2417",
+        "content-type": "application/json"
+      },
+      "sha256": "5264a8cf41aa90a3a09d14fbff074448459a4e5a5a119115b5b5f27b40a13a5d",
+      "file": "plan-detect-post.json",
+      "bytes": 2417
+    },
+    {
+      "name": "plan-detect-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "3289",
+        "content-type": "application/json"
+      },
+      "sha256": "6ede4eed1e1b94646b7c6ce377c8d6a6e62c8a8c41a4075ee3ef1646440f2bf1",
+      "file": "plan-detect-get.json",
+      "bytes": 3289
+    },
+    {
+      "name": "plan-waste-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "1607",
+        "content-type": "application/json"
+      },
+      "sha256": "674ceb1c7d3b55d5184780a609a5089e35155ec253945bdb6a715de12f67aec4",
+      "file": "plan-waste-post.json",
+      "bytes": 1607
+    },
+    {
+      "name": "plan-waste-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "2463",
+        "content-type": "application/json"
+      },
+      "sha256": "6bfd56105ebbed137eb0e58bb98219e2812f2c3f47ca2d9498e9764822c58f2f",
+      "file": "plan-waste-get.json",
+      "bytes": 2463
+    },
+    {
+      "name": "plan-up-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "1332",
+        "content-type": "application/json"
+      },
+      "sha256": "215f1029002fbb9c9e2fa59ac72ee5ed851cdae7c5c33ea66660e529394f496e",
+      "file": "plan-up-post.json",
+      "bytes": 1332
+    },
+    {
+      "name": "plan-up-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "2179",
+        "content-type": "application/json"
+      },
+      "sha256": "68d5d550788598a3c60e0f4c18a202103386f80d717c5c89ff8d335c19bfd99a",
+      "file": "plan-up-get.json",
+      "bytes": 2179
+    },
+    {
+      "name": "plan-down-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "1338",
+        "content-type": "application/json"
+      },
+      "sha256": "0a0170a01351490085a3dab228cd3721f3b81e19ede3500acea88a167f416c56",
+      "file": "plan-down-post.json",
+      "bytes": 1338
+    },
+    {
+      "name": "plan-down-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "2191",
+        "content-type": "application/json"
+      },
+      "sha256": "cb11584cd096d54cbf6d29e3a783ddda5e791483621fe9c52b0344cf799fe3c0",
+      "file": "plan-down-get.json",
+      "bytes": 2191
+    },
+    {
+      "name": "plan-tip-post",
+      "http_status": 200,
+      "headers": {
+        "content-length": "2238",
+        "content-type": "application/json"
+      },
+      "sha256": "ad1efbcbe8a0b2e1c0a569db781f892ced3ea5f98d3324b811e645567f5ed221",
+      "file": "plan-tip-post.json",
+      "bytes": 2238
+    },
+    {
+      "name": "plan-tip-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "3151",
+        "content-type": "application/json"
+      },
+      "sha256": "9d1074202d5720102daaa6443f3b3015f309146e95c315d3584e2d210d9ce2dd",
+      "file": "plan-tip-get.json",
+      "bytes": 3151
+    },
+    {
+      "name": "unknown-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "232",
+        "content-type": "application/json"
+      },
+      "sha256": "72283902202836300ad4aca9b9e60a178082ce922fab0622026e06a3ba1c2b4b",
+      "file": "unknown-get.json",
+      "bytes": 232
+    },
+    {
+      "name": "pending-get",
+      "http_status": 200,
+      "headers": {
+        "cache-control": "no-store",
+        "content-length": "805",
+        "content-type": "application/json"
+      },
+      "sha256": "7ea5afd6ad947af17c39dab2a8729ce1e866ac29b1a9424b4850150b6ae772b6",
+      "file": "pending-get.json",
+      "bytes": 805
+    }
+  ],
+  "strict_projections": [
+    {
+      "name": "readback",
+      "sha256": "76325ff3b06bee86d202997e71f63e3896082be78e5b269fd55b5964633aec78",
+      "file": "readback-strict-result.json",
+      "bytes": 2543
+    },
+    {
+      "name": "readback-data",
+      "sha256": "87bfd6fc82d8defb7b03a39048eebf50f954135e4719330e66522107f4dbf5bf",
+      "file": "readback-data-strict-result.json",
+      "bytes": 3298
+    },
+    {
+      "name": "plan-detect",
+      "sha256": "85516793321a27806319e0ee1fde6b70308c35f76ed407e97b01318493576566",
+      "file": "plan-detect-strict-result.json",
+      "bytes": 2417
+    },
+    {
+      "name": "plan-waste",
+      "sha256": "17e4c5533c46c5bde325983f7e25ad191bea16d1a60f71e486b75f5aadced8dc",
+      "file": "plan-waste-strict-result.json",
+      "bytes": 1607
+    },
+    {
+      "name": "plan-up",
+      "sha256": "66e5aa38e318bfe4a65e8e85dd3e09e96812ed5513b1d1cb19d674f33a9b9ad1",
+      "file": "plan-up-strict-result.json",
+      "bytes": 1332
+    },
+    {
+      "name": "plan-down",
+      "sha256": "82e92922232f68b1bd884d68efd2bd3c174bf81e9fde86dab8b0d15cb7c7bd50",
+      "file": "plan-down-strict-result.json",
+      "bytes": 1338
+    },
+    {
+      "name": "plan-tip",
+      "sha256": "09247e1c461dfe1b4f54c516132105b577bcb0c5f5e44c5e86eb6c1727bc4601",
+      "file": "plan-tip-strict-result.json",
+      "bytes": 2238
+    }
+  ],
+  "source_components": [
+    {
+      "name": "readback",
+      "source": "PASS",
+      "metadata": "PASS",
+      "full_post_known_pending": "semantic_query_response_verified extra only"
+    },
+    {
+      "name": "readback-data",
+      "source": "PASS",
+      "metadata": "PASS",
+      "full_post_known_pending": "semantic_query_response_verified extra only"
+    }
+  ],
+  "source_log": {
+    "file": "final-gate.log",
+    "sha256": "ad87f48541290714903c6a42d7b57c30760d72d109196a91d02d075f29ee7234"
+  }
+}

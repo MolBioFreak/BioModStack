@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { GpuCatalogEntry } from '../gpuCatalog';
 import { deriveBoltzCpGpuLaunchSettings } from '../structurePredictionUiState.js';
 import { useLiveGpuCatalog } from '../useLiveGpuCatalog';
 import type { StructurePredictor, StructureReorchestrateSettings } from './reorchestrateStructureSettings.js';
@@ -7,6 +8,7 @@ interface StructureReorchestratePanelProps {
     settings: StructureReorchestrateSettings;
     onChange: (next: StructureReorchestrateSettings) => void;
     disabled?: boolean;
+    gpuOptions?: GpuCatalogEntry[];
 }
 
 const predictorLabel: Record<StructurePredictor, string> = {
@@ -28,9 +30,11 @@ export function StructureReorchestratePanel({
     settings,
     onChange,
     disabled = false,
+    gpuOptions: scopedGpuOptions,
 }: StructureReorchestratePanelProps) {
     const update = (patch: Partial<StructureReorchestrateSettings>) => onChange({ ...settings, ...patch });
-    const { gpuOptions } = useLiveGpuCatalog();
+    const { gpuOptions: localGpuOptions } = useLiveGpuCatalog();
+    const gpuOptions = scopedGpuOptions ?? localGpuOptions;
     const boltzCpFallbackGpuIds = useMemo(() => gpuOptions.map((gpu) => gpu.index).join(','), [gpuOptions]);
 
     const updateBoltz = (patch: Partial<StructureReorchestrateSettings['boltz']>) => {

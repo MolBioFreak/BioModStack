@@ -64,6 +64,7 @@ export interface Job {
     batch_name?: string | null;
     // Parent-child relationship for exploration mode
     parent_job_id?: string | null;
+    child_stage?: string | null;
     lineage_root_job_id?: string | null;
     stage_family?: string | null;
     stage_mode?: string | null;
@@ -424,6 +425,7 @@ export interface ExecutionTarget {
     provider_instance_id: string;
     name: string | null;
     state: 'discovered' | 'probing' | 'ready' | 'inactive' | 'unavailable';
+    setup?: { phase: string; message: string; started_at?: string; updated_at?: string } | null;
     active: boolean;
     host: string | null;
     port: number | null;
@@ -452,7 +454,20 @@ export interface DiscoveredExecutionTarget {
     started_at: string | null;
 }
 
-export interface RemoteGpuTelemetry {
+export interface RemoteTelemetrySample {
+    sequence?: number;
+    observed_at?: string;
+    available: boolean;
+    gpus: RemoteGpuTelemetry['gpus'];
+    cpu?: { scope?: string; allocated_cores?: number; utilization?: number | null };
+    ram?: { scope?: string; used_bytes?: number | null; limit_bytes?: number | null };
+    disk?: { path?: string; free_bytes?: number | null; total_bytes?: number | null };
+    network?: Array<{ interface: string; rx_bytes_per_second: number | null; tx_bytes_per_second: number | null }>;
+}
+export interface RemoteGpuTelemetry extends Omit<RemoteTelemetrySample, 'gpus'> {
+    cursor?: string;
+    reset?: boolean;
+    history?: RemoteTelemetrySample[];
     source: 'active_vast';
     available: boolean;
     target: ExecutionTarget | null;
@@ -462,9 +477,9 @@ export interface RemoteGpuTelemetry {
         index: number;
         uuid: string;
         name: string;
-        utilization: number;
-        memory_used_mb: number;
-        memory_total_mb: number;
+        utilization: number | null;
+        memory_used_mb: number | null;
+        memory_total_mb: number | null;
         temperature: number | null;
         power_draw_w: number | null;
         controls: { fan: false; power: false };
@@ -506,8 +521,8 @@ export const deactivateExecutionTarget = (executionTargetId: string) =>
         `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
     );
 
-export const fetchActiveRemoteGpuTelemetry = () =>
-    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry');
+export const fetchActiveRemoteGpuTelemetry = (since?: string) =>
+    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry', { params: { since } });
 
 export interface CPUPowerTelemetry {
     source: 'rapl' | string;
@@ -1523,12 +1538,14 @@ export const resumeJob = (
     jobId: string,
     fromStage?: string,
     paramOverrides?: Record<string, unknown>,
-    nameSuffix?: string
+    nameSuffix?: string,
+    executionTargetId?: string | null,
 ) => {
     const hasOverrides = !!paramOverrides && Object.keys(paramOverrides).length > 0;
     const hasNameSuffix = !!nameSuffix && nameSuffix.trim().length > 0;
-    const requestBody = (hasOverrides || hasNameSuffix)
+    const requestBody = (hasOverrides || hasNameSuffix || executionTargetId !== undefined)
         ? {
+            ...(executionTargetId !== undefined ? { execution_target_id: executionTargetId } : {}),
             ...(hasOverrides ? { param_overrides: paramOverrides } : {}),
             ...(hasNameSuffix ? { name_suffix: nameSuffix } : {}),
         }
@@ -2563,7 +2580,7 @@ export interface QueuedJob {
     name: string;
     model_id: string;
     mode: string;
-    queue_status: 'queued' | 'running' | 'paused' | 'pending_msa';
+    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa';
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;

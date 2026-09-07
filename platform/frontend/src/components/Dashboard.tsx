@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchJobs, fetchJobById, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob } from '../lib/api';
+import { fetchJobs, fetchJobById, cancelJob, resubmitJob, fetchJobLogs, resumeJob, deleteJobPermanently, forceRunJob, fetchExecutionTargets } from '../lib/api';
 import type { JobLogs, Job } from '../lib/api';
 import { jobPollingInterval } from '../lib/queryPolling';
 
@@ -12,8 +12,12 @@ import { DashboardTelemetry } from './dashboard/DashboardTelemetry';
 import { JobQueueTable } from './dashboard/JobQueueTable';
 import { JobFilters } from './dashboard/JobFilters';
 import { StructureReorchestratePanel } from './dashboard/StructureReorchestratePanel';
+import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { buildGpuCatalog, listGpuCatalogEntries } from './gpuCatalog';
+import { useLiveGpuCatalog } from './useLiveGpuCatalog';
 import {
     buildStructureReorchestrateOverrides,
+    canChangeStructureExecutionTarget,
     deriveStructureReorchestrateSettings,
     isLegacyRf3StructureJob,
     isStructureReorchestrateJob,
@@ -141,6 +145,36 @@ export function Dashboard() {
     const [resumeSettingsNameSuffix, setResumeSettingsNameSuffix] = useState<string>('retuned');
     const [resumeSettingsForm, setResumeSettingsForm] = useState<ResumeSettingsForm>(DEFAULT_RESUME_SETTINGS_FORM);
     const [structureReorchestrateSettings, setStructureReorchestrateSettings] = useState<StructureReorchestrateSettings | null>(null);
+    const [resumeExecutionTargetId, setResumeExecutionTargetId] = useState<string | null>(null);
+    const canChooseResumeTarget = !!resumeSettingsJob && canChangeStructureExecutionTarget(resumeSettingsJob);
+    const targetsQuery = useQuery({
+        queryKey: ['execution-targets'],
+        queryFn: fetchExecutionTargets,
+        enabled: !!resumeSettingsJob && isStructureReorchestrateJob(resumeSettingsJob),
+        refetchInterval: 15_000,
+    });
+    const selectedWorker = !targetsQuery.isError
+        ? targetsQuery.data?.data.find((target) => target.id === resumeExecutionTargetId && target.active && target.state === 'ready')
+        : undefined;
+    const remoteSelectionBlocked = resumeExecutionTargetId !== null && !selectedWorker;
+    const { gpuOptions: localGpuOptions } = useLiveGpuCatalog();
+    const workerGpuCount = Number(selectedWorker?.capabilities.gpu_count ?? 0);
+    const workerGpuOptions = listGpuCatalogEntries(buildGpuCatalog(
+        Array.from({ length: Number.isInteger(workerGpuCount) && workerGpuCount > 0 && workerGpuCount <= 256 ? workerGpuCount : 0 }, (_, index) => ({
+            index,
+            name: String(selectedWorker?.capabilities.gpu_name ?? 'GPU'),
+            memory_total_mb: Number(selectedWorker?.capabilities.gpu_vram_mb) || null,
+        })),
+    ));
+    const resumeGpuOptions = resumeExecutionTargetId === null ? localGpuOptions : workerGpuOptions;
+    const changeResumeExecutionTarget = (targetId: string | null) => {
+        if (targetId === resumeExecutionTargetId) return;
+        setResumeExecutionTargetId(targetId);
+        setStructureReorchestrateSettings((previous) => previous ? {
+            ...previous,
+            boltzCp: { ...previous.boltzCp, pinnedGpus: [], lockGpus: false },
+        } : null);
+    };
     const [resumeDialogMode, setResumeDialogMode] = useState<'resume' | 'reorchestrate'>('resume');
     const [resumeSettingsError, setResumeSettingsError] = useState<string | null>(null);
     const [search, setSearch] = useState('');
@@ -220,12 +254,14 @@ export function Dashboard() {
             fromStage,
             paramOverrides,
             nameSuffix,
+            executionTargetId,
         }: {
             jobId: string;
             fromStage?: string;
             paramOverrides?: Record<string, unknown>;
             nameSuffix?: string;
-        }) => resumeJob(jobId, fromStage, paramOverrides, nameSuffix),
+            executionTargetId?: string | null;
+        }) => resumeJob(jobId, fromStage, paramOverrides, nameSuffix, executionTargetId),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['jobs'] });
             const successPrefix = resumeDialogMode === 'reorchestrate' ? 'Job re-orchestrated!' : 'Job resumed!';
@@ -286,6 +322,7 @@ export function Dashboard() {
         const structureRetryJob = isStructureReorchestrateJob(detailedJob);
         setResumeDialogMode(structureRetryJob ? 'reorchestrate' : 'resume');
         setResumeSettingsJob(detailedJob);
+        setResumeExecutionTargetId(detailedJob.execution_target_id ?? null);
         setResumeSettingsFromStage(mapAwaitingStageToResumeStage(detailedJob.awaiting_stage));
         setResumeSettingsNameSuffix(detailedJob.status === 'awaiting_input' ? 'continued' : structureRetryJob ? 'reorchestrated' : 'retuned');
         setStructureReorchestrateSettings(structureRetryJob ? deriveStructureReorchestrateSettings(detailedJob) : null);
@@ -342,11 +379,25 @@ export function Dashboard() {
 
         let parsedOverrides: Record<string, unknown> = {};
         if (isStructureReorchestrateJob(resumeSettingsJob)) {
+            if (canChooseResumeTarget && remoteSelectionBlocked) {
+                setResumeSettingsError('Selected worker is unavailable. Choose Local or a ready worker.');
+                return;
+            }
             if (!structureReorchestrateSettings) {
                 setResumeSettingsError('Structure retry settings are missing. Close and reopen the re-orchestrate dialog.');
                 return;
             }
-            parsedOverrides = buildStructureReorchestrateOverrides(resumeSettingsJob, structureReorchestrateSettings);
+            const targetChanged = canChooseResumeTarget && resumeExecutionTargetId !== (resumeSettingsJob.execution_target_id ?? null);
+            parsedOverrides = buildStructureReorchestrateOverrides(
+                resumeSettingsJob,
+                structureReorchestrateSettings,
+                canChooseResumeTarget && (targetChanged || resumeExecutionTargetId !== null) ? resumeGpuOptions.map((gpu) => gpu.index).join(',') : undefined,
+            );
+            if (targetChanged) {
+                parsedOverrides.pinned_gpus = structureReorchestrateSettings.boltzCp.pinnedGpus.length > 0
+                    ? structureReorchestrateSettings.boltzCp.pinnedGpus : null;
+                parsedOverrides.lock_gpus = structureReorchestrateSettings.boltzCp.lockGpus;
+            }
         } else {
             const p = resumeSettingsJob.params || {};
             const maybeSetNumber = (key: string, nextValue: number) => {
@@ -385,6 +436,7 @@ export function Dashboard() {
             fromStage: effectiveStage,
             paramOverrides: parsedOverrides,
             nameSuffix: effectiveSuffix,
+            executionTargetId: canChooseResumeTarget ? resumeExecutionTargetId : undefined,
         });
     };
 
@@ -521,7 +573,7 @@ export function Dashboard() {
                                     )}
                                     <p className="mt-1 text-xs text-slate-500">
                                         {isStructureReorchestrateModal
-                                            ? 'Cache-based re-orchestration still reuses matching tasks; this hint does not strictly force a stage restart yet.'
+                                            ? 'Matching task caches can be reused when the worker and BMS source version stay the same. Stage selection is a hint.'
                                             : 'Cache-based resume reuses matching tasks; this hint does not strictly force stage restart yet.'}
                                     </p>
                                 </label>
@@ -540,9 +592,18 @@ export function Dashboard() {
 
                             {isStructureReorchestrateModal && structureReorchestrateSettings && (
                                 <>
+                                    {canChooseResumeTarget ? <ExecutionTargetPicker
+                                        value={resumeExecutionTargetId}
+                                        onChange={changeResumeExecutionTarget}
+                                        disabled={resumeMutation.isPending}
+                                    /> : <p className="text-sm text-slate-400">Placement changes are available only for terminal structure root jobs. This continuation retains its source target.</p>}
+                                    {resumeExecutionTargetId !== (resumeSettingsJob.execution_target_id ?? null) && (
+                                        <p className="text-sm text-amber-200">Changing execution target starts a fresh execution and cache context, with lineage to this source job.</p>
+                                    )}
                                     <StructureReorchestratePanel
                                         settings={structureReorchestrateSettings}
                                         onChange={setStructureReorchestrateSettings}
+                                        gpuOptions={canChooseResumeTarget ? resumeGpuOptions : undefined}
                                         disabled={resumeMutation.isPending}
                                     />
                                     {resumeSettingsError && (
@@ -854,7 +915,7 @@ export function Dashboard() {
                             <button
                                 onClick={submitResumeWithSettings}
                                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors disabled:opacity-50"
-                                disabled={resumeMutation.isPending}
+                                disabled={resumeMutation.isPending || (canChooseResumeTarget && remoteSelectionBlocked)}
                             >
                                 {resumeMutation.isPending
                                     ? (isStructureReorchestrateModal ? 'Re-orchestrating...' : 'Resuming...')

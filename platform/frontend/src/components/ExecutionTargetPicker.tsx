@@ -6,12 +6,20 @@ import {
     fetchExecutionTargets,
 } from '../lib/api';
 
-export function ExecutionTargetPicker() {
-    const [selectedTargetId, setSelectedTargetId] = useState(() => (
-        typeof window === 'undefined'
+interface ExecutionTargetPickerProps {
+    value?: string | null;
+    onChange?: (targetId: string | null) => void;
+    disabled?: boolean;
+}
+
+export function ExecutionTargetPicker({ value, onChange, disabled = false }: ExecutionTargetPickerProps = {}) {
+    const controlled = value !== undefined;
+    const [storedTargetId, setSelectedTargetId] = useState(() => (
+        controlled || typeof window === 'undefined'
             ? ''
             : window.sessionStorage.getItem(EXECUTION_TARGET_STORAGE_KEY) || ''
     ));
+    const selectedTargetId = controlled ? value ?? '' : storedTargetId;
     const targetsQuery = useQuery({
         queryKey: ['execution-targets'],
         queryFn: fetchExecutionTargets,
@@ -24,14 +32,15 @@ export function ExecutionTargetPicker() {
         [targets],
     );
     useEffect(() => {
-        if (!selectedTargetId || targetsQuery.isLoading) return;
+        if (controlled || !selectedTargetId || targetsQuery.isLoading) return;
         if (!readyTargets.some((target) => target.id === selectedTargetId)) {
             setSelectedTargetId('');
             window.sessionStorage.removeItem(EXECUTION_TARGET_STORAGE_KEY);
         }
-    }, [readyTargets, selectedTargetId, targetsQuery.isLoading]);
+    }, [controlled, readyTargets, selectedTargetId, targetsQuery.isLoading]);
 
     const selectTarget = (targetId: string) => {
+        if (controlled) { onChange?.(targetId || null); return; }
         setSelectedTargetId(targetId);
         if (targetId) {
             window.sessionStorage.setItem(EXECUTION_TARGET_STORAGE_KEY, targetId);
@@ -53,6 +62,8 @@ export function ExecutionTargetPicker() {
                 <button
                     type="button"
                     onClick={() => selectTarget('')}
+                    aria-pressed={selectedTargetId === ''}
+                    disabled={disabled}
                     className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === ''
                         ? 'border-blue-400 bg-blue-500/15 text-blue-100'
                         : 'border-slate-700 bg-slate-950 text-slate-300'}`}
@@ -64,6 +75,8 @@ export function ExecutionTargetPicker() {
                         key={target.id}
                         type="button"
                         onClick={() => selectTarget(target.id)}
+                        aria-pressed={selectedTargetId === target.id}
+                        disabled={disabled}
                         className={`rounded-lg border px-3 py-2 text-sm ${selectedTargetId === target.id
                             ? 'border-emerald-400 bg-emerald-500/15 text-emerald-100'
                             : 'border-slate-700 bg-slate-950 text-slate-300'}`}
@@ -73,9 +86,17 @@ export function ExecutionTargetPicker() {
                 ))}
             </div>
 
+            {controlled && selectedTargetId && (() => {
+                const selected = readyTargets.find((target) => target.id === selectedTargetId);
+                return selected ? (
+                    <p className="mt-3 text-xs text-slate-300">{String(selected.capabilities.gpu_count ?? '?')} × {String(selected.capabilities.gpu_name ?? 'GPU')}</p>
+                ) : (
+                    <p role="alert" className="mt-3 text-xs text-red-300">Selected worker {selectedTargetId} is unavailable. Choose Local or a ready worker, or wait for inventory recovery.</p>
+                );
+            })()}
             {targetsQuery.error && (
                 <p role="alert" className="mt-3 text-xs text-red-300">
-                    Execution targets are unavailable. Local remains authoritative.
+                    {controlled ? 'Execution targets could not be refreshed. Remote submission is blocked until inventory recovers.' : 'Execution targets are unavailable. Local remains authoritative.'}
                 </p>
             )}
         </section>

@@ -2,18 +2,72 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { JobQueuePanel } from '../../src/components/JobQueuePanel';
+import { api } from '../../src/lib/api';
 import { JobQueueTable } from '../../src/components/dashboard/JobQueueTable';
 import { JobDetailsPanel } from '../../src/components/JobDetailsPanel';
 import { QuickViewer } from '../../src/components/QuickViewer';
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 
-afterEach(() => document.body.replaceChildren());
+const defaultAdapter = api.defaults.adapter;
+beforeEach(() => { api.defaults.adapter = async () => { throw new Error('Offline test dependency'); }; });
+afterEach(() => { document.body.replaceChildren(); api.defaults.adapter = defaultAdapter; });
 
 describe('MD queue integration in the dashboard job queue', () => {
+    it.each(['preparing', 'cancelling'])('keeps remote %s visible without claiming execution or offering a duplicate launch', async (phase) => {
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['queue'], response([{
+            id: 'remote-prestart', name: 'Remote bundle preparation', model_id: 'protenix', mode: 'predict',
+            queue_status: phase, paused: false, priority: 0, vram_estimate_mb: 5949,
+            assigned_gpu: 0, pinned_gpu: null, display_gpu_ids: [],
+            execution_target_id: 'vast:123', remote_state: phase,
+            created_at: '2026-09-06T12:00:00Z', started_at: null,
+        }]));
+        client.setQueryData(['system'], response({ gpus: [] }));
+        client.setQueryData(['cancelledJobs'], response([]));
+        const originalAdapter = api.defaults.adapter;
+        const requests: string[] = [];
+        api.defaults.adapter = async (config) => {
+            requests.push(`${config.method} ${config.url}`);
+            if (config.method === 'delete' && config.url === '/api/queue/remote-prestart') return response({ success: true });
+            if (config.url === '/api/queue') return response([]);
+            throw new Error('Unexpected offline request');
+        };
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const root = createRoot(container);
+        try {
+            await act(async () => {
+                root.render(<MemoryRouter><QueryClientProvider client={client}><JobQueuePanel /></QueryClientProvider></MemoryRouter>);
+                await Promise.resolve();
+            });
+            expect(container.textContent).toContain('Remote bundle preparation');
+            expect(container.textContent).toContain(`Vast · ${phase}`);
+            expect(container.textContent).toContain('0 run');
+            expect([...container.querySelectorAll('h4')].map(node => node.textContent?.trim())).toContain(phase === 'preparing' ? 'Preparing remote jobs' : 'Cancelling remote jobs');
+            expect(container.querySelector('button[title="Pause"]')).toBeNull();
+            expect(container.querySelector('button[title="Force Launch"]')).toBeNull();
+            expect(container.querySelector('button[title="Pin to GPU"]')).toBeNull();
+            const cancel = container.querySelector<HTMLButtonElement>('button[title="Cancel"]');
+            expect(cancel).not.toBeNull();
+            expect(cancel?.disabled).toBe(phase === 'cancelling');
+            if (phase === 'preparing') {
+                await act(async () => {
+                    cancel?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                });
+                expect(requests).toContain('delete /api/queue/remote-prestart');
+            }
+        } finally {
+            await act(async () => root.unmount());
+            client.clear();
+            api.defaults.adapter = originalAdapter;
+        }
+    });
+
     it('shows MD once in the global queue and routes domain controls to MD Operations', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         client.setQueryData(['queue'], response([{

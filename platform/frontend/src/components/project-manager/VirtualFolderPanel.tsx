@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { JsonObject, ProjectManagerReadModel } from '../../lib/projectManager';
 import { displayLabel, valueText } from './projectManagerState';
 
@@ -36,6 +37,35 @@ function RecordList({ items, empty, onSelect }: { items: JsonObject[]; empty: st
             })}
         </ul>
     );
+}
+
+const activityLabels: Record<string, [string, string]> = {
+    'molbio_ngs.domain_state.revision_saved': ['Domain state saved', 'A new domain state revision was saved.'],
+    source_attached: ['Source attached', 'A source record was attached to this project context.'],
+    run_completed: ['Run completed', 'A workflow run reported completion.'],
+    domain_connector_event_applied: ['Domain connection updated', 'An event from the domain connector was applied.'],
+};
+
+function ActivityEvent({ item }: { item: JsonObject }) {
+    const [open, setOpen] = useState(false);
+    const payload = item.payload && typeof item.payload === 'object' && !Array.isArray(item.payload) ? item.payload as JsonObject : {};
+    const eventType = text(payload, 'event_type') ?? text(item, 'event_type') ?? 'unknown_event';
+    const [title, description] = activityLabels[eventType] ?? [displayLabel(eventType.replaceAll('.', ' ')), 'A project activity event was recorded. Expand Technical details for the exact event data.'];
+    const timestamp = text(item, 'created_at');
+    const generation = payload.stream_generation ?? payload.generation ?? item.generation;
+    const generationLabel = payload.stream_generation !== undefined ? 'Stream generation' : 'Generation';
+    const stream = payload.stream_key ?? payload.event_stream ?? payload.stream ?? item.event_stream ?? item.stream;
+    return <li className="border-b border-border-primary py-2 last:border-0">
+        <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className="w-full rounded-lg p-2 text-left focus:ring-2 focus:ring-accent">
+            <span className="flex justify-between gap-3 text-sm font-semibold text-content">{title}<span aria-hidden="true">{open ? '−' : '+'}</span></span>
+            <time dateTime={timestamp ?? undefined} className="mt-1 block text-xs text-content-muted">{timestamp ? (Number.isNaN(Date.parse(timestamp)) ? timestamp : new Date(timestamp).toLocaleString()) : 'Timestamp unavailable'}</time>
+        </button>
+        {open && <div className="space-y-3 px-2 pb-3 text-sm text-content-secondary">
+            <p>{text(payload, 'description') ?? text(item, 'description') ?? description}</p>
+            {(generation !== undefined || stream !== undefined) && <p>{stream !== undefined && `Event stream: ${valueText(stream)}`}{generation !== undefined && ` · ${generationLabel} ${valueText(generation)}`}</p>}
+            <details><summary className="cursor-pointer text-xs font-semibold">Technical details</summary><pre className="mt-2 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(item, null, 2)}</pre></details>
+        </div>}
+    </li>;
 }
 
 export function VirtualFolderPanel({ folder, summary, onLoadMore, onSelectRecord, loading = false }: VirtualFolderPanelProps) {
@@ -80,7 +110,7 @@ export function VirtualFolderPanel({ folder, summary, onLoadMore, onSelectRecord
                 </div>
                 <span className="text-[10px] text-content-muted">{items.length} loaded</span>
             </div>
-            <RecordList items={items} empty={`No ${folder} records are available in this bounded context.`} onSelect={(item) => onSelectRecord(folder, item)} />
+            {folder === 'activity' && items.length ? <ul>{items.map((item) => <ActivityEvent key={text(item, 'id') ?? JSON.stringify(item)} item={item} />)}</ul> : <RecordList items={items} empty={`No ${folder} records are available in this bounded context.`} onSelect={(item) => onSelectRecord(folder, item)} />}
             {nextCursor ? (
                 <button type="button" onClick={() => onLoadMore(folder)} disabled={loading} className="mt-3 rounded-lg border border-accent px-3 py-2 text-xs font-semibold text-accent disabled:opacity-50">
                     {loading ? 'Loading…' : `Load more ${folder}`}

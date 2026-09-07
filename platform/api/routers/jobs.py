@@ -727,7 +727,8 @@ def _reconcile_child_jobs_from_history(children: List[Job]) -> int:
 
 
 class ResumeJobRequest(BaseModel):
-    """Optional payload for resume calls that need runtime param overrides."""
+    """Resume overrides; omitted placement inherits, explicit null selects Local."""
+    execution_target_id: Optional[str] = None
     from_stage: Optional[str] = None
     param_overrides: Dict[str, Any] = Field(default_factory=dict)
     name_suffix: Optional[str] = None
@@ -5590,12 +5591,10 @@ async def _create_job(
         selected_execution_target = await session.get(
             ExecutionTarget,
             str(job_data.execution_target_id),
+            populate_existing=True,
         )
-        if (
-            selected_execution_target is None
-            or not selected_execution_target.active
-            or selected_execution_target.state != "ready"
-        ):
+        from services.remote_execution.targets import target_eligible
+        if selected_execution_target is None or not target_eligible(selected_execution_target):
             raise HTTPException(
                 status_code=422,
                 detail="execution_target_id is not an active ready execution target",
@@ -8508,6 +8507,24 @@ def _anchor_dorado_demux_products(job: Job) -> dict[str, Any]:
     }
 
 
+def _stage_callback_has_authority(job: Job) -> bool:
+    if job.awaiting_input:
+        return False
+    if job.status == "running" and job.queue_status == "running":
+        return True
+    # Stage reports are metadata, not a started/completed Job publication. An
+    # authenticated worker may report immediately after spawn, before its SSH
+    # start response arrives. Only the current immutable launch may do this.
+    receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    return bool(
+        job.execution_target_id and job.status == "queued" and job.queue_status == "preparing"
+        and job.remote_state in {"launch_requested", "launch_uncertain"}
+        and job.remote_attempt_id
+        and job.nextflow_run_id == f"remote:{job.remote_attempt_id}"
+        and receipt.get("attempt_id") == job.remote_attempt_id
+    )
+
+
 async def _publish_generic_stage_terminal(
     *,
     session: AsyncSession,
@@ -8525,11 +8542,7 @@ async def _publish_generic_stage_terminal(
             raise HTTPException(status_code=404, detail="Job not found")
         if not stage_reporting.token_is_authorized(current.provenance, token):
             raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-        if (
-            current.status != JobStatus.RUNNING.value
-            or current.queue_status != "running"
-            or current.awaiting_input
-        ):
+        if not _stage_callback_has_authority(current):
             raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
 
         original_completed = current.completed_stages
@@ -8556,8 +8569,13 @@ async def _publish_generic_stage_terminal(
 
         predicates = [
             Job.id == job_id,
-            Job.status == JobStatus.RUNNING.value,
-            Job.queue_status == "running",
+            Job.status == current.status,
+            Job.queue_status == current.queue_status,
+            *([
+                Job.remote_attempt_id == current.remote_attempt_id,
+                Job.nextflow_run_id == current.nextflow_run_id,
+                Job.remote_state == current.remote_state,
+            ] if getattr(current, "execution_target_id", None) else []),
             Job.awaiting_input.is_(False),
             Job.completed_stages.is_(None) if original_completed is None else Job.completed_stages == original_completed,
             Job.stage_outputs.is_(None) if original_outputs is None else Job.stage_outputs == original_outputs,
@@ -9057,11 +9075,7 @@ async def _publish_generic_stage_start(
             raise HTTPException(status_code=404, detail="Job not found")
         if not stage_reporting.token_is_authorized(current.provenance, token):
             raise HTTPException(status_code=403, detail="invalid workflow stage credential")
-        if (
-            current.status != JobStatus.RUNNING.value
-            or current.queue_status != "running"
-            or current.awaiting_input
-        ):
+        if not _stage_callback_has_authority(current):
             raise HTTPException(status_code=409, detail="workflow stage callback lost active-job authority")
 
         original_current_stage = current.current_stage
@@ -9084,8 +9098,13 @@ async def _publish_generic_stage_start(
 
         predicates = [
             Job.id == job_id,
-            Job.status == JobStatus.RUNNING.value,
-            Job.queue_status == "running",
+            Job.status == current.status,
+            Job.queue_status == current.queue_status,
+            *([
+                Job.remote_attempt_id == current.remote_attempt_id,
+                Job.nextflow_run_id == current.nextflow_run_id,
+                Job.remote_state == current.remote_state,
+            ] if getattr(current, "execution_target_id", None) else []),
             Job.awaiting_input.is_(False),
             Job.current_stage.is_(None) if original_current_stage is None else Job.current_stage == original_current_stage,
             Job.stage_progress.is_(None) if original_stage_progress is None else Job.stage_progress == original_stage_progress,
@@ -9281,6 +9300,57 @@ async def resume_job(
             detail=f"Cannot resume job with status: {job.status}"
         )
     
+    # Resolve placement before filesystem writes or domain continuation side effects.
+    source_target_id = job.execution_target_id or None
+    execution_target_id = source_target_id
+    if request and "execution_target_id" in request.model_fields_set:
+        execution_target_id = request.execution_target_id
+        if execution_target_id is not None:
+            execution_target_id = execution_target_id.strip()
+            if not execution_target_id:
+                raise HTTPException(status_code=422, detail="Use null to select Local execution")
+    target_changed = execution_target_id != source_target_id
+    # Mirrors StructurePredictionUiState's GPU launcher model/mode mapping.
+    placement_supported = (
+        job.model_id in {"boltz2", "protenix", "esmfold2"} and job.mode in {"predict", "complex"}
+    ) or (job.model_id == "boltz_cp_experimental" and job.mode == "design")
+    fresh_execution_supported = (
+        placement_supported
+        and job.status in {"failed", "cancelled"}
+        and not (job.parent_job_id or job.child_stage or job.awaiting_input)
+    )
+    if target_changed and not fresh_execution_supported:
+        raise HTTPException(
+            status_code=422,
+            detail="Execution placement changes require a terminal structure root; child and interactive continuations must retain their target",
+        )
+    execution_source_revision = None
+    execution_source_tree = None
+    source_changed = False
+    if execution_target_id:
+        from services.remote_execution.targets import target_eligible
+        target = await session.get(ExecutionTarget, execution_target_id, populate_existing=True)
+        if target is None or not target_eligible(target):
+            raise HTTPException(status_code=422, detail="execution_target_id is not an active ready execution target")
+        if not target_changed and (not job.execution_source_revision or not job.execution_source_tree):
+            raise HTTPException(status_code=409, detail="Remote source Job is missing its immutable source identity")
+        try:
+            from services.remote_execution.bundle import current_source_identity
+            execution_source_revision, execution_source_tree = current_source_identity()
+        except Exception as exc:
+            logger.exception("Unable to capture the re-orchestrated Job source identity")
+            raise HTTPException(status_code=503, detail="Committed BMS source identity is unavailable") from exc
+        source_changed = bool(source_target_id) and (
+            execution_source_revision != job.execution_source_revision
+            or execution_source_tree != job.execution_source_tree
+        )
+        if source_changed and not fresh_execution_supported:
+            raise HTTPException(
+                status_code=409,
+                detail="BMS source changed; child, interactive, and unsupported-domain continuations cannot reuse historical execution state. Submit a new supported root job with the current source instead.",
+            )
+    fresh_execution = target_changed or source_changed
+
     completed = job.completed_stages or []
     # Relaxed restriction: Allow resume even if no stages completed (start from scratch with cache)
 
@@ -9289,6 +9359,8 @@ async def resume_job(
     if isinstance(effective_from_stage, str):
         effective_from_stage = effective_from_stage.strip() or None
     requested_overrides = dict(request.param_overrides) if request else {}
+    if "execution_target_id" in requested_overrides:
+        raise HTTPException(status_code=422, detail="execution_target_id must be a top-level resume field")
     requested_name_suffix = request.name_suffix if request else None
 
     # Prevent callers from overriding resume control fields directly.
@@ -9439,10 +9511,10 @@ async def resume_job(
             "applied_overrides": sorted(param_overrides.keys()),
         }
 
-    # Guard the original declaration before directories, normalization, or rows
-    # can be changed. Fresh-submission/review iteration branches above re-admit.
+    # Only cached continuations retain their original declaration; fresh
+    # re-orchestration re-admits below before directories or rows are written.
     trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
-    if trusted_declaration is not None:
+    if not fresh_execution and trusted_declaration is not None:
         from services.fampnn_policy_admission import guard_cached_declaration
         try:
             guard_cached_declaration(trusted_declaration, job.params or {}, param_overrides)
@@ -9465,16 +9537,34 @@ async def resume_job(
     
     # True resume should keep the original execution directory so Nextflow can
     # reuse cached task hashes that depend on params.out_dir/publishDir paths.
-    output_dir = job.output_dir
-    os.makedirs(output_dir, exist_ok=True)
-    
+    output_dir = str(get_results_dir() / new_job_id) if fresh_execution else job.output_dir
+
     merged_params = {
         **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
         **param_overrides,
     }
+    if fresh_execution:
+        # Placement or source drift starts fresh, never reusing historical runtime/cache state.
+        runtime_keys = {
+            "batch_name", "job_name", "out_dir", "output_dir", "work_dir", "stage_work_dir",
+            "cache_dir", "nxf_cache_dir", "NXF_CACHE_DIR", "lineage_root_job_id",
+            "execution_target_id", "execution_source_revision", "execution_source_tree",
+            "data_root", "code_root", "weights_root", "container_dir", "msa_cache_dir",
+        }
+        hardware_keys = {
+            "pinned_gpus", "gpu_ids", "bcp_gpu_ids", "gpu_id", "gpu_device",
+            "cuda_visible_devices", "CUDA_VISIBLE_DEVICES", "msa_preferred_gpu_ids",
+            "msa_excluded_gpus",
+        }
+        merged_params = {
+            key: value for key, value in merged_params.items()
+            if not key.startswith("resume_") and key not in runtime_keys
+            and (not target_changed or key not in hardware_keys or key in param_overrides)
+        }
+        merged_params["reorchestrated_from_job_id"] = job_id
     merged_params = _ensure_job_resume_identity(
-        job_name=(job.params or {}).get("job_name") or base_name,
-        job_id=_coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
+        job_name=new_name if fresh_execution else (job.params or {}).get("job_name") or base_name,
+        job_id=new_job_id if fresh_execution else _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
         model_id=job.model_id,
         mode=job.mode,
         params=merged_params,
@@ -9484,7 +9574,7 @@ async def resume_job(
         job,
         _coerce_nonempty_text(merged_params.get("resume_root_job_id")) or job_id,
     )
-    if resolved_child_batch_name:
+    if resolved_child_batch_name and not fresh_execution:
         merged_params["batch_name"] = resolved_child_batch_name
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
@@ -9499,13 +9589,29 @@ async def resume_job(
     )
 
     try:
-        # True cached resume stays in its original cohort, even after activation.
+        # Only true cached resume stays in its original scientific cohort.
         # Overrides may not supply authority (including review-payload defaults).
         scientific_contract.reject_reserved_marker(param_overrides)
-        resume_revision = scientific_contract.revision_for_job(job)
+        source_revision = scientific_contract.revision_for_job(job)
+        resume_revision = source_revision
         merged_params.pop(scientific_contract.REVISION_KEY, None)
         merged_params.pop('fampnn_analysis_declaration', None)
         merged_params.pop('fampnn_analysis_policy', None)
+        scientific_contract.reject_reserved_marker(merged_params)
+        if fresh_execution:
+            # Match fresh resubmission: current admission, no silent downgrade,
+            # and current registry validation rather than historical authority.
+            resume_revision = scientific_contract.admission_revision(job.model_id, job.mode)
+            if (source_revision is not None and resume_revision is None
+                    and (job.model_id, job.mode) in scientific_contract.SUPPORTED_CALLERS):
+                raise ValueError("marked source requires an active scientific caller for fresh resubmission")
+            if resume_revision is not None:
+                errors = get_registry().validate_job_params(
+                    job.model_id, job.mode,
+                    _normalize_boltz_cp_params_for_validation(job.model_id, merged_params),
+                )
+                if errors:
+                    raise HTTPException(status_code=422, detail={"validation_errors": errors})
         trusted_declaration = (job.provenance or {}).get('fampnn_analysis_declaration')
         merged_params, resume_provenance = scientific_contract.admitted_payload(
             merged_params, {}, resume_revision,
@@ -9515,12 +9621,23 @@ async def resume_job(
             resume_provenance['core_protein_requested_params'] = {
                 **deepcopy(original_request), **deepcopy(param_overrides),
             }
-        if trusted_declaration is not None:
+        if fresh_execution and resume_revision is not None:
+            from services.fampnn_policy_admission import compile_declaration, overrides_from_declaration
+            declaration = compile_declaration(
+                job.model_id, job.mode, merged_params,
+                overrides_from_declaration(trusted_declaration),
+                parent=await session.get(Job, job.parent_job_id) if job.parent_job_id else None,
+            )
+            if declaration is not None:
+                merged_params['fampnn_analysis_declaration'] = declaration
+                resume_provenance['fampnn_analysis_declaration'] = declaration
+        elif not fresh_execution and trusted_declaration is not None:
             merged_params['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
             resume_provenance['fampnn_analysis_declaration'] = deepcopy(trusted_declaration)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    os.makedirs(output_dir, exist_ok=True)
     new_job = Job(
         id=new_job_id,
         name=new_name,
@@ -9530,11 +9647,12 @@ async def resume_job(
         provenance=resume_provenance,
         params={
             **merged_params,
-            "resume_job_id": job_id,
-            "resume_work_dir": resume_work_dir,
-            "resume_source_dir": job.output_dir,  # For NXF_CACHE_DIR session isolation
-            "resume_requested_stage": effective_from_stage,
-            # We don't need manual stage skipping params because we use -resume
+            **({} if fresh_execution else {
+                "resume_job_id": job_id,
+                "resume_work_dir": resume_work_dir,
+                "resume_source_dir": job.output_dir,
+                "resume_requested_stage": effective_from_stage,
+            }),
         },
         output_dir=output_dir,
         batch_id=job.batch_id,
@@ -9552,7 +9670,11 @@ async def resume_job(
         queue_status='queued',
         vram_estimate_mb=job.vram_estimate_mb,
         sequence_length=job.sequence_length,
-        pinned_gpu=job.pinned_gpu,
+        pinned_gpu=None if target_changed else job.pinned_gpu,
+        execution_target_id=execution_target_id,
+        execution_source_revision=execution_source_revision,
+        execution_source_tree=execution_source_tree,
+        lineage_root_job_id=new_job_id if fresh_execution else job.lineage_root_job_id,
         priority=job.priority,
     )
 
@@ -9583,13 +9705,21 @@ async def resume_job(
     )
     
     return {
-        "message": f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "message": "Job re-orchestrated with current source and a fresh cache" if fresh_execution else f"Job resumed. Checking cache in '{resume_work_dir}'",
+        "execution_target_id": execution_target_id,
+        "placement_changed": target_changed,
+        "source_changed": source_changed,
+        "fresh_execution": fresh_execution,
         "original_job_id": job_id,
         "new_job_id": new_job_id,
         "new_job_name": new_name,
         "resume_from_stage": effective_from_stage or "auto",
-        "resume_stage_mode": "hint",
-        "resume_stage_note": "Stage selection is advisory; cache hits determine exact task reuse.",
+        "resume_stage_mode": "fresh" if fresh_execution else "hint",
+        "resume_stage_note": (
+            "BMS source changed; prior task caches are not reused." if source_changed
+            else "Execution target changed; prior task caches are not reused." if target_changed
+            else "Stage selection is advisory; cache hits determine exact task reuse."
+        ),
         "preserved_stages": [],
         "applied_overrides": sorted(param_overrides.keys())
     }

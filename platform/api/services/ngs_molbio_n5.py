@@ -77,8 +77,7 @@ from services.resource_usage_evidence import (
 
 DATASET_POLICY_VERSION = "bms.ngs-molbio.dataset-kind-registry.v1"
 ADMISSION_POLICY_VERSION = "bms.resource-admission-policy.v1"
-CPU_THREAD_LIMIT = 24
-DRAM_BYTE_LIMIT = 96 * 1024**3
+from biomodstack_local_resources import applied_local_policy
 ACTIVE_ADMISSION_STATES = frozenset({"admitted", "queued"})
 
 
@@ -527,13 +526,13 @@ def _resource_request(scheduler: Mapping[str, Any]) -> dict[str, Any]:
             raise ResourceAdmissionDenied("invalid_dram_request", "effective DRAM request must be numeric", [])
         dram_gib = max(float(dram_gib), 16.0)
     gpu = resources.get("pinned_gpu", resources.get("gpu_index"))
-    if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1 or cpu > CPU_THREAD_LIMIT:
-        raise ResourceAdmissionDenied("invalid_cpu_request", "effective CPU request is outside 1..24 threads", [])
+    if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu < 1 or cpu > applied_local_policy().cpu_threads:
+        raise ResourceAdmissionDenied("invalid_cpu_request", f"effective CPU request is outside 1..{applied_local_policy().cpu_threads} threads", [])
     if not isinstance(dram_gib, (int, float)) or isinstance(dram_gib, bool) or dram_gib <= 0:
         raise ResourceAdmissionDenied("invalid_dram_request", "effective DRAM request must be positive", [])
     dram_bytes = int(dram_gib * 1024**3)
-    if dram_bytes > DRAM_BYTE_LIMIT:
-        raise ResourceAdmissionDenied("resource_admission_denied", "effective DRAM request exceeds the 96 GiB deployment limit", [])
+    if dram_bytes > applied_local_policy().memory_bytes:
+        raise ResourceAdmissionDenied("resource_admission_denied", "effective DRAM request exceeds the applied local RAM budget", [])
     if gpu is not None and (not isinstance(gpu, int) or isinstance(gpu, bool) or gpu < 0):
         raise ResourceAdmissionDenied("gpu_inventory_degraded", "GPU request cannot be matched to a valid scheduler GPU index", [])
     gpu_uuid = None
@@ -553,13 +552,35 @@ def _resource_request(scheduler: Mapping[str, Any]) -> dict[str, Any]:
     return {"cpu_threads": cpu, "dram_bytes": dram_bytes, "gpu_index": gpu, "gpu_uuid": gpu_uuid}
 
 
+async def _locked_local_admission_policy(session: AsyncSession) -> ExperimentResourceAdmissionPolicy:
+    """Reconcile the legacy singleton only behind its write fence, when idle.
+
+    Admission rows/receipts are never rewritten. A changed profile in a running
+    process does not alter the process snapshot. Restart/application while work
+    is active fails closed rather than silently resizing its resource envelope.
+    """
+    await session.execute(update(ExperimentResourceAdmissionPolicy).where(
+        ExperimentResourceAdmissionPolicy.policy_id == "managed-workflows"
+    ).values(lock_generation=ExperimentResourceAdmissionPolicy.lock_generation + 1, updated_at=now()))
+    policy = await session.get(ExperimentResourceAdmissionPolicy, "managed-workflows", populate_existing=True)
+    if policy is None or policy.policy_version != ADMISSION_POLICY_VERSION:
+        raise ResourceAdmissionDenied("resource_policy_unavailable", "resource admission policy is unavailable or divergent", [])
+    desired = applied_local_policy()
+    if (policy.cpu_thread_limit, policy.dram_byte_limit) != (desired.cpu_threads, desired.memory_bytes):
+        active = await session.scalar(select(func.count()).select_from(ExperimentResourceAdmission).where(
+            ExperimentResourceAdmission.state.in_(ACTIVE_ADMISSION_STATES)))
+        if active:
+            raise ResourceAdmissionDenied("resource_policy_unavailable", "local policy changed with active admissions; drain work before managed application/restart", [])
+        policy.cpu_thread_limit = desired.cpu_threads
+        policy.dram_byte_limit = desired.memory_bytes
+        await session.flush()
+    return policy
+
+
 async def reserve_run_group(
     session: AsyncSession, *, group_id: str, domain_id: str, actor: str
 ) -> list[ExperimentResourceAdmission]:
-    policy = await session.get(ExperimentResourceAdmissionPolicy, "managed-workflows")
-    if policy is None or policy.policy_version != ADMISSION_POLICY_VERSION or policy.cpu_thread_limit != CPU_THREAD_LIMIT or policy.dram_byte_limit != DRAM_BYTE_LIMIT:
-        raise ResourceAdmissionDenied("resource_policy_unavailable", "resource admission policy is unavailable or divergent", [])
-    await session.execute(update(ExperimentResourceAdmissionPolicy).where(ExperimentResourceAdmissionPolicy.policy_id == policy.policy_id).values(lock_generation=ExperimentResourceAdmissionPolicy.lock_generation + 1, updated_at=now()))
+    policy = await _locked_local_admission_policy(session)
     runs = list((await session.scalars(select(ExperimentWorkflowRun).where(ExperimentWorkflowRun.run_group_id == group_id))).all())
     attempts = list((await session.scalars(select(ExperimentRunAttempt).where(ExperimentRunAttempt.workflow_run_id.in_([row.resource_id for row in runs])))).all()) if runs else []
     admitted_attempt_ids = set((await session.scalars(select(ExperimentResourceAdmission.run_attempt_id).where(ExperimentResourceAdmission.run_attempt_id.in_([row.resource_id for row in attempts])))).all()) if attempts else set()
@@ -581,8 +602,8 @@ async def reserve_run_group(
     totals = (await session.execute(select(func.coalesce(func.sum(ExperimentResourceAdmission.cpu_threads), 0), func.coalesce(func.sum(ExperimentResourceAdmission.dram_bytes), 0)).where(ExperimentResourceAdmission.state.in_(ACTIVE_ADMISSION_STATES)))).one()
     requested_cpu = sum(item["cpu_threads"] for item in requests)
     requested_dram = sum(item["dram_bytes"] for item in requests)
-    if int(totals[0]) + requested_cpu > CPU_THREAD_LIMIT or int(totals[1]) + requested_dram > DRAM_BYTE_LIMIT:
-        raise ResourceAdmissionDenied("resource_admission_denied", f"aggregate request would exceed {CPU_THREAD_LIMIT} CPU threads or 96 GiB DRAM", requests)
+    if int(totals[0]) + requested_cpu > applied_local_policy().cpu_threads or int(totals[1]) + requested_dram > applied_local_policy().memory_bytes:
+        raise ResourceAdmissionDenied("resource_admission_denied", f"aggregate request would exceed {applied_local_policy().cpu_threads} CPU threads or {applied_local_policy().memory_bytes} bytes DRAM", requests)
     requested_gpus = [item["gpu_index"] for item in requests if item["gpu_index"] is not None]
     active_gpus = set(
         (
@@ -719,8 +740,8 @@ async def persist_admission_refusal(
             domain_experiment_id=domain_id, plan_id=plan_id,
             preparation_id=preparation_id, run_attempt_id=None,
             canonical_job_id=None, state="refused",
-            cpu_threads=max(1, min(CPU_THREAD_LIMIT, int(item.get("cpu_threads") or 1))),
-            dram_bytes=max(1, min(DRAM_BYTE_LIMIT, int(item.get("dram_bytes") or 1))),
+            cpu_threads=max(1, min(applied_local_policy().cpu_threads, int(item.get("cpu_threads") or 1))),
+            dram_bytes=max(1, min(applied_local_policy().memory_bytes, int(item.get("dram_bytes") or 1))),
             gpu_index=item.get("gpu_index"), gpu_uuid=item.get("gpu_uuid"),
             policy_source="project-scheduler", policy_version=ADMISSION_POLICY_VERSION,
             owner=actor, refusal_code=denial.code, refusal_reason=denial.reason[:2048],
@@ -1341,6 +1362,9 @@ async def reconcile_startup_admissions(
             row.updated_at = now()
             pending_evidence += 1
     await session.flush()
+    # Startup applies the configured budget under the existing admission fence.
+    # A changed policy is refused while reservations remain active.
+    await _locked_local_admission_policy(session)
     return pending_evidence
 
 
@@ -1618,9 +1642,9 @@ async def operational_status(session: AsyncSession) -> dict[str, Any]:
         "queue": {"depth": int(queue[0]), "oldest_age_seconds": oldest_age},
         "resource_admission": {
             "cpu_threads_reserved": int(reserved[0]),
-            "cpu_thread_limit": CPU_THREAD_LIMIT,
+            "cpu_thread_limit": applied_local_policy().cpu_threads,
             "dram_bytes_reserved": int(reserved[1]),
-            "dram_byte_limit": DRAM_BYTE_LIMIT,
+            "dram_byte_limit": applied_local_policy().memory_bytes,
             "active_reservations": len(active_admissions),
             "actual_cpu_threads_observed": actual_cpu_threads,
             "actual_dram_bytes_observed": actual_dram_bytes,

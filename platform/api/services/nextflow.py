@@ -1222,11 +1222,15 @@ def _normalize_protenix_msa_backend(value: object) -> str:
 
 
 def _dynamic_gpu_cpu_pool_threads() -> int:
-    total_threads = os.cpu_count() or 48
-    return max(1, total_threads - CPU_RESERVED_THREADS)
+    from biomodstack_local_resources import applied_local_policy
+    return applied_local_policy().cpu_threads
 
 
 async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, Any]) -> Optional[int]:
+    # Remote instance capacity is owned by its execution target, not this controller.
+    if getattr(job, "execution_target_id", None):
+        return None
+    local_limit = _dynamic_gpu_cpu_pool_threads()
     scheduler_config = read_scheduler_config()
     global_config = scheduler_config.get("global", {})
     configured_share = global_config.get("cpu_threads_per_job")
@@ -1234,14 +1238,14 @@ async def _resolve_dynamic_gpu_cpu_share(session, job, launch_params: Dict[str, 
     auto_cpu_thread_job_threshold = global_config.get("auto_cpu_thread_job_threshold", 2)
     try:
         if not auto_cpu_threads and configured_share is not None:
-            return max(1, min(24, int(configured_share)))
+            return max(1, min(local_limit, int(configured_share)))
     except (TypeError, ValueError):
         pass
 
     try:
-        max_cpu_share = max(1, min(24, int(configured_share))) if configured_share is not None else 24
+        max_cpu_share = max(1, min(local_limit, int(configured_share))) if configured_share is not None else local_limit
     except (TypeError, ValueError):
-        max_cpu_share = 24
+        max_cpu_share = local_limit
     try:
         job_threshold = max(1, int(auto_cpu_thread_job_threshold))
     except (TypeError, ValueError):
@@ -2138,17 +2142,6 @@ async def launch_nextflow_job(
                 else "auto"
             )
 
-    launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
-    preflight_notes: List[str] = list(boltzgen_notes)
-    is_protenix = _is_protenix_job(model_id, launch_params)
-    if is_protenix:
-        launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
-        if preflight_notes:
-            logger.warning(
-                f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
-                + " | ".join(preflight_notes)
-            )
-    
     async with async_session() as session:
         # Update job to running
         result = await session.execute(select(Job).where(Job.id == job_id))
@@ -2158,9 +2151,27 @@ async def launch_nextflow_job(
             logger.error(f"Job {job_id} not found in database")
             return
 
-        # Persisted provenance, never a parameter/file self-marker, owns revision.
-        from services.core_protein_scientific_contract import workflow_params
-        launch_params = workflow_params(job, launch_params)
+        try:
+            # Persisted provenance, never a parameter/file self-marker, owns revision.
+            from services.core_protein_scientific_contract import workflow_params
+            launch_params = workflow_params(job, launch_params)
+            launch_params, boltzgen_notes = await prepare_boltzgen_params_for_launch(launch_params)
+            preflight_notes: List[str] = list(boltzgen_notes)
+            is_protenix = _is_protenix_job(model_id, launch_params)
+            if is_protenix:
+                launch_params, preflight_notes = _apply_protenix_preflight(launch_params)
+                if preflight_notes:
+                    logger.warning(
+                        f"[PROTENIX-GUARDRAIL] Preflight downshift applied for job {job_id}: "
+                        + " | ".join(preflight_notes)
+                    )
+        except Exception as exc:
+            if not job.execution_target_id:
+                raise
+            from services.remote_execution.executor import fail_remote_prestart
+
+            await fail_remote_prestart(session, job, str(exc))
+            return
 
         if job.status == JobStatus.RUNNING.value and job.started_at is not None and not allow_running_job:
             logger.warning(f"Job {job_id} is already marked running; skipping duplicate launcher entry")
@@ -2176,7 +2187,13 @@ async def launch_nextflow_job(
             logger.info(f"Job {job_id} was cancelled before starting, aborting launch")
             return
         
-        needs_running_transition = job.status != JobStatus.RUNNING.value or job.started_at is None
+        remote_launch_authority = (
+            job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+            dict((job.provenance or {}).get("remote_execution_assignment") or {}),
+        ) if job.execution_target_id else None
+        needs_running_transition = not job.execution_target_id and (
+            job.status != JobStatus.RUNNING.value or job.started_at is None
+        )
         if needs_running_transition:
             job.status = JobStatus.RUNNING.value
             job.started_at = datetime.utcnow()
@@ -2252,9 +2269,10 @@ async def launch_nextflow_job(
                 stage_report_token, stage_report_digest = stage_reporting.issue_stage_report_token()
                 provenance = dict(job.provenance or {})
                 provenance[stage_reporting.PROVENANCE_DIGEST_KEY] = stage_report_digest
-                job.provenance = provenance
-                await session.commit()
-                from services.remote_execution.executor import launch_remote_job
+                from services.remote_execution.executor import launch_remote_job, _publish_remote_transition
+
+                if not await _publish_remote_transition(session, job, {"provenance": provenance}):
+                    return
 
                 remote_run_id = await launch_remote_job(
                     session,
@@ -3063,6 +3081,16 @@ async def launch_nextflow_job(
             
             result = await session.execute(select(Job).where(Job.id == job_id))
             job = result.scalar_one_or_none()
+            if job and remote_launch_authority is not None:
+                current_authority = (
+                    job.execution_target_id, job.remote_attempt_id, job.nextflow_run_id,
+                    dict((job.provenance or {}).get("remote_execution_assignment") or {}),
+                )
+                if current_authority == remote_launch_authority:
+                    from services.remote_execution.executor import fail_remote_prestart
+
+                    await fail_remote_prestart(session, job, str(e))
+                return
             if job:
                 # Don't overwrite if already cancelled
                 await session.refresh(job)
@@ -3162,6 +3190,10 @@ def launch_nextflow_job_detached(
     return task
 
 
+def resolve_nextflow_version() -> str:
+    return str(os.getenv("BMS_NEXTFLOW_VERSION") or "25.10.1").strip()
+
+
 def resolve_nextflow_executable() -> str:
     """Resolve the exact host Nextflow binary used for API-launched jobs.
 
@@ -3178,7 +3210,7 @@ def resolve_nextflow_executable() -> str:
             raise RuntimeError(f"BMS_NEXTFLOW_BIN is not an executable file: {candidate}")
         return str(candidate.resolve())
 
-    version = str(os.getenv("BMS_NEXTFLOW_VERSION") or "25.10.1").strip()
+    version = resolve_nextflow_version()
     managed = Path.home() / ".local" / "lib" / "nextflow" / version / "nextflow"
     if managed.is_file() and os.access(managed, os.X_OK):
         return str(managed.resolve())

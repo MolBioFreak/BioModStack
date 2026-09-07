@@ -2126,34 +2126,40 @@ class TelemetryStore:
     def read_freshness(self, *, now_ms: int | None = None, stale_after_ms: int) -> dict[str, Any]:
         if int(stale_after_ms) <= 0:
             raise ValueError("telemetry freshness threshold must be positive")
+        observed_now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
         with self._validated_read_connection() as connection:
-            latest = connection.execute("SELECT MAX(timestamp_ms) FROM raw_samples").fetchone()[0]
+            # A wall-clock rollback must not let old future-dated samples mask
+            # a collector that has resumed writing at the corrected time.
+            # Read both bounds in one SQLite snapshot; preserve all history.
+            latest, future_count, latest_future = connection.execute(
+                "SELECT "
+                "(SELECT MAX(timestamp_ms) FROM raw_samples WHERE timestamp_ms <= ?), "
+                "(SELECT COUNT(*) FROM raw_samples WHERE timestamp_ms > ?), "
+                "(SELECT MAX(timestamp_ms) FROM raw_samples WHERE timestamp_ms > ?)",
+                (observed_now_ms, observed_now_ms, observed_now_ms),
+            ).fetchone()
+        metadata = {
+            "stale_after_ms": int(stale_after_ms),
+            "future_sample_count": int(future_count),
+            "latest_future_timestamp_ms": latest_future,
+        }
         if latest is None:
             return {
                 "ready": False,
-                "status": "empty",
-                "latest_timestamp_ms": None,
-                "age_ms": None,
-                "stale_after_ms": int(stale_after_ms),
+                "status": "future" if latest_future is not None else "empty",
+                "latest_timestamp_ms": latest_future,
+                "age_ms": observed_now_ms - latest_future if latest_future is not None else None,
+                **metadata,
             }
         latest_timestamp_ms = int(latest)
-        observed_now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
         age_ms = observed_now_ms - latest_timestamp_ms
-        if age_ms < 0:
-            return {
-                "ready": False,
-                "status": "future",
-                "latest_timestamp_ms": latest_timestamp_ms,
-                "age_ms": age_ms,
-                "stale_after_ms": int(stale_after_ms),
-            }
         ready = age_ms <= int(stale_after_ms)
         return {
             "ready": ready,
             "status": "fresh" if ready else "stale",
             "latest_timestamp_ms": latest_timestamp_ms,
             "age_ms": age_ms,
-            "stale_after_ms": int(stale_after_ms),
+            **metadata,
         }
 
     def insert_minute_for_test(self, bucket_ms: int, payload: dict[str, Any], sample_count: int) -> None:

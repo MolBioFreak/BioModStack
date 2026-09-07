@@ -55,6 +55,7 @@ DEFAULT_ROBOT_ROUTES: Mapping[str, tuple[str, str, float]] = {
     "operator_dashboard": ("GET", "/operator/dashboard", 10.0),
     "operator_dashboard_v2": ("GET", "/operator/v2/dashboard", 5.0),
     "pipette_readback": ("POST", "/liquid/readback", 120.0),
+    "pipette_request_lookup": ("GET", "/liquid/requests", 10.0),
     "pipette_application_status": ("GET", "/liquid/application/status", 10.0),
     "pipette_application_plan": ("POST", "/liquid/application/plan", 10.0),
     "operator_action_admission": ("POST", "/operator/actions/{action_id}/admission", 10.0),
@@ -580,6 +581,19 @@ class BioXpRobotClient:
         except KeyError as exc:
             raise RobotTransportError(f"Unknown BioXP robot route key: {route_name}") from exc
         path = _render_route_path(path_template, path_params)
+        headers: dict[str, str] = {}
+        if route_name in {"pipette_readback", "pipette_application_plan", "pipette_request_lookup"}:
+            # The connection lease carries this request-scoped identity unchanged.
+            # It is transport metadata, never part of the robot's liquid body.
+            json_data = dict(json_data or {})
+            key = json_data.pop("idempotency_key", None)
+            if not isinstance(key, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}", key) is None:
+                raise RobotTransportError("Direct-liquid requests require a valid idempotency key")
+            headers["Idempotency-Key"] = key
+            if route_name == "pipette_request_lookup":
+                if json_data:
+                    raise RobotTransportError("Direct-liquid lookup does not accept a body")
+                json_data = None
         attempts = 2 if retry_read_once and method == "GET" else 1
         for attempt in range(attempts):
             try:
@@ -588,6 +602,7 @@ class BioXpRobotClient:
                     path,
                     json=json_data,
                     params=params,
+                    headers=headers,
                     timeout=_bounded_timeout(timeout if timeout_override is None else timeout_override),
                 )
                 if 300 <= response.status_code < 400:

@@ -44,7 +44,15 @@ class DiscoveredExecutionTarget(StrictModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExecutionTargetSetup(StrictModel):
+    phase: Literal["checking", "installing", "transferring", "verifying", "ready", "failed"]
+    message: str
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class ExecutionTargetResponse(StrictModel):
+    setup: ExecutionTargetSetup | None = None
     id: str
     provider: Literal["vast"]
     provider_instance_id: str
@@ -100,6 +108,7 @@ class RemoteFileRecord(StrictModel):
     sha256: str = Field(pattern=SHA256_PATTERN)
     role: Literal["source", "input", "runtime", "result", "log", "receipt"]
     link_target: str | None = Field(default=None, max_length=2000)
+    mode: int = Field(default=0o644, ge=0, le=0o777, strict=True)
 
     @field_validator("relative_path")
     @classmethod

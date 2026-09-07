@@ -85,7 +85,7 @@ describe('Dashboard telemetry source tabs', () => {
         client.clear();
     });
 
-    it('hides cached remote selectors when current target refresh fails', async () => {
+    it.each(['error', 'empty'])('hides cached remote selectors when inventory is %s', async (outcome) => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
         client.setQueryData(['execution-targets'], response([readyTarget]));
         const container = document.createElement('div');
@@ -108,7 +108,7 @@ describe('Dashboard telemetry source tabs', () => {
         });
         expect(container.querySelectorAll('[data-testid="remote-telemetry"]')).toHaveLength(1);
 
-        api.defaults.adapter = async () => Promise.reject(new Error('offline'));
+        api.defaults.adapter = async () => outcome === 'empty' ? response([]) : Promise.reject(new Error('offline'));
         await act(async () => {
             await client.invalidateQueries({ queryKey: ['execution-targets'] });
             await new Promise((resolve) => setTimeout(resolve, 0));

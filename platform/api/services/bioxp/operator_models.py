@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, StrictBool, StrictFloat, StrictInt, field_validator, model_validator
 
@@ -544,6 +544,9 @@ class OperatorDashboardXTmclFrame(BaseModel):
     data: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
+    receive_sequence: StrictInt | None = None
+    receive_owner: str | None = None
+    owner_generation: StrictInt | None = None
 
 
 class OperatorDashboardXTmclSkippedFrame(BaseModel):
@@ -554,6 +557,9 @@ class OperatorDashboardXTmclSkippedFrame(BaseModel):
     data: list[StrictInt | OperatorDashboardXOmissionMarker] | None = Field(default=None, max_length=64)
     raw: list[StrictInt | OperatorDashboardXOmissionMarker] = Field(default_factory=list, max_length=64)
     received_at: StrictFloat | StrictInt
+    receive_sequence: StrictInt | None = None
+    receive_owner: str | None = None
+    owner_generation: StrictInt | None = None
     error: str | None = Field(default=None, max_length=1000)
 
 
@@ -579,6 +585,20 @@ class OperatorDashboardXTmclWaitPolicy(BaseModel):
         if (self.apartment_equivalence is None) == (self.source_anchor is None):
             raise ValueError("TMCL wait policy requires exactly one authority field")
         return self
+
+
+class OperatorDashboardXTmclAttempt(BaseModel):
+    """Attempt observations retain same-call response ambiguity."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    attempt_ordinal: StrictInt = Field(ge=1)
+    tx_timestamp: StrictFloat | StrictInt
+    tx_write_completed_at: StrictFloat | StrictInt
+    wait_signaled: StrictBool
+    outcome: str = Field(min_length=1, max_length=80)
+    response_present: StrictBool
+    receive_sequence: StrictInt | None
+    response_attempt_attribution: Literal["single_write", "same_call_ambiguous"]
 
 
 class OperatorDashboardXTmclProvenance(BaseModel):
@@ -621,6 +641,7 @@ class OperatorDashboardXTmclProvenance(BaseModel):
     skipped_count: StrictInt | None = Field(default=None, ge=0)
     skipped_frames: list[OperatorDashboardXTmclSkippedFrame] = Field(default_factory=list, max_length=256)
     skipped_frames_truncated: StrictBool | None = None
+    attempts: list[OperatorDashboardXTmclAttempt] | None = None
 
 
 class OperatorDashboardXTmclAck(BaseModel):
@@ -740,6 +761,9 @@ class OperatorDashboardXPreparationStage(BaseModel):
         "rail_24v_readback",
         "door_readback",
         "latch_readback",
+        "latch_solenoid",
+        "door_readback_after_latch",
+        "latch_readback_after_latch",
         "deactivateBoard",
         "activateBoard",
         "boardLifecycleGeneration",
@@ -785,6 +809,8 @@ class OperatorDashboardXPreparationStage(BaseModel):
 class OperatorDashboardXPreparationEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.oem_prepare_without_motion.v2"]
+    failure_stage: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=200)
     ok: StrictBool
     state: Literal["completed", "failed_closed"] | OperatorDashboardXOmissionMarker
     machine_serial: Literal[206]
@@ -814,7 +840,10 @@ class OperatorDashboardXPreparationRejection(BaseModel):
     blocker: Literal["ownership_generation_changed_before_preparation"]
     axis: Literal["x"]
     source_anchor: Literal["ClassControlInterface.initializeMotorsWithoutMotion:3187-3195"]
-    source_exact: Literal[True]
+    source_exact: Literal[False]
+    initializer_source_exact: Literal[True]
+    source_method: Literal["ClassControlInterface.initializeMotorsWithoutMotion"] | None = None
+    reference_state: Literal["desynced"] | None = None
     literal_switch_mask_writes: list[StrictInt] = Field(max_length=0)
 
 
@@ -832,7 +861,10 @@ class OperatorDashboardXPreparationAttempt(BaseModel):
     receipt: OperatorDashboardXPreparationEvidence | OperatorDashboardXOmissionMarker
     axis: Literal["x"]
     source_anchor: Literal["ClassControlInterface.initializeMotorsWithoutMotion:3187-3195"]
-    source_exact: Literal[True]
+    source_exact: Literal[False]
+    initializer_source_exact: Literal[True]
+    source_method: Literal["ClassControlInterface.initializeMotorsWithoutMotion"] | None = None
+    reference_state: Literal["desynced"] | None = None
     literal_switch_mask_writes: list[StrictInt] = Field(max_length=0)
 
 
@@ -1976,10 +2008,120 @@ class OperatorDashboardXAggregateAbortFailure(BaseModel):
         return self
 
 
+class OperatorAggregateStopComponentV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    component: Literal["x", "y", "z", "g", "door"]
+    board: StrictInt
+    motor: StrictInt
+    status: Literal["stopped", "failed"]
+    delivery_attempted: Literal[True]
+    stop_acknowledged: StrictBool
+    zero_speed_verified: StrictBool
+    terminal_speed: StrictInt | None
+    applicable: Literal[True]
+    stop: JsonValue
+    terminal_readback: JsonValue
+    source_anchor: Literal["ClassMotor.StopMotor line 161+"]
+
+
+class OperatorAggregateAbsentComponentV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    component: Literal["x", "y", "z", "g", "door"]
+    board: StrictInt
+    motor: StrictInt
+    status: Literal["not_present_by_authority"]
+    delivery_attempted: Literal[False]
+    stop_acknowledged: Literal[False]
+    zero_speed_verified: Literal[False]
+    applicable: Literal[False]
+    authority: OperatorDashboardXControllerAuthority
+
+
+class OperatorPhysicalAggregateStopV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: Literal["bioxp.physical_aggregate_stop.v1"]
+    ok: StrictBool
+    state: Literal["stopped", "failed_ambiguous"]
+    machine_serial: Literal[206]
+    controller_evidence: OperatorDashboardXControllerAuthority
+    components: list[OperatorAggregateStopComponentV1 | OperatorAggregateAbsentComponentV1]
+    stage_receipts: list[OperatorAggregateStopComponentV1 | OperatorAggregateAbsentComponentV1]
+    delivery_attempted: StrictBool
+    oem_24v_latch: JsonValue
+    abort_latch_completed: StrictBool | None = None
+    controller_terminal_state_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    physical_effect_verification_required: Literal[True]
+    source_anchors: list[str]
+
+
+class OperatorDashboardXSourceStopResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    axis: Literal["x"]
+    intent: Literal["stop"]
+    source_call_completed: StrictBool
+    source_return_ok: StrictBool
+    controller_command_acknowledged: StrictBool
+    controller_terminal_state_verified: Literal[False]
+    timeout_s_omitted_by_source: StrictFloat
+    physical_motion: Literal[False]
+    physical_effect_verified: Literal[False]
+    failure: Literal["x_stop_source_return_failure", "x_stop_source_call_failed"] | None
+    source_noop: Literal["board_null", "board_not_initialized"] | None = None
+    stop: JsonValue | None = None
+    wait: None = None
+    source_return_code: StrictInt | None = None
+    interrupt_epoch: StrictInt | None = Field(default=None, ge=0)
+    interrupted_command_ids: list[str] | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def bind_source_result(self):
+        if self.ok != self.source_return_ok or (self.failure is None) != self.ok:
+            raise ValueError("X stop success must reflect the source return, not controller/physical proof")
+        if self.source_noop is None and not {"stop", "wait", "source_return_code"} <= self.model_fields_set:
+            raise ValueError("issued X source stop requires its actual leaf return evidence")
+        if self.source_noop is not None and (self.stop is not None or self.source_return_code is not None):
+            raise ValueError("source no-op cannot invent issued-stop evidence")
+        if (self.interrupt_epoch is None) != (self.interrupted_command_ids is None):
+            raise ValueError("X source stop interrupt overlay must be complete")
+        return self
+
+
+class OperatorDashboardXSourceAggregateAbortResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ok: StrictBool
+    axis_context: Literal["x"]
+    intent: Literal["aggregate_oem_abort"]
+    physical_scope: Literal["aggregate_oem_all_present_boards"]
+    x_only: Literal[False]
+    logical_abort: OperatorPhysicalAggregateStopV1 | OperatorDashboardXOmissionMarker
+    x_terminal_stop: None
+    reference_desync: OperatorDashboardXReferenceAuthorityEffect | None
+    source_call_completed: StrictBool
+    source_return_ok: StrictBool
+    controller_command_acknowledged: StrictBool
+    controller_terminal_state_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    failure: Literal["x_abort_source_return_failure", "x_abort_source_call_failed"] | None
+    interrupt_epoch: StrictInt | None = Field(default=None, ge=0)
+    interrupted_command_ids: list[str] | None = Field(default=None, max_length=32)
+
+    @model_validator(mode="after")
+    def bind_source_result(self):
+        if self.ok != self.source_return_ok or (self.failure is None) != self.ok:
+            raise ValueError("aggregate source return and failure disagree")
+        if (self.interrupt_epoch is None) != (self.interrupted_command_ids is None):
+            raise ValueError("X source abort interrupt overlay must be complete")
+        return self
+
+
 class OperatorDashboardXInterruptResult(
     RootModel[
         OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXInterruptExceptionResult
         | OperatorDashboardXInterruptNonMappingResult
         | OperatorDashboardXOmissionMarker
@@ -2021,6 +2163,8 @@ class OperatorDashboardXSafetyInterruptReceipt(BaseModel):
                 expected = OperatorDashboardXInterruptExceptionResult
             elif raw_result.get("failure") in {"x_stop_result_not_mapping", "x_abort_result_not_mapping"}:
                 expected = OperatorDashboardXInterruptNonMappingResult
+            elif "source_call_completed" in raw_result:
+                expected = OperatorDashboardXSourceStopResult if intent == "stop" else OperatorDashboardXSourceAggregateAbortResult
             else:
                 expected = OperatorDashboardXStopFailure if intent == "stop" else OperatorDashboardXAggregateAbortFailure
             value = dict(value)
@@ -2030,11 +2174,11 @@ class OperatorDashboardXSafetyInterruptReceipt(BaseModel):
     @model_validator(mode="after")
     def bind_status_and_intent(self):
         result = self.result.root
-        if isinstance(result, OperatorDashboardXStopFailure) and self.intent != "stop":
+        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXSourceStopResult)) and self.intent != "stop":
             raise ValueError("stop result requires stop interrupt intent")
-        if isinstance(result, OperatorDashboardXAggregateAbortFailure) and self.intent != "abort":
+        if isinstance(result, (OperatorDashboardXAggregateAbortFailure, OperatorDashboardXSourceAggregateAbortResult)) and self.intent != "abort":
             raise ValueError("abort result requires abort interrupt intent")
-        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXAggregateAbortFailure)):
+        if isinstance(result, (OperatorDashboardXStopFailure, OperatorDashboardXAggregateAbortFailure, OperatorDashboardXSourceStopResult, OperatorDashboardXSourceAggregateAbortResult)):
             succeeded = result.ok is True
             if self.status != ("completed" if succeeded else "failed"):
                 raise ValueError("interrupt receipt status does not match result")
@@ -2943,6 +3087,8 @@ class OperatorDashboardXPrimitiveOperationResult(
         | OperatorDashboardXStartupHomeFailure
         | OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXAbsolutePositionUnavailable
         | OperatorDashboardXAccelerationSetupFailure
         | OperatorDashboardXAbsoluteNoopFailure
@@ -2992,6 +3138,8 @@ class OperatorDashboardXLifecycleLastFailure(
         | OperatorDashboardXStartupHomeFailure
         | OperatorDashboardXStopFailure
         | OperatorDashboardXAggregateAbortFailure
+        | OperatorDashboardXSourceStopResult
+        | OperatorDashboardXSourceAggregateAbortResult
         | OperatorDashboardXAbsolutePositionUnavailable
         | OperatorDashboardXAccelerationSetupFailure
         | OperatorDashboardXAbsoluteNoopFailure
@@ -3165,6 +3313,9 @@ class OperatorDashboardXProviderSuccess(BaseModel):
     motor: Literal[0]
     source_min_steps: Literal[0]
     source_max_steps: Literal[90263]
+    # Current robot projection publishes null: its production X profile has no
+    # axis_max_source key. Preserve unknown provenance, not invented authority.
+    source_limit_authority: None = None
     effective_absolute_min_steps: Literal[60]
     relative_limit_margin_steps: Literal[20]
     current_generation: StrictInt
@@ -3293,6 +3444,7 @@ class OperatorDashboardPipetteLastError(BaseModel):
 
 class PipetteReceiptTruth(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    semantic_query_response_verified: StrictBool
     delivery_verified: StrictBool
     controller_acknowledged: StrictBool
     completion_verified: StrictBool
@@ -3465,6 +3617,7 @@ class PipetteReadbackChannel(BaseModel):
 
 class PipetteReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    hardware_truth_level: Literal["hardware_query"]
     ok: StrictBool
     semantic_ok: StrictBool
     available: StrictBool
@@ -3635,6 +3788,211 @@ class PipetteApplicationPlanResponse(BaseModel):
         )
         if self.blocker != expected_blocker:
             raise ValueError("application plan blocker does not match dependency status")
+        return self
+
+
+class PipetteDirectReleaseSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    commit: str | None
+    tree: str | None
+    mode: str | None
+    root: str | None
+    host_path: str | None = None
+    manifest_sha256: str | None
+    aggregate_sha256: str | None
+
+
+class PipetteDirectReleaseBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    service_unit: str | None
+    unit_path: str | None
+    unit_sha256: str | None
+    launcher_path: str | None
+    launcher_sha256: str | None
+    configuration_sha256: str | None
+    oem_lock_path: str | None
+    oem_lock_sha256: str | None
+    declared_listener: "OperatorReportListenerV1 | None"
+    observed_listener: "OperatorReportListenerV1 | None"
+    database_root: str | None
+    systemd_invocation_id: str | None
+    udocker_path: str | None = None
+    udocker_sha256: str | None = None
+    udocker_tree_sha256: str | None = None
+    launcher_pid: StrictInt | None = None
+    launcher_cgroup_sha256: str | None = None
+
+
+class PipetteDirectReleaseObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    pid: StrictInt
+    cgroup: str | None
+    cgroup_sha256: str | None
+    started_at: StrictFloat | StrictInt | None
+    listener: "OperatorReportListenerV1 | None"
+    database_root: str | None
+
+
+class PipetteDirectRuntimeReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    receipt_id: str | None
+    receipt_sha256: str | None
+    recorded_at: StrictFloat | StrictInt | None
+
+
+class PipetteDirectReleaseIdentity(BaseModel):
+    """Private producer envelope, validated then omitted, never public authority."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_name: Literal["bioxp.runtime.release_identity.v1"] = Field(alias="schema")
+    status: Literal["verified", "unverified"]
+    verified: StrictBool
+    reason: str | None
+    release_id: str | None
+    source: PipetteDirectReleaseSource
+    image: "OperatorReportReleaseImageV1"
+    deployment: "OperatorReportReleaseDeploymentV1"
+    binding: PipetteDirectReleaseBinding
+    runtime_release_receipt: PipetteDirectRuntimeReceipt | None
+    observation: PipetteDirectReleaseObservation
+
+
+class PipetteDirectSourceIdentity(PipetteReceiptSourceIdentity):
+    release_identity: PipetteDirectReleaseIdentity
+
+
+class PipetteDirectPostMetadata(BaseModel):
+    """Explicit service/replay envelope; never a science-field catch-all."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_identity: PipetteDirectSourceIdentity | None = None
+    callback_session_id: str = Field(default="", max_length=160)
+    command_id: str = Field(default="", max_length=160)
+    pipette_operation_id: str = Field(default="", max_length=160)
+    replayed: StrictBool = False
+    status: str = Field(default="", max_length=120)
+
+
+class PipetteReadbackPostEnvelope(PipetteReadbackResponse, PipetteDirectPostMetadata):
+    semantic_query_response_verified: StrictBool
+
+    @model_validator(mode="after")
+    def validate_semantic_receipt_truth(self):
+        if self.semantic_query_response_verified != self.receipt_truth.semantic_query_response_verified:
+            raise ValueError("readback semantic envelope must match receipt truth")
+        return self
+
+
+class PipetteApplicationPlanPostEnvelope(PipetteApplicationPlanResponse, PipetteDirectPostMetadata):
+    pass
+
+
+class PipetteDirectPlanInputs(BaseModel):
+    """Robot producer normalization, distinct from the narrower BMS POST union."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["load_tip", "move_to_waste", "detect_fluid", "plunger_up", "plunger_down"]
+    home_z_after: StrictBool
+    tip_tray: str | None = Field(default=None, max_length=120)
+    tip_well: str | None = Field(default=None, max_length=32)
+    tip_type: StrictInt | None = None
+    tip_location: Literal[0, 1, 2, 3] | None = None
+    fluid_class: Literal["TC", "MS", "OC", "RC", "STRIP"] | None = None
+
+    @model_validator(mode="after")
+    def validate_required_inputs(self):
+        if self.operation == "load_tip" and any(getattr(self, name) is None for name in ("tip_tray", "tip_well", "tip_type", "tip_location")):
+            raise ValueError("incomplete load-tip input binding")
+        if self.operation == "detect_fluid" and self.fluid_class is None:
+            raise ValueError("missing fluid class")
+        return self
+
+
+class PipetteDirectReadbackInputs(PipetteReadbackRequest):
+    include_data: StrictBool = Field(...)
+
+
+class PipetteDirectRequestRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    command_id: str = Field(min_length=1, max_length=160)
+    pipette_operation_id: str | None = Field(min_length=1, max_length=160)
+    canonical_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation: str = Field(min_length=1, max_length=160)
+    entrypoint_id: str = Field(min_length=1, max_length=160)
+    caller_class: str = Field(min_length=1, max_length=160)
+    control_class: str = Field(min_length=1, max_length=160)
+    action_id: str = Field(min_length=1, max_length=240)
+    command_status: str = Field(min_length=1, max_length=120)
+    pipette_status: str | None = Field(min_length=1, max_length=120)
+    outcome: str | None = Field(min_length=1, max_length=120)
+    failure_code: str | None = Field(min_length=1, max_length=240)
+    ownership_generation: StrictInt = Field(ge=0)
+    connection_generation: StrictInt | None = Field(ge=0)
+    requested_inputs: PipetteDirectReadbackInputs | PipetteDirectPlanInputs
+    result: PipetteReadbackResponse | PipetteApplicationPlanResponse | None
+
+
+class PipetteDirectRequestLookupResponse(BaseModel):
+    """Historical evidence only; a lookup never permits resubmission."""
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    schema_version: Literal["bioxp.direct-liquid.lookup.v1"] = Field(alias="schema")
+    request_kind: Literal["readback", "application_plan"]
+    idempotency_key: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$")
+    lookup_state: Literal["unknown", "pending", "incomplete", "resolved", "conflict", "unavailable"]
+    reason: Literal["identity_not_found", "nonterminal", "outcome_unresolved", "receipt_incomplete", "identity_scope_conflict", "store_unavailable", "stored_binding_invalid"] | None
+    retry_forbidden: Literal[True]
+    live_query_performed: Literal[False]
+    record: PipetteDirectRequestRecord | None
+
+    @model_validator(mode="after")
+    def validate_lookup_binding(self):
+        reasons = {
+            "unknown": {"identity_not_found"}, "pending": {"nonterminal"},
+            "incomplete": {"outcome_unresolved", "receipt_incomplete"}, "resolved": {None},
+            "conflict": {"identity_scope_conflict"},
+            "unavailable": {"store_unavailable", "stored_binding_invalid"},
+        }
+        if self.reason not in reasons[self.lookup_state]:
+            raise ValueError("lookup state/reason mismatch")
+        if self.lookup_state in {"unknown", "conflict", "unavailable"}:
+            if self.record is not None:
+                raise ValueError("lookup cannot disclose a record")
+            return self
+        r = self.record
+        if r is None:
+            raise ValueError("lookup requires recorded identity")
+        readback = self.request_kind == "readback"
+        if readback:
+            if not isinstance(r.requested_inputs, PipetteReadbackRequest):
+                raise ValueError("wrong readback request binding")
+            family = ("live_readback", "direct.liquid.readback", "direct_api", "hardware_query")
+            if r.result is not None and (not isinstance(r.result, PipetteReadbackResponse) or r.result.include_data != r.requested_inputs.include_data):
+                raise ValueError("wrong original readback result")
+        else:
+            if not isinstance(r.requested_inputs, PipetteDirectPlanInputs):
+                raise ValueError("wrong plan request binding")
+            family = ("application_plan:" + r.requested_inputs.operation, "legacy.record", "legacy", "pipette_state_command")
+            if r.result is not None and (not isinstance(r.result, PipetteApplicationPlanResponse) or r.result.operation != r.requested_inputs.operation):
+                raise ValueError("wrong original plan result")
+        if (r.operation, r.entrypoint_id, r.caller_class, r.control_class) != family or r.action_id != "pipette." + r.operation:
+            raise ValueError("wrong direct-liquid producer")
+        if self.lookup_state != "resolved" and r.result is not None:
+            raise ValueError("nonterminal lookup cannot associate result")
+        # receipt_id is independently allocated; it is NOT the child row ID.
+        pending = {"reserved", "queued", "admitted", "dispatched", "acknowledged", "executing", "running", "blocked"}
+        terminal = {"completed", "observed", "failed", "rejected", "cleared", "cancelled"}
+        if (r.pipette_operation_id is None) != (r.pipette_status is None):
+            raise ValueError("missing child identity/status mismatch")
+        if self.lookup_state == "pending":
+            if r.command_status not in pending or r.pipette_status not in pending:
+                raise ValueError("pending lookup requires nonterminal rows")
+        if self.lookup_state == "resolved":
+            if r.outcome is None:
+                raise ValueError("resolved lookup requires a recorded outcome")
+            if r.command_status not in terminal or r.command_status != r.pipette_status:
+                raise ValueError("resolved lookup requires consistent terminal rows")
+            if r.command_status in {"completed", "observed"} and r.result is None:
+                raise ValueError("successful terminal lookup requires complete receipt")
+        if self.lookup_state == "incomplete" and self.reason == "receipt_incomplete":
+            if r.pipette_operation_id is not None and not (r.command_status in terminal and r.command_status == r.pipette_status):
+                raise ValueError("receipt incomplete requires terminal rows or a missing child")
         return self
 
 
@@ -3837,14 +4195,30 @@ class OperatorAssessmentRequest(BaseModel):
     note: str = Field(min_length=1, max_length=4000)
 
 
-class OperatorActionReceipt(BaseModel):
+ReceiptStatusT = TypeVar("ReceiptStatusT", bound=str)
+
+
+class OperatorActionReceiptFields(BaseModel, Generic[ReceiptStatusT]):
     model_config = ConfigDict(extra="forbid", strict=True)
+    transport_exchanges: list[OperatorTransportExchangeV2] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    transport_retention_errors: list[OperatorTransportRetentionErrorV2] | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("transport_exchanges", "transport_retention_errors", mode="before")
+    @classmethod
+    def reject_null_transport_evidence(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("present transport evidence must be an array")
+        return value
     schema_version: Literal["bioxp.operator_action_receipt.v1"]
     command_id: str = Field(min_length=1, max_length=128)
     action_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.-]*$")
     kind: ActionKind
     safety_class: ActionSafety
-    status: ActionStatus
+    status: ReceiptStatusT
     idempotency_key: str = Field(min_length=8, max_length=128)
     idempotency_replay_enabled: StrictBool = True
     ownership_generation: StrictInt = Field(ge=0)
@@ -4054,6 +4428,10 @@ class OperatorActionReceipt(BaseModel):
         return self
 
 
+class OperatorActionReceipt(OperatorActionReceiptFields[ActionStatus]):
+    """Original strict v1 receipt; linked authority status remains unchanged."""
+
+
 class OperatorLegacyReconciliationReceipt(BaseModel):
     """Known schema-2 command row retained by the v1 history projection."""
 
@@ -4134,6 +4512,48 @@ class OperatorMigratedOutcomeUnknownReceipt(BaseModel):
     status: Literal["outcome_unknown"]
 
 
+class OperatorLegacyPipetteReceiptTruth(BaseModel):
+    """Recorded truth before semantic-query evidence was added to v1.
+
+    The absent field stays absent, not false/null or inferred from outcome.
+    This closed shape is accepted only by the read-only history projection;
+    current mutation receipts still require PipetteReceiptTruth in full.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    delivery_verified: StrictBool
+    controller_acknowledged: StrictBool
+    completion_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    physical_effect_verified: Literal[False]
+    physical_effect_claim_suppressed: Literal[True]
+
+
+class OperatorLegacyHistoryPipetteReceipt(BaseModel):
+    """Closed pre-semantic-query indexed receipt, for history reads only."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    schema_name: Literal["bioxp.pipette.receipt.v1"] = Field(alias="schema")
+    receipt_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    created_at: str = Field(min_length=1, max_length=120)
+    operation: str = Field(min_length=1, max_length=120)
+    requested_inputs: dict[str, JsonValue]
+    effective_inputs: dict[str, JsonValue]
+    result: dict[str, JsonValue]
+    truth: OperatorLegacyPipetteReceiptTruth
+    runtime_binding: dict[str, JsonValue]
+    ownership_epoch: StrictInt
+    source_identity: PipetteReceiptSourceIdentity
+    deployment_identity: PipetteReceiptDeploymentIdentity
+    response: dict[str, JsonValue]
+    stage_receipts: list[dict[str, JsonValue]] = Field(max_length=256)
+    status: str = Field(min_length=1, max_length=80)
+    outcome: str = Field(min_length=1, max_length=2000)
+    controller_acknowledged: StrictBool
+    physical_effect_verified: Literal[False]
+
+
 class OperatorHistoryPipetteReceipt(PipetteReceipt):
     """Indexed pipette receipt with schema-5 history projection fields."""
 
@@ -4172,13 +4592,103 @@ class OperatorLegacyUnindexedPipetteReceipt(BaseModel):
     physical_effect_verified: Literal[False]
 
 
+class OperatorHistorySourceIdentity(BaseModel):
+    """Producer-recorded identity, not current runtime authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    evidence_lock_identity_verified: StrictBool
+    evidence_lock_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    registry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    release_id: str = Field(min_length=1, max_length=128)
+    release_verified: StrictBool
+    robot_identity: str = Field(min_length=1, max_length=128)
+    source_aggregate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class OperatorInterruptEvidenceV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    source_call_completed: StrictBool | None
+    source_return_ok: StrictBool | None
+    controller_stop_acknowledged: StrictBool | None
+    controller_terminal_state_verified: StrictBool | None
+    physical_effect_verified: Literal[False]
+    persistence_state: str = Field(min_length=1, max_length=160)
+    details: JsonValue
+
+
+class OperatorRecordedActionReceipt(OperatorActionReceiptFields[ActionStatus | Literal["outcome_unknown"]]):
+    """Legacy ledger evidence extension; never used for mutation receipts.
+
+    Require the complete observed extension rather than defaulting missing
+    evidence, dropping producer fields, or deriving authority from status.
+    """
+
+    status: ActionStatus | Literal["outcome_unknown"]
+    completion_ambiguous: StrictBool
+    completion_verified: StrictBool
+    delivery_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    reconciliation_required: StrictBool
+    retry_forbidden: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveSourceActionReceipt(OperatorActionReceipt):
+    """Persisted admission/exception producer: source identity, no outcome extension."""
+
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveCompletedActionReceipt(OperatorActionReceiptFields[ActionStatus | Literal["outcome_unknown"]]):
+    """The invoke_action normal-return producer, including its entire truth extension."""
+
+    completion_ambiguous: StrictBool
+    completion_verified: StrictBool
+    delivery_verified: StrictBool
+    hardware_postcondition_verified: StrictBool
+    hardware_precondition_verified: StrictBool
+    reconciliation_required: StrictBool
+    retry_forbidden: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+
+
+class OperatorLiveTimeoutActionReceipt(OperatorActionReceiptFields[Literal["outcome_unknown"]]):
+    """The invoke_action TimeoutError producer; no fabricated completion fields."""
+
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
+    source_identity: OperatorHistorySourceIdentity
+    automatic_retry: Literal[False]
+    physical_outcome: Literal["ambiguous"]
+    completion_ambiguous: Literal[True]
+    reconciliation_required: Literal[True]
+    retry_forbidden: Literal[True]
+
+
+OperatorLiveActionReceipt = (
+    OperatorActionReceipt
+    | OperatorLiveSourceActionReceipt
+    | OperatorLiveCompletedActionReceipt
+    | OperatorLiveTimeoutActionReceipt
+)
+
+
 class OperatorActionHistory(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["bioxp.operator_action_history.v1"]
     receipts: list[
         OperatorActionReceipt
+        | OperatorRecordedActionReceipt
+        | OperatorLiveSourceActionReceipt
+        | OperatorLiveTimeoutActionReceipt
         | PipetteReceipt
         | OperatorHistoryPipetteReceipt
+        | OperatorLegacyHistoryPipetteReceipt
         | OperatorLegacyReconciliationReceipt
         | OperatorMigratedOutcomeUnknownReceipt
         | OperatorLegacyUnindexedPipetteReceipt
@@ -4506,6 +5016,76 @@ class OperatorReceiptErrorV2(BaseModel):
     detail: OperatorReceiptFailureDetailV2 | None = None
 
 
+class OperatorTransportExceptionV2(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, serialize_by_alias=True)
+
+    exception_class: str = Field(alias="class", min_length=1)
+    message: str = Field(max_length=512)
+
+
+class OperatorTransportRetentionErrorV2(OperatorTransportExceptionV2):
+    stage: str = Field(min_length=1)
+
+
+class OperatorTransportExchangeV2(BaseModel):
+    """Caller-local F06 evidence; grants no delivery or physical authority."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    exchange_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    attempt_ordinal: StrictInt = Field(ge=1)
+    response_attempt_attribution: Literal["single_write", "same_call_ambiguous"]
+    owner_generation: StrictInt | None
+    matcher: str | None
+    registration_timestamp: StrictFloat | None
+    tx_timestamp: StrictFloat | None
+    tx_write_completed_at: StrictFloat | None
+    timeout_ms: StrictInt | None
+    tx_raw: list[Annotated[StrictInt, Field(ge=0, le=255)]] | None
+    command_family: Literal["tmcl"]
+    tx_id: StrictInt | None
+    tx_dlc: StrictInt | None
+    expected_board: StrictInt | None
+    expected_command: StrictInt | None
+    write_attempted: StrictBool
+    write_returned: StrictBool
+    wait_signaled: StrictBool
+    response_present: StrictBool
+    observed_status: StrictInt | None
+    observed_rx_raw: list[Annotated[StrictInt, Field(ge=0, le=255)]] | None
+    observed_rx_id: StrictInt | None
+    observed_rx_dlc: StrictInt | None
+    receive_timestamp: StrictFloat | None
+    receive_sequence: StrictInt | None
+    outcome: str
+    router_outcome: str
+    exception: OperatorTransportExceptionV2 | None
+    finalized_at: StrictFloat
+    physical_effect_verified: StrictBool
+    command_id: str | None
+    trace_id: str = Field(min_length=1)
+    transport_call_ordinal: StrictInt = Field(ge=1)
+    durable_ownership_claimed: StrictBool
+
+    @field_validator(
+        "registration_timestamp", "tx_timestamp", "tx_write_completed_at",
+        "receive_timestamp", "finalized_at",
+    )
+    @classmethod
+    def finite_transport_times(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("transport evidence times must be finite")
+        return value
+
+    @field_validator("physical_effect_verified", "durable_ownership_claimed")
+    @classmethod
+    def evidence_has_no_authority(cls, value: bool) -> bool:
+        if value:
+            raise ValueError("caller-local transport evidence cannot confer authority")
+        return value
+
+
 class OperatorActionReceiptV2(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -4527,7 +5107,10 @@ class OperatorActionReceiptV2(BaseModel):
     terminal_receipt_id: str | None
     completion_class: str | None
     physical_effect_verified: StrictBool
+    interrupt_evidence: OperatorInterruptEvidenceV2 | None = None
     error: OperatorReceiptErrorV2 | None
+    transport_exchanges: list[OperatorTransportExchangeV2] = Field(default_factory=list)
+    transport_retention_errors: list[OperatorTransportRetentionErrorV2] = Field(default_factory=list)
 
     @field_validator("accepted_at", "queued_at", "dispatched_at", "finished_at")
     @classmethod
@@ -4569,14 +5152,41 @@ class OperatorTransitionV2(BaseModel):
         return value
 
 
+class OperatorDeckStageV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    order: StrictInt = Field(ge=0)
+    operation: str = Field(min_length=1, max_length=240)
+    source_anchor: str = Field(min_length=1, max_length=500)
+    resources: list[str]
+    arguments: dict[str, JsonValue]
+    dependencies: list[StrictInt]
+    terminal_state: Literal[
+        "planned", "completed", "failed", "ambiguous", "stopped", "aborted"
+    ]
+    terminal_evidence: JsonValue | None
+
+
 class OperatorDeckMovementReceiptV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
     target_label: str | None = Field(default=None, min_length=1, max_length=240)
     source_branch: str | None = Field(default=None, min_length=1, max_length=240)
+    resolved_location_id: StrictInt | None = None
+    destination_catalog_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    position_table_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    authority_snapshot_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    complete_authority_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    plan_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source_anchors: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(default_factory=list, max_length=64)
+    delivery_attempted: StrictBool | None = None
+    controller_command_acknowledged: StrictBool | None = None
     controller_completion_verified: StrictBool | None = None
+    hardware_postcondition_verified: StrictBool | None = None
     semantic_state_committed: StrictBool | None = None
     physical_observation_verified: StrictBool | None = None
+    transition_revision: StrictInt | None = None
+    ambiguity_state: Literal["none", "failed", "ambiguous", "recovery_required"] | None = None
+    stages: list[OperatorDeckStageV1] = Field(default_factory=list)
 
 
 class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
@@ -4593,24 +5203,40 @@ class OperatorActionReceiptDetailV2(OperatorActionReceiptV2):
 
     @model_validator(mode="after")
     def bind_deck_movement_detail(self):
-        if self.action_id == "oem.deck.move_to_location":
+        deck_plan_actions = {
+            "oem.deck.move_to_location",
+            "oem.deck._mov_execution",
+            "oem.deck._finite_operation",
+        }
+        if self.action_id in deck_plan_actions:
             if self.deck_movement is None:
-                raise ValueError("deck movement detail requires typed deck evidence")
-            if self.deck_movement.target != self.canonical_inputs.get("target"):
+                # The producer creates deck evidence only when it persists a plan.
+                # Queued, pre-plan failures and interrupted commands may lack it.
+                if self.status == "completed" or self.physical_effect_verified:
+                    raise ValueError("completed deck movement requires typed deck evidence")
+                return self
+            if (
+                self.action_id == "oem.deck.move_to_location"
+                and self.deck_movement.target != self.canonical_inputs.get("target")
+            ):
                 raise ValueError("deck receipt target must match canonical inputs")
             deck = self.deck_movement
             if deck.physical_observation_verified is True and not self.physical_effect_verified:
                 raise ValueError("deck physical observation cannot exceed receipt physical-effect truth")
             if self.physical_effect_verified and deck.physical_observation_verified is not True:
                 raise ValueError("verified physical effect requires matching deck observation")
+            if self.action_id != "oem.deck.move_to_location":
+                return self
             if self.status == "completed":
                 if deck.controller_completion_verified is not True or deck.semantic_state_committed is not True:
                     raise ValueError("completed deck movement requires controller completion and semantic commit")
                 if deck.target_label is None or deck.source_branch is None:
                     raise ValueError("completed deck movement requires established target and source branch")
             else:
-                if deck.semantic_state_committed is True:
-                    raise ValueError("non-completed deck movement cannot claim semantic commit")
+                if deck.semantic_state_committed is True and not (
+                    self.status == "ambiguous" and deck.ambiguity_state == "recovery_required"
+                ):
+                    raise ValueError("non-completed semantic commit requires ambiguous deck recovery")
                 if deck.controller_completion_verified is True and deck.semantic_state_committed is not True:
                     if self.status != "ambiguous" or self.completion_class != "recovery_required":
                         raise ValueError(
@@ -4724,41 +5350,57 @@ class OperatorYAxisAuthorityV2(BaseModel):
         return value
 
 
+_SERIAL206_DECK_DESTINATIONS = (
+    ("LOC_MS", "LOC_MS", 0, "ordinary", ("Magnetic Station",)),
+    ("LOC_OC", "LOC_OC", 1, "ordinary", ("OC chiller", "Output Chiller", "Output Tray")),
+    ("TECANRACK2", "TIP TRAY 2", 8, "ordinary", ()),
+    ("TECANRACK4", "TIP TRAY_4", 10, "ordinary", ()),
+    ("LOC_P_MS", "LOC_MS_PLATE", 25, "ordinary", ()),
+    ("LOC_P_OC", "LOC_OC_PLATE", 21, "ordinary", ()),
+    ("LOC_OC_COVER", "LOC_OC_COVER", 17, "ordinary", ()),
+    ("LOC_TC", "LOC_TC", 2, "ordinary", ("Thermal Cycler",)),
+    ("LOC_TC_BARCODE", "LOC_TC_BARCODE", 2, "barcode", ()),
+    ("LOC_RC", "LOC_RC", 3, "ordinary", ("Reagent Chiller",)),
+    ("LOC_RC_BARCODE", "LOC_RC_BARCODE", 3, "barcode", ()),
+    ("TECANRACK1", "TIP TRAY 1", 7, "ordinary", ()),
+    ("TECANRACK3", "TIP TRAY_3", 9, "ordinary", ()),
+    ("LOC_P_TC", "LOC_TC_PLATE", 23, "ordinary", ()),
+    ("LOC_BSC", "LOC_TC_COVER", 5, "ordinary", ()),
+    ("LOC_RC_COVER", "LOC_RC_COVER", 19, "ordinary", ()),
+    ("LOC_STRIP1", "STRIP 1", 11, "ordinary", ()),
+    ("LOC_STRIP2", "STRIP 2", 12, "ordinary", ()),
+    ("LOC_STRIP3", "STRIP 3", 13, "ordinary", ()),
+    ("LOC_STRIP4", "STRIP 4", 14, "ordinary", ()),
+    ("LOC_OC_COVER_STORAGE", "LOC_OC_COVER_S", 18, "ordinary", ()),
+    ("LOC_RC_COVER_STORAGE", "LOC_RC_COVER_S", 20, "ordinary", ()),
+    ("LOC_TROUGH", "LOC_TROUGH1", 16, "ordinary", ()),
+    ("LOC_BSCS", "LOC_BSCS", 4, "ordinary", ()),
+    ("WASTE_BIN", "Waste Bin", 6, "ordinary", ("Waste Bin",)),
+    ("LOC_PARK", "Park", 28, "park", ("Park",)),
+)
+
+
 class OperatorDeckDestinationV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    key: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
+    target: str = Field(min_length=1, max_length=160, pattern=r"^[A-Z0-9][A-Z0-9_]*$")
     label: str = Field(min_length=1, max_length=240)
     aliases: list[str] = Field(default_factory=list, max_length=64)
+    location_id: StrictInt
     branch_kind: Literal["ordinary", "barcode", "park"]
-    camera_offset_supported: StrictBool
+    camera_offset_option: StrictBool
+    source_anchors: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(min_length=1, max_length=64)
+    enabled: StrictBool
+    disabled_reason: str | None
 
 
 class OperatorDeckDashboardV1(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     current_location: str | None = Field(default=None, max_length=160)
-    current_well: str | None = Field(default=None, max_length=160)
-    position_table_revision: str = Field(min_length=1, max_length=160)
-    destination_catalog_revision: str = Field(min_length=1, max_length=160)
+    current_well: StrictInt | None = None
+    position_table_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    destination_catalog_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     semantic_state_revision: StrictInt = Field(ge=0)
-    ownership_generation: StrictInt = Field(ge=0)
-    expected_board_epoch_by_board: dict[str, NonnegativeStrictInt]
-    destinations: list[OperatorDeckDestinationV1]
-
-    @field_validator("expected_board_epoch_by_board")
-    @classmethod
-    def exact_deck_board_epochs(cls, value: dict[str, int]) -> dict[str, int]:
-        value = _canonical_board_epoch_map(value)
-        if set(value) != {"4", "5"}:
-            raise ValueError("deck dashboard requires exact board epochs 4 and 5")
-        return value
-
-    @field_validator("destinations")
-    @classmethod
-    def unique_deck_destinations(cls, value: list[OperatorDeckDestinationV1]) -> list[OperatorDeckDestinationV1]:
-        keys = [destination.key for destination in value]
-        if not keys or len(keys) != len(set(keys)):
-            raise ValueError("deck dashboard destination keys must be present and unique")
-        return value
+    ambiguity_state: Literal["none", "recovery_required"]
 
 
 class OperatorDashboardV2(BaseModel):
@@ -4797,18 +5439,16 @@ class OperatorActionSpecV2(BaseModel):
         "bioxp.operator_action_request.v2",
         "bioxp.operator_interrupt_request.v1",
     ]
-    response_schema_version: Literal[
-        "bioxp.operator_action_receipt.v2",
-        "bioxp.operator_interrupt_receipt.v1",
-    ]
+    response_schema_version: Literal["bioxp.operator_action_receipt.v2"]
     interrupt: StrictBool
     enabled: StrictBool
     disabled_reason: str | None
-    destination_catalog_revision: str | None = Field(default=None, min_length=1, max_length=160)
-    position_table_revision: str | None = Field(default=None, min_length=1, max_length=160)
-    required_board_ids: list[Literal[4, 5]] | None = None
+    destination_catalog_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    position_table_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    required_boards: list[Literal[4, 5]] | None = None
     expected_board_epoch_by_board: dict[str, NonnegativeStrictInt] | None = None
-    destinations: list[OperatorDeckDestinationV1] | None = None
+    required_references: list[Literal["x", "y", "z", "g"]] | None = None
+    destination_options: list[OperatorDeckDestinationV1] | None = None
 
     @model_validator(mode="after")
     def bind_request_schema_to_interrupt(self):
@@ -4817,30 +5457,71 @@ class OperatorActionSpecV2(BaseModel):
             if self.interrupt
             else "bioxp.operator_action_request.v2"
         )
-        expected_response = (
-            "bioxp.operator_interrupt_receipt.v1"
-            if self.interrupt
-            else "bioxp.operator_action_receipt.v2"
-        )
+        expected_response = "bioxp.operator_action_receipt.v2"
         if self.request_schema_version != expected_request or self.response_schema_version != expected_response:
             raise ValueError("catalog request/response schemas do not match interrupt classification")
         deck_fields = (
             self.destination_catalog_revision,
             self.position_table_revision,
-            self.required_board_ids,
+            self.required_boards,
             self.expected_board_epoch_by_board,
-            self.destinations,
+            self.required_references,
+            self.destination_options,
         )
         if self.action_id == "oem.deck.move_to_location":
-            if any(value is None for value in deck_fields):
-                raise ValueError("deck movement catalog row requires complete finite destination authority")
-            if self.required_board_ids != [4, 5]:
-                raise ValueError("deck movement requires exact board IDs 4 and 5")
-            if set(self.expected_board_epoch_by_board or {}) != {"4", "5"}:
-                raise ValueError("deck movement catalog requires exact board epochs 4 and 5")
-            keys = [destination.key for destination in self.destinations or []]
-            if not keys or len(keys) != len(set(keys)):
-                raise ValueError("deck destination keys must be present and unique")
+            if self.required_boards != [4, 5] or self.required_references != ["x", "y", "z", "g"]:
+                raise ValueError("deck movement requires Serial-206 board and reference authority")
+            options = self.destination_options
+            if options is None:
+                raise ValueError("deck movement catalog row requires destination_options")
+            targets = [destination.target for destination in options]
+            if len(targets) != len(set(targets)):
+                raise ValueError("deck destination targets must be unique")
+            if options:
+                actual_rows = tuple(
+                    (
+                        option.target,
+                        option.label,
+                        option.location_id,
+                        option.branch_kind,
+                        tuple(option.aliases),
+                    )
+                    for option in options
+                )
+                if actual_rows != _SERIAL206_DECK_DESTINATIONS:
+                    raise ValueError("deck destinations must match the exact Serial-206 deck catalog")
+                ids_to_targets: dict[int, list[str]] = {}
+                for option in options:
+                    ids_to_targets.setdefault(option.location_id, []).append(option.target)
+                duplicate_groups = {
+                    tuple(group) for group in ids_to_targets.values() if len(group) > 1
+                }
+                if len(ids_to_targets) != 24 or duplicate_groups != {
+                    ("LOC_TC", "LOC_TC_BARCODE"),
+                    ("LOC_RC", "LOC_RC_BARCODE"),
+                }:
+                    raise ValueError("deck catalog requires exact 26-label and 24-ID identity")
+                if any(
+                    option.camera_offset_option != (option.branch_kind == "ordinary")
+                    for option in options
+                ):
+                    raise ValueError("deck camera option must match its source branch")
+            if self.enabled:
+                if self.disabled_reason is not None or self.destination_catalog_revision is None or self.position_table_revision is None:
+                    raise ValueError("enabled deck movement requires complete revisions")
+                if set(self.expected_board_epoch_by_board or {}) != {"4", "5"} or not options:
+                    raise ValueError("enabled deck movement requires exact epochs and 26 destinations")
+                if any(not option.enabled or option.disabled_reason is not None for option in options):
+                    raise ValueError("enabled deck movement cannot contain disabled destinations")
+            elif self.disabled_reason is None:
+                raise ValueError("disabled deck movement requires robot reason")
+            elif options:
+                if self.destination_catalog_revision is None or self.position_table_revision is None:
+                    raise ValueError("disabled populated deck catalog requires complete revisions")
+                if any(option.enabled or option.disabled_reason != self.disabled_reason for option in options):
+                    raise ValueError("disabled deck destinations must preserve the action reason")
+            elif self.destination_catalog_revision is not None or self.position_table_revision is not None:
+                raise ValueError("empty disabled deck catalog cannot claim revisions")
         elif any(value is not None for value in deck_fields):
             raise ValueError("deck destination authority is forbidden on other actions")
         return self
@@ -4866,16 +5547,12 @@ class OperatorControlCatalogV2(BaseModel):
         if deck is None:
             raise ValueError("deck movement action requires embedded deck dashboard authority")
         action = deck_actions[0]
-        if deck.ownership_generation != self.dashboard.ownership_generation:
-            raise ValueError("deck ownership generation must match embedded dashboard")
         if action.destination_catalog_revision != deck.destination_catalog_revision:
             raise ValueError("deck destination catalog revision is incoherent")
         if action.position_table_revision != deck.position_table_revision:
             raise ValueError("deck position table revision is incoherent")
-        if action.expected_board_epoch_by_board != deck.expected_board_epoch_by_board:
-            raise ValueError("deck board epochs are incoherent")
-        if action.destinations != deck.destinations:
-            raise ValueError("deck destination list is incoherent")
+        if action.enabled and deck.ambiguity_state != "none":
+            raise ValueError("enabled deck movement requires unambiguous dashboard truth")
         return self
 
 

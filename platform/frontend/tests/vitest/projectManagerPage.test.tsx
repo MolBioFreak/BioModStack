@@ -61,6 +61,10 @@ vi.mock('../../src/lib/projectManager', async (importOriginal) => ({
     ...managerApi,
 }));
 
+import { ProjectTree } from '../../src/components/project-manager/ProjectTree';
+import { RelationshipMap } from '../../src/components/project-manager/RelationshipMap';
+import { VirtualFolderPanel } from '../../src/components/project-manager/VirtualFolderPanel';
+import { RunPanel } from '../../src/components/project-manager/RunPanel';
 import { ProjectManager } from '../../src/pages/ProjectManager';
 import { normalizeProjectManagerReadModel } from '../../src/lib/projectManager';
 
@@ -251,6 +255,7 @@ async function renderAt(initialEntry: string) {
 }
 
 beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, writable: true, configurable: true });
     Object.values(nativeApi).forEach((mock) => mock.mockReset());
     Object.values(managerApi).forEach((mock) => mock.mockReset());
     managerApi.projectManagerErrorMessage.mockImplementation((error: unknown) => error instanceof Error ? error.message : String(error));
@@ -338,6 +343,217 @@ afterEach(async () => {
 });
 
 describe('ProjectManager', () => {
+    it('keeps explicit tree collapse on mounted rerender and defaults new branches open', async () => {
+        const nodes = normalizeProjectManagerReadModel(baseSummary).tree.nodes;
+        const render = (next = nodes) => <ProjectTree nodes={next} selectedNodeKey="project:project-1" onSelect={() => undefined} />;
+        await act(async () => root.render(render()));
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Collapse Protein In Silico"]')?.click());
+        await act(async () => root.render(render(structuredClone(nodes))));
+        expect(container.querySelector('[aria-label="Expand Protein In Silico"]')?.getAttribute('aria-expanded')).toBe('false');
+        expect(container.querySelector('[aria-label="Expand Activity"]')).toBeNull();
+        await act(async () => root.render(render([...nodes, { ...nodes[2], node_key: 'domain_experiment:new', label: 'New domain' }])));
+        expect(container.querySelector('[aria-label="Collapse New domain"]')).not.toBeNull();
+    });
+
+    it('retains the same tree through a deferred page selection and disables stale actions', async () => {
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Project tree"]')).not.toBeNull());
+        const tree = container.querySelector('[aria-label="Project tree"]');
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Collapse Protein In Silico"]')?.click());
+        let resolve!: (value: ReturnType<typeof normalizeProjectManagerReadModel>) => void;
+        managerApi.getProjectSummary.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Select Catalytic-loop redesign"]')?.click());
+        expect(container.querySelector('[aria-label="Project tree"]')).toBe(tree);
+        expect(container.querySelector('[aria-label="Expand Protein In Silico"]')).not.toBeNull();
+        expect(container.querySelector<HTMLFieldSetElement>('fieldset')?.disabled).toBe(true);
+        expect(container.textContent).toContain('Validating selected item');
+        await act(async () => resolve(normalizeProjectManagerReadModel(summaryFor('global_experiment:global-1'))));
+        await waitUntil(() => expect(container.querySelector('[aria-label="Selected node inspector"] h2')?.textContent).toBe('Catalytic-loop redesign'));
+        expect(container.querySelector('[aria-label="Project tree"]')).toBe(tree);
+        expect(container.querySelector('[aria-label="Expand Protein In Silico"]')).not.toBeNull();
+    });
+
+    it('expands mapped Activity inline with exact timestamp, payload and an honest fallback', async () => {
+        const summary = normalizeProjectManagerReadModel(baseSummary);
+        summary.pagination.activity.items = [
+            { ...summary.pagination.activity.items[0], event_type: 'domain_connector_event_applied', payload: { event_type: 'molbio_ngs.domain_state.revision_saved', generation: 7, stream: 'state' } },
+            { ...summary.pagination.activity.items[0], id: 'event-unknown', event_type: 'unknown_event', payload: {} },
+        ];
+        const select = vi.fn();
+        await act(async () => root.render(<VirtualFolderPanel folder="activity" summary={summary} onSelectRecord={select} onLoadMore={() => undefined} />));
+        const event = container.querySelector<HTMLButtonElement>('button')!;
+        expect(event.textContent).toContain('Domain state saved');
+        expect(event.getAttribute('aria-expanded')).toBe('false');
+        expect(container.querySelector('time')?.dateTime).toBe('2026-08-09T11:00:00Z');
+        await act(async () => event.click());
+        expect(event.getAttribute('aria-expanded')).toBe('true');
+        expect(container.textContent).toContain('Generation 7');
+        expect(container.textContent).toContain('Event stream: state');
+        expect(container.querySelector('details')?.open).toBe(false);
+        expect(container.querySelector('pre')?.textContent).toContain('molbio_ngs.domain_state.revision_saved');
+        const unknown = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Unknown Event'))!;
+        await act(async () => unknown.click());
+        expect(container.textContent).toContain('A project activity event was recorded.');
+        expect(select).not.toHaveBeenCalled();
+    });
+
+    it('keeps map B ownership, compact groups, warnings and precise selected-item controls', async () => {
+        const summary = normalizeProjectManagerReadModel(baseSummary);
+        const global = { ...summary.map.nodes[1], node_key: 'global_experiment:second', label: 'Second experiment' };
+        const domain = { ...summary.map.nodes[2], node_key: 'domain_experiment:second', label: 'Second domain' };
+        const plan = { ...summary.map.nodes[3], node_key: 'workflow:plan', node_type: 'workflow' as const, label: 'Review plan' };
+        summary.map.nodes.push(global, domain, plan);
+        summary.map.edges.push({ ...summary.map.edges[1], edge_key: 'second-domain', source_node_key: global.node_key, target_node_key: domain.node_key }, { ...summary.map.edges[2], edge_key: 'plan', source_node_key: domain.node_key, target_node_key: plan.node_key });
+        summary.map.nodes[3].reconciliation = { state: 'stale', reason: 'Source verification expired', last_verified_at: null };
+        summary.map.truncated = true;
+        const load = vi.fn(); const select = vi.fn();
+        const render = (selected: string) => <RelationshipMap summary={summary} selectedNodeKey={selected} onSelect={select} onLoadMore={load} />;
+        await act(async () => root.render(render('virtual_folder:domain-1:activity')));
+        const second = container.querySelector('[aria-label="Select Second experiment"]')?.closest('section');
+        expect(second?.textContent).toContain('Second domain');
+        expect(second?.textContent).toContain('Plans · 1');
+        expect(second?.textContent).not.toContain('Protein In Silico');
+        expect(container.textContent).toContain('Attached evidence · 1');
+        expect(container.textContent).toContain('Source verification expired');
+        const show = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Show selected item')!;
+        expect(show.disabled).toBe(true);
+        expect(container.textContent).toContain('Activity is shown in the records panel below.');
+        expect(container.innerHTML).not.toContain('min-w-[34rem]');
+        await act(async () => root.render(render(plan.node_key)));
+        expect(show.disabled).toBe(false);
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Select Review plan"]')?.click());
+        expect(select).toHaveBeenCalledWith(plan);
+        await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Load next map page')?.click());
+        expect(load).toHaveBeenCalledOnce();
+    });
+
+    it('starts narrow rails closed and opens one dismissible drawer with focus return', async () => {
+        window.innerWidth = 390;
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Relationship map"]')).not.toBeNull());
+        expect(container.querySelector('[role="dialog"]')).toBeNull();
+        expect(container.querySelector('[aria-label="Project tree"]')).toBeNull();
+        expect(container.querySelector('[aria-label="Selected node inspector"]')).toBeNull();
+        const view = Array.from(container.querySelectorAll('summary')).find((item) => item.textContent === 'View')!;
+        const button = (name: string) => Array.from(container.querySelectorAll('button')).find((item) => item.textContent === name)!;
+        await act(async () => { view.click(); button('Show tree').focus(); button('Show tree').click(); });
+        expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+        expect(container.querySelector('[aria-label="Project tree drawer"]')).not.toBeNull();
+        await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+        expect(container.querySelector('[role="dialog"]')).toBeNull();
+        expect(document.activeElement).toBe(view);
+        await act(async () => { view.click(); button('Show inspector').click(); });
+        expect(container.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+        expect(container.querySelector('[aria-label="Project tree"]')).toBeNull();
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close panel backdrop"]')?.click());
+        expect(container.querySelector('[role="dialog"]')).toBeNull();
+    });
+
+    it('locks repeat run requests synchronously and shows pending then error recovery', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = normalizeProjectManagerReadModel(baseSummary);
+            value.tree.nodes.push({ ...value.tree.nodes[2], node_key: 'workflow:workflow-1', node_type: 'workflow', subject_id: 'workflow-1', parent_node_key: 'domain_experiment:domain-1' });
+            value.runs.items[0].available_actions = ['open_results', 'clone'];
+            value.runs.items[0].canonical_surface = normalizeProjectManagerReadModel(summaryFor('external_entity_receipt:receipt-9')).selection.canonical_surface;
+            return Promise.resolve(value);
+        });
+        let reject!: (error: Error) => void;
+        managerApi.createLaunchContext.mockImplementation(() => new Promise((_resolve, fail) => { reject = fail; }));
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Actions for run run-1"]')).not.toBeNull());
+        const actions = container.querySelector('[aria-label="Actions for run run-1"]')!;
+        const open = actions.querySelector<HTMLButtonElement>('button')!;
+        await act(async () => { open.click(); open.click(); });
+        await waitUntil(() => expect(open.textContent).toBe('Opening results…'));
+        expect(managerApi.createLaunchContext).toHaveBeenCalledOnce();
+        expect(Array.from(actions.querySelectorAll('button')).every((button) => button.disabled)).toBe(true);
+        expect(actions.closest('article')?.getAttribute('aria-busy')).toBe('true');
+        await act(async () => reject(new Error('Result service unavailable')));
+        await waitUntil(() => expect(open.disabled).toBe(false));
+        expect(container.textContent).toContain('Run action unavailable: Result service unavailable');
+        expect(actions.closest('article')?.querySelector('details')?.open).toBe(false);
+    });
+
+    it('shows cloning only on the affected run and keeps technical data collapsed', async () => {
+        const runs = normalizeProjectManagerReadModel(baseSummary).runs.items;
+        runs[0].available_actions = ['clone'];
+        const action = vi.fn();
+        await act(async () => root.render(<RunPanel runs={[runs[0], { ...runs[0], run_id: 'run-2' }]} pendingAction={{ runId: 'run-1', action: 'clone' }} onSelect={() => undefined} onAction={action} />));
+        const articles = container.querySelectorAll('article');
+        expect(articles[0].textContent).toContain('Cloning…');
+        expect(articles[1].textContent).not.toContain('Cloning…');
+        expect(articles[0].querySelector('details')?.open).toBe(false);
+        expect(articles[0].querySelector('details')?.textContent).toContain('job-9');
+        await act(async () => articles[0].querySelector<HTMLButtonElement>('[aria-label="Actions for run run-1"] button')?.click());
+        expect(action).not.toHaveBeenCalled();
+    });
+
+    it('does not accumulate a previous focus into the newly loaded focus', async () => {
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Select PLM-07 result"]')).not.toBeNull());
+        let resolve!: (value: ReturnType<typeof normalizeProjectManagerReadModel>) => void;
+        managerApi.getProjectSummary.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+        const next = normalizeProjectManagerReadModel(baseSummary);
+        const second = { ...next.map.nodes[1], node_key: 'global_experiment:second', canonical_identity: { store_id: 'global', entity_id: 'second' }, label: 'Second experiment' };
+        // Make a second global reachable in the already validated snapshot.
+        await act(async () => client.setQueriesData({ queryKey: ['project-manager', 'summary', 'project-1'] }, (data: unknown) => {
+            if (!data || typeof data !== 'object' || !('map' in data)) return data;
+            const value = data as typeof next;
+            return { ...value, map: { ...value.map, nodes: [...value.map.nodes, second] } };
+        }));
+        await waitUntil(() => expect(container.querySelector('[aria-label="Select Second experiment"]')).not.toBeNull());
+        await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Select Second experiment"]')?.click());
+        await waitUntil(() => expect(managerApi.getProjectSummary).toHaveBeenLastCalledWith('project-1', expect.objectContaining({ focusId: 'second' })));
+        next.map = { ...next.map, focus_node_key: second.node_key, nodes: [next.map.nodes[0], second], edges: [] };
+        next.runs.items = [];
+        next.selection = { ...next.selection, node_key: second.node_key, node_type: 'global_experiment', title: 'Second experiment' };
+        await act(async () => resolve(next));
+        await waitUntil(() => expect(container.querySelector('[aria-label="Selected node inspector"] h2')?.textContent).toBe('Second experiment'));
+        expect(container.querySelector('[aria-label="Select PLM-07 result"]')).toBeNull();
+        expect(container.querySelector('[aria-label="Inspect run run-1"]')).toBeNull();
+    });
+
+    it('leads inspector with science and preserves exact metadata and warnings in their proper places', async () => {
+        managerApi.getProjectSummary.mockImplementation(() => {
+            const value = normalizeProjectManagerReadModel(baseSummary);
+            value.selection.summary = { ...value.selection.summary, schema: 'bms.protein-in-silico-experiment.v3', priority: 'high', scientific_question: 'Which variant advances?', success_criteria: 'Review exact evidence', domain_payload: { scientific_objective: 'Compare structures', revision_id: 'nested-revision' } };
+            value.selection.reconciliation = { state: 'stale', reason: 'Source verification expired', last_verified_at: null };
+            return Promise.resolve(value);
+        });
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[aria-label="Selected node inspector"]')).not.toBeNull());
+        const inspector = container.querySelector('[aria-label="Selected node inspector"]')!;
+        const technical = inspector.querySelector('details')!;
+        expect(technical.open).toBe(false);
+        expect(technical.textContent).toContain('nested-revision');
+        const science = inspector.querySelector('[aria-label="Research summary"]')!;
+        expect(science.textContent).toContain('Which variant advances?');
+        expect(science.textContent).toContain('Review exact evidence');
+        expect(science.textContent).toContain('Compare structures');
+        expect(science.textContent).not.toContain('nested-revision');
+        const warning = Array.from(inspector.querySelectorAll('p')).find((item) => item.textContent === 'Source verification expired')!;
+        expect(warning.closest('details')).toBeNull();
+        expect(container.querySelector('[aria-label="Relationship map"]')?.textContent).toContain('Open workspace');
+        await act(async () => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Open workspace')?.click());
+        expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('workspace=protein');
+    });
+
+    it('exposes both creation paths under one chooser and plain sort copy', async () => {
+        await renderAt('/projects/project-1?focus=global-1&selected=domain_experiment%3Adomain-1');
+        await waitUntil(() => expect(container.querySelector('[data-project-manager]')).not.toBeNull());
+        const chooser = Array.from(container.querySelectorAll('summary')).find((item) => item.textContent === 'New experiment')!;
+        expect(chooser).toBeDefined();
+        const choices = chooser.parentElement!;
+        expect(choices.querySelectorAll('button')).toHaveLength(2);
+        expect(choices.textContent).toContain('Choose a Protein workflow');
+        expect(choices.textContent).toContain('Create a Global Experiment');
+        expect(Array.from(container.querySelectorAll('button')).filter((item) => item.textContent === 'New Global Experiment')).toHaveLength(0);
+        await act(async () => chooser.click());
+        await act(async () => Array.from(choices.querySelectorAll('button')).find((item) => item.textContent?.startsWith('Empty experiment group'))?.click());
+        await waitUntil(() => expect(container.querySelector('[role="dialog"]')?.textContent).toContain('Create Global Experiment'));
+        expect((choices as HTMLDetailsElement).open).toBe(false);
+    });
+
     it('renders the Protein workspace task-first and keeps authority data under Technical details', async () => {
         managerApi.getProjectSummary.mockImplementation(() => {
             const value = summaryFor('domain_experiment:domain-1') as ReturnType<typeof summaryFor> & { tasks?: unknown[] };
@@ -471,6 +687,7 @@ describe('ProjectManager', () => {
         await renderAt('/projects/project-1?selected=project%3Aproject-1');
         await waitUntil(() => expect(container.textContent).toContain('NGS/MolBio Project'));
         const add = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Attach existing record');
+        await waitUntil(() => expect(add?.disabled).toBe(false));
         await act(async () => add?.click());
         const linkProject = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.trim() === 'Link this NGS/MolBio Project to a Global Project');
         expect(linkProject).not.toBeUndefined();
@@ -1054,13 +1271,13 @@ describe('ProjectManager', () => {
         await act(async () => folder?.click());
         expect(folder?.getAttribute('aria-expanded')).toBe('true');
         await waitUntil(() => expect(container.querySelector('[data-testid="location"]')?.textContent).toContain('selected=virtual_folder%3Adomain-1%3Aactivity'));
-        expect(container.textContent).not.toContain('First bounded page');
-        await waitUntil(() => expect(container.textContent).toContain('Source Attached'));
+        expect(container.querySelector('[aria-label="Collapse Activity"]')?.getAttribute('aria-expanded')).toBe('true');
+        await waitUntil(() => expect(container.textContent).toContain('Source attached'));
         await waitUntil(() => expect(container.textContent).toContain('Load more activity'));
         const loadMore = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Load more activity');
         await act(async () => loadMore?.click());
-        await waitUntil(() => expect(container.textContent).toContain('Run Completed'));
-        expect(container.textContent).toContain('Source Attached');
+        await waitUntil(() => expect(container.textContent).toContain('Run completed'));
+        expect(container.textContent).toContain('Source attached');
         expect(managerApi.getProjectSummary).toHaveBeenCalledWith('project-1', expect.objectContaining({ activityCursor: 'activity:1' }));
     });
 });

@@ -36,6 +36,7 @@ API_ROOT = Path(__file__).parent / "platform" / "api"
 sys.path.insert(0, str(API_ROOT))
 from paths import get_code_root, get_db_path, get_results_dir  # noqa: E402
 from biomodstack_panel_compat import build_toggle_row  # noqa: E402
+from biomodstack_services import desktop_exec_arg
 from biomodstack_services import (  # noqa: E402
     API_LOG as API_LOG_PATH,
     CORE_RUNTIME_LOG as CORE_RUNTIME_LOG_PATH,
@@ -51,6 +52,9 @@ from biomodstack_services import (  # noqa: E402
     runtime_descriptor,
     runtime_port_settings,
     save_runtime_port_settings,
+    storage_compute_settings,
+    save_storage_compute_settings,
+    STORAGE_COMPUTE_APPLY_NOTICE,
 )
 
 # Service-control scripts must belong to the checkout that supplied this panel.
@@ -1067,10 +1071,120 @@ class BioModStackPanel(Adw.Application):
         except Exception as e:
             show_notification("Backup Failed", str(e))
     
+    def _build_storage_compute_row(self) -> Gtk.Widget:
+        row = Adw.ExpanderRow()
+        row.set_title("Storage and compute")
+        row.set_subtitle("Installed roots and editable local CPU/RAM budgets")
+        self.storage_entries = {}
+        self.storage_initial = {}
+        self.storage_hardware_label = Gtk.Label(xalign=0, wrap=True)
+        self.storage_feedback = Gtk.Label(label=STORAGE_COMPUTE_APPLY_NOTICE, xalign=0, wrap=True)
+        for label in (self.storage_hardware_label, self.storage_feedback):
+            child = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            child.set_margin_start(12)
+            child.set_margin_end(12)
+            child.append(label)
+            row.add_row(child)
+        labels = {
+            "data_root": "Shared data root",
+            "dev_data_root": "Development data root",
+            "container_dir": "Workflow image root",
+            "weights_root": "Model weights root",
+            "inputs_dir": "Production inputs",
+            "results_dir": "Production results",
+            "db_path": "Production SQLite file",
+            "work_dir": "Production work directory",
+            "analysis_cache_dir": "Production analysis cache",
+            "colabfold_db": "Reference database root",
+            "msa_cache_dir": "MSA cache root",
+            "sabdab_cache_dir": "SAbDab cache root",
+            "dev_results_dir": "Development results",
+            "local_cpu_threads": "Local CPU budget (logical threads)",
+            "local_memory_gib": "Local RAM budget (GiB)",
+        }
+        try:
+            snapshot = storage_compute_settings(project_root=PROJECT_ROOT)
+            values = {**snapshot["roots"], "local_cpu_threads": snapshot["configured_cpu_threads"],
+                      "local_memory_gib": snapshot["configured_memory_gib"]}
+            self._show_storage_hardware(snapshot)
+            if snapshot.get("validation_error"):
+                self.storage_feedback.set_text("Saved budgets need correction: " + str(snapshot["validation_error"]) + ". Edit values or use detected defaults, then save. No limits applied.")
+        except Exception as exc:
+            values = {}
+            self.storage_feedback.set_text(f"Cannot read settings: {exc}. Nothing saved.")
+        advanced = Adw.ExpanderRow()
+        advanced.set_title("Independent storage paths")
+        advanced.set_subtitle("Existing effective paths; saving never moves files or creates directories")
+        row.add_row(advanced)
+        primary = {"data_root", "dev_data_root", "container_dir", "weights_root", "local_cpu_threads", "local_memory_gib"}
+        for key, title in labels.items():
+            field = Adw.ActionRow()
+            field.set_title(title)
+            entry = Gtk.Entry()
+            entry.set_hexpand(True)
+            entry.set_valign(Gtk.Align.CENTER)
+            entry.set_text(str(values.get(key, "")))
+            field.add_suffix(entry)
+            (row if key in primary else advanced).add_row(field)
+            self.storage_entries[key] = entry
+            self.storage_initial[key] = entry.get_text()
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        for title, callback in (("Re-detect hardware", self._on_redetect_storage_compute),
+                                ("Use detected defaults", self._on_storage_compute_defaults),
+                                ("Save configuration", self._on_save_storage_compute)):
+            button = Gtk.Button(label=title)
+            button.connect("clicked", callback)
+            buttons.append(button)
+        row.add_row(buttons)
+        return row
+
+    def _show_storage_hardware(self, snapshot):
+        self.storage_detected_defaults = {
+            "local_cpu_threads": snapshot["default_cpu_threads"],
+            "local_memory_gib": snapshot["default_memory_gib"],
+        }
+        self.storage_hardware_label.set_text(
+            f"Detected: {snapshot['detected_cpu_threads']} logical threads, "
+            f"{snapshot['detected_memory_gib']:.2f} GiB total usable RAM. "
+            f"Suggested: {snapshot['default_cpu_threads']} threads (80%, rounded up), "
+            f"{snapshot['default_memory_gib']:.2f} GiB (75%).\n{snapshot['cuda_status']}\n"
+            f"{snapshot['applied_limits_status']}"
+        )
+
+    def _on_redetect_storage_compute(self, button):
+        try:
+            self._show_storage_hardware(storage_compute_settings(project_root=PROJECT_ROOT))
+            self.storage_feedback.set_text("Hardware refreshed. Manual entries unchanged; nothing saved.")
+        except Exception as exc:
+            self.storage_feedback.set_text(f"Detection unavailable: {exc}. Nothing saved.")
+
+    def _on_storage_compute_defaults(self, button):
+        for key, value in getattr(self, "storage_detected_defaults", {}).items():
+            self.storage_entries[key].set_text(str(value))
+        self.storage_feedback.set_text("Suggested budgets copied into entries. Review and Save configuration to persist.")
+
+    def _on_save_storage_compute(self, button):
+        try:
+            changes = {key: entry.get_text().strip() for key, entry in self.storage_entries.items()
+                       if entry.get_text() != self.storage_initial[key]}
+            if "local_cpu_threads" in changes:
+                changes["local_cpu_threads"] = int(changes["local_cpu_threads"])
+            if "local_memory_gib" in changes:
+                changes["local_memory_gib"] = float(changes["local_memory_gib"])
+            if not changes:
+                self.storage_feedback.set_text("No changes to save. " + STORAGE_COMPUTE_APPLY_NOTICE)
+                return
+            message = save_storage_compute_settings(changes, project_root=PROJECT_ROOT)
+            self.storage_initial = {key: entry.get_text() for key, entry in self.storage_entries.items()}
+            self.storage_feedback.set_text(message)
+        except Exception as exc:
+            self.storage_feedback.set_text(f"Not saved: {exc}")
+
     def _build_settings_section(self) -> Gtk.Widget:
         """Settings toggles."""
         group = Adw.PreferencesGroup()
         group.set_title("Settings")
+        group.add(self._build_storage_compute_row())
 
         autostart_row_widget, self.autostart_row = build_toggle_row(
             Adw,
@@ -1101,7 +1215,7 @@ class BioModStackPanel(Adw.Application):
 Type=Application
 Name=BioModStack Panel
 Comment=BioModStack Control Panel
-Exec=python3 {Path(__file__).resolve()}
+Exec=python3 {desktop_exec_arg(Path(__file__).resolve())}
 Icon={ICON_PATH}
 Terminal=false
 Categories=Science;System;

@@ -149,9 +149,12 @@ def validate_resource_admission_handoff(value: object) -> dict[str, Any] | None:
     dram_bytes = handoff.get("dram_bytes")
     gpu_index = handoff.get("gpu_index")
     gpu_uuid = handoff.get("gpu_uuid")
-    if type(cpu_threads) is not int or not 1 <= cpu_threads <= 24:
+    # Capacity is enforced by the admission/execution owner, not by historical
+    # evidence parsing: a new local profile must not invalidate an old receipt
+    # or impose controller capacity on evidence from a remote instance.
+    if type(cpu_threads) is not int or cpu_threads < 1:
         raise ResourceUsageEvidenceError("resource admission cpu_threads is invalid")
-    if type(dram_bytes) is not int or not 1 <= dram_bytes <= 96 * 1024**3:
+    if type(dram_bytes) is not int or dram_bytes < 1:
         raise ResourceUsageEvidenceError("resource admission dram_bytes is invalid")
     if gpu_index is not None and (type(gpu_index) is not int or gpu_index < 0):
         raise ResourceUsageEvidenceError("resource admission gpu_index is invalid")

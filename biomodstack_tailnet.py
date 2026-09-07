@@ -20,6 +20,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from biomodstack_runtime_profile import load_install_profile
+from biomodstack_services import systemd_exec_arg, systemd_value
 from biomodstack_services import (
     API_SERVICE,
     CONTAINER_RUNTIME_MODE,
@@ -46,8 +48,8 @@ SELECTION_STATE_PATH = STATE_ROOT / "tailnet-environment.json"
 SELECTION_LOCK_PATH = STATE_ROOT / "tailnet-environment.lock"
 
 SUPPORTED_ENVIRONMENTS = ("development", "production")
-CANONICAL_DEVELOPMENT_ROOT = Path("/home/dalab/biomodstack/dev-test-canonical")
-CANONICAL_PRODUCTION_ROOT = Path("/home/dalab/biomodstack/prod-main-canonical")
+CANONICAL_DEVELOPMENT_ROOT = Path.home() / "biomodstack" / "dev-test-canonical"
+CANONICAL_PRODUCTION_ROOT = Path.home() / "biomodstack" / "prod-main-canonical"
 CONTROL_PATH = "/api/tailnet-environment"
 PRODUCTION_API_PORT = 18000
 # Tailnet's authenticated selector is a Development control surface. Keep the
@@ -657,6 +659,12 @@ def _validate_canonical_environment_root(root: Path, environment: str) -> str:
 
 def _canonical_environment_root(environment: str) -> Path:
     normalized = str(environment).strip().lower()
+    if normalized not in SUPPORTED_ENVIRONMENTS:
+        raise TailnetEnvironmentError("Tailnet environment must be development or production")
+    # The installed lane owns source selection, never the caller's BMS_HOME.
+    configured = load_install_profile().get(f"{normalized}_project_root")
+    if isinstance(configured, str) and configured.strip():
+        return Path(configured).expanduser().resolve()
     if normalized == "development":
         return CANONICAL_DEVELOPMENT_ROOT.resolve()
     if normalized == "production":
@@ -862,7 +870,7 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
     build_identity = git_build_identity(root)
     build_time = build_identity["build_time"]
     build_id = build_identity["build_id"]
-    home_line = f"Environment=BMS_HOME={root}"
+    home_line = "Environment=" + systemd_value(f"BMS_HOME={root}")
     required_identity_lines = (
         home_line,
         f"Environment=VITE_BMS_BUILD_SHA={revision}",
@@ -877,17 +885,17 @@ def _install_operator_development_frontend(root: Path, mutation_ledger: set[str]
     _atomic_write(
         _host_user_systemd_dir() / f"{FRONTEND_SERVICE}.d" / "99-tailnet-canonical-source.conf",
         "[Service]\n"
-        f"Environment=BMS_HOME={root}\n"
+        f"Environment={systemd_value('BMS_HOME=' + str(root))}\n"
         f"Environment=BMS_DEV_API_PROXY_TARGET={dev_api_target}\n"
         f"Environment=VITE_BMS_BUILD_SHA={revision}\n"
         f"Environment=VITE_BMS_BUILD_ID={build_id}\n"
         f"Environment=VITE_BMS_BUILD_TIME={build_time}\n"
-        f"WorkingDirectory={root}/platform/frontend\n"
+        f"WorkingDirectory={systemd_value(root / 'platform/frontend')}\n"
         "ExecStartPre=\n"
         f"ExecStartPre=/usr/bin/sh -c 'test \"$BMS_DEV_API_PROXY_TARGET\" = \"{dev_api_target}\"'\n"
-        f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"
+        f"ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(root / 'scripts/rotate_biomodstack_logs.py')}\n"
         "ExecStart=\n"
-        f"ExecStart=/usr/bin/node {root}/platform/frontend/node_modules/vite/bin/vite.js "
+        f"ExecStart=/usr/bin/node {systemd_exec_arg(root / 'platform/frontend/node_modules/vite/bin/vite.js')} "
         "--host 127.0.0.1 --port 18082\n",
     )
     daemon_reload(project_root=root)
@@ -940,7 +948,7 @@ def _install_adapter_control_policy(
     _atomic_write(
         dropin,
         "[Service]\n"
-        f"Environment=BMS_HOME={root}\n"
+        f"Environment={systemd_value('BMS_HOME=' + str(root))}\n"
         f"Environment=BMS_TAILNET_CONTROL_SOURCE_REVISION={revision}\n"
         f"Environment=BMS_BUILD_SHA={runtime_revision}\n"
         f"Environment=BMS_MANAGED_API_IMAGE_ID={api_image_id}\n"
@@ -950,9 +958,9 @@ def _install_adapter_control_policy(
         "Environment=BMS_TAILNET_CONTROL_TRUSTED_PROXY_HOSTS=127.0.0.1,::1\n"
         f"Environment=BMS_TAILNET_CONTROL_ALLOWED_TAILSCALE_USERS={login}\n"
         "ExecStartPre=\n"
-        f"ExecStartPre=/usr/bin/env python3 {root}/scripts/rotate_biomodstack_logs.py\n"
+        f"ExecStartPre=/usr/bin/env python3 {systemd_exec_arg(root / 'scripts/rotate_biomodstack_logs.py')}\n"
         "ExecStart=\n"
-        f"ExecStart={root}/scripts/run_biomodstack_workflow_adapter.sh\n",
+        f"ExecStart={systemd_exec_arg(root / 'scripts/run_biomodstack_workflow_adapter.sh')}\n",
     )
     return login
 
@@ -2112,15 +2120,17 @@ def _validated_container_runtime(root: Path, *, require_web: bool) -> dict[str, 
         "biomodstack-api": _managed_image_id("BMS_MANAGED_API_IMAGE_ID", MANAGED_API_IMAGE_ID),
         "biomodstack-web": _managed_image_id("BMS_MANAGED_WEB_IMAGE_ID", MANAGED_WEB_IMAGE_ID),
     }
+    from biomodstack_runtime_profile import core_runtime_storage_mounts, resolve_installed_core_runtime_paths
+    try:
+        storage = core_runtime_storage_mounts(resolve_installed_core_runtime_paths(root))
+    except (ValueError, OSError) as exc:
+        raise TailnetEnvironmentError(f"Production storage configuration is invalid: {exc}") from exc
     expected_mounts = {
-        "biomodstack-api": [{
-            "type": "bind",
-            "source": "/mnt/BioModStack",
-            "destination": "/var/lib/biomodstack",
-            "mode": "rw",
-            "rw": True,
-            "propagation": "rprivate",
-        }],
+        "biomodstack-api": sorted([
+            {"type": "bind", "source": m["source"], "destination": m["target"],
+             "mode": "ro" if m["read_only"] else "rw", "rw": not m["read_only"],
+             "propagation": "rprivate"} for m in storage
+        ], key=lambda m: (m["destination"], m["source"])),
         "biomodstack-web": [],
     }
     if any(

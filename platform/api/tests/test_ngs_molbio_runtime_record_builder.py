@@ -49,6 +49,16 @@ def test_builder_defaults_to_active_v2_runtime_authority() -> None:
     assert builder.DENOMINATOR_SCHEMA == "bms.ngs-molbio.runtime-source-denominator.v2"
 
 
+def test_runtime_denominator_covers_local_resource_and_path_authority() -> None:
+    builder = _load_builder()
+    denominator = builder._load_source_denominator()
+    assert {
+        "biomodstack_local_resources.py",
+        "biomodstack_runtime_profile.py",
+        "platform/api/telemetry_store.py",
+    }.issubset(set(denominator["paths"]))
+
+
 def test_runtime_denominator_covers_complete_restriction_authority() -> None:
     denominator = json.loads(DENOMINATOR_V2.read_text(encoding="utf-8"))
     required = {
@@ -90,7 +100,7 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "scripts/build_restriction_enzyme_catalog.py",
     }
     assert required <= set(denominator["paths"])
-    assert len(denominator["paths"]) == 259
+    assert len(denominator["paths"]) == 262
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:

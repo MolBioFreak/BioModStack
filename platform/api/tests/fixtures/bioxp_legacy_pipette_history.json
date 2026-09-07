@@ -1,0 +1,172 @@
+{
+  "schema_version": "bioxp.operator_action_history.v1",
+  "receipts": [
+    {
+      "created_at": "2000-01-01T00:00:00Z",
+      "deployment_identity": {
+        "deployed_sha": null,
+        "deployed_sha_verified": false,
+        "runtime_sha_verified": false,
+        "status": "source_bound_not_deployed_proof"
+      },
+      "effective_inputs": {
+        "action": "load",
+        "metadata": {},
+        "operator": null,
+        "tip_id": "fixture-tip"
+      },
+      "operation": "tip",
+      "ownership_epoch": 1,
+      "receipt_id": "11111111111111111111111111111111",
+      "requested_inputs": {
+        "action": "load",
+        "metadata": {},
+        "operator": null,
+        "tip_id": "fixture-tip"
+      },
+      "result": {
+        "callback_session_id": "pipette-callback:offline-fixture",
+        "hardware_commanded": false,
+        "ok": true,
+        "outcome": "host_state_only",
+        "physical_effect_verified": false,
+        "tip_location": -1,
+        "tip_type": 201
+      },
+      "runtime_binding": {
+        "callback_session_id": "pipette-callback:offline-fixture"
+      },
+      "schema": "bioxp.pipette.receipt.v1",
+      "source_identity": {
+        "authority_verified": true,
+        "evidence_authority": {
+          "acquisition_id": "offline-fixture",
+          "evidence_lock_identity_verified": true,
+          "evidence_lock_path": "/app/.oem_lock/OEM_EVIDENCE_LOCK.json",
+          "evidence_lock_schema": "bioxp.oem_evidence_lock.v4",
+          "evidence_lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "registry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "repository_root": "/app",
+        "source_sha256": {
+          "can_driver": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "novo_router": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "novo_usb_can": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_models": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_receipts": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_service": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_spec": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_transport": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "truth": {
+        "completion_verified": false,
+        "controller_acknowledged": false,
+        "delivery_verified": false,
+        "hardware_postcondition_verified": false,
+        "hardware_precondition_verified": false,
+        "physical_effect_claim_suppressed": true,
+        "physical_effect_verified": false
+      },
+      "status": "failed",
+      "controller_acknowledged": false,
+      "physical_effect_verified": false,
+      "outcome": "host_state_only",
+      "response": {
+        "callback_session_id": "pipette-callback:offline-fixture",
+        "hardware_commanded": false,
+        "ok": true,
+        "outcome": "host_state_only",
+        "physical_effect_verified": false,
+        "tip_location": -1,
+        "tip_type": 201
+      },
+      "stage_receipts": []
+    },
+    {
+      "created_at": "2000-01-01T00:00:00Z",
+      "deployment_identity": {
+        "deployed_sha": null,
+        "deployed_sha_verified": false,
+        "runtime_sha_verified": false,
+        "status": "source_bound_not_deployed_proof"
+      },
+      "effective_inputs": {
+        "action": "load",
+        "metadata": {},
+        "operator": null,
+        "tip_id": null
+      },
+      "operation": "tip",
+      "ownership_epoch": 0,
+      "receipt_id": "22222222222222222222222222222222",
+      "requested_inputs": {
+        "action": "load",
+        "metadata": {},
+        "operator": null,
+        "tip_id": null
+      },
+      "result": {
+        "hardware_commanded": false,
+        "legacy_receipt_id": "33333333333333333333333333333333",
+        "legacy_source_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ok": true,
+        "outcome": "host_state_only",
+        "physical_effect_verified": false,
+        "tip_location": -1,
+        "tip_type": 201
+      },
+      "runtime_binding": {
+        "legacy_receipt_id": "33333333333333333333333333333333",
+        "source_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "schema": "bioxp.pipette.receipt.v1",
+      "source_identity": {
+        "authority_verified": true,
+        "evidence_authority": {
+          "acquisition_id": "offline-fixture",
+          "evidence_lock_identity_verified": true,
+          "evidence_lock_path": "/app/.oem_lock/OEM_EVIDENCE_LOCK.json",
+          "evidence_lock_schema": "bioxp.oem_evidence_lock.v4",
+          "evidence_lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "registry_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "repository_root": "/app",
+        "source_sha256": {
+          "can_driver": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "novo_router": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "novo_usb_can": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_models": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_receipts": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_service": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_spec": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "pipette_transport": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "truth": {
+        "completion_verified": false,
+        "controller_acknowledged": false,
+        "delivery_verified": false,
+        "hardware_postcondition_verified": false,
+        "hardware_precondition_verified": false,
+        "physical_effect_claim_suppressed": true,
+        "physical_effect_verified": false
+      },
+      "status": "failed",
+      "controller_acknowledged": false,
+      "physical_effect_verified": false,
+      "outcome": "host_state_only",
+      "response": {
+        "hardware_commanded": false,
+        "legacy_receipt_id": "33333333333333333333333333333333",
+        "legacy_source_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "ok": true,
+        "outcome": "host_state_only",
+        "physical_effect_verified": false,
+        "tip_location": -1,
+        "tip_type": 201
+      },
+      "stage_receipts": []
+    }
+  ]
+}

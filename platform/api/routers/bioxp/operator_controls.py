@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from services.bioxp.errors import ConnectionStateError, RobotResponseError, RobotTimeoutError, RobotTransportError
 from services.bioxp.operator_models import (
     OperatorActionHistory,
     OperatorActionInvokeRequest,
-    OperatorActionReceipt,
+    OperatorLiveActionReceipt,
     OperatorAdmission,
     OperatorAdmissionRequest,
     OperatorAssessmentRequest,
@@ -28,13 +28,15 @@ from services.bioxp.operator_models import (
     OperatorMoveXYInputsV2,
     OperatorDeckMoveInputsV1,
     OperatorInterruptRequestV1,
-    OperatorInterruptReceiptV1,
     OperatorMethodRequestV1,
     OperatorMethodV1,
     OperatorYMoveAbsoluteInputsV2,
     OperatorYMoveStepsInputsV2,
     OperatorDashboard,
     PipetteReadbackRequest,
+    PipetteDirectRequestLookupResponse,
+    PipetteReadbackPostEnvelope,
+    PipetteApplicationPlanPostEnvelope,
     PipetteReadbackResponse,
     PipetteApplicationPlanRequest,
     PipetteApplicationPlanResponse,
@@ -68,6 +70,16 @@ from services.bioxp.runtime import BioXpRuntime
 from .dependencies import get_bioxp_runtime, require_bioxp_mutation_access
 
 router = APIRouter()
+
+
+def _validate_live_action_receipt(payload: Any) -> OperatorLiveActionReceipt:
+    try:
+        return TypeAdapter(OperatorLiveActionReceipt).validate_python(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail="BioXP robot returned an invalid operator-control contract") from exc
 
 
 def _is_exact_xz_action(action_id: str) -> bool:
@@ -271,7 +283,7 @@ def _resolve_action_quarantine(action_id: str) -> str | None:
     # transaction is still holding the robot's provider-state lock. The robot
     # invocation still enforces the connection and ownership generations and
     # dispatches only the finite X/Z stop and aggregate-abort actions.
-    if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort", "oem.y.stop"}:
+    if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.y.stop"}:
         return None
     # The action-ID quarantine registry is the local authority for these two
     # routes. The robot admission request below still enforces both connection
@@ -512,6 +524,7 @@ def _post_dispatch_receipt_uncertainty(payload: Any) -> HTTPException | None:
             "command_id": command_id,
             "status_path": status_path,
             "outcome": "uncertain",
+            "message": "Command dispatched but receipt validation failed. Outcome unknown; do not resubmit.",
             "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
             "reconciliation": "Poll the command receipt until terminal; if unavailable, require operator reconciliation.",
             "robot_evidence": payload,
@@ -594,7 +607,7 @@ async def invoke_operator_action_v2(
 
 @router.post(
     "/operator-controls/v2/interrupts/{action_id}",
-    response_model=OperatorInterruptReceiptV1,
+    response_model=OperatorActionReceiptV2,
     status_code=200,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
@@ -602,8 +615,8 @@ async def interrupt_operator_action_v1(
     action_id: str,
     request: OperatorInterruptRequestV1,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorInterruptReceiptV1:
-    if action_id not in {"oem.x.stop", "oem.y.stop", "oem.z.stop", "oem.z.abort", "oem.abort_all"}:
+) -> OperatorActionReceiptV2:
+    if action_id not in {"oem.x.stop", "oem.y.stop", "oem.z.stop", "oem.abort_all"}:
         raise HTTPException(status_code=404, detail="Unknown BMS v2 interrupt action")
     try:
         payload = await runtime.connection.request_active_safety_interrupt(
@@ -614,9 +627,23 @@ async def interrupt_operator_action_v1(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorInterruptReceiptV1, payload)
+    try:
+        receipt = OperatorActionReceiptV2.model_validate(payload)
+    except ValidationError as exc:
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty from exc
+        raise HTTPException(status_code=502, detail={
+            "error": "post_dispatch_receipt_validation_failed",
+            "message": "Interrupt request sent; receipt invalid. Physical outcome unknown. Do not resubmit.",
+            "retry_guidance": "do_not_resubmit_reconcile_by_command_id",
+            "robot_evidence": payload,
+        }) from exc
     if receipt.action_id != action_id:
-        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched interrupt receipt")
+        uncertainty = _post_dispatch_receipt_uncertainty(payload)
+        if uncertainty is not None:
+            raise uncertainty
+        raise HTTPException(status_code=502, detail="Interrupt request sent; receipt identity mismatched. Physical outcome unknown. Do not resubmit.")
     return receipt
 
 
@@ -759,22 +786,69 @@ async def operator_dashboard(
     return _validate(OperatorDashboard, payload)
 
 
+def _direct_liquid_ingress(request: Request, allowed: set[str]) -> None:
+    if set(request.query_params) != allowed or any(len(request.query_params.getlist(name)) != 1 for name in allowed) or len(request.headers.getlist("idempotency-key")) != 1:
+        raise HTTPException(status_code=422, detail="Invalid or ambiguous direct-liquid parameters")
+
+
+@router.get("/operator-controls/pipettes/requests", response_model=PipetteDirectRequestLookupResponse, response_model_exclude_unset=True)
+async def pipette_request_lookup(
+    request: Request,
+    response: Response,
+    request_kind: Literal["readback", "application_plan"] = Query(...),
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
+    runtime: BioXpRuntime = Depends(get_bioxp_runtime),
+) -> PipetteDirectRequestLookupResponse:
+    _direct_liquid_ingress(request, {"request_kind", "expected_connection_generation"})
+    upstream_status = 200
+    try:
+        payload = await runtime.connection.request_active_query(
+            "pipette_request_lookup", expected_generation=expected_connection_generation,
+            require_fresh=False, params={"request_kind": request_kind},
+            json_data={"idempotency_key": idempotency_key},
+        )
+    except RobotResponseError as exc:
+        if exc.status_code not in {409, 503}:
+            raise _translate_robot_error(exc) from exc
+        payload = exc.detail
+        upstream_status = exc.status_code
+    except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
+        raise _translate_robot_error(exc) from exc
+    lookup = _validate(PipetteDirectRequestLookupResponse, payload)
+    expected_status = {"conflict": 409, "unavailable": 503}.get(lookup.lookup_state, 200)
+    if upstream_status != expected_status:
+        raise HTTPException(status_code=502, detail="BioXP robot returned mismatched lookup status")
+    if lookup.request_kind != request_kind or lookup.idempotency_key != idempotency_key:
+        raise HTTPException(status_code=502, detail="BioXP robot returned mismatched direct-liquid identity")
+    response.headers["Cache-Control"] = "no-store"
+    response.status_code = expected_status
+    return lookup
+
+
 @router.post("/operator-controls/pipettes/readback", response_model=PipetteReadbackResponse)
 async def pipette_readback(
     request: PipetteReadbackRequest,
+    http_request: Request,
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> PipetteReadbackResponse:
-    snapshot = runtime.connection.snapshot()
+    """Explicit hardware queries, not activation, initialization or liquid motion."""
+    _direct_liquid_ingress(http_request, {"expected_connection_generation"})
     try:
         payload = await runtime.connection.request_active_query(
             "pipette_readback",
-            expected_generation=snapshot.generation,
+            expected_generation=expected_connection_generation,
             require_fresh=True,
-            json_data=request.model_dump(),
+            json_data={**request.model_dump(), "idempotency_key": idempotency_key},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(PipetteReadbackResponse, payload)
+    envelope = _validate(PipetteReadbackPostEnvelope, payload)
+    if envelope.include_data != request.include_data:
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched readback request")
+    return _validate(PipetteReadbackResponse, envelope.model_dump(include=set(PipetteReadbackResponse.model_fields)))
 
 
 @router.get("/operator-controls/pipettes/application/status", response_model=PipetteApplicationStatus)
@@ -796,19 +870,40 @@ async def pipette_application_status(
 @router.post("/operator-controls/pipettes/application/plan", response_model=PipetteApplicationPlanResponse)
 async def pipette_application_plan(
     request: PipetteApplicationPlanRequest,
+    http_request: Request,
+    expected_connection_generation: int = Query(..., ge=1),
+    idempotency_key: str = Header(..., alias="Idempotency-Key", pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,199}$"),
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
 ) -> PipetteApplicationPlanResponse:
-    snapshot = runtime.connection.snapshot()
+    """No-motion planning/receipt creation; unlike readback, no hardware query."""
+    _direct_liquid_ingress(http_request, {"expected_connection_generation"})
     try:
         payload = await runtime.connection.request_active(
             "pipette_application_plan",
-            expected_generation=snapshot.generation,
+            expected_generation=expected_connection_generation,
             require_fresh=True,
-            json_data=request.model_dump(exclude_none=True),
+            json_data={**request.model_dump(exclude_none=True), "idempotency_key": idempotency_key},
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    return _validate(PipetteApplicationPlanResponse, payload)
+    envelope = _validate(PipetteApplicationPlanPostEnvelope, payload)
+    # Planner inputs are a documented projection, not the normalized HTTP body.
+    inputs = request.model_dump(exclude_none=True)
+    if request.operation == "load_tip":
+        expected_inputs = {name: inputs[name] for name in ("tip_tray", "tip_well", "tip_type", "tip_location", "home_z_after")}
+    elif request.operation == "detect_fluid":
+        expected_inputs = {"fluid_class": inputs["fluid_class"]}
+    elif request.operation in {"plunger_up", "plunger_down"}:
+        expected_inputs = {"direction": request.operation.removeprefix("plunger_")}
+    else:
+        expected_inputs = {}
+    # These producer fields are strings, integers and booleans, not coercible
+    # equivalents: Python equality alone treats True as 1 (and 1.0 as 1).
+    actual_inputs = envelope.requested_inputs
+    if (envelope.operation != request.operation or actual_inputs.keys() != expected_inputs.keys()
+            or any(type(actual_inputs[k]) is not type(v) or actual_inputs[k] != v for k, v in expected_inputs.items())):
+        raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched plan request")
+    return _validate(PipetteApplicationPlanResponse, envelope.model_dump(include=set(PipetteApplicationPlanResponse.model_fields)))
 
 
 @router.post(
@@ -846,14 +941,16 @@ async def operator_action_admission(
 
 @router.post(
     "/operator-controls/actions/{action_id}",
-    response_model=OperatorActionReceipt,
+    response_model=OperatorLiveActionReceipt,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
 async def invoke_operator_action(
     action_id: str,
     request: OperatorActionInvokeRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
+    if action_id == "oem.z.abort":
+        raise HTTPException(status_code=410, detail="oem.z.abort is retired; use oem.abort_all")
     quarantine_reason = OPERATOR_SEMANTIC_QUARANTINE_BY_ACTION_ID.get(action_id)
     if quarantine_reason is not None:
         raise HTTPException(status_code=409, detail=quarantine_reason)
@@ -863,7 +960,7 @@ async def invoke_operator_action(
         "inputs": request.inputs,
     }
     try:
-        if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.z.abort", "oem.y.stop"}:
+        if action_id in {"oem.x.stop", "oem.abort_all", "oem.z.stop", "oem.y.stop"}:
             payload = await runtime.connection.request_active_safety_interrupt(
                 "invoke_operator_action",
                 expected_generation=request.expected_connection_generation,
@@ -887,7 +984,7 @@ async def invoke_operator_action(
             )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.action_id != action_id or receipt.idempotency_key != request.idempotency_key:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched operator-action receipt")
     return receipt
@@ -911,11 +1008,11 @@ async def operator_action_history(
     return _validate(OperatorActionHistory, payload)
 
 
-@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorActionReceipt)
+@router.get("/operator-controls/receipts/{command_id}", response_model=OperatorLiveActionReceipt)
 async def operator_action_receipt(
     command_id: str,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
     snapshot = runtime.connection.snapshot()
     try:
         payload = await runtime.connection.request_active_query(
@@ -926,7 +1023,7 @@ async def operator_action_receipt(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched command receipt")
     return receipt
@@ -934,14 +1031,14 @@ async def operator_action_receipt(
 
 @router.post(
     "/operator-controls/receipts/{command_id}/assessment",
-    response_model=OperatorActionReceipt,
+    response_model=OperatorLiveActionReceipt,
     dependencies=[Depends(require_bioxp_mutation_access)],
 )
 async def assess_operator_action(
     command_id: str,
     request: OperatorAssessmentRequest,
     runtime: BioXpRuntime = Depends(get_bioxp_runtime),
-) -> OperatorActionReceipt:
+) -> OperatorLiveActionReceipt:
     try:
         payload = await runtime.connection.request_active(
             "assess_operator_action",
@@ -957,7 +1054,7 @@ async def assess_operator_action(
         )
     except (ConnectionStateError, RobotResponseError, RobotTransportError) as exc:
         raise _translate_robot_error(exc) from exc
-    receipt = _validate(OperatorActionReceipt, payload)
+    receipt = _validate_live_action_receipt(payload)
     if receipt.command_id != command_id:
         raise HTTPException(status_code=502, detail="BioXP robot returned a mismatched assessed receipt")
     return receipt

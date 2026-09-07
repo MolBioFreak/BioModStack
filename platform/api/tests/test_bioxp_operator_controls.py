@@ -114,6 +114,7 @@ def pipette_readback(*, include_data: bool = False) -> dict:
         "include_data": include_data,
         "live_query_performed": True,
         "truth_source": "live_hardware_queries",
+        "hardware_truth_level": "hardware_query",
         "delivery_verified": False,
         "controller_acknowledged": False,
         "completion_verified": False,
@@ -122,6 +123,7 @@ def pipette_readback(*, include_data: bool = False) -> dict:
         "oem_source_anchor": "ClassPipetteCollection constructor/readback; ClassPipette QueryFirmware/Q1/?31/?57/getData",
         "receipt_id": "a" * 32,
         "receipt_truth": {
+            "semantic_query_response_verified": False,
             "delivery_verified": False,
             "controller_acknowledged": False,
             "completion_verified": False,
@@ -727,6 +729,7 @@ class FakeRobotClient:
                 "blocker": "application_dependencies_unbound",
                 "receipt_id": "0123456789abcdef0123456789abcdef",
                 "receipt_truth": {
+                    "semantic_query_response_verified": False,
                     "delivery_verified": False,
                     "controller_acknowledged": False,
                     "completion_verified": False,
@@ -781,6 +784,9 @@ class FakeRobotClient:
 
     async def request(self, route_name, **kwargs):
         self.calls.append((route_name, kwargs))
+        if route_name == "pipette_readback":
+            result = self.responses[route_name]
+            return {**result, "semantic_query_response_verified": result["receipt_truth"]["semantic_query_response_verified"]}
         return self.responses[route_name]
 
 
@@ -1374,7 +1380,8 @@ def test_typed_pipette_application_proxy_is_plan_only(monkeypatch):
 
     status = client.get("/api/bioxp/operator-controls/pipettes/application/status")
     plan = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"operation": "detect_fluid", "fluid_class": "RC"},
     )
 
@@ -1393,7 +1400,8 @@ def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch)
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False},
     )
 
@@ -1401,7 +1409,7 @@ def test_typed_pipette_active_readback_proxy_forwards_fixed_request(monkeypatch)
     assert response.json()["channels_constructed_unconditionally"] == [0, 1, 2, 3]
     assert response.json()["live_query_performed"] is True
     assert runtime.connection.client.calls == [
-        ("pipette_readback", {"json_data": {"include_data": False}}),
+        ("pipette_readback", {"json_data": {"include_data": False, "idempotency_key": "pipette-test-12345678"}}),
     ]
 
 
@@ -1423,7 +1431,8 @@ def test_pipette_active_readback_rejects_malformed_or_inflated_evidence(monkeypa
     runtime.connection.client.responses["pipette_readback"] = payload
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False},
     )
 
@@ -1434,7 +1443,8 @@ def test_pipette_active_readback_request_rejects_unknown_fields(monkeypatch):
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/readback",
+        "/api/bioxp/operator-controls/pipettes/readback?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json={"include_data": False, "operation": "aspirate"},
     )
 
@@ -1607,7 +1617,8 @@ def test_pipette_plan_request_rejects_irrelevant_or_missing_operation_fields(mon
     client, runtime = make_client(monkeypatch, mutations=False)
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json=payload,
     )
 
@@ -1636,13 +1647,14 @@ def test_pipette_plan_forwards_only_selected_operation_fields(monkeypatch, paylo
     )
 
     response = client.post(
-        "/api/bioxp/operator-controls/pipettes/application/plan",
+        "/api/bioxp/operator-controls/pipettes/application/plan?expected_connection_generation=77",
+        headers={"Idempotency-Key": "pipette-test-12345678"},
         json=payload,
     )
 
     assert response.status_code == 200
     assert runtime.connection.client.calls == [
-        ("pipette_application_plan", {"json_data": forwarded}),
+        ("pipette_application_plan", {"json_data": {**forwarded, "idempotency_key": "pipette-test-12345678"}}),
     ]
 
 
@@ -2357,6 +2369,77 @@ def test_x_safety_interrupt_receipt_binds_intent_inputs_result_and_status():
     mismatched_status["status"] = "completed"
     with pytest.raises(ValidationError):
         OperatorDashboardXSafetyInterruptReceipt.model_validate(mismatched_status)
+
+
+@pytest.mark.parametrize("failed_stage", [None, "latch_solenoid", "door_readback_after_latch", "latch_readback_after_latch", "rail_24v_readback"])
+def test_x_activation_preparation_preserves_latch_and_failure_evidence(failed_stage):
+    from services.bioxp.operator_models import (
+        OperatorDashboardXJsonSafeEvidence,
+        OperatorDashboardXPreparationEvidence,
+        OperatorDashboardXPreparationStage,
+    )
+
+    # Existing fixture plus exact stage keys/evidence from motion_safety.py's
+    # _stage, set_solenoid, read_door_latch and _preparation_result producer.
+    preparation = _exact_x_preparation_evidence()
+    preparation.update(
+        ok=failed_stage is None,
+        state="completed" if failed_stage is None else "failed_closed",
+        failure_stage=failed_stage,
+        error=(None if failed_stage is None else
+               "Activation stopped: the 24 V check failed after the door/latch checks. Inspect the retained controller evidence."
+               if failed_stage == "rail_24v_readback" else
+               f"Activation stopped at {failed_stage}. Inspect the retained controller evidence."),
+    )
+    for stage_id, evidence in [
+        ("latch_solenoid", {"value": 1, "source_call_completed": True,
+                            "return_value_ignored": True, "controller_acknowledged": False,
+                            "result": {"ack": None}}),
+        ("door_readback_after_latch", {"ack": {"status": 100}, "value": 0}),
+        ("latch_readback_after_latch", {"ack": {"status": 100}, "value": 0}),
+        ("rail_24v_readback", {"ack": {"status": 100}, "oem_scalar": 0}),
+    ]:
+        if stage_id == failed_stage:
+            evidence = {"value": 1, "error": "RuntimeError: controller unavailable"}
+        preparation["stage_ledger"].append({
+            "stage_id": stage_id,
+            "status": "failed" if stage_id == failed_stage else "passed",
+            "source_anchor": "ControlLib.checkDoorStatus:8678,8701",
+            "controller_evidence": evidence,
+            "physical_motion": False,
+        })
+        if stage_id == failed_stage:
+            break
+    preparation["stage_receipts"] = copy.deepcopy(preparation["stage_ledger"])
+    parsed = OperatorDashboardXPreparationEvidence.model_validate(preparation)
+    assert parsed.model_dump() == preparation
+    assert all(isinstance(stage, OperatorDashboardXPreparationStage)
+               and isinstance(stage.controller_evidence, OperatorDashboardXJsonSafeEvidence)
+               for stage in parsed.stage_ledger)
+
+
+def test_x_activation_preparation_optional_fields_remain_strict_and_bounded():
+    from pydantic import ValidationError
+    from services.bioxp.operator_models import OperatorDashboardXPreparationEvidence
+
+    legacy = _exact_x_preparation_evidence()
+    parsed = OperatorDashboardXPreparationEvidence.model_validate(legacy)
+    assert parsed.failure_stage is None
+    assert parsed.error is None
+    valid = {**legacy, "failure_stage": "latch_solenoid", "error": "x" * 200}
+    assert OperatorDashboardXPreparationEvidence.model_validate(valid).error == "x" * 200
+    for field, value in (("failure_stage", 1), ("failure_stage", "x" * 201),
+                         ("error", 1), ("error", "x" * 201), ("randomfield", True)):
+        with pytest.raises(ValidationError):
+            OperatorDashboardXPreparationEvidence.model_validate({**valid, field: value})
+    stage = {"stage_id": "latch_solenoid", "status": "passed",
+             "source_anchor": "ControlLib.checkDoorStatus:8678,8701",
+             "controller_evidence": {"value": 1}, "physical_motion": False}
+    for field, value in (("stage_id", "invented_latch_stage"), ("randomfield", True),
+                         ("physical_motion", True)):
+        with pytest.raises(ValidationError):
+            OperatorDashboardXPreparationEvidence.model_validate(
+                {**valid, "stage_ledger": [{**stage, field: value}]})
 
 
 def test_x_preparation_and_reference_success_reject_invented_authority_claims():

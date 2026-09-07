@@ -2,10 +2,96 @@ import React, { act } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BioXpOperatorReceiptDetailV2 } from '../../src/lib/bioxpClient';
+
+const completeDeckReceiptFixture = {
+    schema_version: 'bioxp.operator_action_receipt.v2',
+    command_id: 'deck-command-contract-1',
+    action_id: 'oem.deck.move_to_location',
+    status: 'completed',
+    terminal: true,
+    sequence: 42,
+    method_id: null,
+    ownership_generation: 7,
+    expected_board_epoch_by_board: { '4': 2, '5': 8 },
+    state_version: 3,
+    status_path: '/operator/v2/actions/receipts/deck-command-contract-1',
+    accepted_at: 0.5,
+    queued_at: 1,
+    dispatched_at: 1.5,
+    finished_at: 2,
+    terminal_receipt_id: 'deck-command-contract-1',
+    completion_class: 'completed',
+    physical_effect_verified: false,
+    error: null,
+    canonical_inputs: { target: 'LOC_OC', camera_offset: false },
+    requested_values: { target: 'LOC_OC', camera_offset: false },
+    effective_values: { target: 'LOC_OC', camera_offset: false },
+    observed_values: {},
+    raw_return_layers: {},
+    controller_evidence: {},
+    transport_artifacts: [],
+    child_receipts: [],
+    transitions: [],
+    deck_movement: {
+        target: 'LOC_OC',
+        target_label: 'LOC_OC',
+        source_branch: 'ordinary',
+        resolved_location_id: 1,
+        destination_catalog_revision: 'b'.repeat(64),
+        position_table_revision: 'a'.repeat(64),
+        authority_snapshot_digest: 'c'.repeat(64),
+        complete_authority_digest: 'd'.repeat(64),
+        plan_digest: 'e'.repeat(64),
+        source_anchors: ['ClassControlInterface.moveTo:3691-3716'],
+        delivery_attempted: true,
+        controller_command_acknowledged: true,
+        controller_completion_verified: true,
+        hardware_postcondition_verified: true,
+        semantic_state_committed: true,
+        physical_observation_verified: false,
+        transition_revision: 3,
+        ambiguity_state: 'ambiguous',
+        stages: [{
+            order: 0,
+            operation: 'ForceToHighHome',
+            source_anchor: 'ClassControlInterface.btnLOC1_Click:1932-1959',
+            resources: ['axis:z'],
+            arguments: {},
+            dependencies: [],
+            terminal_state: 'completed',
+            terminal_evidence: { controller_acknowledged: true },
+        }, {
+            order: 1,
+            operation: 'StopDeck',
+            source_anchor: 'operator_command_plane:deck_plan',
+            resources: ['axis:x', 'axis:y'],
+            arguments: {},
+            dependencies: [0],
+            terminal_state: 'stopped',
+            terminal_evidence: { interrupt: 'stopped' },
+        }, {
+            order: 2,
+            operation: 'AbortDeck',
+            source_anchor: 'operator_command_plane:deck_plan',
+            resources: ['axis:x', 'axis:y'],
+            arguments: {},
+            dependencies: [1],
+            terminal_state: 'aborted',
+            terminal_evidence: { interrupt: 'aborted' },
+        }],
+    },
+} satisfies BioXpOperatorReceiptDetailV2;
 
 const state = vi.hoisted(() => ({
     stableReset: vi.fn(),
     admissionCalls: 0,
+    catalogArgs: [] as unknown[][],
+    methodReceipt: { data: undefined as Record<string, unknown> | undefined, error: null as unknown },
+    methodHookArgs: [] as unknown[][],
+    methodCallbacks: null as null | { onSuccess?: (receipt: Record<string, unknown>) => void },
+    historyEnabled: false,
+    pipetteProps: null as Record<string, unknown> | null,
     v1DashboardEnabled: null as boolean | null,
     v1CatalogEnabled: null as boolean | null,
     invokeCalls: [] as Array<Record<string, unknown>>,
@@ -320,10 +406,18 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         state.v1DashboardEnabled = enabled;
         return state.dashboard;
     },
-    useBioXpOperatorDashboardV2: () => state.v2Dashboard,
-    useBioXpOperatorControlCatalogV2: () => state.v2Catalog,
+    useBioXpOperatorDashboardV2: () => ({ ...state.v2Dashboard, data: { ...state.v2Dashboard.data, telemetry: state.dashboard.data } }),
+    useBioXpOperatorControlCatalogV2: (...args: unknown[]) => { state.catalogArgs.push(args); return state.v2Catalog; },
+    useBioXpOperatorMethodV1: (...args: unknown[]) => { state.methodHookArgs.push(args); return state.methodReceipt; },
+    bioXpMethodV1IsTerminal: (method: { status?: string } | undefined) => !method?.status || ['completed', 'failed', 'interrupted', 'ambiguous', 'completed_partial', 'cleared'].includes(method.status),
     useBioXpOperatorReceiptV2: (commandId: string | null, generation: number, enabled: boolean) => {
         state.receiptHookCalls.push({ commandId, generation, enabled });
+        const dashboardReceipt = [
+            ...(state.v2Dashboard.data.active_commands as Array<Record<string, unknown>>),
+            ...(state.v2Dashboard.data.latest_receipts as Array<Record<string, unknown>>),
+        ].find((receipt) => receipt.command_id === commandId
+            && ['oem.deck.move_to_location', 'oem.deck._mov_execution', 'oem.deck._finite_operation'].includes(String(receipt.action_id)));
+        if (dashboardReceipt) return { data: dashboardReceipt, error: null, isStale: false };
         if (commandId?.startsWith('deck-command-')) return state.deckReceipt;
         if (commandId?.startsWith('lifecycle-command-')) return state.lifecycleReceipt;
         if (commandId?.startsWith('z-command-')) return state.zReceipt;
@@ -331,6 +425,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
     },
     useBioXpOperatorActionHistory: (...args: unknown[]) => {
         state.historyCalls.push(args[2] as number);
+        state.historyEnabled = args[1] as boolean;
         return state.history;
     },
     bioXpReceiptIsNonTerminal: (receipt: { status?: unknown } | null | undefined): boolean =>
@@ -342,7 +437,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         && receipt.status !== 'cleared',
     useBioXpOperatorControlCatalog: (_generation: number, enabled: boolean) => {
         state.v1CatalogEnabled = enabled;
-        return state.catalog;
+        return enabled ? state.catalog : { data: undefined };
     },
     useBioXpOperatorActionAdmission: () => {
         state.admissionCalls += 1;
@@ -433,7 +528,7 @@ vi.mock('../../src/lib/bioxpClient', () => ({
         data: undefined,
         error: null,
         isPending: false,
-        mutate: (payload: Record<string, unknown>) => state.methodCalls.push(payload),
+        mutate: (payload: Record<string, unknown>, callbacks?: { onSuccess?: (receipt: Record<string, unknown>) => void }) => { state.methodCalls.push(payload); state.methodCallbacks = callbacks ?? null; },
         reset: state.stableReset,
     }),
     useConnectBioXp: () => ({ data: undefined, error: null, isPending: false, mutate: vi.fn() }),
@@ -453,11 +548,78 @@ vi.mock('../../src/lib/bioxpClient', () => ({
 
 vi.mock('../../src/components/BioXpCameraPanel', () => ({ BioXpCameraPanel: () => null }));
 vi.mock('../../src/components/BioXpOperatorControlTabs', () => ({ BioXpOperatorControlTabs: () => null }));
-vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: () => null }));
+vi.mock('../../src/components/BioXpPipetteControlPanel', () => ({ BioXpPipetteControlPanel: (props: Record<string, unknown>) => { state.pipetteProps = props; return null; } }));
 vi.mock('../../src/components/BioXpQuickDashboard', () => ({ BioXpQuickDashboard: () => null }));
 vi.mock('../../src/components/BioXpOperatorReports', () => ({ BioXpOperatorReports: () => null }));
 
 import { BioXpCockpit } from '../../src/components/BioXpCockpit';
+
+describe('primary cockpit query ownership', () => {
+    it('fetches the primary catalog and history without opening Advanced', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(state.v1CatalogEnabled).toBe(true);
+        expect(state.historyEnabled).toBe(true);
+        const x = [...container.querySelectorAll('article')].find(node => node.textContent?.includes('X Axis'))!;
+        expect([...x.querySelectorAll('button')].find(node => node.textContent === 'Move +')?.disabled).toBe(false);
+    });
+    it('preserves published emergency and pipette admission with Advanced closed', async () => {
+        const emergency = { ...xHomeAction(), action_id: 'meta.emergency_stop', enabled: true };
+        const pipette = { ...xHomeAction(), action_id: 'pipette.connect', enabled: false, disabled_reason: 'Robot refused' };
+        state.catalog.data.actions.push(emergency, pipette);
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const emergencyButton = () => [...container.querySelectorAll('button')].find(node => node.textContent === 'Emergency Stop')!;
+        expect(emergencyButton().disabled).toBe(false);
+        const disclosure = [...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Pipette controls')!;
+        await act(async () => { disclosure.open = true; disclosure.dispatchEvent(new Event('toggle')); });
+        expect(state.pipetteProps?.connected).toBe(true);
+        expect(state.pipetteProps?.actions).toContain(pipette);
+        expect(pipette.enabled).toBe(false);
+        emergency.enabled = false;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(emergencyButton().disabled).toBe(true);
+        expect([...container.querySelectorAll('details')].find(node => node.querySelector('summary')?.textContent === 'Advanced Full Command Catalog')?.open).toBe(false);
+    });
+    it('rejects a late XY submission callback after generation replacement', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { (container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).click(); });
+        const callback = state.methodCallbacks;
+        state.connectionGeneration = 2;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        await act(async () => { callback?.onSuccess?.({ method_id: 'old-generation', status: 'active' }); });
+        expect(state.methodHookArgs.at(-1)).toEqual([null, 2, true]);
+        expect(container.textContent).not.toContain('old-generation');
+    });
+    it('keeps catalog identity stable during dashboard freshness changes but blocks normal controls', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const original = state.catalogArgs.at(-1);
+        state.v2Dashboard.isStale = true;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(state.catalogArgs.at(-1)).toEqual(original);
+        expect((container.querySelector('[data-testid="serial206-xy-oem-panel"] button') as HTMLButtonElement).disabled).toBe(true);
+    });
+    it.each(['completed', 'failed', 'interrupted', 'ambiguous'])('follows XY to %s and ignores other identities', async (status) => {
+        await act(async () => { root.render(<BioXpCockpit />); });
+        const panel = () => container.querySelector('[data-testid="serial206-xy-oem-panel"]')!;
+        const button = () => panel().querySelector('button') as HTMLButtonElement;
+        await act(async () => { button().click(); state.methodCallbacks?.onSuccess?.({ method_id: 'xy-one', status: 'queued' }); });
+        expect(state.methodHookArgs.at(-1)).toEqual(['xy-one', 1, true]);
+        expect(button().disabled).toBe(true);
+        state.methodReceipt.data = { method_id: 'other', status: 'completed' };
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(button().disabled).toBe(true);
+        state.methodReceipt.error = new Error('status unavailable');
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain('Do not retry');
+        state.methodReceipt = { data: { method_id: 'xy-one', status }, error: null };
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).toContain(`XY method ${status}`);
+        expect(button().disabled).toBe(false);
+        state.connectionGeneration = 2;
+        await act(async () => { root.render(<BioXpCockpit />); });
+        expect(panel().textContent).not.toContain(`XY method ${status}`);
+        expect(state.methodHookArgs.at(-1)).toEqual([null, 2, true]);
+    });
+});
 
 let container: HTMLDivElement;
 let root: Root;
@@ -522,6 +684,10 @@ const xReceipt = (status: string, index = 0) => ({
 
 beforeEach(() => {
     state.admissionCalls = 0;
+    state.catalogArgs = [];
+    state.methodHookArgs = [];
+    state.methodReceipt = { data: undefined, error: null };
+    state.methodCallbacks = null;
     state.v1DashboardEnabled = null;
     state.v1CatalogEnabled = null;
     state.connectionGeneration = 1;
@@ -564,6 +730,7 @@ beforeEach(() => {
     state.v2Dashboard.data.y_axis.ownership_generation = 1;
     state.v2Dashboard.data.y_axis.state_version = 4;
     state.v2Dashboard.data.y_axis.latest_compact_receipt = null;
+    state.v2Dashboard.data.active_commands = [];
     state.v2Dashboard.data.latest_receipts = [];
     state.v2Catalog.error = null;
     state.v2Catalog.isStale = false;
@@ -607,16 +774,11 @@ beforeEach(() => {
     Object.assign(state.v2Dashboard.data, {
         deck: {
             current_location: 'LOC_TC',
-            current_well: 'B2',
-            position_table_revision: 'pt-206-9',
-            destination_catalog_revision: 'deck-206-4',
+            current_well: 2,
+            position_table_revision: 'a'.repeat(64),
+            destination_catalog_revision: 'b'.repeat(64),
             semantic_state_revision: 17,
-            ownership_generation: 1,
-            expected_board_epoch_by_board: { '4': 2, '5': 8 },
-            destinations: [
-                { key: 'LOC_TC', label: 'TC station', aliases: ['TC'], branch_kind: 'ordinary', camera_offset_supported: true },
-                { key: 'LOC_OC', label: 'OC chiller', aliases: ['OC chiller'], branch_kind: 'ordinary', camera_offset_supported: true },
-            ],
+            ambiguity_state: 'none',
         },
     });
     state.v2Catalog.data.dashboard = structuredClone(state.v2Dashboard.data);
@@ -627,13 +789,14 @@ beforeEach(() => {
         interrupt: false,
         enabled: true,
         disabled_reason: null,
-        destination_catalog_revision: 'deck-206-4',
-        position_table_revision: 'pt-206-9',
-        required_board_ids: [4, 5],
+        destination_catalog_revision: 'b'.repeat(64),
+        position_table_revision: 'a'.repeat(64),
+        required_boards: [4, 5],
         expected_board_epoch_by_board: { '4': 2, '5': 8 },
-        destinations: [
-            { key: 'LOC_TC', label: 'TC station', aliases: ['TC'], branch_kind: 'ordinary', camera_offset_supported: true },
-            { key: 'LOC_OC', label: 'OC chiller', aliases: ['OC chiller'], branch_kind: 'ordinary', camera_offset_supported: true },
+        required_references: ['x', 'y', 'z', 'g'],
+        destination_options: [
+            { target: 'LOC_TC', label: 'LOC_TC', aliases: ['Thermal Cycler'], location_id: 2, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
+            { target: 'LOC_OC', label: 'LOC_OC', aliases: ['OC chiller', 'Output Chiller', 'Output Tray'], location_id: 1, branch_kind: 'ordinary', camera_offset_option: true, source_anchors: ['ClassControlInterface.moveTo:3691-3716'], enabled: true, disabled_reason: null },
         ],
     });
     state.history.data.receipts = [];
@@ -731,6 +894,17 @@ afterEach(async () => {
 });
 
 describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
+    it('represents deck evidence and interrupt stage states in the client type', () => {
+        expect(completeDeckReceiptFixture.deck_movement.stages[0]).toMatchObject({
+            order: 0,
+            terminal_state: 'completed',
+        });
+        expect(completeDeckReceiptFixture.deck_movement.ambiguity_state).toBe('ambiguous');
+        expect(completeDeckReceiptFixture.deck_movement.stages.map((stage) => stage.terminal_state)).toEqual([
+            'completed', 'stopped', 'aborted',
+        ]);
+    });
+
     it('uses the always-loaded v2 catalog for OEM activation and non-homing recovery', async () => {
         state.catalog.data.actions = [];
         (state.v2Catalog.data?.actions as Array<Record<string, unknown>>).push(
@@ -1134,9 +1308,9 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
         expect(panel).toBeTruthy();
         expect(panel.textContent).toContain('LOC_TC');
-        expect(panel.textContent).toContain('B2');
-        expect(panel.textContent).toContain('pt-206-9');
-        expect(panel.textContent).toContain('deck-206-4');
+        expect(panel.textContent).toContain('2');
+        expect(panel.textContent).toContain('a'.repeat(64));
+        expect(panel.textContent).toContain('b'.repeat(64));
         const selector = panel.querySelector('select') as HTMLSelectElement;
         await act(async () => {
             const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
@@ -1159,6 +1333,59 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(Object.keys(submitted.inputs).sort()).toEqual(['camera_offset', 'target']);
         expect(panel.textContent).toContain('deck-command-mounted-1');
         expect(state.receiptHookCalls.some((call) => call.commandId === 'deck-command-mounted-1' && call.generation === 1)).toBe(true);
+    });
+
+    it('prefers a newer authoritative dashboard deck command over terminal local ownership', async () => {
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        await act(async () => move.click());
+        state.deckReceipt.data = {
+            command_id: 'deck-command-mounted-1', action_id: 'oem.deck.move_to_location',
+            status: 'completed', terminal: true, sequence: 10, completion_class: 'completed', error: null,
+        };
+        state.v2Dashboard.data.latest_receipts = [state.deckReceipt.data];
+        state.v2Dashboard.data.active_commands = [{
+            command_id: 'deck-command-dashboard-2', action_id: 'oem.deck.move_to_location',
+            status: 'dispatched', terminal: false, sequence: 11, completion_class: null, error: null,
+        }];
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+
+        expect(panel.textContent).toContain('deck-command-dashboard-2');
+        expect(panel.textContent).toContain('Lifecycledispatched');
+        expect(move.disabled).toBe(true);
+        expect(state.receiptHookCalls.at(-1)?.commandId).toBe('deck-command-dashboard-2');
+    });
+
+    it.each([
+        ['oem.deck._mov_execution', 'dispatched', false, null],
+        ['oem.deck._finite_operation', 'ambiguous', true, 'recovery_required'],
+    ])('blocks and polls canonical internal deck work, then releases settled work: %s', async (actionId, status, terminal, completionClass) => {
+        const internalReceipt = {
+            command_id: 'canonical-internal-deck-command', action_id: actionId,
+            status, terminal, sequence: 73, completion_class: completionClass, error: null,
+        };
+        state.v2Dashboard.data.active_commands = terminal ? [] : [internalReceipt];
+        state.v2Dashboard.data.latest_receipts = terminal ? [internalReceipt] : [];
+
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
+        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
+        expect(move.disabled).toBe(true);
+        expect(panel.textContent).toContain('Existing deck command requires reconciliation; do not resubmit.');
+        expect(panel.textContent).not.toContain(actionId);
+        expect(state.receiptHookCalls.at(-1)?.commandId).toBe('canonical-internal-deck-command');
+
+        state.v2Dashboard.data.active_commands = [];
+        state.v2Dashboard.data.latest_receipts = [{
+            ...internalReceipt,
+            status: 'completed', terminal: true, completion_class: 'completed',
+        }];
+        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
+
+        expect(move.disabled).toBe(false);
+        expect(panel.textContent).not.toContain(actionId);
+        expect(state.receiptHookCalls.at(-1)?.commandId).toBeNull();
     });
 
     it.each(['stopped', 'aborted', 'cancelled'])('renders truthful terminal deck lifecycle %s', async (status) => {
@@ -1206,10 +1433,8 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
 
     it.each([
         ['ownership', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).ownership_generation = 2; }],
-        ['position table', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.position_table_revision = 'pt-stale'; }],
-        ['destination catalog', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.destination_catalog_revision = 'deck-stale'; }],
-        ['board epochs', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.expected_board_epoch_by_board['5'] = 9; }],
-        ['destination list', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.destinations = []; }],
+        ['position table', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.position_table_revision = 'c'.repeat(64); }],
+        ['destination catalog', () => { (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.destination_catalog_revision = 'd'.repeat(64); }],
     ])('disables deck movement when separately fetched dashboard mismatches catalog embedded %s authority', async (_label, mutate) => {
         mutate();
         await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
@@ -1219,18 +1444,6 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         expect(panel.textContent).toContain('matching catalog and dashboard deck authority is unavailable');
     });
 
-    it('keeps deck movement enabled for semantically equal board epochs in reversed key order', async () => {
-        const reversedEpochs = new Proxy({ '4': 2, '5': 8 }, {
-            ownKeys: () => ['5', '4'],
-        });
-        (state.v2Catalog.data!.dashboard as typeof state.v2Dashboard.data).deck!.expected_board_epoch_by_board = reversedEpochs;
-
-        await act(async () => { root.render(<BioXpCockpit />); await Promise.resolve(); });
-        const panel = [...container.querySelectorAll('section')].find((node) => node.textContent?.includes('OEM Deck Movement')) as HTMLElement;
-        const move = [...panel.querySelectorAll('button')].find((button) => button.textContent === 'Move to destination') as HTMLButtonElement;
-        expect(move.disabled).toBe(false);
-        expect(panel.textContent).toContain('Robot action enabled for the selected finite destination.');
-    });
 
     it('renders receipt unavailable and outcome uncertain instead of inventing queued state', async () => {
         state.yReceipt.error = new Error('detail parse failed');
@@ -1319,7 +1532,7 @@ describe('mounted BioXP cockpit admission fan-out collapse (R-A1)', () => {
         });
 
         expect(state.admissionCalls).toBe(0);
-        expect(state.v1DashboardEnabled).toBe(true);
+        expect(state.v1DashboardEnabled).toBeNull();
         expect(state.v1CatalogEnabled).toBe(true);
         expect(document.body.textContent).not.toContain('Checking exact robot admission.');
 

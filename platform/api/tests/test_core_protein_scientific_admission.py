@@ -151,7 +151,8 @@ def test_resume_preserves_known_overrides_and_legacy_extra_policy():
     payload = {"from_stage": "validation", "name_suffix": "retry",
                "param_overrides": {"sequence": "ACDE", "nested": [{"ordinary": None}]}}
     parsed = jobs.ResumeJobRequest.model_validate({**payload, "ignored_extra": {"items": [1, None]}})
-    assert parsed.model_dump() == payload
+    assert parsed.model_dump() == {**payload, "execution_target_id": None}
+    assert "execution_target_id" not in parsed.model_fields_set
 
 
 @pytest_asyncio.fixture
