@@ -1,3 +1,4 @@
+import { MSA_POLICY } from '../lib/msaPolicy';
 import { BoltzGenRankControls } from './BoltzGenRankControls';
 import { FampnnAnalysisControls, hydrateFampnnOverrides, fampnnOverridePayload } from './FampnnAnalysisControls';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -753,7 +754,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         chain_id: '',
         mutation_sets_text: '',
         predictor: 'protenix' as 'protenix' | 'boltz2',
-        msa_provider: 'local' as 'local' | 'colabfold_api',
+        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api',
     });
     const [cdrIndelConfig, setCdrIndelConfig] = useState({
         loop_ids: ['H1', 'H2', 'H3'],
@@ -765,7 +766,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
         allowed_aas: [] as string[],
         blocked_aas: [] as string[],
         predictor: 'protenix' as 'protenix' | 'boltz2',
-        msa_provider: 'local' as 'local' | 'colabfold_api',
+        msa_provider: 'colabfold_api' as 'local' | 'colabfold_api',
     });
     const detectedAntibodyType = String(detectedCDRs?.antibody_type || '').trim().toLowerCase();
     const isSingleDomainFramework = frameworkType === 'nanobody'
@@ -2830,7 +2831,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 onChange={(e) => setManualMutagenesisConfig((current) => ({ ...current, msa_provider: e.target.value as 'local' | 'colabfold_api' }))}
                                                 className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                                             >
-                                                <option value="local">Local</option>
+                                                <option value="local" disabled>Local search disabled — re-preview with API</option>
                                                 <option value="colabfold_api">ColabFold Server</option>
                                             </select>
                                         </label>
@@ -3003,8 +3004,8 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                         }))}
                                                         className="mt-1 w-full rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
                                                     >
-                                                        <option value="local">Local</option>
-                                                        <option value="colabfold_api">ColabFold API</option>
+                                                        <option value="local" disabled>Local search disabled — re-preview with API</option>
+                                                        <option value="colabfold_api">{MSA_POLICY.label}</option>
                                                     </select>
                                                 </label>
                                             </div>
@@ -3035,7 +3036,7 @@ export const AntibodyDenovoTemplate: React.FC<AntibodyDenovoTemplateProps> = ({ 
                                                 </div>
                                                 {cdrIndelConfig.msa_provider === 'colabfold_api' && refinementInputCount * cdrIndelConfig.variants_per_design > 1 && (
                                                     <div className="mt-2 text-amber-300">
-                                                        Multi-variant indel rounds are automatically downgraded to local MSA.
+                                                        API batch search is blocked; no local fallback. {MSA_POLICY.disclosure}
                                                     </div>
                                                 )}
                                             </div>

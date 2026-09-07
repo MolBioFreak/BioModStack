@@ -50,13 +50,13 @@ def test_manual_mutagenesis_iteration_job_preserves_boltz_runtime_params(monkeyp
     launch_request, variant_count, message_note = jobs._build_manual_mutagenesis_iteration_job(
         source_job=source_job,
         designs=[SimpleNamespace(id="design-1")],
-        config=jobs.ManualMutagenesisConfig(mutation_sets=["A1G"], predictor="boltz2", msa_provider="local"),
+        config=jobs.ManualMutagenesisConfig(mutation_sets=["A1G"], predictor="boltz2", msa_provider="colabfold_api"),
         name_suffix=None,
         param_overrides={},
     )
 
     assert variant_count == 1
-    assert message_note == ""
+    assert "API batch admission remains blocked" in message_note
     assert launch_request.model_id == "boltz2"
     for key, expected in {
         "boltz_use_msa": True,
@@ -135,7 +135,7 @@ def test_cdr_indel_iteration_job_preserves_boltz_runtime_params(monkeypatch, tmp
         root_job=root_job,
         source_job=source_job,
         designs=[design],
-        config=jobs.AntibodyCdrIndelConfig(loop_ids=["H1"], predictor="boltz2", msa_provider="local", variants_per_design=1),
+        config=jobs.AntibodyCdrIndelConfig(loop_ids=["H1"], predictor="boltz2", msa_provider="colabfold_api", variants_per_design=1),
         name_suffix=None,
         param_overrides={},
     )

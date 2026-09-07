@@ -49,8 +49,8 @@ test('structure prediction defaults new MSA submissions to the ColabFold server'
         templateSource,
         /if \(numParallelJobs > 1 && msaProvider === 'colabfold_api'\) \{\s*setMsaProvider\('local'\);/,
     );
-    assert.match(templateSource, /Local MMseqs2 \(manual override\)/);
-    assert.match(templateSource, /ColabFold API \(default; single-job only\)/);
+    assert.match(templateSource, /Local search disabled — re-preview with API/);
+    assert.match(templateSource, /MSA_POLICY.label/);
     assert.doesNotMatch(templateSource, /Local MMseqs2 \(recommended\)/);
 });
 
@@ -269,40 +269,11 @@ test('boltz cp template exposes only the OEM context-parallel control', () => {
     assert.doesNotMatch(componentText, /Triangle attention query tile/);
 });
 
-test('structure MSA submit params carry adaptive target-DB sharding controls for local high-quality runs', () => {
-    assert.deepEqual(
-        buildStructureMsaSubmitParams({
-            provider: 'local',
-            preset: 'balanced',
-            targetShardMode: 'auto',
-            targetShards: 4,
-            targetShardMinSizeGb: 1,
-        }),
-        {
-            msa_provider: 'local',
-            msa_preset: 'balanced',
-            msa_target_shard_mode: 'auto',
-            msa_target_shards: 4,
-            msa_target_shard_min_size_gb: 1,
-        },
-    );
-
-    assert.deepEqual(
-        buildStructureMsaSubmitParams({
-            provider: 'local',
-            preset: 'maximum',
-            targetShardMode: 'off',
-            targetShards: 2,
-            targetShardMinSizeGb: 0,
-        }),
-        {
-            msa_provider: 'local',
-            msa_preset: 'maximum',
-            msa_target_shard_mode: 'off',
-            msa_target_shards: 2,
-            msa_target_shard_min_size_gb: 0,
-        },
-    );
+test('saved local sharding requests require explicit API re-preview', () => {
+    assert.throws(() => buildStructureMsaSubmitParams({
+        provider: 'local', preset: 'balanced', targetShardMode: 'auto',
+        targetShards: 4, targetShardMinSizeGb: 1,
+    }), /Local MSA search is disabled/);
 });
 
 test('structure MSA submit params leave ColabFold API provider free of local target-sharding knobs', () => {

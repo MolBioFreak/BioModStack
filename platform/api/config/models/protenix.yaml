@@ -82,12 +82,12 @@ params:
 
   - name: protenix_msa_backend
     type: string
-    description: MSA backend used by Protenix V2
+    description: "ColabFold API — external service; auto resolves to API. Sequences are disclosed to a third party; rate limits apply. Local search disabled."
     required: false
     default: auto
     enum:
       - auto
-      - local
+      - colabfold_api
       - esm
       - none
 

@@ -1,3 +1,4 @@
+import { MSA_POLICY } from '../lib/msaPolicy';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { MaturationEvidence } from './MaturationEvidence';
 import { parseScientificPae } from '../lib/scientificViewerIdentity';
@@ -1729,14 +1730,14 @@ export function ResultsViewer() {
         indel_probability: 0.1,
         allowed_aas: [], // Empty means all allowed
         predictor: 'protenix',
-        msa_provider: 'local',
+        msa_provider: 'colabfold_api',
     });
     const [manualMutagenesisConfig, setManualMutagenesisConfig] = useState<ManualMutagenesisConfig & { mutation_sets_text: string }>({
         chain_id: '',
         mutation_sets: [],
         mutation_sets_text: '',
         predictor: 'protenix',
-        msa_provider: 'local',
+        msa_provider: 'colabfold_api',
     });
 
     const [pipelineOverrides, setPipelineOverrides] = useState({
@@ -6352,8 +6353,8 @@ export function ResultsViewer() {
                                                     }))}
                                                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-fuchsia-500 outline-none"
                                                 >
-                                                    <option value="local">Local</option>
-                                                    <option value="colabfold_api">ColabFold API</option>
+                                                    <option value="local" disabled>Local search disabled — re-preview with API</option>
+                                                    <option value="colabfold_api">{MSA_POLICY.label}</option>
                                                 </select>
                                             </label>
                                         </div>
@@ -6383,7 +6384,7 @@ export function ResultsViewer() {
                                             </div>
                                             {cdrIndelConfig.msa_provider === 'colabfold_api' && activeLaunchDesignCount * cdrIndelConfig.variants_per_design > 1 && (
                                                 <div className="mt-2 text-amber-300">
-                                                    Multi-variant indel rounds are automatically downgraded to local MSA.
+                                                    API batch search is blocked; no local fallback. {MSA_POLICY.disclosure}
                                                 </div>
                                             )}
                                         </div>
@@ -6529,8 +6530,8 @@ export function ResultsViewer() {
                                                     }))}
                                                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                                                 >
-                                                    <option value="local">Local</option>
-                                                    <option value="colabfold_api">ColabFold API</option>
+                                                    <option value="local" disabled>Local search disabled — re-preview with API</option>
+                                                    <option value="colabfold_api">{MSA_POLICY.label}</option>
                                                 </select>
                                             </label>
                                         </div>
@@ -6544,7 +6545,7 @@ export function ResultsViewer() {
                                             </div>
                                             {manualMutagenesisConfig.msa_provider === 'colabfold_api' && (
                                                 <div className="mt-2 text-amber-300">
-                                                    Batch mutagenesis currently downgrades ColabFold API requests to local MSA.
+                                                    API batch search is blocked; no local fallback. {MSA_POLICY.disclosure}
                                                 </div>
                                             )}
                                         </div>

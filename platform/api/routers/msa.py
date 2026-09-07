@@ -164,6 +164,8 @@ async def create_msa_job(
     session: AsyncSession = Depends(get_session),
     molbio_session: AsyncSession = Depends(get_molbio_session),
 ):
+    from services.msa_policy import LOCAL_DISABLED
+    raise HTTPException(status_code=422, detail=LOCAL_DISABLED)
     sequences = []
 
     if request.sequences:
@@ -331,6 +333,8 @@ async def start_msa_server(request: MSAServerStartRequest):
     By default this starts UniRef only on the scheduler-preferred MSA GPU.
     EnvDB startup follows persisted server settings unless explicitly requested.
     """
+    from services.msa_policy import LOCAL_DISABLED
+    raise HTTPException(status_code=422, detail=LOCAL_DISABLED)
     try:
         settings = read_server_settings()
         include_envdb = (

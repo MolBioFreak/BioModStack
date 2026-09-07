@@ -457,6 +457,8 @@ def ensure_server_for_db(
     db_load_mode: int = DEFAULT_GPUSERVER_DB_LOAD_MODE,
     startup_wait_seconds: float = DEFAULT_GPUSERVER_STARTUP_WAIT_SECONDS,
 ) -> Dict[str, Any]:
+    from services.msa_policy import reject_local_search
+    reject_local_search()
     if db_alias not in DB_ALIASES:
         raise ValueError(f"Unknown db alias '{db_alias}'. Expected one of: {sorted(DB_ALIASES)}")
 

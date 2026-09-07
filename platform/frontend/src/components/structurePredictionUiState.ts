@@ -1,3 +1,4 @@
+import { resolveMsaSearchBackend } from '../lib/msaPolicy';
 import {
     buildFrustraMpnnLaunchParams,
     type FrustraMpnnRequestedSettings,
@@ -348,20 +349,13 @@ export const buildStructureFrustraMpnnSubmitParams = (
 export const buildStructureMsaSubmitParams = ({
     provider,
     preset,
-    targetShardMode,
-    targetShards,
-    targetShardMinSizeGb,
 }: StructureMsaSubmitParamsInput): StructureMsaSubmitParams => {
-    const normalizedProvider = provider === 'colabfold_api' ? 'colabfold_api' : 'local';
+    const normalizedProvider = resolveMsaSearchBackend(provider);
     const params: StructureMsaSubmitParams = {
         msa_provider: normalizedProvider,
         msa_preset: preset === 'maximum' || preset === 'balanced' ? preset : 'fast',
     };
-    if (normalizedProvider === 'local') {
-        params.msa_target_shard_mode = normalizeMsaTargetShardMode(targetShardMode);
-        params.msa_target_shards = normalizeMsaTargetShards(targetShards);
-        params.msa_target_shard_min_size_gb = normalizeMsaTargetShardMinSizeGb(targetShardMinSizeGb);
-    }
+
     return params;
 };
 

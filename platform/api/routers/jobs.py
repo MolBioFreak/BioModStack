@@ -823,7 +823,7 @@ class AntibodyCdrIndelConfig(BaseModel):
     allowed_aas: List[str] = Field(default_factory=list)
     blocked_aas: List[str] = Field(default_factory=list)
     predictor: str = Field(default="protenix")
-    msa_provider: str = Field(default="local")
+    msa_provider: str = Field(default="colabfold_api")
 
 
 class ManualMutagenesisConfig(BaseModel):
@@ -831,7 +831,7 @@ class ManualMutagenesisConfig(BaseModel):
     chain_id: Optional[str] = None
     mutation_sets: List[str] = Field(default_factory=list)
     predictor: str = Field(default="protenix")
-    msa_provider: str = Field(default="local")
+    msa_provider: str = Field(default="colabfold_api")
 
 
 class AntibodyIterationLaunchRequest(BaseModel):
@@ -1853,7 +1853,7 @@ def _default_msa_provider_for_job(model_id: str, mode: str) -> str:
     """Default supported structure jobs to the remote ColabFold service."""
     if _supports_colabfold_api_single_job(model_id, mode):
         return "colabfold_api"
-    return "local"
+    return ""
 
 
 def _normalize_target_geometry_mode(raw: Any) -> Optional[str]:
@@ -3649,7 +3649,11 @@ def _build_manual_mutagenesis_iteration_job(
     if requested_msa_provider not in {"local", "colabfold_api"}:
         raise HTTPException(status_code=422, detail="msa_provider must be 'local' or 'colabfold_api'.")
 
-    effective_msa_provider = "local" if requested_msa_provider == "colabfold_api" else requested_msa_provider
+    from services.msa_policy import resolve_search_backend
+    try:
+        effective_msa_provider = resolve_search_backend(requested_msa_provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     launch_params: Dict[str, Any] = {
         "pred_method": "protenix" if predictor == "protenix" else "boltz",
         "mutagenesis_variants": variants,
@@ -3720,7 +3724,7 @@ def _build_manual_mutagenesis_iteration_job(
     )
     message_note = ""
     if requested_msa_provider == "colabfold_api":
-        message_note = " ColabFold API was downgraded to local MSA because batch mutagenesis jobs do not support server-backed MSA yet."
+        message_note = " ColabFold API batch admission remains blocked; no local fallback."
     return launch_request, len(variants), message_note
 
 
@@ -3938,9 +3942,11 @@ def _build_cdr_indel_iteration_job(
     if not variants:
         raise HTTPException(status_code=422, detail="No CDR indel variants were generated from the selected designs.")
 
-    effective_msa_provider = msa_provider
-    if len(variants) > 1 and msa_provider == "colabfold_api":
-        effective_msa_provider = "local"
+    from services.msa_policy import resolve_search_backend
+    try:
+        effective_msa_provider = resolve_search_backend(msa_provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     base_params = _prune_iteration_params(root_job.params if isinstance(root_job.params, dict) else {})
     launch_params: Dict[str, Any] = {
@@ -5557,6 +5563,11 @@ async def _create_job(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     from copy import deepcopy
     original_requested_params = deepcopy(job_data.params)
+    from services.msa_policy import apply_msa_policy
+    try:
+        job_data.params = apply_msa_policy(job_data.model_id, job_data.params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     require_molecular_dynamics_feature(job_data.model_id)
     _raise_if_workflow_launches_disabled("create new workflow jobs")
     md_input_resolver: Callable[[str], str] = (
@@ -6009,17 +6020,19 @@ async def _create_job(
         raise HTTPException(status_code=422, detail="Nanopore submissions must create exactly one authorized job")
 
     # ColabFold API is the default for supported structure-prediction jobs.
-    # Existing single-job validation below makes local MSA an explicit override for batches.
+    # Local search is disabled; API batch admission remains fail-closed.
     default_msa_provider = _default_msa_provider_for_job(job_data.model_id, job_data.mode)
     msa_provider = str(job_data.params.get("msa_provider", default_msa_provider) or default_msa_provider).strip().lower()
-    if msa_provider not in {"local", "colabfold_api"}:
+    if msa_provider not in {"", "colabfold_api"}:
         raise HTTPException(
             status_code=422,
-            detail=f"Invalid msa_provider '{msa_provider}'. Allowed: local, colabfold_api",
+            detail=f"Invalid msa_provider '{msa_provider}'. Enabled search backend: colabfold_api; local search is disabled.",
         )
-    job_data.params["msa_provider"] = msa_provider
+    if msa_provider:
+        job_data.params["msa_provider"] = msa_provider
 
-    if msa_provider == "colabfold_api":
+    from services.msa_policy import requires_msa_search
+    if msa_provider == "colabfold_api" and requires_msa_search(job_data.model_id, job_data.params):
         if not _supports_colabfold_api_single_job(job_data.model_id, job_data.mode):
             raise HTTPException(
                 status_code=422,
@@ -6425,6 +6438,18 @@ async def _create_job(
             from copy import deepcopy
             job_params['fampnn_analysis_declaration'] = deepcopy(fampnn_declaration)
             provenance_payload['fampnn_analysis_declaration'] = deepcopy(fampnn_declaration)
+
+        if any(key in job_params for key in ('msa_provider', 'protenix_msa_backend')):
+            from services.msa_policy import POLICY
+            provenance_payload['msa_search_policy'] = {
+                'revision': POLICY['revision'],
+                'requested': {key: original_requested_params[key] for key in
+                              ('msa_provider', 'protenix_msa_backend') if key in original_requested_params},
+                'effective': {key: job_params[key] for key in
+                              ('msa_provider', 'protenix_msa_backend') if key in job_params},
+                'disclosure': POLICY['disclosure'],
+                'provider_database_version': None,
+            }
 
         if scientific_revision is not None:
             provenance_payload['core_protein_requested_params'] = deepcopy(original_requested_params)
@@ -8055,6 +8080,11 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    from services.msa_policy import apply_msa_policy
+    try:
+        resubmit_params = apply_msa_policy(original_job.model_id, resubmit_params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     resubmit_params = _normalize_nanopore_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_antibody_runtime_paths(original_job.model_id, resubmit_params)
     resubmit_params = _normalize_structure_runtime_paths(original_job.model_id, resubmit_params)
@@ -8077,11 +8107,7 @@ async def resubmit_job(
         resubmit_params = ont_ngs_contract.normalize_ont_launch_params(
             "ont_fastq_qc", resubmit_params
         )
-    if resubmit_params.get("msa_force_refresh") is True:
-        # Resubmits should reuse cache by default unless user explicitly
-        # starts a fresh job with force-refresh enabled.
-        resubmit_params["msa_force_refresh"] = False
-        logger.info(f"[RESUBMIT] Cleared msa_force_refresh for resubmitted job {job_id}")
+    # MSA refresh/cache intent is scientific input; replay never rewrites it.
 
     _validate_protenix_template_requirements(original_job.model_id, resubmit_params)
     _validate_protenix_checkpoint_requirements(original_job.model_id, resubmit_params)
@@ -9588,6 +9614,11 @@ async def resume_job(
         **_normalize_antibody_job_params(_normalize_structure_geometry_params(job.params or {})),
         **param_overrides,
     }
+    from services.msa_policy import apply_msa_policy
+    try:
+        merged_params = apply_msa_policy(job.model_id, merged_params)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if fresh_execution:
         # Placement or source drift starts fresh, never reusing historical runtime/cache state.
         runtime_keys = {

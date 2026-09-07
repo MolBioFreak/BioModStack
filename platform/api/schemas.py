@@ -57,6 +57,14 @@ class JobCreate(BaseModel):
         description="Opaque server-owned Project launch context; hierarchy identity is never accepted here",
     )
 
+    @model_validator(mode="after")
+    def validate_msa_search_policy(self):
+        from services.msa_policy import apply_msa_policy
+        # Validate without mutating requested settings; compilation is visible
+        # in preview/admission effective params, while replay retains intent.
+        apply_msa_policy(self.model_id, self.params)
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def reject_scientific_revision_input(cls, data: Any) -> Any:

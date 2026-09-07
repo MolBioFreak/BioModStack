@@ -1216,7 +1216,7 @@ def _normalize_msa_preset(value: object) -> str:
 
 def _normalize_protenix_msa_backend(value: object) -> str:
     backend = str(value).strip().lower() if value is not None else ""
-    if backend in {"auto", "local", "colabfold_api"}:
+    if backend in {"auto", "local", "colabfold_api", "none", "esm"}:
         return backend
     return ""
 
@@ -1622,6 +1622,8 @@ async def maybe_trigger_mutation_seed_refinement(job, session) -> None:
 
 
 def _build_msa_batch_command(params: Dict[str, Any], output_dir: str) -> List[str]:
+    from services.msa_policy import reject_local_search
+    reject_local_search()
     sequences_json = params.get('sequences_json', '[]')
     if isinstance(sequences_json, (list, dict)):
         sequences_json = json.dumps(sequences_json)
@@ -2126,7 +2128,8 @@ async def launch_nextflow_job(
         return
 
     # Use a mutable launch-params copy so retries can downshift Protenix safely.
-    launch_params: Dict[str, Any] = dict(params or {})
+    from services.msa_policy import apply_msa_policy
+    launch_params: Dict[str, Any] = apply_msa_policy(model_id, params)
 
     structure_validator = str(launch_params.get("structure_validator", "")).strip().lower()
     uses_protenix_validation = _is_protenix_job(model_id, launch_params) or structure_validator == "protenix"
@@ -3300,8 +3303,9 @@ def build_nextflow_command(
     
     Converts all params to --key value flags.
     """
-    # Never mutate caller params; launch retries may reuse the same dict.
-    params = dict(params or {})
+    # Shared preview and scheduler/replay command compilation gate.
+    from services.msa_policy import apply_msa_policy
+    params = apply_msa_policy(model_id, params)
     # Only the persisted launch owner may add this transport after compilation.
     params.pop('boltz_launch_authority_base64', None)
     params.pop('boltz_launch_authority_path', None)

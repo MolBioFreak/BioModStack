@@ -140,18 +140,10 @@ def all_protein_chains_have_msa(payload: List[Dict[str, Any]]) -> bool:
 
 
 def choose_backend(requested: str, stats: Dict[str, int], max_tasks: int, max_chains: int, max_residues: int) -> str:
-    normalized = (requested or "auto").strip().lower()
-    if normalized in {"local", "colabfold_api"}:
-        return normalized
-    if normalized != "auto":
-        raise ValueError(f"Unsupported backend '{requested}'")
-    if (
-        stats["tasks"] <= max_tasks
-        and stats["protein_chains"] <= max_chains
-        and stats["total_residues"] <= max_residues
-    ):
-        return "colabfold_api"
-    return "local"
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_policy import resolve_search_backend
+    return resolve_search_backend(requested)
 
 
 def write_msa_report(
@@ -718,6 +710,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    choose_backend(args.backend, {}, 1, 1, 1)
     input_json = Path(args.input_json).expanduser().resolve()
     output_json = Path(args.output_json).expanduser().resolve()
     out_dir = Path(args.out_dir).expanduser().resolve()

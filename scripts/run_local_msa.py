@@ -2730,6 +2730,9 @@ def run_colabfold_msa_workflow(
             after core ColabFold stages fail. Defaults to False so maximum and
             balanced do not silently feed degraded A3Ms downstream.
     """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from biomodstack_msa_policy import reject_local_search
+    reject_local_search()
     def _should_retry_direct_gpu_on_cpu(err: Exception) -> bool:
         msg = str(err).lower()
         gpu_tokens = (

@@ -1,0 +1,7 @@
+{
+  "revision": "bms.msa-search-policy.v1",
+  "enabled_search_backend": "colabfold_api",
+  "label": "ColabFold API — external service",
+  "local_disabled": "Local MSA search is disabled by the BMS 1.0 interim policy. Explicitly select ColabFold API — external service and re-preview the job; supplied/verified alignments and model-supported no-MSA modes remain supported.",
+  "disclosure": "Sequences are disclosed to a third party; availability and rate limits apply. No local or alternate-provider fallback. Fleet submission requires a separately qualified single submission/egress authority."
+}

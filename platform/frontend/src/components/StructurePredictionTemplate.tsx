@@ -1,3 +1,4 @@
+import { MSA_POLICY } from '../lib/msaPolicy';
 import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { completeCurrentLaunchContext, submitJob, estimateBoltzApiJob, fetchBoltzApiProviderStatus, submitBoltzApiJob, fetchMsaCacheInfo, fetchUserSequence, uploadFile, type BoltzApiEstimateResponse, type BoltzApiProviderStatus, type MsaCacheInfo } from '../lib/api';
@@ -781,6 +782,12 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
         }
 
         if (msaNeeded) {
+            // Preserve historical local draft intent; submission rejects it below.
+            if (msaProvider === 'local') {
+                Object.assign(params, { msa_provider: msaProvider, msa_preset: msaPreset,
+                    msa_target_shard_mode: msaTargetShardMode, msa_target_shards: msaTargetShards,
+                    msa_target_shard_min_size_gb: msaTargetShardMinSizeGb });
+            } else {
             Object.assign(params, buildStructureMsaSubmitParams({
                 provider: msaProvider,
                 preset: msaPreset,
@@ -788,6 +795,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                 targetShards: msaTargetShards,
                 targetShardMinSizeGb: msaTargetShardMinSizeGb,
             }));
+            }
             if (msaTaxonomy) params.msa_taxon_list = msaTaxonomy;
             if (msaEvalue) params.msa_evalue = parseFloat(msaEvalue);
             if (msaMinSeqId) params.msa_min_seq_id = parseFloat(msaMinSeqId);
@@ -1054,6 +1062,10 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
             params.protenix_target_geometry_mode = protenixTargetGeometryMode;
         }
 
+        if (msaProvider === 'local') {
+            alert(MSA_POLICY.local_disabled);
+            return;
+        }
         if (msaNeeded && msaProvider === 'colabfold_api' && numParallelJobs > 1) {
             alert('ColabFold API MSA provider currently supports only single-job submissions (num_parallel_jobs=1).');
             return;
@@ -2268,16 +2280,14 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                             onChange={(e) => setMsaProvider(e.target.value as 'local' | 'colabfold_api')}
                                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded px-2 py-1.5 text-[var(--text-primary)] text-sm"
                                         >
-                                            <option value="local">Local MMseqs2 (manual override)</option>
+                                            <option value="local" disabled>Local search disabled — re-preview with API</option>
                                             <option value="colabfold_api" disabled={numParallelJobs > 1}>
-                                                ColabFold API (default; single-job only)
+                                                {MSA_POLICY.label}
                                             </option>
                                         </select>
                                     </div>
                                     <div className="md:col-span-2 text-xs text-[var(--text-muted)] flex items-end">
-                                        {numParallelJobs > 1
-                                            ? 'Remote ColabFold API is disabled when parallel jobs > 1.'
-                                            : 'Remote mode uses paced ticket submission to avoid hammering shared API infrastructure.'}
+                                        {MSA_POLICY.local_disabled} {MSA_POLICY.disclosure}
                                     </div>
                                 </div>
 
@@ -2320,7 +2330,7 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                     </div>
                                 )}
 
-                                {msaProvider === 'local' && (
+                                {false && (
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
                                         <div>
                                             <label className="text-xs text-[var(--text-secondary)] block mb-1">EnvDB Target Sharding</label>
@@ -2598,6 +2608,8 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                                 <label className="flex items-center gap-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg cursor-pointer hover:bg-amber-500/20 transition-colors">
                                     <input
                                         type="checkbox"
+                                        disabled={!msaAllowEmptyFallback}
+                                        title="MSA failure fallback is disabled; choose an explicit model-supported no-MSA mode instead."
                                         checked={msaAllowEmptyFallback}
                                         onChange={(e) => setMsaAllowEmptyFallback(e.target.checked)}
                                         className="w-4 h-4 rounded bg-[var(--bg-primary)] border-amber-500 text-amber-400 focus:ring-amber-500"

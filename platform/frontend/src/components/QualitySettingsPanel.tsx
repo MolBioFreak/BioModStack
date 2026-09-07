@@ -1,3 +1,4 @@
+import { MSA_POLICY } from '../lib/msaPolicy';
 import React, { useEffect, useState } from 'react';
 import { applyPpiFlowStageMode, applyPpiFlowTuningProfile, getPpiFlowOptimizationScenario, normalizePpiFlowTuningProfile } from './qualitySettingsLogic';
 
@@ -988,7 +989,7 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
     const msaEnabled = structureValidator === 'protenix' ? settings.protenix_use_msa : settings.boltz_use_msa;
     const showProtenixMsaProvider = structureValidator === 'protenix' && settings.protenix_use_msa;
     const showRemoteMsaHost = showProtenixMsaProvider && settings.protenix_msa_backend !== 'local';
-    const showLocalMsaRuntime = msaEnabled && (structureValidator === 'boltz2' || settings.protenix_msa_backend !== 'colabfold_api');
+    const showLocalMsaRuntime = false; // Interim policy: never offer local search controls.
 
     return (
         <div className="bg-slate-900/50 border border-slate-700/50 rounded-lg overflow-hidden">
@@ -1529,16 +1530,12 @@ export const QualitySettingsPanel: React.FC<QualitySettingsPanelProps> = ({
                                             onChange={(e) => updateSetting('protenix_msa_backend', e.target.value as QualitySettings['protenix_msa_backend'])}
                                             className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-sm text-slate-300"
                                         >
-                                            <option value="auto">Auto (workflow heuristic)</option>
-                                            <option value="local">Local MMseqs2 (recommended)</option>
-                                            <option value="colabfold_api">ColabFold API</option>
+                                            <option value="auto">Auto → ColabFold API — external service</option>
+                                            <option value="local" disabled>Local search disabled — re-preview with API</option>
+                                            <option value="colabfold_api">{MSA_POLICY.label}</option>
                                         </select>
                                         <p className="mt-1 text-[10px] text-slate-600">
-                                            {settings.protenix_msa_backend === 'auto'
-                                                ? 'Auto picks local or ColabFold API based on job size.'
-                                                : settings.protenix_msa_backend === 'colabfold_api'
-                                                    ? 'Use the configured ColabFold-compatible endpoint for Protenix MSA prep.'
-                                                    : 'Use the local MMseqs/ColabFold DB stack mounted in BMS.'}
+                                            {MSA_POLICY.local_disabled} {MSA_POLICY.disclosure}
                                         </p>
                                     </div>
 
