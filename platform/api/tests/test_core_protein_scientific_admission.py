@@ -29,7 +29,7 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
     monkeypatch.setattr(sequence_param, "pattern", "[ACDEFGHIKLMNPQRSTVWY]+")
     monkeypatch.setattr(registry, "reload", lambda: None)  # Keep this fixture-owned rule.
     payload = request()
-    payload.params = {"msa_provider": "local", "boltz_use_msa": True,
+    payload.params = {"msa_provider": "colabfold_api", "boltz_use_msa": False,
                       "use_msa": False, "seed": 0,
                       "boltz_recycling_steps": -1 if invalid == "settings" else 1,
                       "mutagenesis_variants": [{"name": "one", "sequence": "ACDE"},

@@ -666,7 +666,7 @@ def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
             "input_pdb": "/tmp/input.pdb",
             "design_chains": "A",
             "structure_validators": ["esmfold2", "protenix_v2"],
-            "msa_provider": "local",
+            "msa_provider": "colabfold_api",
         },
         "/tmp/out",
         job_id="job-123",
@@ -675,7 +675,7 @@ def test_experimental_protein_local_redesign_maps_validator_suite() -> None:
     joined = " ".join(cmd)
     assert "--plr_structure_validators esmfold2,protenix_v2" in joined
     assert "--plr_validator_suite_active true" in joined
-    assert "--protenix_msa_backend local" in joined
+    assert "--protenix_msa_backend colabfold_api" in joined
 
 
 @pytest.mark.parametrize(
