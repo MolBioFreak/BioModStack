@@ -106,6 +106,9 @@ async def test_receipt_from_executed_argv_to_persisted_api(admission, monkeypatc
         env={**os.environ, 'BMS_ESMFOLD2_EFFECTIVE_SETTINGS':str(receipt_path)}, capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
     assert json.loads((root/'capture.json').read_text())['argv'] == receipt['argv']
+    # Replace the probe's placeholder publications with the synthetic cohort.
+    (root / 'fixture.cif').unlink()
+    (root / 'fixture.metrics.json').unlink()
     # Explicitly synthetic publication, distinct from instrumented argv evidence.
     artifacts(output, ('a',))
     p = root/'a.metrics.json'

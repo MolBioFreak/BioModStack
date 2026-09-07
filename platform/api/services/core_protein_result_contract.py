@@ -4,9 +4,11 @@ from typing import Any
 
 
 class CandidateIntegrityError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, candidate_id: str | None = None):
         super().__init__(message)
         self.reason = {'code': code, 'message': message}
+        if candidate_id is not None:
+            self.reason['candidate_id'] = candidate_id
 
 
 def _ids(values: Any, label: str) -> set[str]:
@@ -59,17 +61,17 @@ def validate_candidate_accounting(*, stage_id: str, requested_count: int | None,
             'unevaluable_count': sum(d['disposition'] == 'unevaluable' for d in dispositions)}
 
 
-def _artifact(root, raw):
+def _artifact(root, raw, candidate_id=None):
     import hashlib
     from pathlib import Path
     if not isinstance(raw, str) or not raw:
-        raise CandidateIntegrityError('candidate_artifact_missing', 'declared artifact path is required')
+        raise CandidateIntegrityError('candidate_artifact_missing', 'declared artifact path is required', candidate_id)
     path = Path(raw)
     path = (root / path).resolve() if not path.is_absolute() else path.resolve()
     if not path.is_relative_to(root.resolve()):
-        raise CandidateIntegrityError('foreign_candidate_artifact', 'artifact escapes producer root')
+        raise CandidateIntegrityError('foreign_candidate_artifact', 'artifact escapes producer root', candidate_id)
     if not path.is_file() or path.stat().st_size == 0:
-        raise CandidateIntegrityError('candidate_artifact_missing', f'declared artifact is missing: {raw}')
+        raise CandidateIntegrityError('candidate_artifact_missing', f'declared artifact is missing: {raw}', candidate_id)
     content = path.read_bytes()
     return {'path': str(path), 'sha256': hashlib.sha256(content).hexdigest()}, content
 
@@ -110,8 +112,25 @@ def _structure_confidence(content: bytes, path: str):
         raise CandidateIntegrityError('candidate_structure_invalid', f'unusable declared structure: {path}: {exc}') from exc
 
 
+def _validate_esmfold2_inventory(root, candidates):
+    """Only structure and native per-sample metrics files are publications.
+
+    Summaries, command captures and other ancillary JSON remain allowed.
+    """
+    from pathlib import Path
+    expected = {Path(a['path']).resolve() for c in candidates.values() for a in c.values()}
+    observed = {p.absolute() for p in Path(root).resolve().rglob('*')
+                if p.is_file() and (p.suffix.lower() in {'.pdb', '.cif', '.mmcif'}
+                                    or p.name.endswith('.metrics.json'))}
+    if observed != expected:
+        raise CandidateIntegrityError('candidate_publication_mismatch', 'scientific publication inventory differs from manifest')
+
+
 def revalidate_prepared_publication(root, receipt):
     """Controlled path revalidation only: never reinterpret replacement payloads."""
+    if receipt['summary'].get('stage_id') == 'esmfold2':
+        from pathlib import Path
+        _validate_esmfold2_inventory(Path(receipt['manifest']['path']).parent, receipt['candidates'])
     evidence = [receipt['manifest']]
     evidence.extend(r['artifact'] for r in receipt.get('execution_settings', []))
     evidence.extend(artifact for candidate in receipt['candidates'].values() for artifact in candidate.values())
@@ -131,6 +150,8 @@ def prepare_esmfold2_publication(job, root, existing):
         raise CandidateIntegrityError('missing_candidate_declaration', 'invalid producer manifest JSON') from exc
     if not isinstance(manifest, dict):
         raise CandidateIntegrityError('missing_candidate_declaration', 'producer manifest must be an object')
+    if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 2 or manifest.get('workflow') != 'esmfold2':
+        raise CandidateIntegrityError('unsupported_candidate_manifest', 'expected ESMFold2 manifest version 2')
     entries = manifest.get('samples')
     if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
         raise CandidateIntegrityError('missing_candidate_declaration', 'ESMFold2 requires producer samples declaration')
@@ -141,9 +162,9 @@ def prepare_esmfold2_publication(job, root, existing):
     prepared = {}
     for entry in entries:
         candidate = entry['sample_id']
-        structure, structure_bytes = _artifact(root, entry.get('cif'))
+        structure, structure_bytes = _artifact(root, entry.get('cif'), candidate)
         confidence = _structure_confidence(structure_bytes, structure['path'])
-        metrics, metrics_bytes = _artifact(root, entry.get('metrics'))
+        metrics, metrics_bytes = _artifact(root, entry.get('metrics'), candidate)
         try:
             payload = json.loads(metrics_bytes)
         except (ValueError, UnicodeError) as exc:
@@ -158,7 +179,12 @@ def prepare_esmfold2_publication(job, root, existing):
         prepared[candidate] = {'block': block, 'payload': {**manifest, **entry, **payload},
                                'structure_confidence': confidence,
                                'artifacts': {'structure': structure, 'metrics': metrics}}
-    requested = (job.params or {}).get('esmf_num_diffusion_samples')
+    params = job.params or {}
+    counts = [params[key] for key in ('num_diffusion_samples', 'esmf_num_diffusion_samples') if key in params]
+    if len(counts) == 2 and (type(counts[0]) is not type(counts[1]) or counts[0] != counts[1]):
+        raise CandidateIntegrityError('conflicting_requested_count', 'sample-count aliases disagree')
+    requested = counts[0] if counts else None
+    _validate_esmfold2_inventory(root, {i: prepared[i]['artifacts'] for i in ids})
     summary = validate_candidate_accounting(stage_id='esmfold2', requested_count=requested,
         generated_ids=ids, dispositions=[{'candidate_id': i, 'disposition': 'selected'} for i in ids],
         expected_publication_ids=ids, persisted_ids=ids)
@@ -210,6 +236,8 @@ def validate_persisted_publication(job, rows, root):
     if not isinstance(receipt, dict) or not isinstance(receipt.get('candidates'), dict):
         raise CandidateIntegrityError('missing_candidate_declaration', 'marked generic result lacks candidate publication authority')
     expected = receipt['candidates']
+    if receipt['summary'].get('stage_id') == 'esmfold2':
+        _validate_esmfold2_inventory(Path(receipt['manifest']['path']).parent, expected)
     actual = _ids([row.name for row in rows], 'persisted candidates')
     if actual != set(expected):
         raise CandidateIntegrityError('candidate_publication_mismatch', 'persisted identities differ from expected publication')

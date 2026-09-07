@@ -67,6 +67,68 @@ def _requested(original, model, key, scope):
     return name in original, original.get(name)
 
 
+def _esm_sources(original, effective, components, raw_sources):
+    """Reconcile trusted inputs, executed paths and the complete staged inventory.
+
+    Staged paths need not survive workflow cleanup; hashes remain producer byte
+    evidence. Paths bind first-publication scope, never substitute for hashes.
+    """
+    required = {}
+
+    def require(scope, used, requested):
+        if bool(used) != bool(requested):
+            raise ValueError('requested and executed source inventories differ')
+        if used:
+            if not isinstance(used, str) or not isinstance(requested, str):
+                raise ValueError('invalid source path')
+            if scope in required:
+                raise ValueError('duplicate required source scope')
+            required[scope] = (requested, used)
+
+    for scope, key in [('primary', 'msa_path'), ('model', 'pdb_sequence_path')]:
+        require(scope, effective.get(key), _requested(original, 'esmfold2', key, scope)[1])
+    _, requested_components = _requested(original, 'esmfold2', 'complex_components', 'model')
+    requested_components = requested_components or []
+    if not isinstance(components, list) or not isinstance(requested_components, list):
+        raise ValueError('invalid component source inventory')
+
+    def indexed(items):
+        result = {}
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get('id'), str) or not item['id'] or item['id'] in result:
+                raise ValueError('ambiguous component source identity')
+            result[item['id']] = item
+        return result
+
+    requested_by_id, used_by_id = indexed(requested_components), indexed(components)
+    if requested_by_id.keys() != used_by_id.keys():
+        raise ValueError('requested and executed component inventories differ')
+    for identity, component in used_by_id.items():
+        require('component:' + identity, component.get('msa_path'), requested_by_id[identity].get('msa_path'))
+    if not isinstance(raw_sources, list):
+        raise ValueError('invalid source inventory')
+    seen = set()
+    byte_identities = {}
+    for source in raw_sources:
+        if not isinstance(source, dict):
+            raise ValueError('invalid source entry')
+        scope = source.get('scope')
+        if not isinstance(scope, str) or scope in seen or scope not in required:
+            raise ValueError('duplicate or foreign source scope')
+        seen.add(scope)
+        if (source.get('requested_path'), source.get('used_path')) != required[scope]:
+            raise ValueError('source paths differ from request or executed argv')
+        if type(source.get('size_bytes')) is not int or source['size_bytes'] < 0:
+            raise ValueError('missing or invalid source byte size')
+        identity = (source.get('sha256'), source['size_bytes'])
+        used = source['used_path']
+        if used in byte_identities and byte_identities[used] != identity:
+            raise ValueError('contradictory staged byte identity')
+        byte_identities[used] = identity
+    if seen != required.keys():
+        raise ValueError('missing required source identity')
+
+
 def prepare_receipt(job, root: Path, path: Path):
     """Hash the retained receipt bytes and independently bind requested origin.
 
@@ -99,6 +161,9 @@ def prepare_receipt(job, root: Path, path: Path):
         except SystemExit as exc:
             raise ValueError('invalid execution argv') from exc
         component_effective = json.loads(effective['complex_components_json'] or '[]')
+        if effective.get('complex_components_file'):
+            raise ValueError('unreceipted component file input')
+        _esm_sources(original, effective, component_effective, payload['sources'])
     else:
         effective = {}
         for key in OPENMM_KEYS:

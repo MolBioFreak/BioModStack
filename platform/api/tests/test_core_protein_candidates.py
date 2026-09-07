@@ -27,7 +27,7 @@ def artifacts(tmp_path, ids=('a', 'b')):
         (root / f'{candidate}.pdb').write_text('ATOM      1  CA  ALA A   1       1.000   2.000   3.000  1.00 80.00           C\nEND\n')
         (root / f'{candidate}.metrics.json').write_text(json.dumps({'sample_id': candidate, 'cif': f'{candidate}.pdb', 'iptm': 0.8}))
         samples.append({'sample_id': candidate, 'cif': f'{candidate}.pdb', 'metrics': f'{candidate}.metrics.json'})
-    (root / 'manifest.json').write_text(json.dumps({'workflow': 'esmfold2', 'sample_count': len(ids), 'samples': samples}))
+    (root / 'manifest.json').write_text(json.dumps({'schema_version': 2, 'workflow': 'esmfold2', 'sample_count': len(ids), 'samples': samples}))
     return root
 
 
@@ -114,6 +114,7 @@ async def test_prior_rows_plus_loss_fails_with_retained_partial(tmp_path):
             assert current.status == 'failed'
             assert current.provenance['result_integrity']['partial'] is True
             assert current.provenance['result_integrity']['reason']['code'] == 'candidate_artifact_missing'
+            assert current.provenance['result_integrity']['reason']['candidate_id'] == 'b'
     finally:
         await engine.dispose()
 
@@ -290,6 +291,9 @@ ATOM 1 C CA . ALA A 1 1 ? 1.000 2.000 3.000 1.00 80.00 1 A 1
 
 def replace_last_structure(root, suffix, content):
     manifest = json.loads((root / 'manifest.json').read_text())
+    previous = root / manifest['samples'][-1]['cif']
+    if previous.name != f'b.{suffix}':
+        previous.unlink()
     manifest['samples'][-1]['cif'] = f'b.{suffix}'
     (root / 'manifest.json').write_text(json.dumps(manifest))
     (root / f'b.{suffix}').write_text(content)
@@ -386,6 +390,9 @@ async def test_prepared_manifest_is_sole_iteration_authority(tmp_path, monkeypat
         # Replacement between ingress discovery and preparation: only this new
         # declaration may determine both rows and receipt, not an earlier read.
         manifest = json.loads((root / 'manifest.json').read_text())
+        # Replace the entire publication, not merely its declaration.
+        (root / 'a.pdb').unlink()
+        (root / 'a.metrics.json').unlink()
         manifest['samples'] = manifest['samples'][1:]
         manifest['sample_count'] = 1
         (root / 'manifest.json').write_text(json.dumps(manifest))
@@ -459,8 +466,8 @@ def test_structure_validation_consumes_exact_hashed_bytes(tmp_path, monkeypatch)
     valid = (root / 'b.pdb').read_bytes()
     (root / 'b.pdb').write_text('malformed bytes that are hashed')
     real_artifact = contract._artifact
-    def replace_after_read(root, raw):
-        evidence, content = real_artifact(root, raw)
+    def replace_after_read(root, raw, candidate_id=None):
+        evidence, content = real_artifact(root, raw, candidate_id)
         if raw == 'b.pdb':
             (root / raw).write_bytes(valid)
         return evidence, content

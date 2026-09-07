@@ -157,6 +157,17 @@ workflow {{
     captured = json.loads(captures[0].read_text())
     receipt = json.loads((captures[0].parent / 'effective_settings.json').read_text())
     assert captured['argv'] == receipt['argv']
+    from types import SimpleNamespace
+    from services.core_protein_execution_settings import prepare_receipt
+    owner = SimpleNamespace(provenance={'core_protein_requested_params': {'seed': 0, **input_settings}})
+    path = captures[0].parent / 'effective_settings.json'
+    validated = prepare_receipt(owner, captures[0].parent, path)
+    assert len(validated['receipt']['sources']) == len(receipt['sources'])
+    damaged = {**receipt, 'sources': []}
+    damaged_path = captures[0].parent / 'missing_sources.json'
+    damaged_path.write_text(json.dumps(damaged))
+    with pytest.raises(ValueError, match='missing required source'):
+        prepare_receipt(owner, captures[0].parent, damaged_path)
     assert captured['msa_sha256'] == hashlib.sha256(msa.read_bytes()).hexdigest()
     assert captured['msa_sha256'] == receipt['sources'][0]['sha256']
     components = json.loads(captured['parsed']['complex_components_json'] or '[]')
