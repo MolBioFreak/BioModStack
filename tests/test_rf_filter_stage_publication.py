@@ -23,6 +23,15 @@ def produce(tmp_path, stage='prediction', empty=False, reject=False):
         for name, value in [('a', .9), ('b', .1), ('c', None), ('d', float('nan'))]:
             (source / f'{name}.pdb').write_text(PDB)
             (source / f'{name}.json').write_text(json.dumps({'ptm': value}))
+            if stage == 'prediction':
+                # Synthetic producer receipt; native sibling export is separately
+                # exercised by the closeout exporter -> filter -> API fixture.
+                summary = (source / f'{name}.json').read_bytes()
+                (source / f'{name}_binding.json').write_text(json.dumps({
+                    'schema': 'bms.rf3-native-pair.v1',
+                    'structure': {'name': f'{name}.pdb', 'sha256': hashlib.sha256(PDB.encode()).hexdigest()},
+                    'summary': {'name': f'{name}.json', 'sha256': hashlib.sha256(summary).hexdigest()},
+                }))
     receipt = tmp_path / 'rf_filter_1'
     cmd = [sys.executable, str(ROOT / 'scripts/filter_structures.py'), stage,
            '--input-dir', str(source), '--output-dir', str(tmp_path / 'passing'),
@@ -77,6 +86,11 @@ def test_owning_stage_inventory(tmp_path, role, empty):
     assert stage['state'] == ('skipped' if role == 'skipped' else 'observed')
     if role == 'selected_publication':
         assert stage['selection'][0]['candidate_id'] == 'terminal-a'
+        forged = json.loads(terminal.read_text())
+        forged['producer_output_key'] = 'foreign_task/a.pdb'
+        terminal.write_text(json.dumps(forged))
+        failed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
+        assert failed.returncode != 0
         forged = json.loads(terminal.read_text())
         forged['producer_output_key'] = 'rf3_terminal/b.pdb'  # Same bytes, rejected identity.
         terminal.write_text(json.dumps(forged))

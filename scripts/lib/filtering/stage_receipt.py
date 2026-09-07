@@ -60,7 +60,7 @@ def publish_invocation(filter_instance, results, jsonl_path, root, stage_id, job
             raise ValueError('filter metadata bytes changed during evaluation')
         from .rf3_association import binding_path
         binding = binding_path(source)
-        if binding.is_file():
+        if stage_id == 'rf3_prediction_filter' and binding.is_file():
             row['rf3_binding'] = artifact(root, binding)
         # Retain invalid native JSON too, without pretending it was parsed.
         row['source_sha256'] = row['artifacts']['metadata']['sha256'] if metadata else None

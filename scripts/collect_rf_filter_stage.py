@@ -38,7 +38,8 @@ def main():
         for row in [json.loads(line) for line in outcome_raw.splitlines()]:
             if row['passed'] and args.role == 'selected_publication':
                 artifact = row['artifacts']['published_structure']
-                name = Path(artifact['path']).name
+                branch = 'rf3_terminal' if model == 'rf3' else 'rfd3_only'
+                name = branch + '/' + Path(artifact['path']).name
                 if name in pass_set:
                     raise ValueError('ambiguous selected filter output identity')
                 pass_set[name] = artifact['sha256']
@@ -62,7 +63,7 @@ def main():
             if (terminal['parent_job_id'] != args.job_id or terminal['parent_workflow_id'] != args.owner
                     or terminal['producer_method'] != model):
                 raise ValueError('filter terminal owner mismatch')
-            name = Path(terminal['producer_output_key']).name
+            name = terminal['producer_output_key']
             if name in selected or terminal['candidate_id'] in ids:
                 raise ValueError('duplicate filter terminal identity')
             selected[name] = terminal['producer_artifact_sha256']
