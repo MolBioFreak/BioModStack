@@ -94,6 +94,15 @@ def prepare(job, output):
                     or not native['native_id'] or native['dialect'] not in {'csv', 'npz'}
                     or native['artifact'] != declaration['native']):
                 raise CandidateIntegrityError('foreign_candidate_id', 'native source binding mismatch')
+        if native is not None:
+            from services import aligned_error_utils  # registers shared scripts root
+            from lib.filtering.native_gate import canonical_evidence
+            canonical = canonical_evidence(payload, contents['native'], candidate)
+            for criterion in by_id[candidate]['criteria']:
+                name = criterion['criterion']
+                if name in canonical and (canonical[name]['state'] != 'ok'
+                        or criterion['evidence'] != canonical[name]):
+                    raise CandidateIntegrityError('invalid_filter_publication', 'decisive native scalar differs from filter evidence')
         prepared[candidate] = {'payload': payload, 'artifacts': artifacts, 'native_bytes': contents.get('native')}
     _ids(paths, 'published artifact paths')
     observed = {str(p.resolve()) for p in root.iterdir() if p.suffix in {'.pdb', '.cif', '.mmcif', '.json', '.npz', '.csv'} and p.name != 'filter_summary.json'}

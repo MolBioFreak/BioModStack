@@ -302,6 +302,8 @@ def main():
         core_protein_scientific_contract=args.core_protein_scientific_contract,
     )
     
+    filter_instance.require_rf3_binding = (args.core_protein_scientific_contract == 1
+        and getattr(args, 'stage_id', None) == 'rf3_prediction_filter')
     if receipt_dir:
         from lib.filtering.stage_receipt import snapshot_inputs
         snapshot_inputs(filter_instance, Path(receipt_dir))

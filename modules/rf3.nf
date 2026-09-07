@@ -38,6 +38,7 @@ process RunRF3 {
     def extra_config = params.rf3_extra_config ?: ''
 
     """
+    ${params.get('core_protein_scientific_contract') == 1 ? 'set -euo pipefail' : ''}
     echo "Running RosettaFold3 for batch ${batch_id}"
     
     # Run RF3 using custom wrapper script to bypass CLI issues
@@ -48,6 +49,12 @@ process RunRF3 {
         2>&1 | tee rf3_${batch_id}.log
     echo "RF3 run complete - debug run 13"
     
+    if ${params.get('core_protein_scientific_contract') == 1 ? 'true' : 'false'}; then
+        # Bind the native sibling pairs before flattening loses producer paths.
+        python3 /scripts/lib/filtering/rf3_association.py --native-root rf3_results --output rf3_bound
+        mv rf3_results rf3_native_results
+        mv rf3_bound rf3_results
+    else
     # Flatten and compress results (RF3 creates nested dirs)
     # Move model CIFs to root and gzip
     find rf3_results -name "*_model.cif" -exec gzip {} \\;
@@ -58,12 +65,14 @@ process RunRF3 {
     # Note: we might need per-residue confidences too? Use *confidences.json
     find rf3_results -name "*_confidences.json" -exec mv {} rf3_results/ \\;
 
+    fi
+
     # Convert outputs to pipeline metadata format
     # Only use summary jsons for metadata? Converter handles it?
     python3 /scripts/metadata_converter.py \\
         --input_dir rf3_results \\
         --converter rf3 \\
-        --input_ext json \\
+        --input_ext ${params.get('core_protein_scientific_contract') == 1 ? '_summary_confidences.json' : 'json'} \\
         -o rf3_metadata_${batch_id}.jsonl
     """
 }

@@ -141,7 +141,8 @@ def extract_confidence_metrics(metadata: dict, core_protein_scientific_contract=
     """
     if core_protein_scientific_contract == 1:
         aliases = {'plddt': ('plddt', 'mean_plddt', 'pLDDT'), 'ptm': ('ptm', 'pTM'), 'pae': ('pae', 'mean_pae', 'PAE'), 'rmsd': ('rmsd', 'rmsd_overall'), 'rmsd_binder': ('rmsd_binder', 'binder_rmsd')}
-        result = {key: next((metadata[k] for k in names if k in metadata), None) for key, names in aliases.items()}
+        from .evidence import alias_value
+        result = {key: alias_value(metadata, names) for key, names in aliases.items()}
         result['plddt_units'] = metadata.get('plddt_units')
         return result
     return {

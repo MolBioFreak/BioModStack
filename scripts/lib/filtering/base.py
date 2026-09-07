@@ -62,8 +62,12 @@ class StructureFilter(ABC):
             stem = stem[:-4]
         
         if self.core_protein_scientific_contract == 1:
-            candidates = [structure_path.parent / f"{stem}_summary_confidences.json", structure_path.parent / f"{stem}.json"]
-            return next((p for p in candidates if p.exists()), None)
+            summary_stem = stem.removesuffix('_model')
+            candidates = [structure_path.parent / f"{summary_stem}_summary_confidences.json", structure_path.parent / f"{stem}.json"]
+            matches = [p for p in candidates if p.exists()]
+            if len(matches) > 1:
+                raise ValueError('ambiguous_metadata_identity')
+            return matches[0] if matches else None
 
         # Try various patterns
         candidates = [
@@ -83,8 +87,10 @@ class StructureFilter(ABC):
             if self.core_protein_scientific_contract == 1:
                 import hashlib
                 raw = json_path.read_bytes()
+                self.source_raw = raw
                 self.source_sha256 = hashlib.sha256(raw).hexdigest()
-                data = json.loads(raw)
+                from .evidence import load_object
+                data = load_object(raw)
                 if not isinstance(data, dict):
                     raise ValueError("Metadata must be an object")
                 return data
@@ -131,7 +137,8 @@ class StructureFilter(ABC):
     def copy_passing_files(
         self,
         structure_path: Path,
-        metadata_path: Optional[Path] = None
+        metadata_path: Optional[Path] = None,
+        structure_bytes=None, metadata_bytes=None,
     ) -> Path:
         """
         Copy passing structure (and metadata) to output directory.
@@ -148,15 +155,28 @@ class StructureFilter(ABC):
             if stem.endswith('.cif'):
                 stem = stem[:-4]
             output_path = self.output_dir / f"{stem}.pdb"
-            cif_to_pdb(structure_path, output_path)
+            if structure_bytes is not None:
+                import tempfile
+                with tempfile.TemporaryDirectory(prefix='filter-publication-') as directory:
+                    snapshot = Path(directory) / structure_path.name
+                    snapshot.write_bytes(structure_bytes)
+                    cif_to_pdb(snapshot, output_path)
+            else:
+                cif_to_pdb(structure_path, output_path)
         else:
             # Direct copy
             output_path = self.output_dir / structure_path.name
-            shutil.copy2(structure_path, output_path)
+            if structure_bytes is not None:
+                output_path.write_bytes(structure_bytes)
+            else:
+                shutil.copy2(structure_path, output_path)
         
         # Copy metadata if present
         if metadata_path and metadata_path.exists():
-            shutil.copy2(metadata_path, self.output_dir / metadata_path.name)
+            if metadata_bytes is not None:
+                (self.output_dir / metadata_path.name).write_bytes(metadata_bytes)
+            else:
+                shutil.copy2(metadata_path, self.output_dir / metadata_path.name)
         
         return output_path
     
@@ -202,8 +222,21 @@ class StructureFilter(ABC):
                 metadata = self.load_metadata(metadata_path) if metadata_path else {}
                 if self.core_protein_scientific_contract == 1:
                     identity = structure_path.name.removesuffix('.gz').removesuffix('.cif').removesuffix('.pdb')
-                    if metadata.get('design_id') is not None and metadata['design_id'] != identity:
+                    if metadata.get('design_id') is not None and metadata['design_id'] not in {identity, identity.removesuffix('_model')}:
                         raise ValueError('foreign_metadata_identity')
+                    import hashlib
+                    structure_raw = structure_path.read_bytes()
+                    result['_structure_sha256'] = hashlib.sha256(structure_raw).hexdigest()
+                    if metadata.get('structure_sha256') is not None and metadata['structure_sha256'] != hashlib.sha256(structure_raw).hexdigest():
+                        raise ValueError('foreign_metadata_structure')
+                    if (getattr(self, 'require_rf3_binding', False) or identity.endswith('_model')
+                            or (metadata_path and metadata_path.name.endswith('_summary_confidences.json'))):
+                        from .rf3_association import binding_path, validate
+                        from .evidence import load_object
+                        binding = load_object(binding_path(structure_path).read_bytes())
+                        if metadata_path is None:
+                            raise ValueError('RF3 producer summary missing')
+                        validate(binding, structure_path.name, structure_raw, metadata_path.name, self.source_raw)
                     result['source_sha256'] = self.source_sha256 if metadata_path else None
                 
                 # Extract metrics
@@ -222,7 +255,11 @@ class StructureFilter(ABC):
                 result['reason'] = reason
                 
                 if passed:
-                    published_path = self.copy_passing_files(structure_path, metadata_path)
+                    if self.core_protein_scientific_contract == 1:
+                        published_path = self.copy_passing_files(structure_path, metadata_path,
+                            structure_bytes=structure_raw, metadata_bytes=self.source_raw if metadata_path else None)
+                    else:
+                        published_path = self.copy_passing_files(structure_path, metadata_path)
                     if self.core_protein_scientific_contract == 1:
                         result['published_file'] = str(published_path)
                     logger.info(f"PASS: {structure_path.name}")

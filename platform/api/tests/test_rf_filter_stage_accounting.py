@@ -24,6 +24,12 @@ def publish(tmp_path, monkeypatch, *, role='selected_publication', empty=False, 
         for name, value in values:
             (source / f'{name}.pdb').write_text(PDB)
             (source / f'{name}.json').write_text(json.dumps({'design_id': 'foreign'} if compute_failure else {'ptm': value}))
+    from lib.filtering.rf3_association import SCHEMA, descriptor, binding_path
+    for structure in source.glob('*.pdb'):
+        summary = structure.with_suffix('.json')
+        binding_path(structure).write_text(json.dumps({'schema': SCHEMA,
+            'structure': descriptor(structure.name, structure.read_bytes()),
+            'summary': descriptor(summary.name, summary.read_bytes())}))
     receipt = tmp_path / 'run/filter_rf3/rf3_filter_1'
     monkeypatch.setattr(sys, 'argv', ['filter', 'prediction', '--input-dir', str(source),
         '--output-dir', str(tmp_path / 'results/best_designs'),

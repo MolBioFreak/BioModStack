@@ -111,6 +111,7 @@ def test_prediction_cli_zero_confidence_and_dispositions(tmp_path):
     (tmp_path/'a.cif').write_text('same')
     source = tmp_path/'a_summary_confidences.json'
     source.write_text('{"plddt": 0, "plddt_units": "percent", "ptm": 0}')
+    bind_summary_fixture(tmp_path / 'a.cif', source)
     result = subprocess.run([sys.executable, str(SCRIPTS/'filter_structures.py'), 'prediction', '--input-dir', str(tmp_path), '--output-dir', str(tmp_path/'out'), '--min-plddt', '0', '--core-protein-scientific-contract', '1'], text=True, capture_output=True, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
     record = json.loads((tmp_path/'filtered.jsonl').read_text())
@@ -164,6 +165,13 @@ def test_native_ui_labels_do_not_conflate_metrics():
     assert 'v1 defaults: design pTM ↑, affinity probability ↑, refold RMSD ↓' in controls
 
 
+def bind_summary_fixture(structure, summary):
+    from lib.filtering.rf3_association import SCHEMA, binding_path, descriptor
+    binding_path(structure).write_text(json.dumps({'schema': SCHEMA,
+        'structure': descriptor(structure.name, structure.read_bytes()),
+        'summary': descriptor(summary.name, summary.read_bytes())}))
+
+
 class Filter(StructureFilter):
     def extract_metrics(self, structure_path, metadata):
         return metadata
@@ -192,6 +200,7 @@ def test_exact_rf3_sidecar_and_all_dispositions(tmp_path):
     for name in ['a','b']:
         (tmp_path / f'{name}.cif').write_text('same')
     (tmp_path / 'a_summary_confidences.json').write_text('{"ptm": 0.8}')
+    bind_summary_fixture(tmp_path / 'a.cif', tmp_path / 'a_summary_confidences.json')
     (tmp_path / 'foreign_summary_confidences.json').write_text('{"ptm": 0.9}')
     f = Filter(tmp_path, tmp_path/'out', {'ptm': (.8,None)}, core_protein_scientific_contract=1)
     assert f.find_metadata_file(tmp_path/'a.cif').name == 'a_summary_confidences.json'
@@ -213,6 +222,10 @@ def test_real_wrapper_to_filter_required_metrics(tmp_path, dialect, missing, bud
         'missing': dict(design_ptm=.8, affinity_probability=.8, filter_rmsd=.2),
     }
     rows['missing'].pop(missing)
+    from test_boltzgen_native_scalars import observed_source
+    identity, _ = observed_source(tmp_path)
+    for values in rows.values():
+        values['affinity_probability_binary1'] = values.pop('affinity_probability')
     paths, jsons = [], []
     for name, values in rows.items():
         path = tmp_path / f'{name}.pdb'
@@ -225,12 +238,13 @@ def test_real_wrapper_to_filter_required_metrics(tmp_path, dialect, missing, bud
         import csv
         source = tmp_path / 'metrics.csv'
         with source.open('w') as stream:
-            writer = csv.DictWriter(stream, fieldnames=['id', 'design_ptm', 'affinity_probability', 'filter_rmsd'])
+            writer = csv.DictWriter(stream, fieldnames=['id', 'design_ptm', 'affinity_probability_binary1', 'filter_rmsd'])
             writer.writeheader()
             writer.writerows(dict(id=name, **values) for name, values in rows.items())
-        assert wrapper.create_metadata_json(source, tmp_path, core_protein_scientific_contract=1)
+        assert wrapper.create_metadata_json(source, tmp_path, core_protein_scientific_contract=1,
+            producer_identity=identity, filter_from_inverse_folded=True)
     else:
-        assert wrapper.extract_metrics_from_npz(tmp_path, tmp_path, core_protein_scientific_contract=1) == 3
+        assert wrapper.extract_metrics_from_npz(tmp_path, tmp_path, core_protein_scientific_contract=1, producer_identity=identity) == 3
     for path in jsons:
         assert 'metric_evidence' in json.loads(Path(path).read_text())
     for zero_gate in (False, True):
@@ -248,6 +262,12 @@ def test_real_wrapper_to_filter_required_metrics(tmp_path, dialect, missing, bud
         assert not records['missing']['selected']
         assert any(c['criterion'] == missing and c['disposition'] == 'unevaluable_missing'
                    for c in records['missing']['criteria'])
+        if dialect == 'npz':
+            # The native scalar contract has no NPZ refolding/alignment RMSD.
+            # An arbitrary added filter_rmsd array cannot earn selection.
+            assert summary['final_count'] == 0
+            assert all(not row['selected'] for row in records.values())
+            continue
         assert records['best']['selected']
         assert records['best']['disposition'] == 'passed'
         assert records['worse']['disposition'] == ('rejected_threshold' if zero_gate else 'passed')

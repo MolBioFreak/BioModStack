@@ -17,7 +17,9 @@ def snapshot_inputs(filter_instance, root):
     inputs = root / 'inputs'
     inputs.mkdir(parents=True, exist_ok=False)
     sources = filter_instance.find_structure_files()
+    from .rf3_association import binding_path
     paths = set(sources)
+    paths.update(binding_path(source) for source in sources if binding_path(source).is_file())
     for source in sources:
         metadata = filter_instance.find_metadata_file(source)
         if metadata is not None:
@@ -52,6 +54,14 @@ def publish_invocation(filter_instance, results, jsonl_path, root, stage_id, job
         row['artifacts'] = {'structure': artifact(root, source),
                             'metadata': artifact(root, metadata) if metadata else None,
                             'published_structure': published}
+        if result.get('_structure_sha256') is not None and result['_structure_sha256'] != row['artifacts']['structure']['sha256']:
+            raise ValueError('filter structure bytes changed during evaluation')
+        if result.get('source_sha256') is not None and result['source_sha256'] != (row['artifacts']['metadata']['sha256'] if metadata else None):
+            raise ValueError('filter metadata bytes changed during evaluation')
+        from .rf3_association import binding_path
+        binding = binding_path(source)
+        if binding.is_file():
+            row['rf3_binding'] = artifact(root, binding)
         # Retain invalid native JSON too, without pretending it was parsed.
         row['source_sha256'] = row['artifacts']['metadata']['sha256'] if metadata else None
         counts[row['disposition']] += 1

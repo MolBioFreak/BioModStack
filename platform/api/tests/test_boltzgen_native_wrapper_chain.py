@@ -63,9 +63,15 @@ async def test_wrapper_native_csv_to_filter_sqlite_and_canonical_reader(tmp_path
     try:
         async with factory() as db:
             job = make_job(tmp_path); db.add(job); await db.commit()
-            assert await publication.ingest(job, tmp_path, db) == 1
+            assert await publication.ingest(job, tmp_path, db) == (0 if unknown_source or preexisting else 1)
         async with factory() as db:
             row = await db.scalar(select(Design))
+            if unknown_source or preexisting:
+                assert row is None
+                report = json.loads((output / 'filter_summary.json').read_text())
+                assert report['dispositions'][0]['disposition'] == 'unevaluable_missing'
+                assert report['final_count'] == 0
+                return
             result = await publication.verified_boltzgen_design(db, row)
             assert set(result['block']['metrics']) == {'design_ptm', 'affinity_probability', 'filter_rmsd'}
             for record in result['block']['metrics'].values():

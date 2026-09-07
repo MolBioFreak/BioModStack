@@ -122,7 +122,9 @@ def prepare_filter_stages(job, output_root):
             task_rows = [_json(line) for line in _bound(task_root, invocation['outcomes']).splitlines()]
             ids = set()
             for row in task_rows:
-                validate_outcome(row, stage_id, roster['settings'])
+                criterion_row = ({k: v for k, v in row.items() if k != 'rf3_binding'}
+                                 if stage_id == 'rf3_prediction_filter' else row)
+                validate_outcome(criterion_row, stage_id, roster['settings'])
                 cid = row.get('candidate_id')
                 if not isinstance(cid, str) or not cid or cid in ids or row.get('disposition') not in STATES:
                     raise ValueError('filter candidate identity/disposition invalid')
@@ -145,6 +147,18 @@ def prepare_filter_stages(job, output_root):
                     _bound(task_root, metadata)
                 if row.get('source_sha256') != (metadata['sha256'] if metadata else None):
                     raise ValueError('filter metadata source mismatch')
+                if stage_id == 'rf3_prediction_filter':
+                    # Invalid candidates can retain a broken/missing binding as failure
+                    # evidence; no evaluated scientific disposition may use it.
+                    try:
+                        from services import aligned_error_utils
+                        from lib.filtering.rf3_association import validate
+                        binding = _json(_bound(task_root, row.get('rf3_binding')))
+                        validate(binding, cid, _bound(task_root, artifacts['structure']),
+                                 Path(metadata['path']).name, _bound(task_root, metadata))
+                    except (ValueError, KeyError, TypeError):
+                        if row['disposition'] != 'invalid_evidence' or not row.get('candidate_failure'):
+                            raise ValueError('filter RF3 producer association invalid')
                 published = artifacts['published_structure']
                 if row['passed'] != (published is not None):
                     raise ValueError('filter publication disposition mismatch')
@@ -171,8 +185,11 @@ def prepare_filter_stages(job, output_root):
         if stage['role'] == 'selected_publication':
             # This is the existing PublishResults directory, not a guessed input
             # or an arbitrary fallback. Upstream fanout has no such equality.
-            selected = Counter((Path(row['artifacts']['published_structure']['path']).name,
+            branch = 'rf3_terminal' if stage_id == 'rf3_prediction_filter' else 'rfd3_only'
+            selected = Counter((f"{branch}/{Path(row['artifacts']['published_structure']['path']).name}",
                                 row['artifacts']['published_structure']['sha256']) for row in rows if row['passed'])
+            if len({key for key, _ in selected}) != sum(selected.values()):
+                raise ValueError('filter selected output identity ambiguous across tasks')
             joined = Counter()
             publication_paths = set()
             selection = stage.get('selection')
@@ -192,7 +209,7 @@ def prepare_filter_stages(job, output_root):
                 digest = hashlib.sha256(_read(root, path)).hexdigest()
                 if digest != terminal['producer_artifact_sha256']:
                     raise ValueError('filter terminal artifact mismatch')
-                joined[(Path(terminal['producer_output_key']).name, digest)] += 1
+                joined[(terminal['producer_output_key'], digest)] += 1
             actual_paths = {path.relative_to(root).as_posix() for path in (root / 'results/best_designs').glob('*.pdb')}
             if selected != joined or actual_paths != publication_paths:
                 raise ValueError('filter selected publication pass-set mismatch')

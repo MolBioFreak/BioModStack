@@ -397,6 +397,8 @@ def run_strict_filter(args):
         pdbs = pdbs[0].split()
     if len(jsons) == 1:
         jsons = jsons[0].split()
+    if len({Path(p).stem for p in pdbs}) != len(pdbs):
+        raise ValueError('duplicate filter candidate identity')
     dispositions, passing = [], []
     for pdb in pdbs:
         path = Path(pdb)
@@ -407,15 +409,20 @@ def run_strict_filter(args):
             if len(matches) > 1:
                 raise ValueError('ambiguous_metadata_identity')
             raw = matches[0].read_bytes() if matches else None
-            metrics = json.loads(raw) if raw is not None else {}
+            from lib.filtering.evidence import load_object
+            metrics = load_object(raw) if raw is not None else {}
             if not isinstance(metrics, dict) or (metrics.get('design_id') is not None and metrics['design_id'] != identity):
                 raise ValueError('foreign_metadata_identity')
             metrics['core_protein_scientific_contract'] = 1
+            from lib.filtering.evidence import alias_value
+            metrics['affinity_probability'] = alias_value(metrics, ('affinity_probability', 'affinity_probability_binary1'))
             sequence = metrics.get('designed_sequence') or ''
             for name, _, _ in criteria:
                 if name.endswith('_fraction'):
                     metrics[name] = get_metric_value(metrics, {'sequence': sequence}, name)
-            record = evaluate(criteria, metrics, identity, metrics.get('metric_evidence'), metrics.get('plddt_units'), required=required)
+            from lib.filtering.native_gate import gate_evidence
+            evidence = gate_evidence(metrics, matches[0] if matches else None, identity)
+            record = evaluate(criteria, metrics, identity, evidence, metrics.get('plddt_units'), required=required)
             record['source_sha256'] = hashlib.sha256(raw).hexdigest() if raw is not None else None
             record['structure_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
             if record['disposition'] == 'passed':

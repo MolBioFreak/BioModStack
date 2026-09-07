@@ -72,6 +72,10 @@ def evaluate(criteria, metrics, candidate_id, evidence=None, plddt_units=None, r
                 item = {'state': 'invalid', 'value': None, 'units': 'native', 'reason_code': 'invalid_evidence_schema'}
         else:
             item = metric_evidence(name, metrics.get(name), plddt_units)
+        if item['state'] == 'ok' and name in metrics:
+            scalar = metric_evidence(name, metrics[name], plddt_units)
+            if scalar['state'] != 'ok' or scalar['value'] != item['value']:
+                item = {**item, 'state': 'invalid', 'value': None, 'reason_code': 'conflicting_metric_evidence'}
         if item['state'] == 'unavailable':
             disposition = 'unevaluable_missing'
         elif item['state'] == 'invalid':
@@ -85,10 +89,31 @@ def evaluate(criteria, metrics, candidate_id, evidence=None, plddt_units=None, r
     return {'core_protein_scientific_contract': 1, 'candidate_id': candidate_id, 'disposition': disposition, 'criteria': records}
 
 
+def load_object(raw):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate metadata key: ' + key)
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+def alias_value(values, names):
+    """Compare supplied aliases before choosing one, including null/boolean conflicts."""
+    present = [values[name] for name in names if name in values]
+    if not present:
+        return None
+    first = present[0]
+    if any(type(v) is bool or type(first) is bool or v != first for v in present[1:]):
+        return float('nan')  # The common evaluator emits typed invalid evidence.
+    return first
+
+
 def native_metadata(values, design_id, source_bytes, dialect):
     values = dict(values)
-    if 'affinity_probability_binary1' in values:
-        values['affinity_probability'] = values['affinity_probability_binary1']
+    values['affinity_probability'] = alias_value(values, ('affinity_probability_binary1', 'affinity_probability'))
     evidence = {}
     # Preserve additional native numeric columns so requested metrics are not dropped.
     for name in set(CORE) | {k for k,v in values.items() if isinstance(v, Real)}:
@@ -110,6 +135,9 @@ def csv_metadata(csv_path, output_dir, known_design_ids=None, batch_prefix='', p
     if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
         raise ValueError('CSV candidate identity columns ambiguous')
     rows = [(row, csv_candidate_identity(row)) for row in reader]
+    if len({base for _, base in rows}) != len(rows):
+        raise ValueError('duplicate CSV candidate identity')
+    resolved = []
     for row, base in rows:
         rank = row.get('final_rank')
         candidates = ([f'rank{int(float(rank))}_{base}'] if rank else []) + [base]
@@ -117,6 +145,10 @@ def csv_metadata(csv_path, output_dir, known_design_ids=None, batch_prefix='', p
         matches = [c for c in candidates if known_design_ids is None or c in known_design_ids]
         if not matches:
             raise ValueError(f'CSV identity not bound to converted candidate: {base}')
+        resolved.append((row, base, matches[0]))
+    if len({identity for _, _, identity in resolved}) != len(resolved):
+        raise ValueError('duplicate converted CSV candidate identity')
+    for row, base, identity in resolved:
         values = {}
         for key, value in row.items():
             if value == '':
@@ -126,11 +158,11 @@ def csv_metadata(csv_path, output_dir, known_design_ids=None, batch_prefix='', p
                     values[key] = float(value)
                 except (ValueError, TypeError):
                     values[key] = value
-        data = native_metadata(values, matches[0], raw, 'csv')
+        data = native_metadata(values, identity, raw, 'csv')
         from lib.boltzgen_native import retain_source
-        data['native_scalar_source'] = retain_source(csv_path, output_dir, matches[0], 'csv', producer_identity, native_id=base)
+        data['native_scalar_source'] = retain_source(csv_path, output_dir, identity, 'csv', producer_identity, native_id=base)
         data['native_scalar_source']['filter_from_inverse_folded'] = filter_from_inverse_folded
-        (Path(output_dir) / f'confidence_{matches[0]}.json').write_text(json.dumps(data, allow_nan=False, indent=2))
+        (Path(output_dir) / f'confidence_{identity}.json').write_text(json.dumps(data, allow_nan=False, indent=2))
     return True
 
 
