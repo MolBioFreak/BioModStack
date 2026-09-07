@@ -36,6 +36,12 @@ from services.ont_ngs_contract import DORADO_LOCK_PATH
 from services.ngs_molbio_source_authority import SourceBuildRevisionError, source_build_revision
 from services.ngs_molbio_runtime_status import NgsMolBioRuntimeAuthorityError, runtime_implementation_record
 
+# Scientific task scripts and the API share one immutable image-store owner.
+_SCRIPTS_ROOT = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_ROOT))
+from lib.shared_runtime_images import SharedRuntimeImageError, publish_image, verify_image
+
 SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,255}$")
 SAFE_CONTIG_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,255}$")
 DIMER_TOKENS = ("dimer", "multimer", "concatemer")
@@ -789,10 +795,21 @@ class _PinnedSamtoolsCommand:
         assert self.runtime_directory_fd is not None
         assert self.runtime_directory_identity is not None
         runtime_fd = self.pass_fds[0]
-        metadata = os.fstat(runtime_fd)
-        path_metadata = os.stat(self.runtime_path, follow_symlinks=False)
-        directory_metadata = os.fstat(self.runtime_directory_fd)
-        directory_path_metadata = os.stat(self.runtime_path.parent, follow_symlinks=False)
+        try:
+            metadata = os.fstat(runtime_fd)
+            directory_metadata = os.fstat(self.runtime_directory_fd)
+            visible_directory_fd = _open_nofollow(
+                self.runtime_path.parent, directory=True, label="shared pinned NGS runtime directory",
+            )
+            try:
+                directory_path_metadata = os.fstat(visible_directory_fd)
+                path_metadata = os.stat(
+                    self.runtime_path.name, dir_fd=visible_directory_fd, follow_symlinks=False,
+                )
+            finally:
+                os.close(visible_directory_fd)
+        except OSError as exc:
+            raise AlignmentSessionError("shared pinned NGS runtime snapshot is unavailable") from exc
         if (
             _runtime_stat_identity(metadata) != self.runtime_identity
             or _runtime_stat_identity(path_metadata) != self.runtime_identity
@@ -804,7 +821,7 @@ class _PinnedSamtoolsCommand:
             or not stat.S_ISDIR(directory_metadata.st_mode)
             or stat.S_IMODE(directory_metadata.st_mode) & 0o222
         ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
+            raise AlignmentSessionError("shared pinned NGS runtime snapshot is unsafe")
 
 
 _samtools_runtime_lock = threading.RLock()
@@ -872,114 +889,56 @@ def _sha256_descriptor(descriptor: int) -> str:
     return digest.hexdigest()
 
 
-def _private_runtime_snapshot(
-    source_fd: int,
+def _runtime_image_store(source: Path) -> Path:
+    configured = os.environ.get("BMS_RUNTIME_IMAGE_STORE", "").strip()
+    container_dir = os.environ.get("BMS_CONTAINER_DIR", "").strip()
+    if configured:
+        root = Path(configured).expanduser()
+    else:
+        container_root = Path(container_dir).expanduser() if container_dir else source.parent
+        root = container_root / ".image-store"
+    if not root.is_absolute():
+        raise AlignmentSessionError("shared NGS runtime image store path is invalid")
+    return root
+
+
+def _shared_runtime_snapshot(
+    source: Path,
     *,
-    directory: Path,
+    store_root: Path,
     expected_digest: str,
 ) -> tuple[int, int, Path, tuple[int, int, int, int, int], int, tuple[int, int, int, int, int]]:
-    """Copy one stable source generation into one private named read-only image."""
-    metadata_before = os.fstat(source_fd)
-    process_directory = directory / f".bms-ngs-runtime-{expected_digest}"
-    runtime_path = process_directory / "runtime.sif"
-    if process_directory.exists():
-        source_digest = _sha256_descriptor(source_fd)
-        metadata_after = os.fstat(source_fd)
-        if (
-            _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after)
-            or source_digest != expected_digest
-        ):
-            raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(
-            process_directory,
-            directory=True,
-            label="private pinned NGS runtime directory",
-        )
-        try:
-            private_metadata = os.fstat(runtime_fd)
-            directory_metadata = os.fstat(directory_fd)
-            if (
-                _sha256_descriptor(runtime_fd) != expected_digest
-                or not stat.S_ISREG(private_metadata.st_mode)
-                or private_metadata.st_size != metadata_after.st_size
-                or stat.S_IMODE(private_metadata.st_mode) & 0o222
-                or not stat.S_ISDIR(directory_metadata.st_mode)
-                or stat.S_IMODE(directory_metadata.st_mode) & 0o222
-            ):
-                raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-            return (
-                runtime_fd,
-                private_metadata.st_size,
-                runtime_path,
-                _runtime_stat_identity(private_metadata),
-                directory_fd,
-                _runtime_stat_identity(directory_metadata),
-            )
-        except Exception:
-            os.close(runtime_fd)
-            os.close(directory_fd)
-            raise
-    digest = hashlib.sha256()
-    size = 0
-    staging_directory = Path(
-        tempfile.mkdtemp(prefix=f".bms-ngs-runtime-{expected_digest}.partial-", dir=directory)
-    )
-    os.chmod(staging_directory, 0o700)
-    temporary_path = staging_directory / "runtime.sif"
+    """Publish centrally, then bind verified object bytes to retained no-follow FDs.
+
+    Publication and hashing belong to the shared store, not to each job. Cached
+    commands only check the immutable object identities; the mutable source is
+    not execution authority after admission.
+    """
     runtime_fd: int | None = None
     directory_fd: int | None = None
     try:
-        with temporary_path.open("xb") as snapshot:
-            while chunk := os.pread(source_fd, SNAPSHOT_CHUNK_BYTES, size):
-                snapshot.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-            snapshot.flush()
-            os.fsync(snapshot.fileno())
-            metadata_after = os.fstat(source_fd)
-            if _runtime_stat_identity(metadata_before) != _runtime_stat_identity(metadata_after):
-                raise AlignmentSessionError("pinned NGS runtime changed during snapshot validation")
-            if size != metadata_after.st_size or digest.hexdigest() != expected_digest:
-                raise AlignmentSessionError("pinned NGS runtime digest does not match the canonical lock")
-            os.fchmod(snapshot.fileno(), 0o400)
-        os.chmod(staging_directory, 0o500)
-        try:
-            os.rename(staging_directory, process_directory)
-        except OSError:
-            if not process_directory.exists():
-                raise
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-            return _private_runtime_snapshot(
-                source_fd,
-                directory=directory,
-                expected_digest=expected_digest,
-            )
-        runtime_fd = _open_nofollow(runtime_path, directory=False, label="private pinned NGS runtime")
-        directory_fd = _open_nofollow(process_directory, directory=True, label="private pinned NGS runtime directory")
-        runtime_identity = _runtime_stat_identity(os.fstat(runtime_fd))
-        directory_identity = _runtime_stat_identity(os.fstat(directory_fd))
-        private_metadata = os.fstat(runtime_fd)
-        if (
-            not stat.S_ISREG(private_metadata.st_mode)
-            or private_metadata.st_size != size
-            or stat.S_IMODE(private_metadata.st_mode) & 0o222
-        ):
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unsafe")
-        return runtime_fd, size, runtime_path, runtime_identity, directory_fd, directory_identity
-    except Exception:
+        runtime_path = publish_image(source, store_root, expected_digest)
+        record = verify_image(runtime_path, expected_digest)
+        runtime_fd = _open_nofollow(runtime_path, directory=False, label="shared pinned NGS runtime")
+        directory_fd = _open_nofollow(
+            runtime_path.parent, directory=True, label="shared pinned NGS runtime directory",
+        )
+        metadata = os.fstat(runtime_fd)
+        identity = _runtime_stat_identity(metadata)
+        verified_identity = tuple(record[key] for key in ("device", "inode", "size", "mtime_ns", "ctime_ns"))
+        if record["sha256"] != expected_digest or identity != verified_identity:
+            raise AlignmentSessionError("shared pinned NGS runtime changed during validation")
+        return (
+            runtime_fd, metadata.st_size, runtime_path, identity,
+            directory_fd, _runtime_stat_identity(os.fstat(directory_fd)),
+        )
+    except Exception as exc:
         if runtime_fd is not None:
             os.close(runtime_fd)
         if directory_fd is not None:
             os.close(directory_fd)
-        try:
-            os.chmod(staging_directory, 0o700)
-            temporary_path.unlink(missing_ok=True)
-            staging_directory.rmdir()
-        except OSError:
-            pass
+        if isinstance(exc, (OSError, ValueError, SharedRuntimeImageError)):
+            raise AlignmentSessionError(f"shared pinned NGS runtime snapshot is unsafe: {exc}") from exc
         raise
 
 
@@ -1002,37 +961,34 @@ def _samtools_command() -> _PinnedSamtoolsCommand:
     runtime_sif = Path(runtime_raw).expanduser()
     if not runtime_sif.is_absolute():
         raise AlignmentSessionError("pinned NGS samtools runtime path is invalid")
-    key = (os.fspath(runtime_sif), "descriptor-only")
+    store_root = _runtime_image_store(runtime_sif)
+    key = (os.fspath(runtime_sif), os.fspath(store_root))
     with _samtools_runtime_lock:
+        # The small canonical lock stays fresh even when image bytes are cached.
+        expected_digest, expected_version = _ngs_runtime_identity()
+        if expected_version != "1.24":
+            raise AlignmentSessionError("canonical NGS samtools version is not 1.24")
         cached = _samtools_runtime_cache.get(key)
         if cached is not None:
+            if cached.runtime_sha256 != expected_digest:
+                raise AlignmentSessionError("cached NGS runtime does not match the canonical lock")
             cached.verify_runtime()
             return cached
         apptainer = shutil.which("apptainer")
         if not apptainer:
             raise AlignmentSessionError("Apptainer is unavailable for the pinned NGS runtime")
-        expected_digest, expected_version = _ngs_runtime_identity()
-        source_fd = _open_nofollow(runtime_sif, directory=False, label="pinned NGS runtime")
-        runtime_fd: int | None = None
-        directory_fd: int | None = None
-        runtime_path: Path | None = None
-        try:
-            (
-                runtime_fd,
-                runtime_size,
-                runtime_path,
-                runtime_identity,
-                directory_fd,
-                directory_identity,
-            ) = _private_runtime_snapshot(
-                source_fd,
-                directory=runtime_sif.parent,
-                expected_digest=expected_digest,
-            )
-        finally:
-            os.close(source_fd)
-        if runtime_fd is None or directory_fd is None or runtime_path is None:
-            raise AlignmentSessionError("private pinned NGS runtime snapshot is unavailable")
+        (
+            runtime_fd,
+            runtime_size,
+            runtime_path,
+            runtime_identity,
+            directory_fd,
+            directory_identity,
+        ) = _shared_runtime_snapshot(
+            runtime_sif,
+            store_root=store_root,
+            expected_digest=expected_digest,
+        )
         try:
             command = _PinnedSamtoolsCommand(
                 argv=(

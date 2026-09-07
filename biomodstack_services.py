@@ -1682,6 +1682,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
         Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
         Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
+        Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={Path(dev_container_dir) / '.image-store'}")}
+        EnvironmentFile=-{systemd_exec_arg(Path(dev_container_dir) / '.image-store' / 'references' / 'development.env')}
         Environment=BMS_WORKFLOW_ADAPTER_BIND_HOST=127.0.0.1
         Environment={systemd_value(f"BMS_WORKFLOW_ADAPTER_PORT={DEVELOPMENT_WORKFLOW_ADAPTER_PORT}")}
         Environment={systemd_value(f"BMS_BUILD_SHA={build_revision}")}
@@ -1741,6 +1743,8 @@ def render_user_units(project_root: Path | None = None, runtime_mode: str | None
         Environment={systemd_value(f"BMS_CONTAINER_DIR={dev_container_dir}")}
         Environment={systemd_value(f"BMS_CM_CONFORNETS_CONTAINER_PATH={dev_confornets_container}")}
         Environment={systemd_value(f"BMS_NGS_RUNTIME_SIF={dev_ngs_runtime_sif}")}
+        Environment={systemd_value(f"BMS_RUNTIME_IMAGE_STORE={Path(dev_container_dir) / '.image-store'}")}
+        EnvironmentFile=-{systemd_exec_arg(Path(dev_container_dir) / '.image-store' / 'references' / 'development.env')}
         Environment={systemd_value(f"BMS_WEIGHTS={dev_weights_root}")}
         Environment={systemd_value(f"BMS_COLABFOLD_DB={dev_colabfold_db}")}
         Environment={systemd_value(f"BMS_MSA_CACHE={dev_msa_cache_dir}")}

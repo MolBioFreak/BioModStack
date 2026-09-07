@@ -1,5 +1,4 @@
 {
-  "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
   "paths": [
     "apptainer/dorado.def",
     "biomodstack_local_resources.py",
@@ -244,11 +243,13 @@
     "scripts/build_ont_squigulator_runtime.sh",
     "scripts/build_restriction_enzyme_catalog.py",
     "scripts/build_small_igv_report_inputs.py",
+    "scripts/lib/shared_runtime_images.py",
     "scripts/ont_raw_signal_lookup.py",
     "scripts/ont_raw_signal_validate.py",
     "scripts/ont_signal_comparison_runtime.py",
     "scripts/ont_signal_runtime.py",
     "scripts/ont_squigulator_runtime.py",
+    "scripts/publish_runtime_images.py",
     "scripts/run_ngs_molbio_payload_ownership_audit.py",
     "scripts/test_validate_standalone_igv_report.py",
     "scripts/validate_standalone_igv_report.py",
@@ -264,5 +265,6 @@
     "workflows/ngs/wf_clone_validation.nf",
     "workflows/oligo_design.nf"
   ],
-  "schema": "bms.ngs-molbio.runtime-source-denominator.v2"
+  "schema": "bms.ngs-molbio.runtime-source-denominator.v2",
+  "content_sha256": "74e7f698e4ccb000407dc631e0d1592a90a1398a37fb572809c7db2ed6bc66ed"
 }

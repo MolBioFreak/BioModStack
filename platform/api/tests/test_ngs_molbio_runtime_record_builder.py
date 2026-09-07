@@ -100,7 +100,8 @@ def test_runtime_denominator_covers_complete_restriction_authority() -> None:
         "scripts/build_restriction_enzyme_catalog.py",
     }
     assert required <= set(denominator["paths"])
-    assert len(denominator["paths"]) == 262
+    assert {'scripts/lib/shared_runtime_images.py', 'scripts/publish_runtime_images.py'} <= set(denominator['paths'])
+    assert len(denominator["paths"]) == 264
 
 
 def test_checked_in_active_runtime_record_is_accepted() -> None:

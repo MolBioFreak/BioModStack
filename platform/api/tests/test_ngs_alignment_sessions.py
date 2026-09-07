@@ -31,6 +31,12 @@ from routers import ngs_alignment_sessions as ngs_routes  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _isolated_runtime_image_store(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("BMS_RUNTIME_IMAGE_STORE", raising=False)
+    monkeypatch.delenv("BMS_CONTAINER_DIR", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _stable_derived_artifact_creation_authority(monkeypatch: pytest.MonkeyPatch):
     from services import ngs_alignment_sessions as service
 
@@ -643,10 +649,16 @@ def test_locus_slice_validates_and_deterministically_caps_primary_reads(
 
 
 def test_locus_admission_requires_primary_overlap_when_only_supplementary_is_inside(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     import pysam
     from services import ngs_alignment_sessions as service
+
+    # Decode the real fixture BAM without depending on a live Dorado runtime.
+    def fixture_sam_lines(bam, **kwargs):
+        with pysam.AlignmentFile(bam, 'rb') as stream:
+            yield from (record.to_string() for record in stream.fetch(until_eof=True))
+    monkeypatch.setattr(service, '_iter_sam_lines', fixture_sam_lines)
 
     source = tmp_path / "supplementary-only-overlap.bam"
     header = {"HD": {"VN": "1.6", "SO": "coordinate"}, "SQ": [{"SN": "plasmid", "LN": 1000}]}
@@ -1081,7 +1093,10 @@ def test_samtools_command_uses_pinned_no_network_ont_runtime(
             "samtools",
         )
         assert command.runtime_path is not None
-        assert command.runtime_path.parent.parent == container_dir
+        assert command.runtime_sha256 is not None
+        assert command.runtime_path == (
+            container_dir / ".image-store" / "objects" / "sha256" / command.runtime_sha256 / "runtime.sif"
+        )
         assert os.stat(command.runtime_path, follow_symlinks=False).st_ino == os.fstat(command.pass_fds[0]).st_ino
         assert os.fstat(command.pass_fds[0]).st_mode & 0o222 == 0
         assert "--bind" not in command.argv
@@ -1185,7 +1200,7 @@ def test_samtools_read_inspection_uses_inherited_snapshot_descriptors_without_re
         service._clear_samtools_runtime_cache()
 
 
-def test_samtools_runtime_private_snapshot_survives_source_mutation_after_cache(
+def test_samtools_runtime_shared_snapshot_survives_source_mutation_after_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1215,7 +1230,13 @@ def test_samtools_runtime_private_snapshot_survives_source_mutation_after_cache(
             handle.seek(0)
             handle.write(b"tampered")
             handle.truncate()
+        def no_image_work(*_args, **_kwargs):
+            pytest.fail("cached command must not publish, copy, or hash image bytes")
+
+        monkeypatch.setattr(service, "publish_image", no_image_work)
+        monkeypatch.setattr(service, "verify_image", no_image_work)
         command.verify_runtime()
+        assert service._samtools_command() is command
         assert os.pread(runtime_fd, command.runtime_size or 0, 0) == b"approved"
     finally:
         service._clear_samtools_runtime_cache()
