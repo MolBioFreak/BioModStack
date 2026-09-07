@@ -116,6 +116,23 @@ def run_scorer(monkeypatch, tmp_path, *, request=True, bad=None, mode='selected_
     return json.loads((tmp_path/'score.json').read_text())
 
 
+def test_contradictory_domains_block_scorer_and_publication(monkeypatch, tmp_path):
+    def contradict(payload):
+        for name in ('selected', 'H3'):
+            payload['domains'][name] = {'reference': [R[1]], 'candidate': [C[0]],
+                                       'pairs': [(R[1], C[0])]}
+    data = run_scorer(monkeypatch, tmp_path, transform=contradict)
+    assert data['objective_score'] is None
+    assert data['unavailable_reason'] == 'contradictory_domain_correspondence'
+    monkeypatch.setattr(sys, 'argv', ['filter', '--core-protein-scientific-contract', '1',
+        '--score_json', str(tmp_path/'score.json'), '--pdb_path', str(tmp_path/'candidate.pdb'),
+        '--output_dir', str(tmp_path/'pass'), '--report_json', str(tmp_path/'report.json'),
+        '--min_improvement', '0'])
+    filtering.main()
+    assert json.loads((tmp_path/'report.json').read_text())['passed'] is False
+    assert not (tmp_path/'pass'/'candidate.pdb').exists()
+
+
 def test_main_uses_exact_side_specific_request_domains(monkeypatch, tmp_path):
     data = run_scorer(monkeypatch, tmp_path)
     assert data['selected_interface_score_original'] == -7

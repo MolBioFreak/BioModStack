@@ -106,6 +106,8 @@ def validate_comparison_request(request, reference_bytes, candidate_bytes):
             return 'invalid_role_authority'
     if not isinstance(request.get('domains'), dict):
         return 'invalid_comparison_request'
+    if contradictory_domain_mapping(request['domains']):
+        return 'contradictory_domain_correspondence'
     return None
 
 
@@ -180,11 +182,8 @@ def compare_declared_domain(reference, candidate, reference_domain, candidate_do
     return result
 
 
-def compare_request_domains(request, reference, candidate, reference_binder, candidate_binder):
-    """Consume explicit domains from the request, never intersect to define them."""
-    domains = (request or {}).get('domains', {})
-    results = {}
-    # Domains select parts of one comparison; they cannot redefine its mapping.
+def contradictory_domain_mapping(domains):
+    """Domains select parts of one comparison; they cannot redefine its mapping."""
     forward, reverse = {}, {}
     conflict = False
     for spec in domains.values():
@@ -197,6 +196,14 @@ def compare_request_domains(request, reference, candidate, reference_binder, can
         except (ValueError, TypeError, AttributeError):
             # Local malformed-pair diagnostics remain owned by the domain validator.
             continue
+    return conflict
+
+
+def compare_request_domains(request, reference, candidate, reference_binder, candidate_binder):
+    """Consume explicit domains from the request, never intersect to define them."""
+    domains = (request or {}).get('domains', {})
+    results = {}
+    conflict = contradictory_domain_mapping(domains)
     for name in dict.fromkeys(['whole_binder', 'selected', 'nonselected', *domains]):
         spec = domains.get(name)
         if spec is None:
