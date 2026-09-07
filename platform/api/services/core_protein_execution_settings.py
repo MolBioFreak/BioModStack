@@ -204,6 +204,15 @@ def prepare_receipt(job, root: Path, path: Path):
     expected_keys = ESM_KEYS if model == 'esmfold2' else OPENMM_KEYS
     if {s.key for s in settings if not s.scope.startswith('component:')} != expected_keys:
         raise ValueError('missing required effective settings')
+    if model == 'esmfold2':
+        required_components = {
+            ('component:' + component['id'], key)
+            for component in component_effective
+            for key in ('msa_format', 'msa_max_sequences', 'msa_remove_insertions')
+        }
+        observed_components = {(s.scope, s.key) for s in settings if s.scope.startswith('component:')}
+        if observed_components != required_components:
+            raise ValueError('missing or foreign component effective settings')
     sources = [Source(scope=s['scope'], sha256=s['sha256'], size_bytes=s.get('size_bytes')) for s in payload['sources']]
     projection = ExecutionReceipt(model=model, artifact_sha256=evidence['sha256'], settings=settings, sources=sources).model_dump()
     return {'artifact': evidence, 'receipt': projection}

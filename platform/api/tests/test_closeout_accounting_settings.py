@@ -15,6 +15,24 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+@pytest.mark.parametrize('missing', ['msa_format', 'msa_max_sequences', 'msa_remove_insertions'])
+def test_component_settings_inventory_first_ingestion(tmp_path, missing):
+    source = tmp_path / 'source.a3m'
+    source.write_text('>q\nAC\n')
+    request = {'complex_components': [{'id': 'B', 'type': 'protein', 'sequence': 'AC',
+                'msa_path': str(source), 'msa_remove_insertions': False}]}
+    _, receipt = runner.compile_workflow_request(
+        {'core_protein_scientific_contract': 1, **request}, {str(source): str(source)})
+    owner = SimpleNamespace(provenance={'core_protein_requested_params': request})
+    path = tmp_path / 'effective_settings.json'
+    path.write_text(json.dumps(receipt))
+    prepare_receipt(owner, tmp_path, path)
+    receipt['settings'].pop('component:B.' + missing)
+    path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='component effective settings'):
+        prepare_receipt(owner, tmp_path, path)
+
+
 def publication(tmp_path):
     root = artifacts(tmp_path, ids=('a',))
     manifest = json.loads((root / 'manifest.json').read_text())
