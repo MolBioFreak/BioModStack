@@ -422,6 +422,14 @@
         {
           "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_native_rank_defaults_preserve_complete_rank_algorithm",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_affinity_alias_conflicts_not_overwritten",
+          "layer": "synthetic native converter/filter/publication regression"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_prediction_alias_cli",
+          "layer": "synthetic native converter/filter/publication regression"
         }
       ],
       "limitations": "FL (see layer_limitations)"
@@ -486,6 +494,18 @@
         {
           "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_foreign_same_name_metadata_is_invalid",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_native_rf3_export_to_prediction_cli",
+          "layer": "synthetic native converter/filter/publication regression"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_rf3_uses_parsed_snapshot_for_binding_and_publication",
+          "layer": "synthetic native converter/filter/publication regression"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_rf3_export_filter_receipt_sqlite_api",
+          "layer": "synthetic native converter/filter/publication regression"
         }
       ],
       "limitations": "FL (see layer_limitations)"
@@ -506,6 +526,14 @@
         {
           "selector": "platform/api/tests/test_wp03_filter_evidence.py::test_unified_invalid_metrics_still_publish",
           "layer": "API / disposable persistence"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_decisive_native_evidence_revalidated_before_selection",
+          "layer": "synthetic native converter/filter/publication regression"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_duplicate_csv_rejected_before_any_conversion",
+          "layer": "synthetic native converter/filter/publication regression"
         }
       ],
       "limitations": "FL (see layer_limitations)"
@@ -586,6 +614,10 @@
         {
           "selector": "platform/api/tests/test_closeout_accounting_settings.py::test_inventory_revalidated_after_preparation",
           "layer": "closeout production-boundary regression; synthetic fixtures"
+        },
+        {
+          "selector": "platform/api/tests/test_p1_filter_closeout.py::test_terminal_full_key_substitution_rejected",
+          "layer": "synthetic native converter/filter/publication regression"
         }
       ],
       "limitations": "CA (see layer_limitations)"
