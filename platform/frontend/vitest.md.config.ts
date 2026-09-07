@@ -30,6 +30,7 @@ export default defineConfig({
             './tests/vitest/structureReorchestrateRemoteMounted.test.tsx',
             './tests/vitest/remoteTelemetryHistory.test.tsx',
             './tests/vitest/dashboardTelemetryScopes.test.tsx',
+            './tests/vitest/independentProvisionMounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2Mounted.test.tsx',
             './tests/vitest/molecularDynamicsGen2ShellRoundTrip.test.tsx',
             './tests/vitest/molstarViewerLoadStateMounted.test.tsx',

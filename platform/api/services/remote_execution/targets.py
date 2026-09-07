@@ -101,8 +101,48 @@ def target_id(provider: str, provider_instance_id: str) -> str:
     return f"{provider}:{provider_instance_id}"
 
 
+def observed_artifact_inventory(target):
+    """Last explicit verified download, not discovery of all installed science."""
+    import json
+    from datetime import timezone
+    from pydantic import ValidationError
+    from .contracts import ObservedArtifactInventory
+    metadata = target.provider_metadata
+    if not isinstance(metadata, dict):
+        return None
+    stored = metadata.get("artifact_inventory")
+    if not isinstance(stored, dict) or not stored:
+        return None
+    raw = dict(stored)
+    binding = raw.pop("endpoint_sha256", None)
+    identity = (target.host, target.port, target.username, target.remote_root, target.host_key_sha256)
+    try:
+        observation = ObservedArtifactInventory.model_validate(raw)
+    except (ValidationError, TypeError, ValueError):
+        # Optional historical observations must not break otherwise healthy
+        # target listings. GET neither repairs metadata nor probes the worker.
+        return None
+    # Freshness is derived, never trusted from the stored projection.
+    observation.state = "stale"
+    observed = observation.observed_at
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
+    current = metadata.get("preload")
+    if not isinstance(current, dict):
+        return observation
+    if (0 <= age <= INVENTORY_MAX_AGE_SECONDS and inventory_fresh(target)
+            and current.get("operation_id") == observation.operation_id
+            and current.get("phase") == "source_download_ready"
+            and target.active and target.state == "ready"
+            and binding == hashlib.sha256(json.dumps(identity).encode()).hexdigest()):
+        observation.state = "download_verified"
+    return observation
+
+
 def _target_response(target: ExecutionTarget) -> ExecutionTargetResponse:
     return ExecutionTargetResponse(
+        artifact_inventory=observed_artifact_inventory(target),
         setup=(target.provider_metadata or {}).get("setup"),
         preload=(target.provider_metadata or {}).get("preload"),
         progress=(target.provider_metadata or {}).get("progress") if target.leased_job_id else None,

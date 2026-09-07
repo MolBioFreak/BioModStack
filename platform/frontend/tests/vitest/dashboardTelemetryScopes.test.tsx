@@ -45,6 +45,7 @@ afterEach(() => {
 describe('Dashboard telemetry source tabs', () => {
     it('switches between local, named Vast, and combined active telemetry', async () => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([readyTarget]));
         const container = document.createElement('div');
         document.body.appendChild(container);
@@ -98,6 +99,7 @@ describe('Dashboard telemetry source tabs', () => {
             }
             return response([target]);
         };
+        client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([target]));
         const container = document.createElement('div');
         document.body.append(container);
@@ -141,6 +143,7 @@ describe('Dashboard telemetry source tabs', () => {
         } };
         const post = vi.spyOn(api, 'post').mockRejectedValue({ isAxiosError: true, message: 'Request failed with status code 409', response: { data: { detail: 'Worker has active execution' } } });
         api.defaults.adapter = async () => response([target]);
+        client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([target]));
         const container = document.createElement('div');
         document.body.append(container);
@@ -176,6 +179,7 @@ describe('Dashboard telemetry source tabs', () => {
 
     it.each(['error', 'empty'])('hides cached remote selectors when inventory is %s', async (outcome) => {
         const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+        client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([readyTarget]));
         const container = document.createElement('div');
         document.body.appendChild(container);

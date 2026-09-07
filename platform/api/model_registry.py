@@ -77,6 +77,31 @@ class ModelIntegration(BaseModel):
     workflows: Dict[str, WorkflowIntegration] = Field(default_factory=dict)
 
 
+class RuntimeDependencyRef(BaseModel):
+    """Trusted managed-storage binding, never an operator path or download URL."""
+    model_config = {"extra": "forbid", "frozen": True}
+    kind: str = Field(pattern=r"^(image|weights)$")
+    relative_path: str = Field(pattern=r"^[A-Za-z0-9_.-]+$")
+
+
+# Incremental migration of the existing launch dependency authority. Models not
+# listed here have not yet had their independent closure reviewed.
+INDEPENDENT_RUNTIME_MODELS = frozenset({
+    "protenix", "esmfold2", "esmfold2_experimental", "fampnn", "frustrampnn",
+})
+
+
+def model_runtime_dependencies(model_id: str) -> tuple[RuntimeDependencyRef, ...]:
+    model = get_registry().get_model(model_id)
+    if model is None or model_id not in INDEPENDENT_RUNTIME_MODELS:
+        raise ValueError("Independent runtime closure is not available for this model")
+    refs = [RuntimeDependencyRef(kind="image", relative_path=model.container)]
+    weights = {"protenix": "protenix", "esmfold2": "esmfold2", "esmfold2_experimental": "esmfold2"}
+    if model_id in weights:
+        refs.append(RuntimeDependencyRef(kind="weights", relative_path=weights[model_id]))
+    return tuple(refs)
+
+
 class ModelDefinition(BaseModel):
     """Complete definition of a model/tool."""
     id: str

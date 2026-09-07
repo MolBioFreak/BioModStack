@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_session
 from services.remote_execution.contracts import (
     ExecutionTargetActivateRequest,
-    PreloadRequest,
+    PreloadRequest, ProvisionRequest, ProvisionSelection, ProvisionPreview, ObservedArtifactInventory,
     ExecutionTargetInventoryResponse,
     ExecutionTargetResponse,
 )
@@ -15,7 +15,7 @@ from services.remote_execution.targets import (
     ExecutionTargetError,
     active_remote_telemetry,
     deactivate_target,
-    list_targets,
+    list_targets, get_target, observed_artifact_inventory,
     refresh_vast_targets,
 )
 
@@ -81,6 +81,46 @@ async def preload_execution_target(
         return await controller.start(session, execution_target_id, request)
     except ExecutionTargetError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/provision/catalog", response_model=list[ProvisionSelection])
+async def provision_catalog():
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, get_registry
+    return [ProvisionSelection(kind=kind, model_id=model_id)
+        for model_id in sorted(INDEPENDENT_RUNTIME_MODELS)
+        if get_registry().get_model(model_id) is not None for kind in ("model", "image")]
+
+
+@router.post("/{execution_target_id}/provision/preview", response_model=ProvisionPreview)
+async def preview_provision(execution_target_id: str, request: ProvisionSelection,
+                            http_request: Request, session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.preview(session, execution_target_id, request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{execution_target_id}/provision", response_model=ExecutionTargetResponse, status_code=202)
+async def provision_execution_target(execution_target_id: str, request: ProvisionRequest,
+                                      http_request: Request, session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, "preload_controller", None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail="Preload service is unavailable")
+    try:
+        return await controller.start(session, execution_target_id, request)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{execution_target_id}/artifact-inventory", response_model=ObservedArtifactInventory | None)
+async def artifact_inventory(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return observed_artifact_inventory(await get_target(session, execution_target_id))
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/active/telemetry")

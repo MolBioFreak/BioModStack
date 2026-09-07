@@ -71,9 +71,40 @@ class PreloadRequest(StrictModel):
     job_id: str = Field(min_length=1, max_length=64)
 
 
+class ProvisionSelection(StrictModel):
+    kind: Literal["model", "image"]
+    model_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+
+class ProvisionRequest(ProvisionSelection):
+    preview_sha256: str = Field(pattern=SHA256_PATTERN)
+
+
+class CachedArtifactReceipt(StrictModel):
+    name: str = Field(min_length=1, max_length=2000)
+    sha256: str = Field(pattern=SHA256_PATTERN)
+    size_bytes: int = Field(ge=0)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value):
+        return _clean_relative_posix_path(value, field="name")
+
+
+class ProvisionPreview(StrictModel):
+    selection: ProvisionSelection
+    preview_sha256: str = Field(pattern=SHA256_PATTERN)
+    artifacts: list[CachedArtifactReceipt]
+    total_bytes: int = Field(ge=0)
+    scientific_ready: Literal[False] = False
+    scope: Literal["cache_download_only"] = "cache_download_only"
+
+
 class PreloadProgress(StrictModel):
     operation_id: str
-    job_id: str
+    job_id: str | None = None
+    selection: ProvisionSelection | None = None
+    artifacts: list[CachedArtifactReceipt] = Field(default_factory=list)
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     source_tree: str = Field(pattern=r"^[0-9a-f]{40}$")
     request_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -84,7 +115,18 @@ class PreloadProgress(StrictModel):
     updated_at: datetime
 
 
+class ObservedArtifactInventory(StrictModel):
+    operation_id: str
+    selection: ProvisionSelection
+    observed_at: datetime
+    artifacts: list[CachedArtifactReceipt]
+    scope: Literal["last_independent_provision"] = "last_independent_provision"
+    state: Literal["download_verified", "stale"] = "stale"
+    scientific_ready: Literal[False] = False
+
+
 class ExecutionTargetResponse(StrictModel):
+    artifact_inventory: ObservedArtifactInventory | None = None
     setup: ExecutionTargetSetup | None = None
     preload: PreloadProgress | None = None
     progress: RemoteArtifactProgress | None = None

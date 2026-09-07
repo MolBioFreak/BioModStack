@@ -271,12 +271,10 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         raise RemoteBundleError(f"Managed workflow Python runtime is unavailable: {api_runtime}")
     extra_paths.add(api_runtime.resolve())
 
-    if normalized_model == "protenix":
-        container_names.add("protenix.sif")
-        weight_names.add("protenix")
-    if normalized_model in {"esmfold2", "esmfold2_experimental"}:
-        container_names.add("esmfold2.sif")
-        weight_names.add("esmfold2")
+    from model_registry import INDEPENDENT_RUNTIME_MODELS, model_runtime_dependencies
+    if normalized_model in INDEPENDENT_RUNTIME_MODELS:
+        for ref in model_runtime_dependencies(normalized_model):
+            (container_names if ref.kind == "image" else weight_names).add(ref.relative_path)
     if normalized_model in {"protein_local_redesign", "protein_modification_experimental"}:
         container_names.update({"foundry.sif", "fampnn.sif"})
         validators = str(
@@ -291,9 +289,9 @@ def _runtime_assets(model_id: str, mode: str, params: dict[str, Any]) -> list[tu
         if "esmfold2" in validators:
             container_names.add("esmfold2.sif")
             weight_names.add("esmfold2")
-    if normalized_model in {"fampnn", "fampnn_child"}:
+    if normalized_model == "fampnn_child":
         container_names.add("fampnn.sif")
-    if normalized_model == "frustrampnn" or params.get("run_frustrampnn") is True:
+    if params.get("run_frustrampnn") is True:
         container_names.add("frustrampnn.sif")
     if normalized_model == "molecular_dynamics":
         if normalized_mode in {"simulate", "replica"}:

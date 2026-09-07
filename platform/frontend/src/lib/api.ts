@@ -419,9 +419,45 @@ export interface GPUStatus {
     processes: GPUProcess[];
 }
 
+export interface ProvisionSelection {
+    kind: 'model' | 'image';
+    model_id: string;
+}
+
+export interface CachedArtifactReceipt {
+    name: string;
+    sha256: string;
+    size_bytes: number;
+}
+
+export interface ProvisionPreview {
+    selection: ProvisionSelection;
+    preview_sha256: string;
+    artifacts: CachedArtifactReceipt[];
+    total_bytes: number;
+    scientific_ready: false;
+    scope: 'cache_download_only';
+}
+
+export interface ProvisionRequest extends ProvisionSelection {
+    preview_sha256: string;
+}
+
+export interface ObservedArtifactInventory {
+    operation_id: string;
+    selection: ProvisionSelection;
+    observed_at: string;
+    artifacts: CachedArtifactReceipt[];
+    scope: 'last_independent_provision';
+    state: 'download_verified' | 'stale';
+    scientific_ready: false;
+}
+
 export interface RemotePreloadProgress {
     operation_id: string;
-    job_id: string;
+    job_id?: string | null;
+    selection?: ProvisionSelection | null;
+    artifacts?: CachedArtifactReceipt[];
     source_revision: string;
     source_tree: string;
     request_sha256: string;
@@ -443,6 +479,7 @@ export interface RemoteArtifactProgress {
 }
 
 export interface ExecutionTarget {
+    artifact_inventory?: ObservedArtifactInventory | null;
     preload?: RemotePreloadProgress | null;
     progress?: RemoteArtifactProgress | null;
     id: string;
@@ -531,6 +568,18 @@ export const preloadExecutionTarget = async (targetId: string, jobId: string): P
     const response = await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/preload`, { job_id: jobId });
     return response.data;
 };
+
+export const fetchProvisionCatalog = async (): Promise<ProvisionSelection[]> =>
+    (await api.get<ProvisionSelection[]>('/api/execution-targets/provision/catalog')).data;
+
+export const previewExecutionTargetProvision = async (targetId: string, selection: ProvisionSelection): Promise<ProvisionPreview> =>
+    (await api.post<ProvisionPreview>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision/preview`, selection)).data;
+
+export const provisionExecutionTarget = async (targetId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
+    (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision`, request)).data;
+
+export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
+    (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
 
 export const fetchExecutionTargets = () =>
     api.get<ExecutionTarget[]>('/api/execution-targets');

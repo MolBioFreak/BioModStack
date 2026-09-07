@@ -170,6 +170,66 @@ def _prewarm_plan(job, command, source_revision, source_tree, directory):
     return entries
 
 
+def independent_plan(selection):
+    """Resolve only reviewed registry dependencies; no Job or biological inputs."""
+    from model_registry import model_runtime_dependencies
+    from paths import get_container_dir, get_weights_root
+    entries = []
+    for ref in model_runtime_dependencies(selection.model_id):
+        if selection.kind == 'image' and ref.kind != 'image':
+            continue
+        root = (get_container_dir() if ref.kind == 'image' else get_weights_root()).resolve()
+        path = root / ref.relative_path
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            raise ValueError('Independent runtime asset is not a contained regular asset')
+        prefix = ('containers/' if ref.kind == 'image' else 'weights/') + ref.relative_path
+        for record in _records_for_source(path, prefix, 'runtime'):
+            # Cache-only tree links are not installed; reject rather than claim
+            # an incomplete model download. Launch's existing link path is unchanged.
+            if record.link_target is not None:
+                raise ValueError('Independent provisioning does not support runtime symlinks')
+            suffix = record.relative_path[len(prefix):].lstrip('/')
+            entries.append(CacheTransferArtifact(path / suffix if suffix else path,
+                record.relative_path, record.sha256, record.size_bytes, record.mode, 'runtime'))
+    return entries
+
+
+def independent_preview(selection, target):
+    from .contracts import ProvisionPreview, ProvisionSelection, CachedArtifactReceipt
+    entries = independent_plan(selection)
+    artifacts = [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes) for e in entries]
+    identity = dict(selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id).model_dump(),
+        target=[target.id, target.host, target.port, target.username, target.remote_root, target.host_key_sha256],
+        source=current_source_identity(), artifacts=artifacts,
+        modes=[e.mode for e in entries])
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return ProvisionPreview(selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id), preview_sha256=digest,
+        artifacts=[CachedArtifactReceipt.model_validate(r) for r in artifacts],
+        total_bytes=sum(e.size_bytes for e in entries)), entries
+
+
+async def provision_cache(*, connection, entries, operation_id, progress, check_fence):
+    receipts = await _cache_artifacts(connection=connection, artifacts=entries,
+        operation_id=operation_id, progress=progress, check_fence=check_fence)
+    # Read back exact installed cache-object identities after all transfers. This
+    # is download evidence, NOT a materialized runtime or scientific acceptance.
+    tool = await _install_helper(connection, check_fence)
+    for offset in range(0, len(receipts), 128):
+        batch = receipts[offset:offset + 128]
+        await check_fence()
+        response = await run_remote(connection, ['python3', tool, '--root',
+            f'{connection.remote_root}/cache/artifacts/v1'], input_bytes=json.dumps({
+                'action': 'probe', 'artifacts': [dict(sha256=r['sha256'], size_bytes=r['size_bytes']) for r in batch]
+            }).encode(), timeout=3600)
+        rows = json.loads(response.stdout)['artifacts']
+        expected = {(r['sha256'], r['size_bytes']) for r in batch}
+        observed = {(r['sha256'], r['size_bytes']) for r in rows if r['state'] == 'cache_hit'}
+        if expected != observed or any(r['state'] != 'cache_hit' for r in rows):
+            raise ValueError('Cache source verification failed')
+    await check_fence()
+    return receipts
+
+
 async def prewarm_cache(*, connection, job, command, source_revision, source_tree,
                         operation_id, progress, check_fence):
     """Only source/runtime: no input admission, envelope creation or scientific run."""
