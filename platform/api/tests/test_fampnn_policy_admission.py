@@ -28,7 +28,6 @@ def payload(tmp_path, overrides):
 
 @pytest.mark.asyncio
 async def test_typed_override_admission_persists_only_declaration(admission, monkeypatch, tmp_path):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('fampnn', 'binder_design')}))
     request = payload(tmp_path, {'summary': [{'chain_id': 'B', 'author_number': 2}], 'mutation': []})
     response = await jobs._create_job(request, BackgroundTasks(), admission)
     admission.expire_all()
@@ -79,7 +78,6 @@ def test_large_declaration_uses_job_owned_file(tmp_path):
     {'summary': [{'chain_id': 'Z', 'author_number': 9}]},
 ])
 async def test_forbidden_override_has_zero_writes(admission, monkeypatch, tmp_path, override):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('fampnn', 'binder_design')}))
     def no_add(*args, **kwargs):
         raise AssertionError('invalid policy must fail before writes')
     monkeypatch.setattr(admission, 'add', no_add)
@@ -102,7 +100,6 @@ def test_compiled_authority_forbidden_in_nested_extras(key, tmp_path):
 @pytest.mark.parametrize('operation', ['resubmit', 'resume'])
 async def test_declared_attempt_retry_retains_authority(admission, monkeypatch, tmp_path, operation):
     from fastapi import Request, Response
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('fampnn', 'binder_design')}))
     response = await jobs._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
     original = await admission.get(Job, response.id)
     original.status = 'failed'
@@ -131,7 +128,6 @@ async def test_real_child_inherits_parent_biology_not_revision(admission, monkey
                  provenance={'fampnn_analysis_declaration': declaration})
     admission.add(parent)
     await admission.commit()
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('fampnn_child', 'sequence_design')}))
     child_request = JobCreate(name='sequence-child', model_id='fampnn_child', mode='sequence_design',
         parent_job_id=parent.id, child_stage='fampnn',
         params={'pdb_paths': parent_request.params['input_pdb'], 'fampnn_checkpoint': 'fampnn_0_0.pt'},
@@ -151,18 +147,17 @@ async def test_real_child_inherits_parent_biology_not_revision(admission, monkey
 
 
 @pytest.mark.asyncio
-async def test_unactivated_override_is_not_silently_ignored(admission, monkeypatch, tmp_path):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset())
-    with pytest.raises(HTTPException) as exc:
-        await jobs._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
-    assert exc.value.status_code == 422
-    assert not list((await admission.execute(select(Job))).scalars())
+async def test_default_admission_preserves_empty_mutation_override(admission, tmp_path):
+    response = await jobs._create_job(payload(tmp_path, {'mutation': []}), BackgroundTasks(), admission)
+    row = await admission.get(Job, response.id)
+    assert contract.revision_for_job(row) == contract.REVISION
+    assert row.params[contract.REVISION_KEY] == contract.REVISION
+    assert row.provenance['fampnn_analysis_declaration']['mutation_override'] == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('forbidden', [False, True])
 async def test_local_parent_authorized_region_is_not_whole_design_chain(admission, monkeypatch, tmp_path, forbidden):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('protein_modification_experimental', 'region_redesign')}))
     request = payload(tmp_path, {})
     source = tmp_path / 'input.pdb'
     source.write_text(source.read_text().replace('END\n',

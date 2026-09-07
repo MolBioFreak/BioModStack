@@ -63,15 +63,17 @@ async def test_forged_child_stage_cannot_suppress_current_revision(admission):
 
 
 @pytest.mark.asyncio
-async def test_marked_parent_does_not_activate_inactive_caller(admission, monkeypatch):
-    monkeypatch.setattr(contract, "ACTIVATED_CALLERS", frozenset())
+async def test_marked_parent_child_receives_default_revision(admission):
     parent = Job(id="parent", name="parent", model_id="boltz2", mode="predict",
                  status="running", params={}, provenance={KEY: 1})
     admission.add(parent)
     await admission.commit()
     result = await jobs._create_job(request(parent_job_id="parent", child_stage="boltz2"),
                                     BackgroundTasks(), admission)
-    assert contract.revision_for_job(await admission.get(Job, result.id)) is None
+    child = await admission.get(Job, result.id)
+    assert contract.revision_for_job(child) == contract.REVISION
+    assert child.params[KEY] == contract.REVISION
+    assert parent.provenance == {KEY: 1}
 
 
 @pytest.mark.asyncio
@@ -119,17 +121,19 @@ async def test_fresh_legacy_child_resubmit_uses_current_validation(admission, in
 
 
 @pytest.mark.asyncio
-async def test_fresh_marked_source_cannot_downgrade_inactive_caller(admission, monkeypatch):
+async def test_fresh_marked_source_resubmit_uses_default_revision(admission):
     from fastapi import Request, Response
     source = Job(id="source", name="source", model_id="boltz2", mode="predict",
                  status="failed", params={"sequence": "ACDE", KEY: 1}, provenance={KEY: 1})
     admission.add(source)
     await admission.commit()
-    monkeypatch.setattr(contract, "ACTIVATED_CALLERS", frozenset())
-    with pytest.raises(HTTPException) as exc:
-        await jobs.resubmit_job("source", Request({"type": "http", "headers": []}), Response(), admission)
-    assert exc.value.status_code == 422
-    assert len(list((await admission.execute(select(Job))).scalars())) == 1
+    before = deepcopy((source.params, source.provenance))
+    result = await jobs.resubmit_job("source", Request({"type": "http", "headers": []}), Response(), admission)
+    new = await admission.get(Job, result["new_job_id"])
+    assert contract.revision_for_job(new) == contract.REVISION
+    assert new.params[KEY] == contract.REVISION
+    assert (source.params, source.provenance) == before
+    assert len(list((await admission.execute(select(Job))).scalars())) == 2
 
 
 @pytest.mark.parametrize("value", [None, "1", True, False, 1])
@@ -161,7 +165,6 @@ async def admission(monkeypatch, tmp_path):
     monkeypatch.setattr(jobs, "get_results_dir", lambda: tmp_path / "results")
     registry = ModelRegistry(Path(__file__).resolve().parents[1] / "config" / "models")
     monkeypatch.setattr(jobs, "get_registry", lambda: registry)
-    monkeypatch.setattr(contract, "ACTIVATED_CALLERS", frozenset({("boltz2", "predict")}))
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'jobs.sqlite'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

@@ -24,7 +24,6 @@ def test_request_authority_cannot_be_forged(key):
 
 @pytest.mark.asyncio
 async def test_pre_registry_request_retained_in_sqlite_and_command(admission, monkeypatch):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('esmfold2','predict')}))
     original = {'sequence':'ACDE', 'esmf_seed':0, 'esmf_msa_remove_insertions':False}
     result = await jobs._create_job(JobCreate(name='receipt', model_id='esmfold2', mode='predict', params=deepcopy(original)), BackgroundTasks(), admission)
     admission.expire_all()

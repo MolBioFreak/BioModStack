@@ -65,7 +65,8 @@
     "tests/test_closeout_accounting_settings.py",
     "tests/test_viewer_closeout.py",
     "tests/test_closeout_analytics_sort_wire.py",
-    "tests/test_p1_filter_closeout.py"
+    "tests/test_p1_filter_closeout.py",
+    "tests/test_resume_remote_placement.py"
   ],
   "frontend": [
     "tests/vitest/boltzgenAnalyticsMounted.test.tsx",

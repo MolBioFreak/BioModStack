@@ -43,7 +43,6 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
     from antibody_fampnn_provenance import native_export, NATIVE_SOURCES
     from fampnn_policy_resolution import prep_receipt, resolve_declaration, bind_native_candidates
     root = Path(__file__).resolve().parents[3]
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('antibody_denovo','antibody_denovo_pipeline'), ('fampnn_child','sequence_design')}))
     target = tmp_path/'target.pdb'
     target.write_text('ATOM      1  CA  ALA T   1       0.000   0.000   0.000  1.00 20.00           C\n')
     framework = tmp_path/'framework.pdb'

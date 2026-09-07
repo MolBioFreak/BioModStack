@@ -1,4 +1,6 @@
-# BoltzGen native scalar publication (bounded, activation OFF)
+# BoltzGen native scalar publication
+
+This is the default publication contract for new supported BoltzGen jobs.
 
 ## Source authority
 

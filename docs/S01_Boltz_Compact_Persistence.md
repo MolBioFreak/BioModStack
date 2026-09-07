@@ -1,11 +1,11 @@
-# S-01 Boltz compact persistence boundary (not activation)
+# S-01 Boltz compact persistence boundary
 
 `ingest_job_results(job_id, output_dir, session, commit=...)` routes trusted
 `Job.provenance.core_protein_scientific_contract == 1` (integer, not Boolean)
 Boltz2 predict/complex results to the private
 `services.boltz_scientific_persistence.ingest_verified_boltz` adapter. Existing
 explicit FrustraMPNN terminal owners retain precedence. CM is not routed here.
-`ACTIVATED_CALLERS` remains empty. This document does not declare S-01 complete.
+New supported Boltz jobs receive revision 1 automatically; no rollout flag is required.
 
 ## Producer transport and inventory
 

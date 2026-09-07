@@ -5947,7 +5947,7 @@ async def _create_job(
         from services.fampnn_policy_admission import compile_declaration
         fampnn_declaration = None
         if scientific_revision is None and job_data.fampnn_analysis_overrides is not None:
-            raise ValueError('FA-MPNN analysis overrides require an activated caller')
+            raise ValueError('FA-MPNN analysis overrides require a supported core-protein caller')
         if scientific_revision is not None:
             scientific_parent = await session.get(Job, job_data.parent_job_id) if job_data.parent_job_id else None
             fampnn_declaration = compile_declaration(
@@ -8073,7 +8073,7 @@ async def resubmit_job(
     try:
         source_revision = scientific_contract.revision_for_job(original_job)
         # Every fresh attempt uses current admission, including former children.
-        # A marked source may not silently downgrade through an inactive caller.
+
         resubmit_params.pop(scientific_contract.REVISION_KEY, None)
         resubmit_params.pop('fampnn_analysis_declaration', None)
         resubmit_params.pop('fampnn_analysis_policy', None)
@@ -8081,9 +8081,7 @@ async def resubmit_job(
         resubmit_revision = scientific_contract.admission_revision(
             original_job.model_id, original_job.mode,
         )
-        if (source_revision is not None and resubmit_revision is None
-                and (original_job.model_id, original_job.mode) in scientific_contract.SUPPORTED_CALLERS):
-            raise ValueError("marked source requires an active scientific caller for fresh resubmission")
+
         if resubmit_revision is not None:
             errors = get_registry().validate_job_params(
                 original_job.model_id, original_job.mode,
@@ -9602,9 +9600,7 @@ async def resume_job(
             # Match fresh resubmission: current admission, no silent downgrade,
             # and current registry validation rather than historical authority.
             resume_revision = scientific_contract.admission_revision(job.model_id, job.mode)
-            if (source_revision is not None and resume_revision is None
-                    and (job.model_id, job.mode) in scientific_contract.SUPPORTED_CALLERS):
-                raise ValueError("marked source requires an active scientific caller for fresh resubmission")
+
             if resume_revision is not None:
                 errors = get_registry().validate_job_params(
                     job.model_id, job.mode,

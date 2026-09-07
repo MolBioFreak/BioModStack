@@ -300,32 +300,33 @@ async def test_fold_cp_terminal_root_can_change_placement(store):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fresh_cause', ['placement', 'source'])
-async def test_marked_fresh_reorchestration_blocked_while_inactive(store, monkeypatch, fresh_cause):
+async def test_marked_fresh_reorchestration_uses_default_revision(store, fresh_cause):
     from services import core_protein_scientific_contract as contract
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset())
     snapshot = await source(store, 'vast:new',
         execution_source_revision=('c' if fresh_cause == 'source' else 'a') * 40,
         provenance={contract.REVISION_KEY: contract.REVISION})
     factory, client, root = store
     payload = {'execution_target_id': None} if fresh_cause == 'placement' else {}
     response = await client.post('/jobs/source/resume', json=payload)
-    assert response.status_code == 422, response.text
-    assert 'marked source requires an active scientific caller' in response.json()['detail']
+    assert response.status_code == 200, response.text
+    assert response.json()['fresh_execution'] is True
     async with factory() as session:
         rows = (await session.scalars(select(Job))).all()
-        assert len(rows) == 1
-        assert {column.name: getattr(rows[0], column.name) for column in Job.__table__.columns} == snapshot
-    assert not (root / 'results').exists()
+        assert len(rows) == 2
+        successor = await session.get(Job, response.json()['new_job_id'])
+        assert contract.revision_for_job(successor) == contract.REVISION
+        assert successor.params[contract.REVISION_KEY] == contract.REVISION
+        assert successor.output_dir != snapshot['output_dir']
+        assert not any(key.startswith('resume_') for key in successor.params)
+        original = await session.get(Job, 'source')
+        assert {column.name: getattr(original, column.name) for column in Job.__table__.columns} == snapshot
     assert (root / 'original' / 'sentinel').read_text() == 'immutable artifact'
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('marked', [False, True])
-@pytest.mark.parametrize('active', [False, True])
-async def test_true_cached_resume_preserves_scientific_cohort(store, monkeypatch, marked, active):
+async def test_true_cached_resume_preserves_scientific_cohort(store, marked):
     from services import core_protein_scientific_contract as contract
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS',
-                        frozenset({('boltz2', 'predict')}) if active else frozenset())
     provenance = {contract.REVISION_KEY: contract.REVISION,
                   'core_protein_requested_params': {'sequence': 'ACDEFG'}} if marked else {}
     snapshot = await source(store, 'vast:new', provenance=provenance)
@@ -351,7 +352,6 @@ async def test_true_cached_resume_preserves_scientific_cohort(store, monkeypatch
 @pytest.mark.parametrize('invalid', [False, True])
 async def test_unmarked_fresh_reorchestration_uses_current_admission(store, monkeypatch, fresh_cause, invalid):
     from services import core_protein_scientific_contract as contract
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('boltz2', 'predict')}))
     snapshot = await source(store, 'vast:new',
         execution_source_revision=('c' if fresh_cause == 'source' else 'a') * 40)
     factory, client, root = store

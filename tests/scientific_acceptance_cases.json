@@ -1024,9 +1024,9 @@
     }
   ],
   "layer_limitations": {
-    "CT": "Admission activation is mocked locally; ACTIVATED_CALLERS remains off. Disposable-history controls are not a historical scan. A Python state test alone does not establish every TypeScript/display path.",
+    "CT": "Admission tests exercise the real default revision for supported callers without per-caller activation mocks. Disposable-history controls are not a historical scan. A Python state test alone does not establish every TypeScript/display path.",
     "ID": "Synthetic chain/residue arrays and structure bytes; matrix/viewer fixtures are not model-inference or rendered molecular-engine accuracy evidence. Separate PDB/mmCIF controls do not alone prove all equivalent-file pairings.",
-    "FA": "Pinned producer-shaped synthetic tensors; no sampling model runs. Caller policy transport/admission fixtures do not authorize held caller activation or establish mutation-guidance ingestion.",
+    "FA": "Pinned producer-shaped synthetic tensors; no sampling model runs. Caller policy transport/admission fixtures do not establish live model acceptance or mutation-guidance ingestion.",
     "FL": "Synthetic CSV/NPZ/filter inputs. Selected threshold tests must be checked against every requested criterion; zero-bound controls alone do not prove a full below/equal/above matrix. Native ranking means software native-dialect data, not inference.",
     "CA": "Disposable SQLite and synthetic manifest/filter publication; no live finalization or historical repair. Terminal-policy coverage is limited to explicitly exercised owners and race branches.",
     "PR": "Synthetic bound scalar evidence. API numeric availability is covered by source selectors; do not infer complete rendered PPIFlow availability from unrelated analytics UI tests.",

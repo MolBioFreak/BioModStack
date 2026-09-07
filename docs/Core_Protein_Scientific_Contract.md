@@ -1,14 +1,14 @@
 # Core-protein scientific contract
 
-This document describes the future-result contract defined by BMS-CP-SCI-01.
-The release gate remains empty in `core_protein_scientific_contract.py`.
-Local software verification and later runtime activation have separate owners.
+This document describes the default new-job contract defined by BMS-CP-SCI-01.
+Every supported core-protein model/mode receives revision 1 at admission.
+There is no per-workflow rollout switch or operator opt-in.
 
 ## Admission and historical results
 
 `Job.provenance.core_protein_scientific_contract` owns the revision. Request
 parameters carry that revision to the workflow. A result file cannot grant
-itself authority. New submissions use the current caller release gate; existing
+itself authority. New supported submissions always use the current contract; existing
 jobs retain their stored revision during resume. Old rows and artifacts remain
 unchanged. Consumers keep incompatible metric cohorts separate.
 
@@ -82,7 +82,8 @@ proves only its tested surface. Data-only workflow fixtures, temporary SQLite
 records and mounted UI tests establish software behavior; model inference,
 image qualification and deployment require separate approval.
 
-Activation, historical repair, image changes and service operations remain
-outside this implementation. Existing FrustraMPNN and conformational-mapping
-owners retain their stronger native contracts. Unsupported callers remain
-held until their complete producer/consumer path is accepted.
+Historical repair and image changes remain outside this implementation.
+Existing FrustraMPNN and conformational-mapping owners retain their native
+contracts. The supported caller inventory defines this contract's scope,
+not a rollout allowlist. Unrelated models do not acquire protein-specific
+semantics, and unsupported generated FA-MPNN routes remain explicitly rejected.

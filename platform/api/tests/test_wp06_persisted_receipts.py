@@ -77,7 +77,6 @@ async def test_openmm_receipts_persist_through_real_finalizer(admission, tmp_pat
 
 @pytest.mark.asyncio
 async def test_receipt_from_executed_argv_to_persisted_api(admission, monkeypatch, tmp_path):
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('esmfold2','predict')}))
     msa = tmp_path / 'query.a3m'
     msa.write_text('>q\nACDE\n')
     raw = {'sequence':'ACDE', 'esmf_seed':0, 'esmf_msa_remove_insertions':False, 'esmf_msa_path':str(msa)}

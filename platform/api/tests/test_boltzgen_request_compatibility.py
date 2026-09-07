@@ -10,7 +10,6 @@ async def test_admission_rejects_native_plddt_before_queue(admission, monkeypatc
     from schemas import JobCreate
     from sqlalchemy import select
     from database import Job
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('boltzgen', 'ntp_binder')}))
     with pytest.raises(HTTPException, match='native pLDDT'):
         await jobs._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
                               params={'ntp_type': 'ATP', 'min_plddt': 0}), BackgroundTasks(), admission)
@@ -23,7 +22,6 @@ async def test_admission_persists_effective_native_rank(admission, monkeypatch):
     from routers import jobs
     from schemas import JobCreate
     from database import Job
-    monkeypatch.setattr(contract, 'ACTIVATED_CALLERS', frozenset({('boltzgen', 'ntp_binder')}))
     response = await jobs._create_job(JobCreate(name='synthetic-admission', model_id='boltzgen', mode='ntp_binder',
                               params={'ntp_type': 'ATP', 'boltzgen_rank_design_ptm_weight': 2}), BackgroundTasks(), admission)
     job = await admission.get(Job, response.id)

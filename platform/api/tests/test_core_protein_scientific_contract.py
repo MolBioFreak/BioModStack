@@ -31,13 +31,11 @@ def test_caller_cannot_supply_reserved_marker(payload, model):
         JobCreate.model_validate({"name": "new", "model_id": model, "mode": "predict", **payload})
 
 
-def test_activation_is_empty_and_not_request_owned(monkeypatch):
+def test_supported_callers_receive_current_revision_by_default():
     c = contract()
-    assert c.ACTIVATED_CALLERS == frozenset()
     assert CALLER in c.SUPPORTED_CALLERS
-    assert c.admission_revision(*CALLER) is None
-    monkeypatch.setattr(c, "ACTIVATED_CALLERS", frozenset({CALLER, ("rf3", "predict")}))
-    assert c.admission_revision(*CALLER) == 1
+    for caller in c.SUPPORTED_CALLERS:
+        assert c.admission_revision(*caller) == c.REVISION
     for caller in [("rf3", "predict"), ("nanopore", "basecall"), ("frustrampnn", "analyze"),
                    ("protein_modification_experimental", "shape_blueprint"), ("unknown", "predict")]:
         assert c.admission_revision(*caller) is None
@@ -60,21 +58,18 @@ def test_only_persisted_provenance_is_authority():
 
 def test_new_scientific_child_uses_current_caller_not_parent_revision(monkeypatch):
     c = contract()
-    monkeypatch.setattr(c, "ACTIVATED_CALLERS", frozenset({CALLER}))
     old = SimpleNamespace(provenance={"old": "untouched"})
     marked = SimpleNamespace(provenance={KEY: 1})
     assert c.admission_revision(*CALLER, parent=old, scientific_child=True) == 1
     assert c.admission_revision(*CALLER, parent=marked, scientific_child=True) == 1
     assert c.admission_revision(*CALLER, parent=old) == 1
     assert c.admission_revision(*CALLER, scientific_child=True) == 1
-    monkeypatch.setattr(c, "ACTIVATED_CALLERS", frozenset())
-    assert c.admission_revision(*CALLER, parent=marked, scientific_child=True) is None
+    assert c.admission_revision("rf3", "predict", parent=marked, scientific_child=True) is None
 
 
 def test_old_rows_and_new_clone_are_independent(tmp_path, monkeypatch):
     import sqlite3
     c = contract()
-    monkeypatch.setattr(c, "ACTIVATED_CALLERS", frozenset({CALLER}))
     original = {"params": {"sequence": "ACDE"}, "provenance": {"legacy": True}, "derived_score": 91}
     raw = json.dumps(original)
     with sqlite3.connect(tmp_path / "old.sqlite") as db:

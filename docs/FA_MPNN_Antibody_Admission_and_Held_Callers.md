@@ -1,17 +1,18 @@
 # FA-MPNN antibody declaration and held generated callers
 
 Authority: BMS-CP-SCI-01 FA-06–FA-10/C-01 and the settled S-00 scope.
-This package changes software contracts only. `ACTIVATED_CALLERS` remains empty.
+The scientific contract is standard for every supported new core-protein job;
+there is no activation switch or request opt-in.
 It adds no public mode, model integration, historical-result operation, or mutation-guidance ingestion.
 
 ## Caller declarations
 
 | Existing caller | Summary default | Mutation default / overrides | Admission disposition |
 |---|---|---|---|
-| Direct FA-MPNN general sequence design | Declared protein input domain | Authorized nonfixed sequence-design residues; typed narrowing only | Existing inventory; activation OFF; inherited implementation retained |
-| Direct FA-MPNN binder design | Exact declared binder-role residues | Authorized nonfixed binder sequence-design residues; typed narrowing only | Existing inventory; activation OFF; inherited implementation retained |
-| Local redesign FA-MPNN | `sequence_redesign_positions_spec` | Its authorized nonfixed region; typed narrowing only | Existing inventory; activation OFF; inherited implementation retained |
-| Antibody de novo FA-MPNN | Exact authorized sequence-design antibody domain; includes framework when the existing request authorizes framework design | Resolved native CDR membership minus actual fixed/protected residues; typed narrowing only. Summary is fixed, with no summary override | Existing `antibody_denovo/antibody_denovo_pipeline` and `fampnn_child/sequence_design` inventory only; activation OFF |
+| Direct FA-MPNN general sequence design | Declared protein input domain | Authorized nonfixed sequence-design residues; typed narrowing only | Standard new-job admission |
+| Direct FA-MPNN binder design | Exact declared binder-role residues | Authorized nonfixed binder sequence-design residues; typed narrowing only | Standard new-job admission |
+| Local redesign FA-MPNN | `sequence_redesign_positions_spec` | Its authorized nonfixed region; typed narrowing only | Standard new-job admission |
+| Antibody de novo FA-MPNN | Exact authorized sequence-design antibody domain; includes framework when the existing request authorizes framework design | Resolved native CDR membership minus actual fixed/protected residues; typed narrowing only. Summary is fixed, with no summary override | Standard for `antibody_denovo/antibody_denovo_pipeline` and `fampnn_child/sequence_design` |
 | Legacy RFdiffusion general-to-FA-MPNN call in `protein_design.nf` | Declared generated protein domain (held declaration, not a fabricated residue map) | Authorized nonfixed sequence-design region; narrowing only | **HELD / UNADMITTED.** No authoritative public caller inventory entry. The admission compiler rejects legacy `rfdiffusion` callers |
 | Legacy RFdiffusion binder-to-FA-MPNN call in `protein_design.nf` | Exact generated binder-role domain (held declaration, not a guessed chain) | Authorized nonfixed binder sequence-design region; narrowing only | **HELD / UNADMITTED.** No new caller entry or activation |
 

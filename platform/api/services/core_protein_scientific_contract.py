@@ -1,4 +1,4 @@
-"""Narrow S-01 foundation; no producer is activated by this package.
+"""Default scientific contract for new supported core-protein jobs.
 
 Provenance is authority. Params are transport only. This module does not infer
 scientific correspondence, units, residue scopes, or metric meaning. Producers
@@ -36,9 +36,7 @@ SUPPORTED_CALLERS = MappingProxyType({
     ("protein_modification_experimental", "region_redesign"): "local_redesign",
     ("protein_local_redesign", "local_redesign"): "local_redesign",
 })
-# Compile-time release gate, NOT environment/config/request driven. Populate only
-# after the corresponding producers, children, consumers and scopes pass integration.
-ACTIVATED_CALLERS: frozenset[tuple[str, str]] = frozenset()
+
 
 
 def reject_reserved_marker(payload: Any) -> None:
@@ -77,7 +75,7 @@ def revision_for_job(job: Any) -> int | None:
 
 def admission_revision(model_id: str, mode: str, *, parent: Any = None,
                        scientific_child: bool = False) -> int | None:
-    """Resolve NEW admission from the current caller's release gate only.
+    """Assign the current contract to every new supported core-protein job.
 
     Parent/child metadata is not revision authority. Existing persisted rows and
     true same-attempt resumes use revision_for_job instead of this function.
@@ -85,7 +83,7 @@ def admission_revision(model_id: str, mode: str, *, parent: Any = None,
     caller = (model_id, mode)
     if caller not in SUPPORTED_CALLERS:
         return None
-    return REVISION if caller in ACTIVATED_CALLERS else None
+    return REVISION
 
 
 def admitted_payload(params: Mapping, provenance: Mapping, revision: int | None) -> tuple[dict, dict]:
