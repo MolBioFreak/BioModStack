@@ -80,11 +80,10 @@ def transfer_marker(incoming: Path) -> Path:
 
 
 def prepare_transfer(incoming: Path) -> None:
-    """Fail closed on same-boot API death: transport children may still write.
+    """Require a transport-issued quiescence receipt or a different kernel boot.
 
-    The current transport API does not expose durable process-group ownership.
-    A controller reboot proves those local writers are gone; an API restart alone
-    does not. Do not turn a deterministic destination into an unsafe writer race.
+    PID absence/reuse and API lock release are deliberately not death proofs.
+    Legacy and incomplete supervisor records retain the same-boot fence.
     """
     marker = transfer_marker(incoming)
     if marker.exists():
@@ -95,8 +94,29 @@ def prepare_transfer(incoming: Path) -> None:
             uuid.UUID(record["boot_id"])
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             raise GenerationError("Invalid retained transfer ownership record") from exc
+        if record.get("schema") is not None:
+            from .transfer_supervisor import SCHEMA
+
+            if record.get("schema") != SCHEMA or record.get("destination") != str(checked(incoming)):
+                raise GenerationError("Invalid retained transfer destination/ownership schema")
         if record.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip():
-            raise GenerationError("Interrupted result transport requires local writer-quiescence recovery; API restart alone is insufficient")
+            if record.get("schema") is None or record.get("phase") != "quiescent":
+                raise GenerationError("Interrupted result transport requires local writer-quiescence recovery; supervisor receipt is not yet available")
+            proof = record.get("quiescence")
+            owners = [record.get("controller"), record.get("supervisor")]
+            if proof == "descendants-reaped":
+                owners.append(record.get("writer"))
+            elif proof != "no-writer" or "writer" in record:
+                raise GenerationError("Invalid transfer quiescence proof")
+            fields = {"pid", "start_ticks", "process_group", "session"}
+            if any(not isinstance(owner, dict) or set(owner) != fields
+                   or any(type(value) is not int or value <= 0 for value in owner.values())
+                   for owner in owners):
+                raise GenerationError("Invalid transfer process identity receipt")
+            if proof == "descendants-reaped":
+                writer = record["writer"]
+                if writer["pid"] != writer["process_group"] or writer["pid"] != writer["session"]:
+                    raise GenerationError("Invalid transfer writer process group")
         marker.unlink()
         sync_dir(marker.parent)
 
@@ -109,6 +129,11 @@ def begin_transfer(incoming: Path) -> None:
 
 def end_transfer(incoming: Path) -> None:
     marker = transfer_marker(incoming)
+    if marker.exists() and json.loads(marker.read_text()).get("schema") is not None:
+        prepare_transfer(incoming)
+        return
+    # Legacy in-process transports have no supervisor record. Their ordinary
+    # return/cleanup contract applies; restart still refuses their boot marker.
     marker.unlink(missing_ok=True)
     sync_dir(marker.parent)
 

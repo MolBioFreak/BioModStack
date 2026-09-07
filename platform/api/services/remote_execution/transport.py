@@ -10,6 +10,10 @@ import re
 import shlex
 import signal
 import tempfile
+import sys
+
+from .result_generation import durable_json, transfer_marker
+from .transfer_supervisor import SCHEMA, process_identity
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Sequence
@@ -107,6 +111,62 @@ def _ssh_base(connection: RemoteConnection) -> list[str]:
         f"UserKnownHostsFile={known_hosts_path()}",
         f"{connection.username}@{connection.host}",
     ]
+
+
+async def _run_owned(argv: Sequence[str], destination: Path, *, timeout: float) -> CommandResult:
+    """Only result downloads use this durable, API-death-aware lifecycle."""
+    marker = transfer_marker(destination)
+    # Only the collector's freshly prepared legacy boot fence may launch. Do
+    # not overwrite an active or ambiguous supervisor record on a direct retry.
+    if not marker.exists() or json.loads(marker.read_text()) != {
+        "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    }:
+        raise RemoteTransportError("Result transport requires a freshly prepared ownership fence")
+    durable_json(marker, dict(schema=SCHEMA, phase="starting",
+                             destination=str(destination.resolve()),
+                             boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                             controller=process_identity(os.getpid())))
+    read_fd, write_fd = os.pipe()
+    task = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, str(Path(__file__).with_name("transfer_supervisor.py")),
+            str(marker), str(read_fd), *argv, pass_fds=(read_fd,),
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, start_new_session=True,
+        )
+        os.close(read_fd)
+        read_fd = -1
+        task = asyncio.create_task(process.communicate())
+        try:
+            stdout, stderr = await asyncio.wait_for(asyncio.shield(task), timeout)
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            # Closing our private pipe asks the still-owned supervisor to stop.
+            # Never signal a recovered PID, nor kill the receipt authority.
+            os.close(write_fd)
+            write_fd = -1
+            cleanup = asyncio.create_task(asyncio.wait_for(asyncio.shield(task), 5))
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+                except asyncio.TimeoutError:
+                    break
+            try:
+                cleanup.result()
+            except asyncio.TimeoutError:
+                pass  # receipt absent => retained fence; no byte reclamation
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise RemoteTransportError("Remote transport timed out") from None
+        return CommandResult(int(process.returncode or 0),
+                             stdout.decode("utf-8", errors="replace"),
+                             stderr.decode("utf-8", errors="replace"))
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                os.close(fd)
 
 
 async def _run(argv: Sequence[str], *, input_bytes: bytes | None = None, timeout: float = 60) -> CommandResult:
@@ -309,7 +369,14 @@ async def rsync_selected_from_remote(
             list_path = Path(handle.name)
             for relative_path in relative_paths:
                 handle.write(relative_path.encode("utf-8") + b"\0")
-        result = await _run(
+        # The result collector has already fenced this generation. Other
+        # selected-download users retain their existing transport contract.
+        async def run_selected(argv):
+            if transfer_marker(destination).exists():
+                return await _run_owned(argv, destination, timeout=timeout)
+            return await _run(argv, timeout=timeout)
+
+        result = await run_selected(
             [
                 "rsync",
                 "--archive",
@@ -323,7 +390,6 @@ async def rsync_selected_from_remote(
                 f"{connection.username}@{connection.host}:{source.rstrip('/')}/",
                 str(destination.resolve()) + "/",
             ],
-            timeout=timeout,
         )
     finally:
         if list_path is not None:

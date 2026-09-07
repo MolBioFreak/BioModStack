@@ -904,8 +904,9 @@ async def collect_remote_results(
                     max_file_bytes=max(int(artifact.size_bytes) for artifact in missing),
                 )
             except (RemoteTransportError, asyncio.CancelledError):
-                # The transport contract reaps its process group on cancellation
-                # and timeout, and has observed exit for ordinary rsync failures.
+                # Durable result transport must prove descendant quiescence.
+                # A timeout/exception alone cannot authorize marker removal;
+                # end_transfer retains the fence if its receipt is missing.
                 end_transfer(incoming)
                 raise
             else:
