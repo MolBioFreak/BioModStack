@@ -981,11 +981,40 @@ async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=No
     }, release_lease=True)
 
 
-async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
-    with _controller_attempt_guard(str(job.id)) as owned:
+# Retain controller tasks independently of browser/HTTP request lifetime.
+_result_return_tasks: set[asyncio.Task] = set()
+
+
+def automatic_result_return_enabled(job: Job) -> bool:
+    """Only the persisted per-job opt-in authorizes successful result retrieval.
+
+    Missing/legacy/invalid settings fail closed to manual. Failure diagnostics
+    and interrupted transfers never inherit this authorization.
+    """
+    params = job.params if isinstance(job.params, dict) else {}
+    return params.get("remote_result_policy") == "automatic"
+
+
+async def reconcile_remote_job(session: AsyncSession, job: Job, *, background_tasks=None) -> bool:
+    job_id = str(job.id)
+    with _controller_attempt_guard(job_id) as owned:
         if not owned:
             return False
-        return await _reconcile_remote_job_owned(session, job)
+        changed = await _reconcile_remote_job_owned(session, job)
+    # Release the observation guard before entering the same reservation lane
+    # used by manual pulls. Refresh persisted authority, including revocation.
+    job = await session.get(Job, job_id, populate_existing=True)
+    if job is None or job.remote_state != "results_available" or not automatic_result_return_enabled(job):
+        return changed
+    from fastapi import BackgroundTasks
+
+    tasks = background_tasks if background_tasks is not None else BackgroundTasks()
+    admitted = await request_remote_result_pull(session, job, tasks, automatic=True)
+    if admitted and background_tasks is None:
+        task = asyncio.create_task(tasks())
+        _result_return_tasks.add(task)
+        task.add_done_callback(_result_return_tasks.discard)
+    return changed or bool(admitted)
 
 
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
@@ -993,7 +1022,7 @@ async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     job_id = str(job.id)
     await _recover_result_generation(session, job)
     if job.status in {"completed", "failed", "cancelled"}:
-        return False
+        return await _recover_diagnostic_return(session, job)
     if job.remote_state == "returning":
         if (job.status, job.queue_status) != ("running", "running"):
             return False
@@ -1154,8 +1183,10 @@ async def _pull_failure(session, job, message):
     }, require_lease=False)
 
 
-async def request_remote_result_pull(session, job, background_tasks):
+async def request_remote_result_pull(session, job, background_tasks, *, automatic=False):
     """Reserve transfer before responding; keep the process lock through completion."""
+    if automatic and (job.remote_state != "results_available" or not automatic_result_return_enabled(job)):
+        return False
     if (not job.execution_target_id or not job.remote_attempt_id
             or not all(isinstance(value, str) and value.strip() and value != "None"
                        for value in (job.execution_source_revision, job.execution_source_tree,
@@ -1166,11 +1197,23 @@ async def request_remote_result_pull(session, job, background_tasks):
     owned = guard.__enter__()
     if not owned:
         guard.__exit__(None, None, None)
-        if job.remote_state == "returning":
-            return
+        if automatic or job.remote_state == "returning":
+            return False
         raise RemoteExecutionError("Remote attempt controller is busy")
     scheduled = False
     try:
+        # The caller's ORM snapshot is not policy authority. A concurrent
+        # revocation/cancellation before reservation must win without transfer.
+        identity = _pull_identity(job)
+        await session.refresh(job)
+        if _pull_identity(job) != identity:
+            if automatic:
+                return False
+            raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
+        if automatic and (job.remote_state != "results_available"
+                          or not automatic_result_return_enabled(job)
+                          or (job.status, job.queue_status) != ("awaiting_input", "completed")):
+            return False
         if (job.status not in {"awaiting_input", "running"}
                 or job.remote_state not in {"results_available", "result_pull_failed", "returning"}
                 or job.awaiting_stage != "remote_results"
@@ -1183,6 +1226,7 @@ async def request_remote_result_pull(session, job, background_tasks):
             raise RemoteExecutionError("Remote result attempt changed; refresh the Job")
         background_tasks.add_task(_run_requested_pull, str(job.id), _pull_identity(job), guard)
         scheduled = True
+        return True
     finally:
         if not scheduled:
             guard.__exit__(None, None, None)
@@ -1248,7 +1292,8 @@ async def _run_requested_pull(job_id, identity, guard):
                 await session.rollback()
                 job = await session.get(Job, job_id, populate_existing=True)
                 if (job is None or _pull_identity(job) != identity or job.remote_state != "returning"
-                        or job.status != "running" or job.queue_status != "running"):
+                        or job.status != "running" or job.queue_status != "running"
+                        or dict((job.provenance or {}).get("remote_execution_receipt") or {}) != receipt):
                     return
                 fence = await session.execute(update(Job).where(
                     Job.id == job_id, Job.status == "running", Job.queue_status == "running",
@@ -1327,6 +1372,51 @@ def _diagnostic_authority(job, identity, digest, receipt_snapshot=None):
             and (receipt_snapshot is None or receipt == receipt_snapshot))
 
 
+def _diagnostic_destination(job_id, identity, digest):
+    root = get_data_root() / "remote-execution" / "diagnostics"
+    destination = _safe_result_path(root, "/".join((job_id, identity["attempt_id"], digest)))
+    if any(p.is_symlink() for p in (destination, *destination.parents)):
+        raise RemoteExecutionError("Diagnostic destination traverses a symlink")
+    return destination
+
+
+async def _recover_diagnostic_return(session, job):
+    """Recover an abandoned archive claim locally, never pull failed science.
+
+    Called only with the controller guard. An immutable manifest-bound directory
+    is the publication journal: a rename before DB commit can be verified and
+    adopted without worker connectivity. Missing/corrupt archives remain explicit
+    retry, preserving every byte and the original scientific terminal history.
+    """
+    record = dict((job.provenance or {}).get("remote_diagnostics") or {})
+    if job.status not in {"failed", "cancelled"} or record.get("state") != "returning":
+        return False
+    identity = _pull_identity(job)
+    receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
+    digest = receipt.get("result_manifest_sha256")
+    recovered = dict(record, state="failed", output_dir=None,
+                     error="Diagnostic pull interrupted; choose Retry diagnostics")
+    try:
+        if not _diagnostic_authority(job, identity, digest):
+            raise RemoteExecutionError("Diagnostic return identity changed; refresh the Job")
+        status = RemoteAttemptStatus.model_validate(dict(job_id=str(job.id), attempt_id=identity["attempt_id"],
+            state=receipt.get("state"), exit_code=receipt.get("exit_code"),
+            result_manifest_sha256=digest))
+        if status.state not in TERMINAL_REMOTE_STATES or not digest:
+            raise RemoteExecutionError("Diagnostic terminal manifest authority is missing")
+        destination = _diagnostic_destination(str(job.id), identity, digest)
+        if destination.exists():
+            await asyncio.to_thread(_verify_result_package, destination, job, status)
+            recovered.update(state="returned", output_dir=str(destination), error=None)
+    except Exception as exc:
+        recovered["error"] = f"Diagnostic recovery blocked: {exc}"[:1500]
+    # CAS includes the receipt/policy/lifecycle snapshot observed before hashing;
+    # a newer attempt, cancellation or diagnostic request cannot be overwritten.
+    return await _publish_remote_transition(session, job, {
+        "provenance": dict(job.provenance or {}, remote_diagnostics=recovered),
+    }, require_lease=False)
+
+
 async def _run_requested_diagnostics(job_id, identity, digest, guard, receipt_snapshot=None):
     incoming = None
     try:
@@ -1363,11 +1453,7 @@ async def _run_requested_diagnostics(job_id, identity, digest, guard, receipt_sn
                 if fence.rowcount != 1:
                     await session.rollback()
                     return
-                root = get_data_root() / "remote-execution" / "diagnostics"
-                relative = "/".join((job_id, identity["attempt_id"], digest))
-                destination = _safe_result_path(root, relative)
-                if any(p.is_symlink() for p in (destination, *destination.parents)):
-                    raise RemoteExecutionError("Diagnostic destination traverses a symlink")
+                destination = _diagnostic_destination(job_id, identity, digest)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():
                     await asyncio.to_thread(_verify_result_package, destination, job, status)

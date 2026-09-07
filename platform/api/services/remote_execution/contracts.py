@@ -97,7 +97,7 @@ class ProvisionPreview(StrictModel):
     artifacts: list[CachedArtifactReceipt]
     total_bytes: int = Field(ge=0)
     scientific_ready: Literal[False] = False
-    scope: Literal["cache_download_only"] = "cache_download_only"
+    scope: Literal["managed_asset_activation"] = "managed_asset_activation"
 
 
 class PreloadProgress(StrictModel):

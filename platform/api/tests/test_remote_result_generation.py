@@ -172,13 +172,15 @@ async def test_retained_staging_fails_closed(tmp_path, monkeypatch, corruption):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_import", [False, True])
-async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_path, monkeypatch, fail_import):
+@pytest.mark.parametrize("pull_mode", ["manual", "automatic"])
+async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_path, monkeypatch, fail_import, pull_mode):
     from services import result_ingester, analysis_autorun
     await ready(store)
     async with store() as session:
         job = await session.get(Job, "job")
         job.output_dir = str(tmp_path / "output")
         job.model_id = "custom_file_workflow"
+        job.params = dict(job.params or {}, remote_result_policy=pull_mode)
         manifest, incoming, status = package(job)
         Path(job.output_dir).mkdir()
         (Path(job.output_dir) / "old.txt").write_text("good")
@@ -210,7 +212,14 @@ async def test_real_native_finalizer_transaction_and_explicit_retry(store, tmp_p
     for retry in range(2 if fail_import else 1):
         tasks = BackgroundTasks()
         async with store() as session:
-            await ex.request_remote_result_pull(session, await session.get(Job, "job"), tasks)
+            job = await session.get(Job, "job")
+            if pull_mode == "automatic" and retry == 0:
+                assert await ex.reconcile_remote_job(session, job, background_tasks=tasks)
+            else:
+                # A failed import never triggers automatic transfer or science
+                # retries, even though the opt-in remains persisted.
+                assert not await ex.reconcile_remote_job(session, job, background_tasks=BackgroundTasks())
+                await ex.request_remote_result_pull(session, job, tasks)
         await tasks()
         async with store() as session:
             job = await session.get(Job, "job")

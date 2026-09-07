@@ -20,6 +20,7 @@ KEY = contract.REVISION_KEY
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", ["second_sequence", "settings", None])
 async def test_marked_variants_all_validate_before_any_row_mutation(admission, monkeypatch, invalid):
+    """New explicit no-MSA batch intent; never a migration of saved local-MSA settings."""
     # A registry-owned sequence rule makes the second generated request fail
     # independently. Production registry hardening is explicitly outside scope.
     registry = jobs.get_registry()
@@ -29,7 +30,7 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
     monkeypatch.setattr(sequence_param, "pattern", "[ACDEFGHIKLMNPQRSTVWY]+")
     monkeypatch.setattr(registry, "reload", lambda: None)  # Keep this fixture-owned rule.
     payload = request()
-    payload.params = {"msa_provider": "local", "boltz_use_msa": True,
+    payload.params = {"msa_provider": "colabfold_api", "boltz_use_msa": False,
                       "use_msa": False, "seed": 0,
                       "boltz_recycling_steps": -1 if invalid == "settings" else 1,
                       "mutagenesis_variants": [{"name": "one", "sequence": "ACDE"},
@@ -41,19 +42,55 @@ async def test_marked_variants_all_validate_before_any_row_mutation(admission, m
         with pytest.raises(HTTPException) as exc:
             await jobs._create_job(payload, BackgroundTasks(), admission)
         assert exc.value.status_code == 422
+        # Both invalid branches must reach the variant validator, not an MSA gate.
+        expected_error = (
+            "sequence does not match required pattern" if invalid == "second_sequence"
+            else "boltz_recycling_steps must be >= 1.0"
+        )
+        assert exc.value.detail == {"validation_errors": [expected_error]}
+        assert not admission.new
         assert list((await admission.execute(select(Job))).scalars()) == []
         assert not admission.new
     else:
         await jobs._create_job(payload, BackgroundTasks(), admission)
         rows = list((await admission.execute(select(Job))).scalars())
         variants = [row for row in rows if row.model_id == "boltz2"]
+        assert len(rows) == 2  # No MSA-search dependency row for this explicit no-MSA request.
         assert len(variants) == 2
         assert {row.params["sequence"] for row in variants} == {"ACDE", "FGHI"}
         for row in variants:
             assert contract.revision_for_job(row) == 1
             assert row.params["seed"] == 0
+            assert row.params["msa_provider"] == "colabfold_api"
+            assert row.params["boltz_use_msa"] is False
             assert row.params["use_msa"] is False
 
+
+
+@pytest.mark.asyncio
+async def test_explicit_local_variant_policy_rejects_before_any_row_mutation(admission, monkeypatch):
+    """Historical local-MSA batch keeps its settings and must reject, not migrate."""
+    # Keep the historical batch's scientific settings intact. Local search is
+    # now forbidden, and API-backed mutagenesis is separately not admitted.
+    payload = request()
+    payload.params = {"msa_provider": "local", "boltz_use_msa": True,
+                      "use_msa": False, "seed": 0, "boltz_recycling_steps": 1,
+                      "mutagenesis_variants": [{"name": "one", "sequence": "ACDE"},
+                                              {"name": "two", "sequence": "FGHI"}]}
+    def no_add(*args, **kwargs):
+        raise AssertionError("Job row mutation before explicit local policy rejection")
+    monkeypatch.setattr(admission, "add", no_add)
+    with pytest.raises(HTTPException) as exc:
+        await jobs._create_job(payload, BackgroundTasks(), admission)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == (
+        "Local MSA search is disabled by the BMS 1.0 interim policy. "
+        "Explicitly select ColabFold API — external service and re-preview the job; "
+        "supplied/verified alignments and model-supported no-MSA modes remain supported."
+    )
+    assert not admission.new
+    assert list((await admission.execute(select(Job))).scalars()) == []
+    assert not admission.new
 
 
 @pytest.mark.asyncio

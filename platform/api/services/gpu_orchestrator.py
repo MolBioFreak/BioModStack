@@ -1419,76 +1419,78 @@ async def _claim_remote_job(
     from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
     from services.remote_execution.progress import preload_idle_clause
     claim_now = datetime.utcnow()
-    lease_transition = await session.execute(
-        update(ExecutionTarget)
-        .where(
-            ExecutionTarget.id == target_id,
-            ExecutionTarget.active.is_(True),
-            ExecutionTarget.state == "ready",
-            ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
-            ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
-            ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
-            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
-                (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
-            ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
-            preload_idle_clause(),
-            ExecutionTarget.leased_job_id.is_(None),
+    # A losing claim must not expire other workers' pending ORM rows. Keep
+    # target + job ownership atomic inside a savepoint, not a session rollback.
+    async with session.begin_nested() as claim:
+        lease_transition = await session.execute(
+            update(ExecutionTarget)
+            .where(
+                ExecutionTarget.id == target_id,
+                ExecutionTarget.active.is_(True),
+                ExecutionTarget.state == "ready",
+                ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
+                ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
+                ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
+                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
+                    (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
+                ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
+                preload_idle_clause(),
+                ExecutionTarget.leased_job_id.is_(None),
+            )
+            .values(
+                leased_job_id=str(job.id),
+                lease_acquired_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session=False)
         )
-        .values(
-            leased_job_id=str(job.id),
-            lease_acquired_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+        if int(lease_transition.rowcount or 0) != 1:
+            await claim.rollback()
+            return None
+        original = _normalize_job_params(getattr(job, "params", None))
+        scheduler_params = (
+            attach_scheduler_gpu_assignment(original, int(gpu_id))
+            if gpu_id is not None
+            else original
         )
-        .execution_options(synchronize_session=False)
-    )
-    if int(lease_transition.rowcount or 0) != 1:
-        await session.rollback()
-        return None
-    original = _normalize_job_params(getattr(job, "params", None))
-    scheduler_params = (
-        attach_scheduler_gpu_assignment(original, int(gpu_id))
-        if gpu_id is not None
-        else original
-    )
-    provenance = dict(getattr(job, "provenance", None) or {})
-    provenance["remote_execution_assignment"] = {
-        "schema": "bms.remote-execution-assignment.v1",
-        "execution_target_id": target_id,
-        "gpu_index": gpu_id,
-        "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
-        "admission_snapshot": dict(admission_snapshot or {}),
-        "claimed_at": datetime.utcnow().isoformat() + "Z",
-    }
-    transition = await session.execute(
-        update(Job)
-        .where(
-            Job.id == str(job.id),
-            Job.status == "queued",
-            Job.queue_status == "queued",
-            Job.paused.is_(False),
-            Job.assigned_gpu.is_(None),
-            Job.execution_target_id == target_id,
-            Job.params == original,
-            Job.started_at.is_(None),
-            Job.nextflow_run_id.is_(None),
+        provenance = dict(getattr(job, "provenance", None) or {})
+        provenance["remote_execution_assignment"] = {
+            "schema": "bms.remote-execution-assignment.v1",
+            "execution_target_id": target_id,
+            "gpu_index": gpu_id,
+            "gpu_indices": list(gpu_ids or ([] if gpu_id is None else [gpu_id])),
+            "admission_snapshot": dict(admission_snapshot or {}),
+            "claimed_at": datetime.utcnow().isoformat() + "Z",
+        }
+        transition = await session.execute(
+            update(Job)
+            .where(
+                Job.id == str(job.id),
+                Job.status == "queued",
+                Job.queue_status == "queued",
+                Job.paused.is_(False),
+                Job.assigned_gpu.is_(None),
+                Job.execution_target_id == target_id,
+                Job.params == original,
+                Job.started_at.is_(None),
+                Job.nextflow_run_id.is_(None),
+            )
+            .values(
+                status="queued",
+                queue_status="preparing",
+                started_at=None,
+                assigned_gpu=gpu_id,
+                vram_estimate_mb=int(vram_estimate_mb),
+                params=scheduler_params,
+                provenance=provenance,
+                remote_state="preparing",
+                error_message=None,
+            )
+            .execution_options(synchronize_session=False)
         )
-        .values(
-            status="queued",
-            queue_status="preparing",
-            started_at=None,
-            assigned_gpu=gpu_id,
-            vram_estimate_mb=int(vram_estimate_mb),
-            params=scheduler_params,
-            provenance=provenance,
-            remote_state="preparing",
-            error_message=None,
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if int(transition.rowcount or 0) != 1:
-        await session.rollback()
-        await session.refresh(job)
-        return None
+        if int(transition.rowcount or 0) != 1:
+            await claim.rollback()
+            return None
     job.status = "queued"
     job.queue_status = "preparing"
     job.started_at = None
@@ -3190,6 +3192,16 @@ class GPUOrchestrator:
                 result = await session.execute(
                     select(Job).where(
                         Job.queue_status.in_(("running", "cancelling", "preparing"))
+                        | (
+                            Job.execution_target_id.is_not(None)
+                            & (
+                                (Job.remote_state == "results_available")
+                                | (
+                                    Job.status.in_(("failed", "cancelled"))
+                                    & (Job.provenance["remote_diagnostics"]["state"].as_string() == "returning")
+                                )
+                            )
+                        )
                     )
                 )
                 running_jobs = result.scalars().all()

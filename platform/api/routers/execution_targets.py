@@ -19,7 +19,29 @@ from services.remote_execution.targets import (
     refresh_vast_targets,
 )
 
+from services.remote_execution.managed_inventory import ManagedInventory, project_inventory
+
 router = APIRouter()
+
+
+@router.get('/{execution_target_id}/runtime-inventory', response_model=ManagedInventory | None)
+async def runtime_inventory(execution_target_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        return project_inventory(await get_target(session, execution_target_id))
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post('/{execution_target_id}/runtime-inventory/refresh', response_model=ManagedInventory)
+async def refresh_runtime_inventory(execution_target_id: str, http_request: Request,
+                                    session: AsyncSession = Depends(get_session)):
+    controller = getattr(http_request.app.state, 'preload_controller', None)
+    if controller is None:
+        raise HTTPException(status_code=503, detail='Preload service is unavailable')
+    try:
+        return await controller.refresh_inventory(session, execution_target_id)
+    except ExecutionTargetError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("", response_model=list[ExecutionTargetResponse])
@@ -124,5 +146,8 @@ async def artifact_inventory(execution_target_id: str, session: AsyncSession = D
 
 
 @router.get("/active/telemetry")
-async def execution_target_telemetry(session: AsyncSession = Depends(get_session), since: str | None = None):
-    return await active_remote_telemetry(session, since)
+async def execution_target_telemetry(
+    session: AsyncSession = Depends(get_session), since: str | None = None,
+    execution_target_id: str | None = None,
+):
+    return await active_remote_telemetry(session, since, execution_target_id)

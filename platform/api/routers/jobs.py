@@ -72,7 +72,7 @@ from runtime_policy import (
     workflow_launch_block_detail,
     workflow_launches_allowed,
 )
-from schemas import JobCreate, JobResponse, JobList, JobStatus
+from schemas import ExecutionPolicy, JobCreate, JobResponse, JobList, JobStatus
 from services.job_control import cancel_job_lineage, reject_generic_md_lifecycle_control
 from services import alignment_access, ont_submission_trust, stage_reporting, ont_ngs_contract
 from services.ont_barcode_units import load_barcode_units
@@ -5265,6 +5265,7 @@ async def list_jobs(
             model_id=job.model_id,
             mode=job.mode,
             params={} if summary else _public_job_params(job),
+            execution_policy=ExecutionPolicy.from_params(job.params),
             created_at=job.created_at,
             started_at=job.started_at,
             completed_at=job.completed_at,
@@ -6203,12 +6204,12 @@ async def _create_job(
             name=f"{job_data.name}_msa",
             model_id='msa_batch',
             mode='msa_generation',
-            params=_build_msa_batch_child_params(
+            params={**_build_msa_batch_child_params(
                 source_params=job_data.params,
                 sequences_for_msa=sequences_for_msa,
                 source_model_id=job_data.model_id,
                 source_mode=job_data.mode,
-            ),
+            ), "remote_result_policy": job_data.execution_policy.remote_result_policy},
             output_dir=msa_output_dir,
             status=JobStatus.QUEUED.value,
             batch_id=batch_id,
@@ -6460,7 +6461,8 @@ async def _create_job(
             name=job_name,
             model_id=job_data.model_id,
             mode=job_data.mode,
-            params=job_params,  # Variant-specific params for mutagenesis
+            params={**job_params, "remote_result_policy": job_data.execution_policy.remote_result_policy},
+            # Execution policy is persisted only after scientific admission.
             output_dir=output_dir,
             status=JobStatus.QUEUED.value,
             # Batch grouping for job sets
@@ -8080,6 +8082,7 @@ async def resubmit_job(
     output_dir = str(get_results_dir() / f"{new_name}_{timestamp}")
 
     resubmit_params = deepcopy(original_job.params) if isinstance(original_job.params, dict) else {}
+    resubmit_params.pop("remote_result_policy", None)
     from services.msa_policy import apply_msa_policy
     try:
         resubmit_params = apply_msa_policy(original_job.model_id, resubmit_params)
@@ -8180,7 +8183,8 @@ async def resubmit_job(
         name=new_name,
         model_id=original_job.model_id,
         mode=original_job.mode,
-        params=resubmit_params,
+        params={**resubmit_params, "remote_result_policy":
+                "automatic" if (original_job.params or {}).get("remote_result_policy") == "automatic" else "manual"},
         provenance=resubmit_provenance,
         status=JobStatus.QUEUED.value,
         created_at=datetime.utcnow(),
@@ -9652,6 +9656,9 @@ async def resume_job(
     )
     if resolved_child_batch_name and not fresh_execution:
         merged_params["batch_name"] = resolved_child_batch_name
+    if "remote_result_policy" in param_overrides or "execution_policy" in param_overrides:
+        raise HTTPException(status_code=422, detail="execution policy is not a scientific override")
+    merged_params.pop("remote_result_policy", None)
     merged_params = _normalize_antibody_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_runtime_paths(job.model_id, merged_params)
     merged_params = _normalize_structure_geometry_params(merged_params)
@@ -9721,6 +9728,7 @@ async def resume_job(
         provenance=resume_provenance,
         params={
             **merged_params,
+            "remote_result_policy": "automatic" if (job.params or {}).get("remote_result_policy") == "automatic" else "manual",
             **({} if fresh_execution else {
                 "resume_job_id": job_id,
                 "resume_work_dir": resume_work_dir,

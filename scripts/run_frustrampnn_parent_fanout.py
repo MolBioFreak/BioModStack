@@ -17,7 +17,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform" / "api"))
 from component_runtime import (
-    GroupingLedger, ResultReference, durable_write, ordered_candidates, plan_frustrampnn,
+    ComponentBoundary, GroupingLedger, ResultReference, durable_write, ordered_candidates, plan_frustrampnn,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -111,10 +111,10 @@ def execute_parent_fanout(
     # attempt identities are never inferred from parent job IDs.
     ledger = GroupingLedger(output_receipt.with_suffix(".components.sqlite"),
         attempt_id=str(output_receipt.resolve().parent), plan=plan)
-    ledger.check_active()
+    boundary = ComponentBoundary(ledger)
 
     endpoint = f"{api_url.rstrip('/')}/api/frustrampnn/jobs/{parent_job_id}/workflow-dataset/analyze"
-    response = requests.post(
+    response = boundary.submit(lambda: requests.post(
         endpoint,
         data={
             "parent_workflow_id": parent_workflow_id,
@@ -125,7 +125,7 @@ def execute_parent_fanout(
         files=files,
         headers={"Authorization": f"Bearer {capability}"},
         timeout=120,
-    )
+    ))
     response.raise_for_status()
     fanout = response.json()
     children = fanout.get("child_jobs")
@@ -154,23 +154,30 @@ def execute_parent_fanout(
     plan.require_groups([[str(c["candidate_id"]) for c in child["candidates"]] for child in children])
 
     status_endpoint = f"{api_url.rstrip('/')}/api/jobs/{parent_job_id}/children/status"
-    started = time.monotonic()
-    status_payload: dict[str, Any]
-    while True:
-        ledger.check_active()
+    def observe() -> dict[str, Any]:
         status_response = requests.get(
             status_endpoint, params={"stage": "frustrampnn"}, timeout=30
         )
         status_response.raise_for_status()
-        status_payload = status_response.json()
+        return status_response.json()
+
+    def complete(status_payload: dict[str, Any]) -> bool:
         observed = [str(value) for value in status_payload.get("child_ids", [])]
-        if set(observed) - set(child_ids):
+        if len(observed) != len(set(observed)) or set(observed) - set(child_ids):
             raise RuntimeError("foreign FrustraMPNN child lineage was observed")
+        rows = status_payload.get("children", [])
+        row_ids = [str(item.get("job_id") or "") for item in rows if isinstance(item, dict)]
+        if (len(row_ids) != len(rows) or len(set(row_ids)) != len(row_ids)
+                or set(row_ids) != set(observed)):
+            raise RuntimeError("FrustraMPNN child status lineage is invalid")
         if status_payload.get("all_done") and set(observed) == set(child_ids):
-            break
-        if timeout > 0 and time.monotonic() - started > timeout:
-            raise RuntimeError("timed out waiting for required FrustraMPNN child Jobs")
-        time.sleep(poll_interval)
+            if any(item.get("status") != "completed" for item in rows):
+                raise RuntimeError("required FrustraMPNN child Jobs failed or were cancelled")
+            return True
+        return False
+
+    status_payload = boundary.wait(observe, complete, poll_interval=poll_interval,
+                                   timeout=timeout, clock=time.monotonic, sleep=time.sleep)
     if (
         status_payload.get("completed") != len(child_ids)
         or status_payload.get("failed")
@@ -238,14 +245,13 @@ def execute_parent_fanout(
         if reference_path.exists() and reference_path.read_bytes() != reference_bytes:
             raise RuntimeError("durable child receipt conflicts")
         durable_write(reference_path, reference_bytes)
-        ledger.seal(ResultReference(plan.component_id(len(receipts)-1),
+        boundary.result(ResultReference(plan.component_id(len(receipts)-1),
             reference_path.name, hashlib.sha256(reference_bytes).hexdigest(),
-            len(reference_bytes), "frustrampnn-native-child-receipt"))
+            len(reference_bytes), "frustrampnn-native-child-receipt"), output_receipt.parent)
     if copied_ids != candidate_ids:
         raise RuntimeError("FrustraMPNN child bundle order/cardinality is incomplete")
 
-    for reference in ledger.join():
-        reference.resolve(output_receipt.parent)
+    boundary.join(output_receipt.parent)
     terminal = {
         "schema_name": "bms.frustrampnn.parent-fanout-terminal.v1",
         "schema_version": 1,

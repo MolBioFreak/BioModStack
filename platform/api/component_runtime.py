@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 import sqlite3
 from typing import Any, Callable, Mapping, Sequence, TypeVar
@@ -232,3 +233,53 @@ class GroupingLedger:
         if set(rows) != set(ids):
             raise RuntimeError("required component result join is incomplete")
         return tuple(ResultReference(**json.loads(rows[identity])) for identity in ids)
+
+
+class ComponentBoundary:
+    """Shared submit/wait/result guards around adapter-owned execution.
+
+    Submission is called once, never retried on ambiguous failure. The adapter
+    owns idempotent replay and native response/scientific validation. Waiting
+    owns no resource reservation: the underlying scheduler/Nextflow owns leases
+    and process termination. A cancellation exception is not quiescence proof.
+    """
+
+    def __init__(self, ledger: GroupingLedger):
+        self.ledger = ledger
+
+    def submit(self, operation: Callable[[], T]) -> T:
+        self.ledger.check_active()
+        result = operation()
+        self.ledger.check_active()
+        return result
+
+    def wait(self, observe: Callable[[], T], complete: Callable[[T], bool], *,
+             poll_interval: float, timeout: float = 0,
+             clock: Callable[[], float] = time.monotonic,
+             sleep: Callable[[float], None] = time.sleep) -> T:
+        if poll_interval < 0 or timeout < 0:
+            raise ValueError("component wait intervals must be nonnegative")
+        started = clock()
+        while True:
+            self.ledger.check_active()
+            observation = observe()
+            self.ledger.check_active()
+            if complete(observation):
+                return observation
+            elapsed = clock() - started
+            if timeout and elapsed >= timeout:
+                raise RuntimeError("timed out waiting for required components")
+            sleep(min(poll_interval, max(0, timeout - elapsed)) if timeout else poll_interval)
+
+    def result(self, reference: ResultReference, root: Path) -> Path:
+        """Seal only adapter-validated, byte-bound native results."""
+        self.ledger.check_active()
+        resolved = reference.resolve(root)
+        self.ledger.seal(reference)
+        return resolved
+
+    def join(self, root: Path) -> tuple[Path, ...]:
+        """Exact required-set join; recheck bytes even on replay."""
+        paths = tuple(reference.resolve(root) for reference in self.ledger.join())
+        self.ledger.check_active()
+        return paths

@@ -1,6 +1,6 @@
-"""Explicit cache-only operations using an authoritative saved Job as recipe.
+"""Saved-Job cache prewarm and independent managed image/weight provisioning.
 
-No queue insertion, Job updates, input transfers, or automatic restart/resume.
+No queue insertion, Job updates, input transfers, inference or automatic resume.
 """
 from __future__ import annotations
 
@@ -178,7 +178,8 @@ class PreloadController:
                 phase="checking", message="Checking source and runtime cache", started_at=now, updated_at=now)
             admitted = await session.execute(update(ExecutionTarget).where(admission_clause(target)).values(
                 provider_metadata=func.json_set(ExecutionTarget.provider_metadata, "$.preload",
-                    func.json(progress.model_dump_json()))).execution_options(synchronize_session=False))
+                    func.json(progress.model_dump_json()), '$.managed_inventory.refresh_failed',
+                    func.json('true'))).execution_options(synchronize_session=False))
             if admitted.rowcount != 1:
                 await session.rollback()
                 raise ExecutionTargetError("Worker inventory, endpoint, or activity changed; refresh and retry")
@@ -191,8 +192,11 @@ class PreloadController:
             await session.rollback()
             return response
 
-    async def _publish(self, session, target_id, progress, expected_endpoint=None):
+    async def _publish(self, session, target_id, progress, expected_endpoint=None, managed=None):
         metadata = func.json_set(ExecutionTarget.provider_metadata, "$.preload", func.json(progress.model_dump_json()))
+        if managed is not None:
+            metadata = func.json_set(metadata, "$.managed_inventory", func.json(json.dumps(managed)),
+                "$.managed_boot_id", managed['observation']['boot_id'])
         if progress.selection is not None and progress.phase == "source_download_ready":
             target = await get_target(session, target_id)
             if expected_endpoint is None or endpoint(target) != expected_endpoint:
@@ -251,15 +255,31 @@ class PreloadController:
                     await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint)
 
             await check_fence()
+            managed = None
             if progress.selection is not None:
                 from .cache import provision_cache
+                from .managed_inventory import (manifest_for, helper_call, activate_release,
+                    observe_releases, endpoint_digest)
                 async with self.session_factory() as session:
-                    target = TargetSnapshot.capture(await get_target(session, target_id))
+                    current_target = await get_target(session, target_id)
+                    target = TargetSnapshot.capture(current_target)
+                    previous = (current_target.provider_metadata or {}).get('managed_inventory', {})
+                    manifests = previous.get('manifests', []) if previous.get('endpoint_sha256') == endpoint_digest(target) else []
                 preview, entries = await self._preview(progress.selection, target)
                 if preview.preview_sha256 != progress.request_sha256:
                     raise ExecutionTargetError("Provision preview changed; preview again")
+                boot = (await helper_call(connection, {'action': 'boot'}, check_fence))['boot_id']
+                manifest = manifest_for(progress.selection, entries, (progress.source_revision, progress.source_tree))
+                await helper_call(connection, dict(action='admit', manifest=manifest, boot_id=boot), check_fence)
                 artifacts = await provision_cache(connection=connection, entries=entries,
                     operation_id=progress.operation_id, progress=publish, check_fence=check_fence)
+                await activate_release(connection, manifest, check_fence, publish, boot)
+                manifests = [m for m in manifests if m['selection'] != manifest['selection']] + [manifest]
+                observed = await observe_releases(connection, manifests, check_fence)
+                if str(observed.boot_id) != boot:
+                    raise ExecutionTargetError('Worker identity or activity changed during preload')
+                managed = dict(manifests=manifests, observation=observed.model_dump(mode='json'),
+                               endpoint_sha256=endpoint_digest(target))
                 receipt = dict(source_revision=progress.source_revision, source_tree=progress.source_tree,
                     artifacts=artifacts)
             else:
@@ -278,10 +298,10 @@ class PreloadController:
             progress.artifact = None
             progress.message = "Source and cacheable runtime downloads verified; launch still prepares support Python and verifies scientific readiness"
             if progress.selection is not None:
-                progress.message = "Selected cache downloads verified by readback; runtime materialization and scientific readiness remain unverified"
+                progress.message = "Selected managed asset release activated and re-observed; critical runtime and scientific readiness remain unverified"
             progress.updated_at = datetime.utcnow()
             async with self.session_factory() as session:
-                await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint)
+                await self._publish(session, target_id, progress, expected_endpoint=expected_endpoint, managed=managed)
         except BaseException as exc:
             async with self.session_factory() as session:
                 progress.message = failure_message(exc, progress.phase)
@@ -296,6 +316,62 @@ class PreloadController:
                 raise
         finally:
             self.tasks.pop(progress.operation_id, None)
+
+    async def refresh_inventory(self, session, target_id):
+        from .managed_inventory import observe_releases, endpoint_digest, project_inventory
+        async with self.lock:
+            if self.closed:
+                raise ExecutionTargetError('Preload service is stopping')
+            target = await get_target(session, target_id)
+            previous = deepcopy((target.provider_metadata or {}).get('managed_inventory', {}))
+            operation = (target.provider_metadata or {}).get('preload', {}).get('operation_id')
+            if (not target.active or target.state != 'ready' or not inventory_fresh(target)
+                    or target.leased_job_id or await _has_nonterminal_jobs(session, target_id)
+                    or (target.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
+                raise ExecutionTargetError('Inventory refresh requires an idle attached worker with current provider inventory')
+            target = TargetSnapshot.capture(target)
+            await session.rollback()
+            if not isinstance(previous, dict):
+                raise ExecutionTargetError('Managed inventory metadata is invalid; provision again')
+            if previous.get('manifests') and previous.get('endpoint_sha256') != endpoint_digest(target):
+                raise ExecutionTargetError('Managed inventory belongs to a different worker identity; provision again')
+
+            async def fence():
+                async with self.session_factory() as check:
+                    row = await get_target(check, target_id)
+                    if (endpoint(row) != endpoint(target) or not inventory_fresh(row)
+                            or not row.active or row.state != 'ready' or row.leased_job_id
+                            or (row.provider_metadata or {}).get('preload', {}).get('operation_id') != operation
+                            or (row.provider_metadata or {}).get('preload', {}).get('phase') in PRELOAD_ACTIVE_PHASES):
+                        raise ExecutionTargetError('Worker identity or activity changed during inventory observation')
+            try:
+                observed = await observe_releases(RemoteConnection.from_target(target), previous.get('manifests', []), fence)
+                payload = dict(manifests=previous.get('manifests', []), observation=observed.model_dump(mode='json'),
+                               endpoint_sha256=endpoint_digest(target))
+                value = func.json_set(ExecutionTarget.provider_metadata,
+                    '$.managed_inventory', func.json(json.dumps(payload)), '$.managed_boot_id', str(observed.boot_id))
+                changed = await session.execute(update(ExecutionTarget).where(admission_clause(target),
+                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string().is_(operation))
+                    .values(provider_metadata=value).execution_options(synchronize_session=False))
+                if changed.rowcount != 1:
+                    await session.rollback()
+                    raise ExecutionTargetError('Worker identity or activity changed during inventory observation')
+                await session.commit()
+                result = project_inventory(await get_target(session, target_id))
+                await session.rollback()
+                return result
+            except BaseException as exc:
+                await session.rollback()
+                # Failed readback invalidates freshness immediately; retain prior evidence.
+                await session.execute(update(ExecutionTarget).where(admission_clause(target),
+                    ExecutionTarget.provider_metadata['preload']['operation_id'].as_string().is_(operation))
+                    .values(provider_metadata=func.json_set(ExecutionTarget.provider_metadata,
+                        '$.managed_inventory.refresh_failed', func.json('true')))
+                    .execution_options(synchronize_session=False))
+                await session.commit()
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                raise ExecutionTargetError('Managed inventory readback failed; prior observation is stale, explicitly retry') from exc
 
     async def recover(self):
         async with self.session_factory() as session:

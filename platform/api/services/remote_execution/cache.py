@@ -20,8 +20,10 @@ async def _noop(*args, **kwargs):
     pass
 
 
-async def _install_helper(connection, check_fence):
-    payload = (Path(__file__).parents[2] / 'tools/bms_artifact_cache.py').read_bytes()
+async def _install_helper(connection, check_fence, helper_name='bms_artifact_cache.py'):
+    if helper_name not in {'bms_artifact_cache.py', 'bms_managed_runtime.py'}:
+        raise ValueError('Unknown managed helper')
+    payload = (Path(__file__).parents[2] / 'tools' / helper_name).read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
     destination = f'{connection.remote_root}/runner/cache-{digest}.py'
     # The helper is small: one stdin transfer, verified before atomic publication.
@@ -198,7 +200,7 @@ def independent_preview(selection, target):
     from .contracts import ProvisionPreview, ProvisionSelection, CachedArtifactReceipt
     entries = independent_plan(selection)
     artifacts = [dict(name=e.remote_destination, sha256=e.sha256, size_bytes=e.size_bytes) for e in entries]
-    identity = dict(selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id).model_dump(),
+    identity = dict(scope='managed_asset_activation.v1', selection=ProvisionSelection(kind=selection.kind, model_id=selection.model_id).model_dump(),
         target=[target.id, target.host, target.port, target.username, target.remote_root, target.host_key_sha256],
         source=current_source_identity(), artifacts=artifacts,
         modes=[e.mode for e in entries])

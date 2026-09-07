@@ -100,6 +100,7 @@ def workflow_params(job: Any, params: Mapping) -> dict:
     """Rebuild the transport marker from persisted authority, without mutation."""
     result = deepcopy(dict(params))
     result.pop(REVISION_KEY, None)
+    result.pop("remote_result_policy", None)
     result.pop('fampnn_analysis_declaration', None)
     result.pop('fampnn_analysis_policy', None)
     reject_reserved_marker(result)

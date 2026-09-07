@@ -377,7 +377,7 @@ class AttachmentController:
         async with self.lock:
             if self.closed:
                 raise ExecutionTargetError("Attachment service is stopping")
-            if self.tasks:
+            if target_id("vast", request.provider_instance_id) in self.tasks:
                 raise ExecutionTargetError("An attachment is already in progress")
             result = await begin_activation(session, request)
             if result.setup is None or result.setup.started_at is None:
@@ -448,24 +448,13 @@ async def begin_activation(
         raise ExecutionTargetError("Vast instance has no SSH endpoint")
     now = datetime.utcnow()
     identifier = target_id("vast", instance.provider_instance_id)
-    active_target = await session.scalar(
-        select(ExecutionTarget).where(
-            ExecutionTarget.active.is_(True),
-            ExecutionTarget.id != identifier,
-        )
-    )
-    if active_target is not None and (preload_active(active_target) or await _has_nonterminal_jobs(session, str(active_target.id))):
-        raise ExecutionTargetError(
-            "The active execution target has nonterminal Jobs and cannot be replaced"
-        )
+
     admitted = await session.execute(update(ExecutionTarget).where(
         ExecutionTarget.id == identifier,
         ExecutionTarget.leased_job_id.is_(None),
         ExecutionTarget.state != "probing",
         preload_idle_clause(),
-        ~select(ExecutionTarget.id).where(
-            ExecutionTarget.provider_metadata["preload"]["phase"].as_string().in_(("checking", "transferring", "verifying"))
-        ).exists(),
+
         ExecutionTarget.provider_metadata["inventory"]["status"].as_string() == "complete",
         ExecutionTarget.provider_metadata["inventory"]["present"].as_boolean().is_(True),
         ExecutionTarget.provider_metadata["inventory"]["running"].as_boolean().is_(True),
@@ -612,20 +601,7 @@ async def finish_activation(session: AsyncSession, identifier: str) -> Execution
         await session.commit()
         raise ExecutionTargetError(message) from exc
 
-    nonterminal = select(Job.id).where(
-        Job.execution_target_id == ExecutionTarget.id,
-        blocking_job_clause(),
-    ).exists()
-    await session.execute(
-        update(ExecutionTarget)
-        .where(ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True),
-               ExecutionTarget.leased_job_id.is_(None), preload_idle_clause(), ~nonterminal)
-        .values(active=False, state="inactive", updated_at=datetime.utcnow())
-    )
-    if await session.scalar(select(ExecutionTarget.id).where(
-        ExecutionTarget.id != identifier, ExecutionTarget.active.is_(True)).limit(1)):
-        await session.rollback()
-        raise ExecutionTargetError("The active execution target acquired work during attachment; retry when idle")
+
     await session.refresh(target)
     # Publish readiness with an atomic current-inventory predicate, never ORM
     # autoflush of an old ready projection after network I/O.
@@ -696,13 +672,20 @@ async def remote_target_telemetry(target: ExecutionTarget) -> dict[str, Any]:
     return sample
 
 
-async def active_remote_telemetry(session: AsyncSession, since: str | None = None) -> dict[str, Any]:
-    result = await session.execute(
-        select(ExecutionTarget).where(
-            ExecutionTarget.active.is_(True),
-            ExecutionTarget.state == "ready",
-        )
+async def active_remote_telemetry(
+    session: AsyncSession, since: str | None = None,
+    execution_target_id: str | None = None,
+) -> dict[str, Any]:
+    query = select(ExecutionTarget).where(
+        ExecutionTarget.active.is_(True), ExecutionTarget.state == "ready",
     )
-    target = result.scalar_one_or_none()
+    if execution_target_id is not None:
+        query = query.where(ExecutionTarget.id == execution_target_id)
+    # Preserve the single-worker API, but never choose an arbitrary fleet member.
+    candidates = (await session.execute(query.limit(2))).scalars().all()
+    target = candidates[0] if len(candidates) == 1 else None
     from .telemetry import remote_telemetry
-    return remote_telemetry.read(target, since)
+    value = remote_telemetry.read(target, since)
+    if len(candidates) > 1:
+        value['error'] = 'Select an execution target to view fleet telemetry'
+    return value

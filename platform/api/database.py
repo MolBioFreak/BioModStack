@@ -224,12 +224,7 @@ class ExecutionTarget(Base):
             name="uq_execution_target_provider_instance",
         ),
         CheckConstraint("provider IN ('vast')", name="ck_execution_target_provider"),
-        Index(
-            "uq_execution_targets_one_active",
-            "active",
-            unique=True,
-            sqlite_where=text("active = 1"),
-        ),
+
         Index("ix_execution_targets_provider_state", "provider", "state"),
     )
 

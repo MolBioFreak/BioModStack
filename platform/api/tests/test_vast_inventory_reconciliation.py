@@ -458,11 +458,12 @@ async def test_inventory_attachment_initial_mutation_is_fenced(store, monkeypatc
     session, factory = store
     identifier = 'vast:49674511'
     inventory(monkeypatch, ['49674511'])
-    original = session.scalar
+    original = session.execute
     transitions = []
     async def competing_transition(*args, **kwargs):
-        result = await original(*args, **kwargs)
-        if not transitions:
+        statement = args[0]
+        if (not transitions and getattr(statement, 'is_update', False)
+                and statement.compile().params.get('state') == 'probing'):
             async with factory() as other:
                 if change == 'lease':
                     await other.execute(update(ExecutionTarget).where(ExecutionTarget.id == identifier).values(
@@ -473,8 +474,8 @@ async def test_inventory_attachment_initial_mutation_is_fenced(store, monkeypatc
                     await targets.refresh_vast_targets(other)
                 current = await other.get(ExecutionTarget, identifier)
                 transitions.append((current.state, current.active, current.host, current.username, current.remote_root))
-        return result
-    monkeypatch.setattr(session, 'scalar', competing_transition)
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(session, 'execute', competing_transition)
     calls = []
     async def forbidden(*args, **kwargs):
         calls.append('ssh')

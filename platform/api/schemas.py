@@ -30,8 +30,19 @@ class JobStatus(str, Enum):
 
 # --- Job Schemas ---
 
+class ExecutionPolicy(BaseModel):
+    """Execution-only successful result return; never authorizes diagnostics."""
+    model_config = ConfigDict(extra="forbid")
+    remote_result_policy: Literal["manual", "automatic"] = "manual"
+
+    @classmethod
+    def from_params(cls, params):
+        return cls(remote_result_policy="automatic" if isinstance(params, dict) and params.get("remote_result_policy") == "automatic" else "manual")
+
+
 class JobCreate(BaseModel):
     """Request schema for creating a new job."""
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     fampnn_analysis_overrides: FampnnAnalysisOverrides | None = None
     name: str = Field(..., min_length=1, max_length=255)
     model_id: str = Field(..., description="ID of the model to use (e.g., rfdiffusion)")
@@ -62,6 +73,8 @@ class JobCreate(BaseModel):
         from services.msa_policy import apply_msa_policy
         # Validate without mutating requested settings; compilation is visible
         # in preview/admission effective params, while replay retains intent.
+        if "remote_result_policy" in self.params or "execution_policy" in self.params:
+            raise ValueError("use typed execution_policy, not scientific params")
         apply_msa_policy(self.model_id, self.params)
         return self
 
@@ -70,6 +83,8 @@ class JobCreate(BaseModel):
     def reject_scientific_revision_input(cls, data: Any) -> Any:
         from services.core_protein_scientific_contract import reject_reserved_marker
         reject_reserved_marker(data)
+        if isinstance(data, dict) and "remote_result_policy" in data:
+            raise ValueError("remote_result_policy belongs in execution_policy")
         return data
 
     @model_validator(mode="before")
@@ -133,6 +148,15 @@ class CandidateResultSummary(BaseModel):
 
 class JobResponse(BaseModel):
     """Response schema for a job."""
+    execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+
+    @model_validator(mode="after")
+    def expose_orm_execution_policy(self):
+        if "execution_policy" not in self.model_fields_set:
+            self.execution_policy = ExecutionPolicy.from_params(self.params)
+        self.params = {key: value for key, value in self.params.items() if key != "remote_result_policy"}
+        return self
+
     id: str
     name: str
     status: JobStatus

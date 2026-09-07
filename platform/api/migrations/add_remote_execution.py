@@ -48,9 +48,7 @@ def migrate(db_path: str | Path | None = None) -> None:
             )
             """
         )
-        connection.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_targets_one_active ON execution_targets(active) WHERE active = 1"
-        )
+
         connection.execute(
             "CREATE INDEX IF NOT EXISTS ix_execution_targets_provider_state ON execution_targets(provider, state)"
         )
