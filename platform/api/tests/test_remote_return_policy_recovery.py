@@ -231,4 +231,3 @@ async def test_return_publication_cannot_use_changed_authority(store, monkeypatc
         job = await session.get(Job, "job")
         assert job.remote_state == "returning"
         assert (await session.get(ExecutionTarget, "target")).leased_job_id == "other-job"
-
