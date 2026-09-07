@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 import os
-import stat
+
 import sys
 from pathlib import Path
 from typing import Any
@@ -27,10 +27,6 @@ def _expected_digest(value: str) -> str:
         raise RuntimeImageAttestationError("expected runtime image digest is not SHA-256")
     return expected
 
-
-def _identity(info: os.stat_result) -> dict[str, int]:
-    return {"device": info.st_dev, "inode": info.st_ino, "bytes": info.st_size,
-            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns}
 
 
 def _write_receipt(path: Path, payload: dict[str, Any]) -> None:
@@ -61,25 +57,23 @@ def create_verified_image_reference(
     )
     if reference == receipt or os.path.lexists(reference) or os.path.lexists(receipt):
         raise RuntimeImageAttestationError("runtime reference outputs must be new distinct paths")
-    before = image.lstat()
-    if not stat.S_ISREG(before.st_mode):
-        raise RuntimeImageAttestationError("runtime image is not a regular file")
+
     try:
         shared = publish_image(image, store_root, expected)
         measured = verify_image(shared, expected)
     except (OSError, RuntimeError, ValueError) as exc:
         raise RuntimeImageAttestationError(f"runtime image publication failed: {exc}") from exc
-    after = image.lstat()
-    if _identity(before) != _identity(after) or before.st_mode != after.st_mode:
-        raise RuntimeImageAttestationError("runtime image source changed during publication")
+
     # Keep the scientific v1 receipt contract: a shared CAS object is still an
     # independently copied immutable snapshot, not a link to mutable source bytes.
     payload = {
         "schema_name": "cm_runtime_image_receipt", "schema_version": 1,
         "status": "verified_immutable_snapshot",
-        "measurement_method": "shared_cas_open_no_follow+source_identity_recheck+sha256",
+        "measurement_method": "shared_cas_open_no_follow+object_identity_recheck+sha256",
         "expected_sha256": expected,
-        "observed_source": {"path": image.name, **_identity(before), "sha256": expected},
+        "observed_source": {"path": str(shared), "bytes": measured["size"],
+                            **{key: measured[key] for key in ("device", "inode", "mtime_ns", "ctime_ns")},
+                            "sha256": measured["sha256"]},
         "verified_snapshot": {"name": shared.name, "bytes": measured["size"], "sha256": expected},
     }
     reference.parent.mkdir(parents=True, exist_ok=True)
@@ -135,8 +129,10 @@ def resolve_verified_image_reference(
         } or payload["schema_name"] != "cm_runtime_image_receipt"
                 or payload["schema_version"] != 1 or payload["status"] != "verified_immutable_snapshot"
                 or payload["expected_sha256"] != expected
-                or payload["observed_source"]["sha256"] != expected
-                or payload["observed_source"]["bytes"] != measured["size"]
+                or payload["observed_source"] != {
+                    "path": str(shared), "bytes": measured["size"], "sha256": expected,
+                    **{key: measured[key] for key in ("device", "inode", "mtime_ns", "ctime_ns")}
+                }
                 or payload["verified_snapshot"] != {
                     "name": shared.name, "bytes": measured["size"], "sha256": expected
                 }):

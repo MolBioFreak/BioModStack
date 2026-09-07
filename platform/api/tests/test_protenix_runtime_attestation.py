@@ -72,6 +72,25 @@ def _verified_image(tmp_path: Path):
     return image, snapshot, receipt
 
 
+@pytest.mark.parametrize('replacement', [b'X' * len(b'immutable executed container bytes\n'), b'different length'])
+def test_reused_object_attests_measured_object_not_changed_original(tmp_path, replacement):
+    image, shared, _ = _verified_image(tmp_path)
+    expected = _sha(shared)
+    image.write_bytes(replacement)
+    preflight = _load(PREFLIGHT_PATH, 'prepare_runtime_image_attestation_reuse')
+    reference, receipt = tmp_path/'new-reference.json', tmp_path/'new-receipt.json'
+    payload = preflight.create_verified_image_reference(
+        image=image, expected_sha256=expected, store_root=tmp_path/'store',
+        reference=reference, receipt=receipt)
+    assert payload['observed_source']['inode'] == shared.stat().st_ino
+    assert payload['observed_source']['path'] == str(shared)
+    assert payload['observed_source']['bytes'] == shared.stat().st_size
+    assert payload['observed_source']['sha256'] == expected != _sha(image)
+    assert preflight.resolve_verified_image_reference(
+        reference=reference, receipt=receipt, expected_sha256=expected,
+        store_root=tmp_path/'store') == shared
+
+
 def test_host_preflight_snapshots_opened_image_and_emits_observed_identity(tmp_path: Path) -> None:
     image, snapshot, receipt_path = _verified_image(tmp_path)
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -79,8 +98,9 @@ def test_host_preflight_snapshots_opened_image_and_emits_observed_identity(tmp_p
     assert snapshot.read_bytes() == image.read_bytes()
     assert receipt["status"] == "verified_immutable_snapshot"
     assert receipt["observed_source"]["sha256"] == _sha(image)
-    assert receipt["observed_source"]["device"] == image.stat().st_dev
-    assert receipt["observed_source"]["inode"] == image.stat().st_ino
+    assert receipt["observed_source"]["device"] == snapshot.stat().st_dev
+    assert receipt["observed_source"]["inode"] == snapshot.stat().st_ino
+    assert receipt["observed_source"]["path"] == str(snapshot)
     assert receipt["verified_snapshot"]["sha256"] == _sha(snapshot)
     assert stat.S_IMODE(snapshot.stat().st_mode) & 0o222 == 0
     assert snapshot.stat().st_ino != image.stat().st_ino
@@ -104,7 +124,7 @@ def test_host_preflight_rejects_registry_digest_mismatch_without_outputs(tmp_pat
     assert not receipt.exists()
 
 
-def test_host_preflight_detects_path_swap_after_publication(tmp_path: Path, monkeypatch) -> None:
+def test_host_preflight_source_swap_after_publication_cannot_change_execution(tmp_path: Path, monkeypatch) -> None:
     preflight = _load(PREFLIGHT_PATH, "prepare_runtime_image_attestation_swap")
     image = tmp_path / "protenix.sif"
     image.write_bytes(b"opened bytes")
@@ -120,13 +140,15 @@ def test_host_preflight_detects_path_swap_after_publication(tmp_path: Path, monk
         return result
 
     monkeypatch.setattr(preflight, "publish_image", publish_then_swap)
-    with pytest.raises(preflight.RuntimeImageAttestationError, match="changed"):
-        preflight.create_verified_image_reference(
-            image=image, expected_sha256=hashlib.sha256(b"opened bytes").hexdigest(),
-            store_root=tmp_path / "store", reference=reference, receipt=receipt,
-        )
-    assert not reference.exists()
-    assert not receipt.exists()
+    expected = hashlib.sha256(b"opened bytes").hexdigest()
+    payload = preflight.create_verified_image_reference(
+        image=image, expected_sha256=expected,
+        store_root=tmp_path / "store", reference=reference, receipt=receipt)
+    shared = preflight.resolve_verified_image_reference(
+        reference=reference, receipt=receipt, expected_sha256=expected, store_root=tmp_path/'store')
+    assert shared.read_bytes() == b'opened bytes'
+    assert image.read_bytes() == b'replacement bytes'
+    assert payload['observed_source']['inode'] == shared.stat().st_ino
 
 
 def _attestation_fixture(tmp_path: Path):
