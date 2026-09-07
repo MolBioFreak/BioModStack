@@ -128,11 +128,20 @@ def bind_native_candidates(scopes, native_dir):
     """Enumerate actual pinned writer outputs; never extrapolate requested counts."""
     policy = deepcopy(scopes)
     observed = {name: [] for name in policy['inputs']}
-    for path in sorted(Path(native_dir).glob('*.pdb')):
-        match = re.fullmatch(r'(.+)_sample(0|[1-9][0-9]*)', path.stem)
-        if not match or match.group(1) not in observed:
-            raise ValueError('foreign native candidate output')
-        observed[match.group(1)].append(path.stem)
+    from fampnn_native_binding import read_receipt, sha
+    native_dir = Path(native_dir)
+    pdbs = {p.name for p in native_dir.glob('*.pdb')}
+    captured = {p.name.removesuffix('.fa_binding.json') for p in native_dir.glob('*.pdb.fa_binding.json')}
+    if pdbs != captured:
+        raise ValueError('native binding: candidate inventory differs from writer capture')
+    for path in sorted(native_dir.glob('*.pdb')):
+        receipt = read_receipt(path)
+        name = receipt['input_id']
+        if (name not in observed
+                or receipt['source_pdb_sha256'] != policy['inputs'][name]['artifact_binding']['source_pdb_sha256']
+                or receipt['candidate_pdb_sha256'] != sha(path.read_bytes())):
+            raise ValueError('foreign native candidate binding')
+        observed[name].append(receipt['candidate_id'])
     for name, ids in observed.items():
         if not ids:
             raise ValueError('missing native candidate outputs')

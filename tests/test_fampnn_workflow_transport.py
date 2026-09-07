@@ -18,7 +18,8 @@ DIALECT = 'fampnn-18363df253dbeb7b2cb963daf7a732fbaa25157d'
 
 
 @pytest.mark.parametrize('deferred', [False, True])
-def test_real_module_transports_marked_policy_and_runs_analyzer(tmp_path, deferred):
+@pytest.mark.parametrize('missing_pkl_directory', [False, True])
+def test_real_module_transports_marked_policy_and_runs_analyzer(tmp_path, deferred, missing_pkl_directory):
     jar = os.environ.get('BMS_TEST_NEXTFLOW_JAR')
     assert jar and Path(jar).is_file(), 'Set BMS_TEST_NEXTFLOW_JAR to a native Nextflow 25.10.1 jar (no Docker wrapper)'
     launcher = ['java', '-jar', jar]
@@ -75,11 +76,17 @@ workflow {{
 import os, sys, shutil
 from pathlib import Path
 args = sys.argv[1:]
-if args[0] == '/app/fampnn/fampnn/inference/seq_design.py':
+if args[0] == '/scripts/fampnn_native_binding.py':
+    assert args[1:5] == ['--root', '/app/fampnn', '--', '/app/fampnn/fampnn/inference/seq_design.py']
+    sys.path[:0] = [{str(ROOT/'scripts')!r}, {str(ROOT/'tests')!r}]
+    from fampnn_binding_fixtures import synthetic_receipt
     Path('fampnn_output/sample_pkls').mkdir(parents=True)
     Path('fampnn_output/samples').mkdir()
     shutil.copy({str(sample)!r}, 'fampnn_output/sample_pkls/input_sample0.pkl')
     shutil.copy('input.pdb', 'fampnn_output/samples/input_sample0.pdb')
+    synthetic_receipt(Path('input.pdb'), Path('fampnn_output/samples/input_sample0.pdb'), Path('fampnn_output/sample_pkls/input_sample0.pkl').read_bytes())
+    if {missing_pkl_directory!r}:
+        shutil.rmtree('fampnn_output/sample_pkls')
 elif args[0] == '/scripts/analyse_fampnn.py':
     Path('results/input_seq_0.json').write_text('{{}}')
 elif args[0] == '/scripts/metadata_converter.py':
@@ -103,6 +110,12 @@ else:
     assert row['core_protein_scientific_contract'] == 1
     assert row['analysis_policy'] == policy
     assert row['artifact_binding']['source_pdb']['sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    if missing_pkl_directory:
+        assert row['seq_probs_reason'] == 'missing_declared_sample_pkl'
+        assert row['fampnn_seq_probs_available'] is False
+        assert row['fampnn_mean_sampled_prob'] is None
+        assert row['artifact_binding']['sample_pkl'] is None
+        return
     assert row['artifact_binding']['sample_pkl']['sha256'] == hashlib.sha256(sample.read_bytes()).hexdigest()
     assert row['artifact_binding']['candidate_pdb']['sha256'] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert row['residue_evidence'][0]['aa'] == 'R'

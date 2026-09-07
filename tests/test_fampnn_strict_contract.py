@@ -39,11 +39,20 @@ def inputs(tmp_path, n=3):
                                         mutation_override=None)})
     path = tmp_path / 'input_sample0.pkl'
     bind_fixture(policy, source)
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(source, source.parent/'samples/input_sample0.pdb', pickle.dumps(payload))
     return payload, policy, path, source
 
 
 def run(payload, policy, path, source, **kwargs):
     path.write_bytes(pickle.dumps(payload))
+    # Numerical fixtures vary the producer tensor before its synthetic export;
+    # never refresh candidate/source authority here (substitutions must fail).
+    from fampnn_native_binding import receipt_path
+    sidecar = receipt_path(source.parent/'samples/input_sample0.pdb')
+    receipt = json.loads(sidecar.read_text())
+    receipt['sample_pkl_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    sidecar.write_text(json.dumps(receipt))
     return fa.analyze_sample_pkl(path, core_protein_scientific_contract=1,
                                  analysis_policy=policy, source_pdb_dir=source.parent, **kwargs)
 
@@ -56,6 +65,8 @@ def bind_fixture(policy, source):
     }
     (source.parent / 'samples').mkdir(exist_ok=True)
     (source.parent / 'samples/input_sample0.pdb').write_bytes(source.read_bytes())
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(source, source.parent/'samples/input_sample0.pdb')
 
 
 def test_exact_byte_bindings_use_captured_source_sample_policy_and_candidate(tmp_path, monkeypatch):
@@ -66,6 +77,8 @@ def test_exact_byte_bindings_use_captured_source_sample_policy_and_candidate(tmp
     policy_bytes = json.dumps(policy, indent=3).encode()
     candidate = source.parent / 'samples/input_sample0.pdb'
     original = {source: source.read_bytes(), path: sample_bytes, candidate: candidate.read_bytes()}
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(source, candidate, sample_bytes)
     reads = {}
     real_read = Path.read_bytes
     def replacing_read(file):
@@ -91,9 +104,11 @@ def test_exact_byte_bindings_use_captured_source_sample_policy_and_candidate(tmp
 def test_candidate_byte_binding_does_not_invent_source_author_chain_parity(tmp_path):
     p, policy, path, source = inputs(tmp_path)
     candidate = source.parent / 'samples/input_sample0.pdb'
-    # Native output may serialize numeric chain indexes as A/B/... while source
-    # author chains were Z/B/.... Bind bytes; do not reuse source-author mapping.
+    # Synthetic exporter-owned A chain transform; the analyzer must preserve
+    # both source and candidate namespaces rather than asserting author parity.
     candidate.write_text(source.read_text().replace('ALA Z', 'ALA A'))
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(source, candidate)
     row = run(p, policy, path, source)
     assert row['artifact_binding']['candidate_pdb']['sha256'] == hashlib.sha256(candidate.read_bytes()).hexdigest()
     assert row['residue_evidence'][0]['identity'] == 'Z:10:'
@@ -368,6 +383,8 @@ def test_marked_cli_requires_policy_and_unmarked_payload_marker_is_ignored(tmp_p
     p, policy, path, source = inputs(tmp_path)
     p['core_protein_scientific_contract'] = 1
     path.write_bytes(pickle.dumps(p))
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(source, tmp_path/'samples/input_sample0.pdb', path.read_bytes())
     out = tmp_path / 'out.jsonl'
     command = [sys.executable, str(SCRIPT), '--sample-pkl-dir', str(tmp_path), '--out-jsonl', str(out)]
     old = subprocess.run(command, capture_output=True, text=True)

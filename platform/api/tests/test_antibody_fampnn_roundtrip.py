@@ -175,6 +175,9 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
     assert scopes['inputs']['design']['mutation_override'] == ([] if mutation == [] else ['H:2:'])
     native = tmp_path/'native'; native.mkdir()
     (native/'design_sample0.pdb').write_bytes(pdb.read_bytes())
+    sys.path.insert(0, str(root/'tests'))
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(pdb, native/'design_sample0.pdb')
     policy = bind_native_candidates(scopes, native)
     policy_path = tmp_path/'policy.json'; policy_path.write_text(json.dumps(policy))
     pkls = tmp_path/'pkls'; pkls.mkdir()
@@ -182,6 +185,7 @@ async def test_antibody_request_prepared_child_analyzer(admission, monkeypatch, 
         seq_probs=np.tile(np.eye(21)[1]*0.2 + np.eye(21)[2]*0.8, (3,1)),
         pred_aatype=np.array([1,1,1]), seq_mask=np.ones(3), aatype_override_mask=np.array([0,0,1]),
         chain_index=np.array([0,0,1]), residue_index=np.array([1,2,3]))))
+    synthetic_receipt(pdb, native/'design_sample0.pdb', (pkls/'design_sample0.pkl').read_bytes())
     output = tmp_path/'analysis.jsonl'
     result = subprocess.run([sys.executable,str(root/'scripts/analyse_fampnn_seq_probs.py'),
         '--sample-pkl-dir',str(pkls),'--out-jsonl',str(output),'--out-csv',str(tmp_path/'analysis.csv'),

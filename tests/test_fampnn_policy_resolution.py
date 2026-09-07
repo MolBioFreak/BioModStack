@@ -46,6 +46,8 @@ def test_preflight_resolves_explicit_transform_then_binds_only_observed_candidat
     native = tmp_path / 'samples'
     native.mkdir()
     (native / 'native_sample7.pdb').write_bytes(output.read_bytes())
+    from fampnn_binding_fixtures import synthetic_receipt
+    synthetic_receipt(output, native/'native_sample7.pdb')
     policy = module.bind_native_candidates(scopes, native)
     from analyse_fampnn_seq_probs import _validate_policy, _resolve_policy
     _validate_policy(policy)

@@ -327,14 +327,18 @@ def _analyze_strict(path, payload, policy, source_pdb_dir, mutation_top_n, mutat
         raise ValueError('source PDB binding: bytes differ from workflow authority')
     mapping = _source_identities(source_bytes)
     candidate = Path(candidate_pdb_dir or (path.parent / 'samples')) / f'{path.stem}.pdb'
-    # Bind the native candidate artifact as bytes, not as a second source-author
-    # namespace: native serialization may renumber chains/insertion positions.
-    # This digest is observed output evidence, not structural validation.
     candidate_bytes = _capture_bytes(candidate, 'candidate PDB')
+    from fampnn_native_binding import validate_binding
+    native = validate_binding(candidate, source_bytes, candidate_bytes,
+                              input_id=input_name, sample_bytes=sample_bytes)
     keys = list(zip(chain.astype(int).tolist(), residue.astype(int).tolist()))
     if len(set(keys)) != n or any(k not in mapping for k in keys):
         raise ValueError('source identity: duplicate or unmapped chain/residue index')
     identities = [mapping[k] for k in keys]
+    exported = {(r['chain_index'], r['residue_index']): r for r in native['records']}
+    if len(exported) != len(native['records']) or any(
+            k not in exported or exported[k]['source'] != identities[i] for i, k in enumerate(keys)):
+        raise ValueError('native binding: tensor axis differs from parser/export identity')
 
     summary, authorized, mutations = _resolve_policy(policy, input_name, list(mapping.values()))
     # The pinned writer crops every field by seq_mask. Missing source residues
@@ -403,6 +407,7 @@ def _analyze_strict(path, payload, policy, source_pdb_dir, mutation_top_n, mutat
             'producer_candidate_id': path.stem,
             'source_pdb': _byte_binding(source_bytes), 'sample_pkl': _byte_binding(sample_bytes),
             'candidate_pdb': _byte_binding(candidate_bytes), 'analysis_policy': _byte_binding(policy_bytes)},
+        'native_export': native,
         'candidate_pdb_path': str(candidate),
         'metric_source': 'fampnn_sample_pkl_seq_probs', 'core_protein_scientific_contract': 1,
         'dialect': STRICT_DIALECT, 'alphabet': STRICT_ALPHABET, 'analysis_policy': policy,
@@ -592,6 +597,41 @@ def write_csv(rows: List[Dict[str, Any]], path: Path) -> None:
             writer.writerow({key: row.get(key) for key in scalar_keys})
 
 
+def _missing_sample(candidate_id, input_id, policy, policy_bytes, source_dir, candidate_dir):
+    """Missing optional tensors are unavailable evidence, not vanished candidates."""
+    from fampnn_native_binding import validate_binding
+    source = Path(source_dir) / f'{input_id}.pdb'
+    candidate = Path(candidate_dir) / f'{candidate_id}.pdb'
+    source_bytes = _capture_bytes(source, 'source PDB')
+    candidate_bytes = _capture_bytes(candidate, 'candidate PDB')
+    authority = policy['inputs'][input_id]['artifact_binding']
+    if hashlib.sha256(source_bytes).hexdigest() != authority['source_pdb_sha256']:
+        raise ValueError('source PDB binding: bytes differ from workflow authority')
+    native = validate_binding(candidate, source_bytes, candidate_bytes, input_id=input_id)
+    summary, _, mutations = _resolve_policy(policy, input_id, list(_source_identities(source_bytes).values()))
+    reason = 'missing_declared_sample_pkl'
+    row = dict(design=candidate_id, core_protein_scientific_contract=1,
+        dialect=STRICT_DIALECT, alphabet=STRICT_ALPHABET, analysis_policy=policy,
+        artifact_binding=dict(producer_input_id=input_id, producer_candidate_id=candidate_id,
+            source_pdb=_byte_binding(source_bytes), candidate_pdb=_byte_binding(candidate_bytes),
+            sample_pkl=None, analysis_policy=_byte_binding(policy_bytes)),
+        native_export=native, candidate_pdb_path=str(candidate), source_pdb_path=str(source),
+        sample_pkl_path=None, metric_source='fampnn_sample_pkl_seq_probs',
+        fampnn_seq_probs_available=False, seq_probs_reason=reason, missing=['sample_pkl'],
+        present_count=None, selected_count=len(summary), scored_selected_count=0,
+        unscored_selected_count=len(summary), invalid_selected_count=0,
+        coverage=0.0 if summary else None, summary_denominator='scored_selected_count',
+        resolved_summary_membership=sorted(summary), requested_mutation_membership=sorted(mutations),
+        resolved_mutation_membership=None,
+        residue_evidence=[], mutation_omissions=[dict(reason=reason)],
+        fampnn_mutation_scoring_available=False, fampnn_mutation_opportunity_count=0,
+        fampnn_top_model_favored_mutations=[], sampled_log_prob_reason=reason)
+    for name in ('mean_sampled_prob', 'min_sampled_prob', 'mean_entropy', 'max_entropy',
+                 'total_sampled_log_prob', 'mean_sampled_log_prob'):
+        row['fampnn_' + name] = None
+    return row
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-pkl-dir", required=True, type=Path)
@@ -610,11 +650,30 @@ def main() -> int:
         if args.analysis_policy is None:
             parser.error('marked analysis requires workflow-owned analysis policy')
         policy, policy_bytes = _capture_policy(args.analysis_policy.read_bytes())
+        if args.candidate_pdb_dir is None:
+            args.candidate_pdb_dir = args.sample_pkl_dir / 'samples'
+        from fampnn_policy_resolution import bind_native_candidates
+        captured = bind_native_candidates(policy, args.candidate_pdb_dir)
+        if any(set(captured['inputs'][name]['artifact_binding']['producer_candidate_ids']) !=
+               set(entry['artifact_binding']['producer_candidate_ids']) for name, entry in policy['inputs'].items()):
+            raise ValueError('native binding: policy inventory differs from writer inventory')
         if args.source_pdb_dir is None:
             parser.error('marked analysis requires source PDB directory')
 
-    if not args.sample_pkl_dir.exists():
+    if not args.sample_pkl_dir.exists() and policy is None:
         raise SystemExit(f"sample PKL directory does not exist: {args.sample_pkl_dir}")
+    paths = list(iter_sample_pkls(args.sample_pkl_dir))
+    missing = set()
+    declared = {}
+    if policy is not None:
+        declared = {c: name for name, entry in policy['inputs'].items()
+                    for c in entry['artifact_binding']['producer_candidate_ids']}
+        observed = [p.stem for p in paths]
+        if len(observed) != len(set(observed)) or set(observed) - set(declared):
+            raise ValueError('native binding: duplicate or undeclared sample PKL')
+        missing = set(declared) - set(observed)
+        if missing and policy['require_full_coverage']:
+            raise ValueError('workflow requires full summary coverage; missing declared sample PKL: ' + ', '.join(sorted(missing)))
 
     rows = [
         analyze_sample_pkl(
@@ -626,10 +685,12 @@ def main() -> int:
             source_pdb_dir=args.source_pdb_dir,
             candidate_pdb_dir=args.candidate_pdb_dir,
         )
-        for path in iter_sample_pkls(args.sample_pkl_dir)
+        for path in paths
     ]
-    if policy is not None and policy.get('require_full_coverage') is True and not rows:
-        raise ValueError('workflow requires full summary coverage; no samples available')
+    rows.extend(_missing_sample(c, declared[c], policy, policy_bytes, args.source_pdb_dir,
+        args.candidate_pdb_dir or (args.sample_pkl_dir / 'samples')) for c in sorted(missing))
+    if policy is not None:
+        rows.sort(key=lambda row: row['design'])
     write_jsonl(rows, args.out_jsonl)
     if args.out_csv:
         write_csv(rows, args.out_csv)

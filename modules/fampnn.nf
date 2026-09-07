@@ -132,14 +132,14 @@ process RunFAMPNN {
     """ : (strictAnalysis ? "printf '%s' '${policyBase64}' | base64 --decode > fampnn_analysis_policy.json" : '')
     def bindNativePolicy = deferredAnalysis ? 'python /scripts/fampnn_policy_resolution.py --scopes fampnn_resolved_scopes.json --native-dir fampnn_output/samples --output fampnn_analysis_policy.json' : ''
     def analysisFlags = strictAnalysis ? '--core-protein-scientific-contract 1 --analysis-policy fampnn_analysis_policy.json --source-pdb-dir . --candidate-pdb-dir fampnn_output/samples' : ''
-    def requireAnalysis = strictAnalysis && (deferredAnalysis ? analysis_contract.declaration : analysis_contract.policy).require_full_coverage == true
+    def nativeLauncher = strictAnalysis ? '/scripts/fampnn_native_binding.py --root /app/fampnn -- /app/fampnn/fampnn/inference/seq_design.py' : '/app/fampnn/fampnn/inference/seq_design.py'
     """
     mkdir -p results
     ${policySetup}
 
     # PyTorch >=2.6 defaults torch.load(..., weights_only=True), which breaks
     # legacy FAMPNN checkpoints saved with defaultdict metadata.
-    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 python /app/fampnn/fampnn/inference/seq_design.py \\
+    TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 python ${nativeLauncher} \\
         batch_size=${params.fampnn_batch_size ?: 16} \\
         checkpoint_path=${checkpointPath} \\
         exclude_cys=${params.fampnn_exclude_cys != null ? params.fampnn_exclude_cys : true} \\
@@ -176,7 +176,7 @@ process RunFAMPNN {
     python /scripts/metadata_converter.py --input_dir results --input_ext ".json" \\
         --converter fampnn --output_file "fampnn_metadata_${batch_id}.jsonl"
 
-    if [ -d "fampnn_output/sample_pkls" ]; then
+    if ${strictAnalysis ? 'true' : 'false'} || [ -d "fampnn_output/sample_pkls" ]; then
         python /scripts/analyse_fampnn_seq_probs.py \\
             --sample-pkl-dir "fampnn_output/sample_pkls" \\
             --out-jsonl "fampnn_seq_prob_metrics_${batch_id}.jsonl" \\
@@ -184,7 +184,6 @@ process RunFAMPNN {
             --mutation-top-n ${strictAnalysis && params.fampnn_mutation_top_n != null ? params.fampnn_mutation_top_n : (params.fampnn_mutation_top_n ?: 25)} \\
             --mutation-min-log-odds-delta ${params.fampnn_mutation_min_log_odds_delta ?: 0.0} ${analysisFlags}
     else
-        ${requireAnalysis ? 'exit 1 # Required sequence-probability analysis missing' : ':'}
         printf '' > "fampnn_seq_prob_metrics_${batch_id}.jsonl"
     fi
     
