@@ -5,7 +5,7 @@
   "binding_runtime_state": "implemented_unverified",
   "capability_exposure_state": "fail_closed",
   "connector_event_runtime_count": 12,
-  "content_sha256": "43b4b64ff9ed647b15e329fe70093e12e6f34b2e66b5b5c5a5d299dc8046c5c2",
+  "content_sha256": "3da4f918de4e9a68800520bed40d73d1cdf32f2edb75dbb452e2be5e0f58e5e3",
   "dataset_exposure_state": "fail_closed",
   "implementation_state": "implemented_unverified",
   "n0_package_fingerprint": "5299ed008fd727d83d60a5953741689b18645bc3e884212ce3176d2c36bfb653",
@@ -454,8 +454,8 @@
     },
     {
       "path": "platform/api/routers/jobs.py",
-      "sha256": "507517bd5802202670d6940b50d01aff14314db5e8a754dcb459d073cc4892f8",
-      "size_bytes": 426308
+      "sha256": "b9d4e3fde1341b5e6492e6bf931e10002ecf103d611bc0ce917fdf26fd50f8fd",
+      "size_bytes": 438337
     },
     {
       "path": "platform/api/routers/molbio_ngs_experiments.py",
@@ -534,8 +534,8 @@
     },
     {
       "path": "platform/api/schemas.py",
-      "sha256": "35bc0bce9bd04ce480807c333d7d40e2370b2728385f1455b5c4d7a6fa4429d2",
-      "size_bytes": 16084
+      "sha256": "c3dc5614bf213bdcd38c3f24409369641139b75e42aefe064b843f5c241b0c99",
+      "size_bytes": 19249
     },
     {
       "path": "platform/api/services/analysis_autorun.py",
@@ -644,8 +644,8 @@
     },
     {
       "path": "platform/api/services/nextflow.py",
-      "sha256": "e145554a2c255aac661c74ebd95274a6390b86ab5d1735fc0a0cdd85cfcc0530",
-      "size_bytes": 218665
+      "sha256": "7f077bd4b6e5289aa6a5fd63d3fbc30d5a88a92be5e7d24fba65652125c63727",
+      "size_bytes": 226580
     },
     {
       "path": "platform/api/services/ngs_alignment_sessions.py",
@@ -1069,8 +1069,8 @@
     },
     {
       "path": "platform/frontend/src/lib/api.ts",
-      "sha256": "c27c3497565d356b5945a07cc37851eea4b586abb97386661e428a55f54da1c5",
-      "size_bytes": 203010
+      "sha256": "71dd66fa153b95d7095262f4e3ce5e49013f5d7bf6d38fa23dde53203ab8a2cc",
+      "size_bytes": 204738
     },
     {
       "path": "platform/frontend/src/lib/goldenGateAuthority.ts",
@@ -1159,8 +1159,8 @@
     },
     {
       "path": "platform/frontend/vitest.md.config.ts",
-      "sha256": "f2f68bff89acfd98505e1111129e480fa81983eafb0492df4bc0521323ae3cc3",
-      "size_bytes": 3770
+      "sha256": "5daf5ee346251eaa01ccfdfc4b6e39b2be8b4f4158b3845da4b4d58a8110ef01",
+      "size_bytes": 5068
     },
     {
       "path": "schemas/molbio/restriction_enzyme_catalog_v1.schema.json",
@@ -1367,8 +1367,8 @@
     "content_sha256": "0c38fa0cd6d5a19afd6eaf16ca14f4dec32161ce3dcd37dfef03f998662df758",
     "path": "schemas/ngs_molbio_runtime/runtime-source-denominator-v2.json"
   },
-  "successor_source_commit": "279b99fa43d18958522e79f325f8cfa763559b40",
-  "successor_source_tree": "6e6f66ab42627fb82e7fa1a6d052a0876e764021",
+  "successor_source_commit": "0c94ac3f59c845821f699a49f0dcf77ad24aefcd",
+  "successor_source_tree": "4f2253cd46994635cb0b967fb8861f7c6d2f89af",
   "tests_run": 0,
   "verification_state": "source_audit_only"
 }
