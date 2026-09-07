@@ -37,6 +37,8 @@ import { isAntibodyPipelineMode } from '../lib/antibodyModes';
 import { ModelIntegrationControl, useModelIntegrationConfig } from './ModelIntegrationControl';
 import { FrustraMpnnSettingsPanel } from './frustrampnn/FrustraMpnnSettingsPanel.js';
 import { ExecutionTargetPicker } from './ExecutionTargetPicker';
+import { ExecutionPolicyControl } from './ExecutionPolicyControl';
+import { initialExecutionPolicy } from '../lib/executionPolicy';
 import { ProjectTechnicalDetails, ProjectWorkflowSetupBanner, useProjectWorkflowSetup } from './project-manager/ProjectWorkflowSetup';
 import {
     hydrateFrustraMpnnSettings,
@@ -704,6 +706,7 @@ const getCompactModelDescription = (model: UntypedApiValue): string => {
 };
 
 export function JobSubmission() {
+    const [initialReturnPolicy] = useState(initialExecutionPolicy);
     const queryClient = useQueryClient();
     const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -885,6 +888,7 @@ export function JobSubmission() {
             try {
                 const data = JSON.parse(stored);
                 data.params = fampnnUserParams(data.params || {});
+                delete data.params.remote_result_policy;
                 console.log('Loading cloned job data:', data);
 
                 // Set common fields
@@ -1863,6 +1867,7 @@ export function JobSubmission() {
         <div className="min-h-screen bg-slate-950 p-6">
             {projectSetup.setup && <><ProjectWorkflowSetupBanner setup={projectSetup.setup}/><section className="mx-auto mb-4 mt-4 flex max-w-[104rem] flex-wrap items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-950/20 p-3"><button type="button" className="rounded-lg border border-blue-400 px-3 py-2 text-xs font-semibold text-blue-200" onClick={() => void projectSetup.saveDraft(projectDraftValues as JsonObject)}>Save draft</button><button type="button" className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white" onClick={() => void projectSetup.startRun(projectDraftValues as JsonObject)}>Start run</button><ProjectTechnicalDetails setup={projectSetup.setup}/></section></>}
             <ExecutionTargetPicker />
+            <ExecutionPolicyControl initialPolicy={initialReturnPolicy} />
             {launchContextId && (
                 <aside className="mb-4 rounded-lg border border-blue-500/40 bg-blue-950/40 px-4 py-3 text-sm text-blue-100" aria-label="Project launch destination">
                     {launchContextQuery.isLoading && 'Resolving Project launch destination…'}

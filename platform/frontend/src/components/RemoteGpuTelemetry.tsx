@@ -20,14 +20,18 @@ const REMOTE_SIZING = {
     xlarge: { plotHeight: 196, padding: 'p-6', gap: 'gap-5', spacing: 'space-y-6', margin: 'mt-6' },
 };
 
-export function RemoteGpuTelemetry({ dashboardSize = 'standard' }: { dashboardSize?: keyof typeof REMOTE_SIZING }) {
+export function RemoteGpuTelemetry({ dashboardSize = 'standard', executionTargetId }: { dashboardSize?: keyof typeof REMOTE_SIZING; executionTargetId?: string }) {
     const sizing = REMOTE_SIZING[dashboardSize];
     const client = useQueryClient();
+    const queryKey = executionTargetId == null
+        ? ['active-remote-gpu-telemetry']
+        : ['active-remote-gpu-telemetry', executionTargetId];
     const telemetryQuery = useQuery({
-        queryKey: ['active-remote-gpu-telemetry'],
+        queryKey,
+        placeholderData: undefined,
         queryFn: async () => {
-            const previous = client.getQueryData<AxiosResponse<Telemetry>>(['active-remote-gpu-telemetry']);
-            const next = await fetchActiveRemoteGpuTelemetry(previous?.data.cursor);
+            const previous = client.getQueryData<AxiosResponse<Telemetry>>(queryKey);
+            const next = await fetchActiveRemoteGpuTelemetry(previous?.data.cursor, executionTargetId);
             return { ...next, data: mergeRemoteTelemetry(previous?.data, next.data) };
         },
         refetchInterval: 10_000,
@@ -50,7 +54,7 @@ export function RemoteGpuTelemetry({ dashboardSize = 'standard' }: { dashboardSi
     if (!telemetry.target) {
         return (
             <div role="alert" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 text-sm text-amber-100">
-                No active ready Vast worker is available. Attach one from the Dashboard.
+                {telemetry.error || 'No active ready Vast worker is available. Attach one from the Dashboard.'}
             </div>
         );
     }

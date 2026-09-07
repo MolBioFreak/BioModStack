@@ -8,7 +8,7 @@ import { api, type ExecutionTarget, type ProvisionPreview, type ProvisionSelecti
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const catalog: ProvisionSelection[] = [{ kind: 'model', model_id: 'protenix' }, { kind: 'image', model_id: 'protenix' }, { kind: 'model', model_id: 'esmfold2' }];
 const artifacts = [{ name: 'runtime/protenix.sif', sha256: 'a'.repeat(64), size_bytes: 1234 }];
-const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'cache_download_only' });
+const preview = (selection: ProvisionSelection): ProvisionPreview => ({ selection, artifacts, total_bytes: 1234, preview_sha256: 'b'.repeat(64), scientific_ready: false, scope: 'managed_asset_activation' });
 const ready: ExecutionTarget = { id: 'vast:123', provider: 'vast', provider_instance_id: '123', name: 'Worker', state: 'ready', active: true, host: 'host', port: 22, username: 'root', remote_root: '/opt/bms', host_key_sha256: 'c'.repeat(64), capabilities: {}, pricing: {}, last_error: null, last_seen_at: null, activated_at: null };
 const adapter = api.defaults.adapter;
 let container: HTMLDivElement;
@@ -27,7 +27,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
   container = document.createElement('div'); document.body.append(container); root = createRoot(container);
   api.defaults.adapter = async config => {
-    if (config.method === 'get') return response(config.url?.endsWith('/catalog') ? catalog : [target]);
+    if (config.method === 'get') return response(config.url?.endsWith('/catalog') ? catalog : config.url?.endsWith('/runtime-inventory') ? null : [target]);
     const body = JSON.parse(String(config.data));
     posts.push({ url: String(config.url), body });
     return response(config.url?.endsWith('/preview') ? preview(body) : target);
@@ -47,6 +47,9 @@ it('mounts in the real worker panel without Jobs; previews exact bytes then star
   expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('1,234 bytes');
   expect(container.textContent).toContain(artifacts[0].name);
   expect(container.textContent).toContain(artifacts[0].sha256);
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('additional installed copy');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('retains prior release generations');
+  expect(container.querySelector('[aria-label="Provision preview"]')?.textContent).toContain('not a missing-byte transfer estimate');
   expect(container.textContent).toContain('b'.repeat(64));
   await click('Start provision', true);
   expect(posts).toHaveLength(2);
@@ -98,6 +101,14 @@ it('discards a late preview after selection change and requires explicit preview
   expect(button('Start provision').disabled).toBe(true);
 });
 
+it('rejects the retired cache-only preview scope before enabling provision', async () => {
+  await render(); await select('Provision model', 'protenix');
+  vi.spyOn(api, 'post').mockResolvedValueOnce(response({ ...preview(catalog[0]), scope: 'cache_download_only' }));
+  await click('Preview artifact downloads');
+  expect(button('Start provision').disabled).toBe(true);
+  expect(container.querySelector('[aria-label="Provision preview"]')).toBeNull();
+});
+
 it('restores only the persisted last receipt and displays stale/failed status without auto-provision', async () => {
   target = { ...target, artifact_inventory: { operation_id: 'receipt', selection: catalog[0], artifacts, observed_at: '2026-01-01T00:00:00Z', state: 'download_verified', scope: 'last_independent_provision', scientific_ready: false } };
   await render();
@@ -112,11 +123,13 @@ it('restores only the persisted last receipt and displays stale/failed status wi
 });
 
 it('surfaces catalog failure with explicit retry and no provision side effects', async () => {
-  const get = vi.spyOn(api, 'get').mockRejectedValueOnce(new Error('Catalog unavailable'));
+  const originalGet = api.get.bind(api);
+  const get = vi.spyOn(api, 'get').mockImplementation((url, config) => String(url).endsWith('/catalog')
+    ? Promise.reject(new Error('Catalog unavailable')) : originalGet(url, config));
   await render();
   expect(container.textContent).toContain('Catalog unavailable');
   expect(button('Start provision').disabled).toBe(true);
-  expect(get).toHaveBeenCalledTimes(1);
+  expect(get.mock.calls.filter(([url]) => String(url).endsWith('/catalog'))).toHaveLength(1);
   get.mockRestore(); await click('Retry catalog');
   await select('Provision model', 'protenix');
   expect(button('Preview artifact downloads').disabled).toBe(false);

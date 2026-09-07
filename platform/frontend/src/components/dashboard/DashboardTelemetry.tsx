@@ -40,9 +40,12 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
         refetchInterval: 5_000,
         retry: false,
     });
-    const activeVastTarget = targetsQuery.isError
-        ? undefined
-        : targetsQuery.data?.data.find((target) => target.active && target.state === 'ready');
+    const [selectedTargetId, setSelectedTargetId] = useState<string>('');
+    const activeTargets = targetsQuery.isError ? []
+        : (targetsQuery.data?.data ?? []).filter((target) => target.active && target.state === 'ready');
+    const activeVastTarget = selectedTargetId
+        ? activeTargets.find((target) => target.id === selectedTargetId)
+        : activeTargets.length === 1 ? activeTargets[0] : undefined;
     const activeVastLabel = activeVastTarget?.name?.trim() || (
         activeVastTarget ? `Instance ${activeVastTarget.provider_instance_id}` : 'Active Vast'
     );
@@ -121,6 +124,19 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
                     )}
                 </div>
 
+                {activeTargets.length > 0 && (
+                    <label className="text-xs text-[var(--text-secondary)]">
+                        Telemetry worker
+                        <select aria-label="Telemetry worker" value={activeVastTarget?.id ?? ''}
+                            onChange={(event) => setSelectedTargetId(event.target.value)}
+                            className="ml-2 rounded-lg border border-[var(--border-primary)] bg-[var(--bg-primary)] p-2">
+                            <option value="" disabled>Select a worker</option>
+                            {activeTargets.map((target) => <option key={target.id} value={target.id}>
+                                {target.name?.trim() || `Instance ${target.provider_instance_id}`} · {target.id}
+                            </option>)}
+                        </select>
+                    </label>
+                )}
                 <div className="flex items-center gap-2">
                     <span className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-muted)]">
                         Panel Size
@@ -155,7 +171,7 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
                 <RemotePreloadPanel key={activeVastTarget.id} target={activeVastTarget} jobs={jobs} onChanged={() => targetsQuery.refetch()} />
             )}
             {scope === 'local' && localTelemetry}
-            {scope === 'vast' && <RemoteGpuTelemetry dashboardSize={telemetrySize} />}
+            {scope === 'vast' && activeVastTarget && <RemoteGpuTelemetry key={`telemetry:${activeVastTarget.id}`} executionTargetId={activeVastTarget.id} dashboardSize={telemetrySize} />}
             {scope === 'combined' && activeVastTarget && (
                 <div className="space-y-5" data-bms-telemetry-combined="true">
                     <section className="space-y-3">
@@ -168,7 +184,7 @@ export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'mod
                         <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                             Vast · {activeVastLabel}
                         </h2>
-                        <RemoteGpuTelemetry dashboardSize={telemetrySize} />
+                        <RemoteGpuTelemetry key={`telemetry:${activeVastTarget.id}`} executionTargetId={activeVastTarget.id} dashboardSize={telemetrySize} />
                     </section>
                 </div>
             )}

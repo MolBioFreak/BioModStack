@@ -92,6 +92,7 @@ export function JobDetailsPanel({ job, onClose }: JobDetailsPanelProps) {
                     </div>
 
                     {/* Job Info Row */}
+                    <p>Successful result return: {job.execution_policy?.remote_result_policy ?? 'manual'}</p>
                     <RemoteResultsPrompt job={job} />
                     <RemoteDiagnosticsPrompt job={job} />
                     <div className="flex items-center gap-6 text-xs text-slate-400 mb-3">

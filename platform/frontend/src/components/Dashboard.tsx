@@ -467,6 +467,7 @@ export function Dashboard() {
             model_id: detailedJob.model_id,
             mode: detailedJob.mode,
             source_job_id: detailedJob.id,
+            execution_policy: detailedJob.execution_policy ?? { remote_result_policy: 'manual' },
             params: detailedJob.params || {},
             pinned_gpu: detailedJob.pinned_gpu ?? null,
         };
@@ -592,6 +593,7 @@ export function Dashboard() {
 
                             {isStructureReorchestrateModal && structureReorchestrateSettings && (
                                 <>
+                                    <p>Successful result return: {resumeSettingsJob.execution_policy?.remote_result_policy ?? 'manual'} (preserved on retry)</p>
                                     {canChooseResumeTarget ? <ExecutionTargetPicker
                                         value={resumeExecutionTargetId}
                                         onChange={changeResumeExecutionTarget}

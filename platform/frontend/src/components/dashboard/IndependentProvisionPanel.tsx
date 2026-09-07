@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { ManagedRuntimeInventoryPanel } from './ManagedRuntimeInventoryPanel';
 import { isAxiosError } from 'axios';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -44,7 +45,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
   const valid = selections.some(item => item.model_id === modelId);
   const inventory = target.artifact_inventory;
   return <section aria-label="Independent worker provisioning" className="space-y-3 rounded-xl border border-[var(--border-primary)] bg-[var(--bg-secondary)] p-3 text-[var(--text-primary)]">
-    <h4 className="font-medium">Provision model or image downloads</h4>
+    <h4 className="font-medium">Provision model or image asset releases</h4>
     <p className="text-xs text-[var(--text-muted)]">No saved Job required. Model includes its reviewed runtime dependencies; image downloads only the container. Preview hashes managed source files without transferring them. Provisioning does not launch inference.</p>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-sm">Provision scope<select aria-label="Provision scope" className={selectClass} value={kind} onChange={event => { setKind(event.target.value as ProvisionSelection['kind']); setModelId(''); }}>
@@ -61,7 +62,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
     <ProvisionActions key={JSON.stringify([kind, modelId, valid])} target={target} onChanged={onChanged} selection={valid ? { kind, model_id: modelId } : null} />
     <div aria-label="Last independent provision receipt" className="space-y-2 border-t border-[var(--border-primary)] pt-3 text-sm">
       <h5 className="font-medium">Last independent provision — cache receipt</h5>
-      <p className="text-xs text-[var(--text-muted)]">Not a full installed inventory. Cache download verification is not scientific readiness or runtime activation. Refresh does not probe the worker; explicit provision re-verifies the cache.</p>
+      <p className="text-xs text-[var(--text-muted)]">Not a full installed inventory. Cache download verification is not scientific readiness or runtime activation. This last-cache receipt remains separate from the installed observation below.</p>
       {inventory ? <>
         <p>{inventory.state === 'download_verified' ? 'Cache downloads verified at observation' : 'Stale cache observation — provision again to re-verify'}</p>
         <p>{inventory.selection.kind} · {inventory.selection.model_id} · Observed {inventory.observed_at}</p>
@@ -69,6 +70,7 @@ function ProvisionChooser({ target, onChanged }: Props) {
         <ArtifactList artifacts={inventory.artifacts} />
       </> : <p>No independent provision observation. Installed artifacts are unknown.</p>}
     </div>
+    <ManagedRuntimeInventoryPanel target={target} />
   </section>;
 }
 function ProvisionActions({ target, onChanged, selection }: Props & { selection: ProvisionSelection | null }) {
@@ -85,7 +87,7 @@ function ProvisionActions({ target, onChanged, selection }: Props & { selection:
   });
   const busy = active > 0 || ['checking', 'transferring', 'verifying'].includes(target.preload?.phase ?? '');
   const allowed = target.active && target.state === 'ready' && !target.progress && !busy;
-  const data = !consumed && preview.data?.selection.kind === selection?.kind && preview.data?.selection.model_id === selection?.model_id ? preview.data : undefined;
+  const data = !consumed && preview.data?.scope === 'managed_asset_activation' && preview.data?.selection.kind === selection?.kind && preview.data?.selection.model_id === selection?.model_id ? preview.data : undefined;
   async function requestPreview() {
     if (lock.current || !allowed || !selection || client.isMutating({ mutationKey }) > 0) return;
     lock.current = true;
@@ -109,9 +111,10 @@ function ProvisionActions({ target, onChanged, selection }: Props & { selection:
     </div>
     {!allowed && <p className="text-xs text-[var(--text-muted)]">Provisioning requires an attached, ready, idle worker with no active preload.</p>}
     {(preview.error || provision.error) && <p role="alert" className="text-sm text-[var(--error)]">{errorText(preview.error || provision.error)}</p>}
-    {provision.isSuccess && <p role="status">Provision request accepted. Completion and cache verification are reported by worker progress and the persisted receipt.</p>}
+    {provision.isSuccess && <p role="status">Provision request accepted. Completion is reported by worker progress; installed evidence is shown separately from the last-cache receipt.</p>}
     {data && <div aria-label="Provision preview" className="space-y-2 text-sm">
-      <p>{data.total_bytes.toLocaleString()} bytes total · Cache download only — not scientific Ready</p>
+      <p>{data.total_bytes.toLocaleString()} dependency bytes total · Managed asset activation — not scientific Ready</p>
+      <p>Provisioning makes an additional installed copy separate from cache and retains prior release generations. This total is not a missing-byte transfer estimate, free-space check or storage reservation.</p>
       <p className="break-all text-xs font-mono">Preview SHA256 {data.preview_sha256}</p>
       <ArtifactList artifacts={data.artifacts} />
     </div>}

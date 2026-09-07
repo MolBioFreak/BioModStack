@@ -2,7 +2,22 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RemoteGpuTelemetry as Panel } from '../../src/components/RemoteGpuTelemetry';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { api } from '../../src/lib/api';
+
+const originalAdapter = api.defaults.adapter;
+let unexpectedRequests: string[] = [];
+beforeEach(() => {
+    unexpectedRequests = [];
+    api.defaults.adapter = async config => {
+        let data: unknown;
+        if (config.method === 'get' && config.url === '/api/execution-targets/provision/catalog') data = [];
+        else if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A8/runtime-inventory') data = null;
+        else { unexpectedRequests.push(`${config.method} ${config.url}`); throw new Error('Unexpected request'); }
+        return { data, status: 200, statusText: 'OK', headers: {}, config };
+    };
+});
+afterEach(() => { api.defaults.adapter = originalAdapter; expect(unexpectedRequests).toEqual([]); });
 import { DashboardTelemetry } from '../../src/components/dashboard/DashboardTelemetry';
 
 vi.mock('../../src/components/InfraLiveTelemetry', () => ({
@@ -26,8 +41,8 @@ describe('central remote history', () => {
         value.history![2].gpus = value.gpus;
         value.history![0].network = [{ interface: 'eth0', rx_bytes_per_second: 1048576, tx_bytes_per_second: null }];
         client.setQueryData(['execution-targets'], { data: [value.target] });
-        client.setQueryData(['active-remote-gpu-telemetry'], { data: value });
-        const cached = client.getQueryData(['active-remote-gpu-telemetry']);
+        client.setQueryData(['active-remote-gpu-telemetry', 'vast:8'], { data: value });
+        const cached = client.getQueryData(['active-remote-gpu-telemetry', 'vast:8']);
         const container = document.createElement('div');
         document.body.appendChild(container);
         const root = createRoot(container);
@@ -64,7 +79,7 @@ describe('central remote history', () => {
                     expect(plots.map(plot => plot.getAttribute('aria-label')).join(' ')).toContain('VRAM used (MiB)');
                     expect(plots[0].querySelector('path')?.getAttribute('d')?.match(/ M/g)).toHaveLength(2);
                     expect(remote.textContent).toContain('No samples');
-                    expect(client.getQueryData(['active-remote-gpu-telemetry'])).toBe(cached);
+                    expect(client.getQueryData(['active-remote-gpu-telemetry', 'vast:8'])).toBe(cached);
                 }
             }
         } finally {

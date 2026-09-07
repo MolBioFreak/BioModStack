@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardTelemetry } from '../../src/components/dashboard/DashboardTelemetry';
 import { api, type ExecutionTarget } from '../../src/lib/api';
@@ -16,6 +16,18 @@ vi.mock('../../src/components/RemoteGpuTelemetry', () => ({
 
 const response = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: {} });
 const defaultApiAdapter = api.defaults.adapter;
+let unexpectedRequests: string[] = [];
+function unexpected(config: { method?: string; url?: string }): never {
+    unexpectedRequests.push(`${config.method} ${config.url}`);
+    throw new Error('Unexpected request');
+}
+beforeEach(() => {
+    unexpectedRequests = [];
+    api.defaults.adapter = async config => {
+        if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A123/runtime-inventory') return response(null);
+        return unexpected(config);
+    };
+});
 
 const readyTarget = {
     id: 'vast:123',
@@ -40,6 +52,7 @@ afterEach(() => {
     document.body.replaceChildren();
     window.localStorage.clear();
     api.defaults.adapter = defaultApiAdapter;
+    expect(unexpectedRequests).toEqual([]);
 });
 
 describe('Dashboard telemetry source tabs', () => {
@@ -91,13 +104,15 @@ describe('Dashboard telemetry source tabs', () => {
         let target: ExecutionTarget = readyTarget;
         const requests: string[] = [];
         api.defaults.adapter = async config => {
-            if (config.method === 'post') {
+            if (config.method === 'post' && config.url === '/api/execution-targets/vast%3A123/preload') {
                 requests.push(String(config.url));
                 expect(JSON.parse(String(config.data))).toEqual({ job_id: 'saved-job' });
                 target = { ...target, preload: { operation_id: 'op', job_id: 'saved-job', source_revision: 'a'.repeat(40), source_tree: 'b'.repeat(40), request_sha256: 'c'.repeat(64), phase: 'transferring', artifact: 'esmfold2.sif', message: 'Transferring runtime', started_at: '2026-09-06', updated_at: '2026-09-06' } };
                 return response(target);
             }
-            return response([target]);
+            if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A123/runtime-inventory') return response(null);
+            if (config.method === 'get' && config.url === '/api/execution-targets') return response([target]);
+            return unexpected(config);
         };
         client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([target]));
@@ -142,7 +157,11 @@ describe('Dashboard telemetry source tabs', () => {
             phase: 'failed', artifact: 'esmfold2.sif', message: 'Artifact verification failed', started_at: '2026-09-06', updated_at: '2026-09-06',
         } };
         const post = vi.spyOn(api, 'post').mockRejectedValue({ isAxiosError: true, message: 'Request failed with status code 409', response: { data: { detail: 'Worker has active execution' } } });
-        api.defaults.adapter = async () => response([target]);
+        api.defaults.adapter = async config => {
+            if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A123/runtime-inventory') return response(null);
+            if (config.method === 'get' && config.url === '/api/execution-targets') return response([target]);
+            return unexpected(config);
+        };
         client.setQueryData(['remote-provision-catalog'], []);
         client.setQueryData(['execution-targets'], response([target]));
         const container = document.createElement('div');
@@ -201,7 +220,11 @@ describe('Dashboard telemetry source tabs', () => {
         });
         expect(container.querySelectorAll('[data-testid="remote-telemetry"]')).toHaveLength(1);
 
-        api.defaults.adapter = async () => outcome === 'empty' ? response([]) : Promise.reject(new Error('offline'));
+        api.defaults.adapter = async config => {
+            if (config.method === 'get' && config.url === '/api/execution-targets/vast%3A123/runtime-inventory') return response(null);
+            if (config.method === 'get' && config.url === '/api/execution-targets') return outcome === 'empty' ? response([]) : Promise.reject(new Error('offline'));
+            return unexpected(config);
+        };
         await act(async () => {
             await client.invalidateQueries({ queryKey: ['execution-targets'] });
             await new Promise((resolve) => setTimeout(resolve, 0));

@@ -45,6 +45,7 @@ export interface CandidateResultSummary {
 }
 
 export interface Job {
+    execution_policy?: ExecutionPolicy;
     result_summary?: CandidateResultSummary;
     fampnn_analysis_overrides?: import('../components/FampnnAnalysisControls').FampnnAnalysisOverrides;
     id: string;
@@ -436,7 +437,7 @@ export interface ProvisionPreview {
     artifacts: CachedArtifactReceipt[];
     total_bytes: number;
     scientific_ready: false;
-    scope: 'cache_download_only';
+    scope: 'managed_asset_activation';
 }
 
 export interface ProvisionRequest extends ProvisionSelection {
@@ -578,6 +579,32 @@ export const previewExecutionTargetProvision = async (targetId: string, selectio
 export const provisionExecutionTarget = async (targetId: string, request: ProvisionRequest): Promise<ExecutionTarget> =>
     (await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/provision`, request)).data;
 
+export interface ManagedRuntimeArtifact extends CachedArtifactReceipt {
+    state: 'verified' | 'missing' | 'corrupt' | 'incompatible';
+}
+export interface ManagedRuntimeRelease {
+    selection: ProvisionSelection;
+    release_sha256: string;
+    source_revision: string;
+    source_tree: string;
+    state: ManagedRuntimeArtifact['state'] | 'partial' | 'unverified';
+    artifacts: ManagedRuntimeArtifact[];
+}
+export interface ManagedRuntimeInventory {
+    observed_at: string;
+    boot_id: string;
+    state: 'current' | 'stale';
+    scope: 'managed_independent_asset_releases';
+    releases: ManagedRuntimeRelease[];
+    scientific_ready: false;
+    critical_runtime_ready: false;
+    blockers: Array<'critical_release_not_verified' | 'scientific_readiness_not_checked'>;
+}
+export const fetchExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory | null> =>
+    (await api.get<ManagedRuntimeInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory`)).data;
+export const refreshExecutionTargetRuntimeInventory = async (targetId: string): Promise<ManagedRuntimeInventory> =>
+    (await api.post<ManagedRuntimeInventory>(`/api/execution-targets/${encodeURIComponent(targetId)}/runtime-inventory/refresh`)).data;
+
 export const fetchExecutionTargetArtifactInventory = async (targetId: string): Promise<ObservedArtifactInventory | null> =>
     (await api.get<ObservedArtifactInventory | null>(`/api/execution-targets/${encodeURIComponent(targetId)}/artifact-inventory`)).data;
 
@@ -600,8 +627,8 @@ export const deactivateExecutionTarget = (executionTargetId: string) =>
         `/api/execution-targets/${encodeURIComponent(executionTargetId)}/deactivate`,
     );
 
-export const fetchActiveRemoteGpuTelemetry = (since?: string) =>
-    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry', { params: { since } });
+export const fetchActiveRemoteGpuTelemetry = (since?: string, executionTargetId?: string) =>
+    api.get<RemoteGpuTelemetry>('/api/execution-targets/active/telemetry', { params: { since, execution_target_id: executionTargetId } });
 
 export interface CPUPowerTelemetry {
     source: 'rapl' | string;
@@ -915,6 +942,8 @@ export const extractChain = async (
     });
 };
 
+import { submissionExecutionPolicy, type ExecutionPolicy } from './executionPolicy';
+
 // Start a job
 export const submitJob = (jobData: Partial<Job>, options: { launchContext?: boolean } = {}) => {
     const useLaunchContext = options.launchContext !== false;
@@ -922,6 +951,7 @@ export const submitJob = (jobData: Partial<Job>, options: { launchContext?: bool
         ? new URLSearchParams(window.location.search).get('launch_context_id')
         : null;
     const selectedExecutionTarget = selectedExecutionTargetForSubmission();
+    jobData = { ...jobData, execution_policy: jobData.execution_policy ?? submissionExecutionPolicy() };
     const targetedJobData = selectedExecutionTarget && !jobData.execution_target_id
         ? { ...jobData, execution_target_id: selectedExecutionTarget }
         : jobData;
