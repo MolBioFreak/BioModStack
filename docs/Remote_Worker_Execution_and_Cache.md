@@ -28,7 +28,7 @@ Required invariants:
 - Template provisioning and BMS-controlled preload populate a cache consumed by normal launch, rather than parallel unused directories.
 - Cache hits are verified; missing or corrupt objects are never used as model weights or executable code.
 - Downloads/transfers publish only complete verified objects atomically. Interrupted writes must not poison a later hit.
-- Concurrent preparations do not overwrite an in-use immutable asset. Runtime relocation must preserve exact source authority, including supported runtime-internal symlinks and interpreter paths.
+- Concurrent preparations do not overwrite an in-use immutable asset. Source and runtime materializations belong to one attempt; a new attempt must not inherit unmanifested files from an older source working directory or runtime generation. Runtime relocation must preserve exact source authority, including supported runtime-internal symlinks and interpreter paths.
 - Preloading admits only server-resolved model/runtime/workflow dependencies. It does not cache biological inputs, user results, credentials, or arbitrary browser-supplied filesystem paths.
 - Workflow/source revision and model/runtime identity are explicit. New releases do not change the meaning of existing receipts or retained results.
 - Cache status and preload progress persist on the target. They do not imply GPU/model readiness or scientific success.

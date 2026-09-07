@@ -338,7 +338,7 @@ def test_bundle_preserves_committed_source_and_relocates_managed_paths(
         assert bundle.envelope.source_revision == revision
         assert bundle.envelope.source_tree == tree
         assert bundle.envelope.command[0] == "/opt/biomodstack/runner/nextflow"
-        assert "/opt/biomodstack/revisions/" in bundle.envelope.command[2]
+        assert bundle.envelope.command[2] == bundle.remote_source_dir + "/main.nf"
         assert "/opt/biomodstack/attempts/" in bundle.envelope.command[4]
         assert bundle.remote_output_alias == bundle.envelope.output_directory
         assert bundle.remote_output_alias.startswith("/opt/biomodstack/attempts/")
