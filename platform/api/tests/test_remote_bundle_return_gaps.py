@@ -34,7 +34,9 @@ def test_existing_generation_publication_and_rollback_on_results_filesystem(tmp_
         incoming.mkdir()
         (incoming/'new.txt').write_text('verified-new-generation')
         (incoming/'result-manifest.json').write_text('{}')
-        job = SimpleNamespace(id='job', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None)
+        job = SimpleNamespace(id='job', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None,
+                              execution_target_id='target', execution_source_revision='a'*40,
+                              execution_source_tree='b'*40, execution_bundle_sha256='c'*64, provenance={})
         monkeypatch.setattr(executor, 'get_data_root', lambda: tmp_path/'state')
         replace = executor.os.replace
         def promote(source, destination):
@@ -63,7 +65,9 @@ async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypa
     with tempfile.TemporaryDirectory(prefix='bms-return-', dir='/dev/shm') as directory:
         output = Path(directory)/'results/job'
         output.parent.mkdir()
-        job = SimpleNamespace(execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None)
+        job = SimpleNamespace(id='job', execution_target_id='target', remote_attempt_id='attempt', output_dir=str(output), child_output_dir=None,
+                              execution_source_revision='a'*40, execution_source_tree='b'*40,
+                              execution_bundle_sha256='c'*64, provenance={})
         class Session:
             async def get(self, *args, **kwargs):
                 return SimpleNamespace()
@@ -78,5 +82,5 @@ async def test_incoming_transfer_stages_on_results_filesystem(tmp_path, monkeypa
             return SimpleNamespace(artifacts=[])
         monkeypatch.setattr(executor, '_fetch_result_manifest', fetch)
         monkeypatch.setattr(executor, '_verify_result_package', lambda *args: SimpleNamespace(artifacts=[]))
-        _, incoming = await executor.collect_remote_results(Session(), job, None)
+        _, incoming = await executor.collect_remote_results(Session(), job, SimpleNamespace(result_manifest_sha256='d'*64))
         assert incoming.exists()

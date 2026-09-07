@@ -800,13 +800,65 @@ async def _fetch_result_manifest(
         raise RemoteExecutionError("Remote result manifest identity does not match the BMS Job")
     if len(manifest.artifacts) > MAX_RESULT_ARTIFACTS:
         raise RemoteExecutionError("Remote result manifest exceeds the artifact-count limit")
+    from .result_generation import checked, prepare_transfer
+
+    checked(incoming)
+    prepare_transfer(incoming)
+    if incoming.exists():
+        saved = checked(incoming / "result-manifest.json")
+        if saved.exists() and saved.read_bytes() != manifest_bytes:
+            raise RemoteExecutionError("Retained result staging manifest identity changed")
+        if not saved.exists() and any(incoming.iterdir()):
+            raise RemoteExecutionError("Retained result staging has no manifest identity")
+    else:
+        incoming.mkdir(parents=True, exist_ok=False)
+    # Reject unsafe/undeclared retained files. Reclaim only declared incomplete
+    # files under the matching manifest; complete files survive explicit retry.
+    declared = {a.relative_path: a for a in manifest.artifacts}
+    for path in incoming.rglob("*"):
+        checked(path)
+        if path.is_file() and path != incoming / "result-manifest.json":
+            relative = path.relative_to(incoming).as_posix()
+            if relative not in declared:
+                # rsync's unrenamed temporary file can survive machine death.
+                # Only reclaim its exact declared sibling pattern, never relax
+                # the final complete-package inventory/hash check.
+                import re
+
+                temporary_for = any(
+                    path.parent == incoming / Path(name).parent
+                    and re.fullmatch(r"\." + re.escape(Path(name).name) + r"\.[A-Za-z0-9]{6}", path.name)
+                    for name in declared
+                )
+                if temporary_for:
+                    path.unlink()
+                else:
+                    raise RemoteExecutionError("Retained result staging contains undeclared files")
+    missing = []
+    for artifact in manifest.artifacts:
+        path = _safe_result_path(incoming, artifact.relative_path)
+        if path.exists():
+            if path.is_file() and path.stat().st_size == artifact.size_bytes and _sha256_file(path) == artifact.sha256:
+                continue
+            if not path.is_file():
+                raise RemoteExecutionError("Retained artifact is not a regular file")
+            path.unlink()
+        missing.append(artifact)
     total_bytes = sum(int(artifact.size_bytes) for artifact in manifest.artifacts)
     configured_limit = int(os.environ.get("BMS_REMOTE_MAX_RETURN_BYTES", DEFAULT_MAX_RESULT_BYTES))
     free_budget = max(0, shutil.disk_usage(incoming.parent).free - RESULT_DISK_RESERVE_BYTES)
-    if total_bytes > min(configured_limit, free_budget):
+    missing_bytes = sum(int(artifact.size_bytes) for artifact in missing)
+    if total_bytes > configured_limit or missing_bytes + len(manifest_bytes) > free_budget:
         raise RemoteExecutionError("Remote result package exceeds the local return-byte budget")
-    incoming.mkdir(parents=True, exist_ok=False)
-    (incoming / "result-manifest.json").write_bytes(manifest_bytes)
+    # A deterministic sibling temp cannot pollute the declared payload inventory.
+    from .result_generation import move
+
+    temporary = checked(incoming.with_name(incoming.name + ".manifest-tmp"))
+    with temporary.open("wb") as handle:
+        handle.write(manifest_bytes)
+        handle.flush()
+        os.fsync(handle.fileno())
+    move(temporary, incoming / "result-manifest.json")
     return manifest
 
 
@@ -823,8 +875,9 @@ async def collect_remote_results(
     if any(part.is_symlink() for part in (local_output, *local_output.parents)):
         raise RemoteExecutionError("Remote result destination traverses a symlink")
     local_output = local_output.resolve()
-    incoming = local_output.parent / f".{local_output.name}.remote-incoming" / str(job.remote_attempt_id)
-    incoming = incoming.with_name(incoming.name + "-" + uuid.uuid4().hex)
+    from .result_generation import staging_path
+
+    incoming = staging_path(job, str(status.result_manifest_sha256))
     incoming.parent.mkdir(parents=True, exist_ok=True)
     remote_results_dir = f"{attempt_dir}/results"
     await session.commit()
@@ -836,14 +889,27 @@ async def collect_remote_results(
             job,
             status,
         )
-        if manifest.artifacts:
-            await rsync_selected_from_remote(
-                connection,
-                remote_results_dir,
-                incoming,
-                [artifact.relative_path for artifact in manifest.artifacts],
-                max_file_bytes=max(int(artifact.size_bytes) for artifact in manifest.artifacts),
-            )
+        missing = [artifact for artifact in manifest.artifacts
+                   if not _safe_result_path(incoming, artifact.relative_path).is_file()]
+        if missing:
+            from .result_generation import begin_transfer, end_transfer
+
+            begin_transfer(incoming)
+            try:
+                await rsync_selected_from_remote(
+                    connection,
+                    remote_results_dir,
+                    incoming,
+                    [artifact.relative_path for artifact in missing],
+                    max_file_bytes=max(int(artifact.size_bytes) for artifact in missing),
+                )
+            except (RemoteTransportError, asyncio.CancelledError):
+                # The transport contract reaps its process group on cancellation
+                # and timeout, and has observed exit for ordinary rsync failures.
+                end_transfer(incoming)
+                raise
+            else:
+                end_transfer(incoming)
         manifest = await asyncio.to_thread(_verify_result_package, incoming, job, status)
     except (RemoteTransportError, RemoteExecutionError, OSError, ValueError) as exc:
         raise RemoteCollectionPending(str(exc)) from exc
@@ -851,30 +917,38 @@ async def collect_remote_results(
 
 
 def _publish_result_generation(job: Job, incoming: Path) -> tuple[Path, Path | None]:
-    """Atomically make one verified attempt the only visible result generation."""
-    manifest_path = incoming / "result-manifest.json"
-    local_output = Path(str(job.child_output_dir or job.output_dir)).expanduser().resolve()
-    local_output.parent.mkdir(parents=True, exist_ok=True)
-    if incoming.stat().st_dev != local_output.parent.stat().st_dev:
-        raise RemoteExecutionError("Remote result staging and Job output are on different filesystems")
-    backup: Path | None = None
-    if local_output.exists():
-        backup = (
-            local_output.parent
-            / ".bms-remote-quarantine"
-            / str(job.id)
-            / str(job.remote_attempt_id)
-            / ("previous-" + uuid.uuid4().hex)
-        )
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(local_output, backup)
-    try:
-        os.replace(incoming, local_output)
-    except Exception:
-        if backup is not None and backup.exists() and not local_output.exists():
-            os.replace(backup, local_output)
-        raise
-    return local_output, backup
+    from .result_generation import publish
+
+    return publish(job, incoming)
+
+
+async def _recover_result_generation(session, job):
+    """Repair only under both the controller lock and current DB write authority."""
+    from .result_generation import journal_path, recover
+
+    if not journal_path(job).exists():
+        return False
+    identity = _pull_identity(job)
+    await session.refresh(job)
+    if _pull_identity(job) != identity:
+        raise RemoteExecutionError("Result publication recovery authority changed")
+    fence = await session.execute(update(Job).where(
+        Job.id == job.id, Job.remote_attempt_id == job.remote_attempt_id,
+        Job.nextflow_run_id == job.nextflow_run_id,
+        Job.execution_target_id == job.execution_target_id,
+        Job.execution_source_revision == job.execution_source_revision,
+        Job.execution_source_tree == job.execution_source_tree,
+        Job.execution_bundle_sha256 == job.execution_bundle_sha256,
+        Job.status == job.status, Job.queue_status == job.queue_status,
+        Job.remote_state == job.remote_state, Job.provenance == job.provenance,
+        Job.output_dir == job.output_dir, Job.child_output_dir == job.child_output_dir,
+    ).values(provenance=job.provenance))
+    if fence.rowcount != 1:
+        await session.rollback()
+        raise RemoteExecutionError("Result publication recovery lost current DB fence")
+    repaired = await asyncio.to_thread(recover, job)
+    await session.commit()
+    return repaired
 
 
 async def _finish_remote_cancellation(session: AsyncSession, job: Job, status=None) -> bool:
@@ -916,6 +990,7 @@ async def reconcile_remote_job(session: AsyncSession, job: Job) -> bool:
 async def _reconcile_remote_job_owned(session: AsyncSession, job: Job) -> bool:
     """Reconcile one running remote Job. Return true when local state changed."""
     job_id = str(job.id)
+    await _recover_result_generation(session, job)
     if job.status in {"completed", "failed", "cancelled"}:
         return False
     if job.remote_state == "returning":
@@ -1160,6 +1235,7 @@ async def _run_requested_pull(job_id, identity, guard):
                 job = await session.get(Job, job_id)
                 if job is None or _pull_identity(job) != identity or job.remote_state != "returning":
                     return
+                await _recover_result_generation(session, job)
                 await _prove_pull_endpoint(session, job)
                 status = await remote_status(session, job)
                 receipt = dict((job.provenance or {}).get("remote_execution_receipt") or {})
@@ -1188,12 +1264,17 @@ async def _run_requested_pull(job_id, identity, guard):
                 # Hold the write fence across publication and receipt application.
                 await session.refresh(job)
                 await _finalize_pulled_results(session, job, status, manifest, incoming)
+                await session.rollback()
+                job = await session.get(Job, job_id, populate_existing=True)
+                if job is not None and _pull_identity(job) == identity:
+                    await _recover_result_generation(session, job)
             except Exception as exc:
                 await session.rollback()
                 job = await session.get(Job, job_id, populate_existing=True)
                 if (job is not None and _pull_identity(job) == identity
                         and job.remote_state == "returning"
                         and (job.status, job.queue_status) == ("running", "running")):
+                    await _recover_result_generation(session, job)
                     await _pull_failure(session, job, f"Result pull failed: {exc}")
     finally:
         guard.__exit__(None, None, None)
@@ -1341,6 +1422,16 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         ).hexdigest()
         if expected_contract_sha256 != current_contract_sha256:
             raise RemoteExecutionError("REMOTE_RESULT_CONTRACT_IDENTITY_MISMATCH")
+        from services.remote_stage_receipts import validate_remote_stage_receipts
+
+        # Pure receipt/contract checks run against staging before visible moves.
+        staged_receipts = validate_remote_stage_receipts(
+            output_root=incoming, job_id=str(job.id),
+            attempt_id=expected_attempt_id, manifest=manifest,
+        )
+        if job.model_id == "nanopore" or (job.model_id == "molecular_dynamics"
+                and (job.mode != "simulate" or staged_receipts)):
+            raise RemoteExecutionError("Remote generic receipts cannot authorize domain lifecycle")
         try:
             local_output, previous_generation = await asyncio.to_thread(
                 _publish_result_generation,
@@ -1353,14 +1444,17 @@ async def _finalize_pulled_results(session, job, status, manifest, incoming):
         receipt["previous_generation_quarantine"] = (
             str(previous_generation) if previous_generation is not None else None
         )
-        provenance["remote_execution_receipt"] = receipt
+        provenance = dict(job.provenance or {}, remote_execution_receipt=receipt)
         job.provenance = provenance
         from services.remote_stage_receipts import apply_remote_stage_receipts
 
-        await apply_remote_stage_receipts(
-            session=session, job=job, attempt_id=expected_attempt_id,
-            output_root=local_output, manifest=manifest,
-        )
+        # MD's native completion barrier owns lifecycle/lineage, not generic
+        # stage metadata. Unsupported domains remain explicitly rejected above.
+        if job.model_id != "molecular_dynamics":
+            await apply_remote_stage_receipts(
+                session=session, job=job, attempt_id=expected_attempt_id,
+                output_root=local_output, manifest=manifest,
+            )
         await session.flush()
         if job.model_id == "msa_batch":
             msa_manifest = local_output / "msa_manifest.json"

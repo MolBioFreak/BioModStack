@@ -19,7 +19,7 @@ async def test_real_completion_schedules_viewer_analysis(store, monkeypatch, tmp
     async def status(*_):
         return receipt().model_copy(update={'result_manifest_sha256': 'a'*64})
     async def collect(*_):
-        return SimpleNamespace(artifacts=[]), tmp_path
+        return SimpleNamespace(artifacts=[], job_id='job', attempt_id='attempt', exit_code=0), tmp_path
     async def ingest(*_, **__):
         return 0
     original_finalizer = integrity.finalize_successful_job

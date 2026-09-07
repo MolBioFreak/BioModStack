@@ -335,7 +335,7 @@ async def test_remote_reconciler_never_writes_after_finalizer_loses_authority(st
     async def status(*_):
         return receipt().model_copy(update={"result_manifest_sha256": "a" * 64})
     async def collect(*_):
-        return SimpleNamespace(artifacts=[]), tmp_path
+        return SimpleNamespace(artifacts=[], job_id="job", attempt_id="attempt", exit_code=0), tmp_path
     monkeypatch.setattr(ex, "remote_status", status)
     monkeypatch.setattr(ex, "collect_remote_results", collect)
     monkeypatch.setattr(ex, "_publish_result_generation", lambda *_: (tmp_path, None))

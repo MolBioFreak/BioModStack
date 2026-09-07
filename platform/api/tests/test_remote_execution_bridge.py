@@ -485,6 +485,11 @@ def test_verified_remote_generation_replaces_stale_output_atomically(
     job = SimpleNamespace(
         id="job-1",
         remote_attempt_id="attempt-1",
+        execution_target_id="target-1",
+        execution_source_revision="a" * 40,
+        execution_source_tree="b" * 40,
+        execution_bundle_sha256="c" * 64,
+        provenance={},
         child_output_dir=None,
         output_dir=str(output),
     )
