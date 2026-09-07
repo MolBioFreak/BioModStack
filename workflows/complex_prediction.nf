@@ -88,6 +88,7 @@ def requestedFrustraMPNNSettingsHashPayload(value, String settingsValueOrigin) {
 
 include { complex_prediction_wf } from '../modules/structure_prediction.nf'
 include { SchedulerFrustraMPNNParentFanout } from '../modules/frustrampnn_parent_fanout.nf'
+include { RemoteCanonicalFrustraMPNN } from '../modules/frustrampnn_remote.nf'
 
 def parseJsonFile(rawPath) {
     return new JsonSlurper().parse(file(rawPath))
@@ -179,8 +180,6 @@ process PrepareComplexPredictionFrustraMPNNCandidate {
 process MaterializeComplexPredictionFrustraMPNNCandidate {
     tag "frustrampnn-complex-materialize:${candidate_meta.producer_method}:${candidate_meta.producer_artifact_sha256}"
     stageInMode 'copy'
-    publishDir { "${params.out_dir}/${new File(candidate_meta.producer_candidate_key.toString()).parent}" },
-        mode: 'copy', pattern: 'canonical_source.pdb', saveAs: { new File(candidate_meta.producer_candidate_key.toString()).name }
 
     input:
     tuple val(candidate_meta), path(prepared_request), path(prepared_source), path(prepared_structure_map)
@@ -244,7 +243,7 @@ process PublishComplexPredictionFrustraMPNNCandidate {
     def candidateId = result_meta.candidate_id.toString()
     """
     set -euo pipefail
-    '${params.api_python}' '${params.code_root}/scripts/publish_frustrampnn_bundle.py' \
+    '${params.api_python}' '${params.code_root}/scripts/publish_remote_frustrampnn_bundle.py' \
       --source-bundle '${candidate_bundle}' \
       --allowed-root '${params.out_dir}' \
       --destination '${params.out_dir}/frustrampnn/results/${candidateId}' \
@@ -265,13 +264,14 @@ process ReportComplexPredictionFrustraMPNNComplete {
     script:
     """
     set -euo pipefail
-    mapfile -t outputs < <('${params.api_python}' \
+    '${params.api_python}' \
       '${params.code_root}/scripts/validate_frustrampnn_publication_markers.py' \
       --job-root '${params.out_dir}' \
-      published_*.json)
-    test \"\${#outputs[@]}\" -gt 0
+      published_*.json > validated_outputs.txt
+    mapfile -t outputs < validated_outputs.txt
+    test "\${#outputs[@]}" -gt 0
     '${params.api_python}' '${params.code_root}/scripts/stage_reporter.py' --job-root-relative \
-      '${params.job_id}' frustrampnn complete \"\${outputs[@]}\"
+      '${params.job_id}' frustrampnn complete "\${outputs[@]}"
     : > frustrampnn_complete.reported
     """
 }
@@ -451,18 +451,26 @@ workflow COMPLEX_PREDICTION {
                     }
                     tuple(candidate_metas[preferredIndex], prepared_requests[preferredIndex], prepared_sources[preferredIndex], prepared_structure_maps[preferredIndex])
                 }
-            scheduler_candidates = deduplicated_candidates.map {
-                candidate_meta, prepared_request, prepared_source, prepared_structure_map ->
-                tuple(candidate_meta, prepared_source)
+            if (System.getenv('BMS_REMOTE_EXECUTION') == '1') {
+                MaterializeComplexPredictionFrustraMPNNCandidate(deduplicated_candidates)
+                RemoteCanonicalFrustraMPNN(MaterializeComplexPredictionFrustraMPNNCandidate.out.prepared)
+                PublishComplexPredictionFrustraMPNNCandidate(RemoteCanonicalFrustraMPNN.out.result)
+                ReportComplexPredictionFrustraMPNNComplete(PublishComplexPredictionFrustraMPNNCandidate.out.marker.collect())
+                frustrampnn_results = RemoteCanonicalFrustraMPNN.out.result
+            } else {
+                scheduler_candidates = deduplicated_candidates.map {
+                    candidate_meta, prepared_request, prepared_source, prepared_structure_map ->
+                    tuple(candidate_meta, prepared_source)
+                }
+                SchedulerFrustraMPNNParentFanout(
+                    scheduler_candidates,
+                    Channel.value(params.job_id.toString()),
+                    Channel.value('complex_prediction'),
+                    Channel.value(params.frustrampnn_settings.toString()),
+                    Channel.value(settingsValueOrigin),
+                )
+                frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
             }
-            SchedulerFrustraMPNNParentFanout(
-                scheduler_candidates,
-                Channel.value(params.job_id.toString()),
-                Channel.value('complex_prediction'),
-                Channel.value(params.frustrampnn_settings.toString()),
-                Channel.value(settingsValueOrigin),
-            )
-            frustrampnn_results = SchedulerFrustraMPNNParentFanout.out.receipt
         } else {
             if (!params.job_id) error('FrustraMPNN not-requested reporting requires --job_id')
             ReportComplexPredictionFrustraMPNNNotRequested(Channel.value(true))

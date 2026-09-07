@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import hashlib
-import ipaddress
+
 import json
 import os
 import re
@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import uuid
-from urllib.parse import urlsplit
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -51,6 +51,61 @@ class PreparedRemoteBundle:
     source_transfer: TransferPlan
     runtime_transfers: tuple[TransferPlan, ...]
     input_transfers: tuple[TransferPlan, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CacheTransferArtifact:
+    source: Path
+    remote_destination: str
+    sha256: str
+    size_bytes: int
+    mode: int
+    role: str
+
+
+def uncached_runtime_transfers(bundle: PreparedRemoteBundle) -> tuple[TransferPlan, ...]:
+    """Only destination-dependent support-python bypasses the shared cache."""
+    return tuple(transfer for transfer in bundle.runtime_transfers
+                 if transfer.remote_destination == bundle.remote_runtime_dir.rstrip('/') + '/support-python')
+
+
+def cache_transfer_artifacts(bundle: PreparedRemoteBundle) -> tuple[CacheTransferArtifact, ...]:
+    """Project the existing authoritative envelope, never a second model registry.
+
+    Relocated support-python contains destination-dependent bytes and symlinks;
+    it deliberately stays on the verified legacy transport path. Regular source,
+    workflow, SIF and model files share the same byte-addressed cache protocol.
+    """
+    result: list[CacheTransferArtifact] = []
+    for record in bundle.envelope.files:
+        relative = PurePosixPath(record.relative_path)
+        if (record.link_target is not None or relative.parts[0] not in {"source", "runtime"}
+                or record.role != relative.parts[0]):
+            continue
+        if relative.parts[:2] == ("runtime", "support-python"):
+            continue
+        if relative.parts[0] == "source":
+            # The archive carries every workflow/source leaf without thousands of SSH calls.
+            if record.relative_path != "source/.bms-source.tar":
+                continue
+            leaf = PurePosixPath(*relative.parts[1:])
+            source = bundle.source_transfer.source.joinpath(*leaf.parts)
+            destination = f"{bundle.remote_source_dir}/{leaf}"
+        else:
+            destination = f"{bundle.remote_runtime_dir}/{'/'.join(relative.parts[1:])}"
+            matches = [transfer for transfer in bundle.runtime_transfers
+                       if destination == transfer.remote_destination
+                       or destination.startswith(transfer.remote_destination.rstrip('/') + '/')]
+            if len(matches) != 1:
+                raise RemoteBundleError("Cache artifact has ambiguous transport authority")
+            transfer = matches[0]
+            suffix = destination[len(transfer.remote_destination):].lstrip('/')
+            source = transfer.source / suffix if suffix else transfer.source
+        result.append(CacheTransferArtifact(
+            source=source, remote_destination=destination, sha256=record.sha256,
+            size_bytes=record.size_bytes, mode=record.mode, role=relative.parts[0],
+        ))
+    return tuple(result)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -359,6 +414,20 @@ def compile_remote_dependencies(model_id: str, mode: str, command: list[str]) ->
     unchanged. The returned argv is the sole authority for runtime and input
     selection below.
     """
+    # These current workflows still require controller-side child orchestration.
+    # Reject rather than silently dropping required stages or falling back locally.
+    callback_workflows = {
+        'conformational_mapping.nf', 'protein_design.nf', 'boltz_cp_experimental.nf',
+        'antibody_denovo.nf', 'protein_local_redesign.nf', 'ppiflow_generator_design.nf',
+    }
+    selected_workflows = {Path(value).name for value in command if value.endswith('.nf')}
+    blocked = selected_workflows & callback_workflows
+    if blocked:
+        raise RemoteBundleError(
+            'Remote workflow closure is not implemented for ' + ', '.join(sorted(blocked))
+            + '; controller callbacks/child scheduling are still required. '
+            'No local fallback or partial scientific execution was performed.'
+        )
     params: dict[str, Any] = {}
     for index, value in enumerate(command):
         if value.startswith("--"):
@@ -608,6 +677,9 @@ def prepare_remote_bundle(
         "BMS_API_PYTHON": f"{remote_runtime}/support-python/venv/bin/python",
         "BMS_MSA_CACHE": f"{remote_attempt}/msa-cache",
         "BMS_REMOTE_EXECUTION": "1",
+        "BMS_REMOTE_ATTEMPT_ID": attempt_id,
+        "BMS_REMOTE_JOB_ID": str(job.id),
+        "BMS_REMOTE_OUTPUT_ROOT": remote_results,
         "BMS_WORK": f"{remote_attempt}/work",
         "NXF_CACHE_DIR": f"{remote_attempt}/.nextflow",
         "NXF_HOME": f"{remote_root}/cache/nextflow",
@@ -615,29 +687,7 @@ def prepare_remote_bundle(
         "NXF_ANSI_LOG": "false",
         "CUDA_VISIBLE_DEVICES": ",".join(str(value) for value in assigned_gpu_indices),
     }
-    api_url = os.getenv("BMS_REMOTE_API_BASE_URL", "").strip()
-    parsed_api_url = urlsplit(api_url)
-    if (
-        parsed_api_url.scheme not in {"http", "https"}
-        or not parsed_api_url.hostname
-        or parsed_api_url.username
-        or parsed_api_url.password
-        or parsed_api_url.query
-        or parsed_api_url.fragment
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL is not configured as a credential-free HTTP(S) URL")
-    api_host = parsed_api_url.hostname.lower()
-    if api_host == "localhost" or api_host.endswith(".localhost"):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    try:
-        api_address = ipaddress.ip_address(api_host)
-    except ValueError:
-        api_address = None
-    if api_address is not None and (
-        api_address.is_loopback or api_address.is_link_local or api_address.is_unspecified
-    ):
-        raise RemoteBundleError("BMS_REMOTE_API_BASE_URL must be reachable from the remote worker")
-    effective_environment["API_BASE_URL"] = api_url.rstrip("/")
+
     for key, value in dict(environment or {}).items():
         if key in {
             "PYTORCH_CUDA_ALLOC_CONF",

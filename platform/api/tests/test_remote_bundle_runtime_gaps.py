@@ -204,6 +204,7 @@ async def test_staging_has_no_controller_aliases(package, monkeypatch):
     monkeypatch.setattr(executor, 'run_remote', remote)
     monkeypatch.setattr(executor, '_transfer_plan', transfer)
     monkeypatch.setattr(executor, 'rsync_to_remote', transfer)
+    monkeypatch.setattr("services.remote_execution.cache.stage_cached_bundle", transfer)
     await executor._stage_bundle(None, prepared)
     assert str(roots['results']) not in str(calls)
     assert str(roots['data']) not in str(calls)

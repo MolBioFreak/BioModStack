@@ -2116,9 +2116,13 @@ export function StructurePredictionTemplate({ onBack, initialValues, onDraftChan
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <h3 className="text-sm font-semibold text-cyan-300">ESMFold2 Settings</h3>
                             <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-medium text-cyan-200">
-                                Local-only
+                                Worker-local model files
                             </span>
                         </div>
+                        <p className="text-xs text-slate-400">
+                            Uses cached model files on the selected execution worker, not workstation-only execution.
+                            Choose Local or a ready remote worker in Execution Target above; the same model settings apply.
+                        </p>
                         <ModelDocumentationLinks
                             topics={structureDocumentationTopics}
                             summary="Docs linked; structure inputs stay in this launcher."

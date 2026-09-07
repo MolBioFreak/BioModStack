@@ -316,6 +316,16 @@ def supervise(attempt_dir: Path) -> int:
                     raise RuntimeError("attempt secret environment is invalid")
                 environment[key] = value
             secret_path.unlink()
+        # Remote workflow metadata is envelope-owned, never worker-shell or
+        # legacy secret-file authority. No BMS callback connectivity is needed.
+        environment.update({
+            "BMS_REMOTE_EXECUTION": "1",
+            "BMS_REMOTE_ATTEMPT_ID": str(envelope["attempt_id"]),
+            "BMS_REMOTE_JOB_ID": str(envelope["job_id"]),
+            "BMS_REMOTE_OUTPUT_ROOT": str(envelope["output_directory"]),
+        })
+        for key in ("API_BASE_URL", "BMS_REMOTE_API_BASE_URL", "BMS_STAGE_REPORT_TOKEN"):
+            environment.pop(key, None)
         if (attempt_dir / CANCEL_REQUEST_FILE).exists():
             exit_code = -15
         else:
@@ -395,6 +405,62 @@ def supervise(attempt_dir: Path) -> int:
     return exit_code
 
 
+def workflow_activity(attempt_dir: Path, identity: dict[str, Any]) -> dict[str, Any] | None:
+    """Bounded advisory stage metadata; never scientific output or completion proof."""
+    import re
+    import stat
+    from datetime import datetime, timezone
+
+    directory = attempt_dir / 'results' / '.bms-stage-receipts'
+    if any(path.is_symlink() for path in (directory, *directory.parents)):
+        return None
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    latest = None
+    states = {'start': 'started', 'complete': 'completed', 'failed': 'failed'}
+    try:
+        names = os.listdir(directory_fd)
+        if len(names) > 1024:
+            return None
+        for name in names:
+            if not name.endswith('.json'):
+                continue
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+                        continue
+                    payload = json.loads(os.read(fd, 65537))
+                finally:
+                    os.close(fd)
+                if (not isinstance(payload, dict)
+                        or set(payload) != {'schema', 'job_id', 'attempt_id', 'stage', 'status', 'outputs'}
+                        or payload['schema'] != 'bms.remote-stage-receipt.v1'
+                        or payload['job_id'] != identity.get('job_id')
+                        or payload['attempt_id'] != identity.get('attempt_id')
+                        or not isinstance(payload['stage'], str)
+                        or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', payload['stage'])
+                        or payload['status'] not in states
+                        or not isinstance(payload['outputs'], list)):
+                    continue
+                expected = payload['stage'] + ('.start.json' if payload['status'] == 'start' else '.terminal.json')
+                if name != expected:
+                    continue
+                record = {'stage': payload['stage'], 'state': states[payload['status']],
+                          'updated_at': datetime.fromtimestamp(info.st_mtime, timezone.utc).isoformat()}
+                key = (info.st_mtime_ns, name)
+                if latest is None or key > latest[0]:
+                    latest = (key, record)
+            except (OSError, ValueError, TypeError):
+                continue
+    finally:
+        os.close(directory_fd)
+    return latest[1] if latest else None
+
+
 def status(attempt_dir: Path) -> dict[str, Any]:
     with status_path(attempt_dir).with_suffix(".json.lock").open("a+b") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
@@ -419,6 +485,11 @@ def status(attempt_dir: Path) -> dict[str, Any]:
                     }
                 )
             _write_atomic_json(status_path(attempt_dir), value)
+        value.pop('activity', None)
+        if value.get('state') in {'running', 'cancelling'}:
+            activity = workflow_activity(attempt_dir, value)
+            if activity is not None:
+                value['activity'] = activity
         return value
 
 

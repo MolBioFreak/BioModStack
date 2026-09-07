@@ -1417,6 +1417,7 @@ async def _claim_remote_job(
         return None
     from datetime import timedelta
     from services.remote_execution.targets import INVENTORY_MAX_AGE_SECONDS
+    from services.remote_execution.progress import preload_idle_clause
     claim_now = datetime.utcnow()
     lease_transition = await session.execute(
         update(ExecutionTarget)
@@ -1430,6 +1431,7 @@ async def _claim_remote_job(
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() >=
                 (claim_now - timedelta(seconds=INVENTORY_MAX_AGE_SECONDS)).isoformat(),
             ExecutionTarget.provider_metadata["inventory"]["checked_at"].as_string() <= claim_now.isoformat(),
+            preload_idle_clause(),
             ExecutionTarget.leased_job_id.is_(None),
         )
         .values(
@@ -2712,6 +2714,7 @@ class GPUOrchestrator:
                         active
                         for active in active_remote_jobs
                         if active.execution_target_id == job.execution_target_id
+                        and active.remote_state != "returning"
                     ]
                     if target_active:
                         job.remote_state = "waiting_remote_worker"

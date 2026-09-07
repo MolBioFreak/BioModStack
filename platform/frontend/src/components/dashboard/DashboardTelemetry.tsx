@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchExecutionTargets } from '../../lib/api';
+import { fetchExecutionTargets, type Job } from '../../lib/api';
+import { RemotePreloadPanel } from './RemotePreloadPanel';
 import { InfraLiveTelemetry } from '../InfraLiveTelemetry';
 import { RemoteGpuTelemetry } from '../RemoteGpuTelemetry';
 
@@ -30,7 +31,7 @@ const readTelemetrySizePreference = (): TelemetryPanelSize => {
     return 'standard';
 };
 
-export function DashboardTelemetry() {
+export function DashboardTelemetry({ jobs = [] }: { jobs?: Pick<Job, 'id' | 'model_id' | 'name'>[] }) {
     const [telemetrySize, setTelemetrySize] = useState<TelemetryPanelSize>('standard');
     const [scope, setScope] = useState<TelemetryScope>('local');
     const targetsQuery = useQuery({
@@ -150,6 +151,9 @@ export function DashboardTelemetry() {
                 </div>
             </div>
 
+            {activeVastTarget && (scope === 'vast' || scope === 'combined') && (
+                <RemotePreloadPanel key={activeVastTarget.id} target={activeVastTarget} jobs={jobs} onChanged={() => targetsQuery.refetch()} />
+            )}
             {scope === 'local' && localTelemetry}
             {scope === 'vast' && <RemoteGpuTelemetry dashboardSize={telemetrySize} />}
             {scope === 'combined' && activeVastTarget && (

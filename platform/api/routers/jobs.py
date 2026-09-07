@@ -1086,6 +1086,10 @@ def _infer_gate_stage_from_files(job: Job) -> Optional[str]:
 
 
 def _repair_job_for_response(job: Job) -> bool:
+    if job.execution_target_id and (job.awaiting_stage == "remote_results" or job.remote_state in {
+        "results_available", "returning", "result_pull_failed"
+    }):
+        return False
     changed = False
 
     gate_stage, gate_payload = load_review_gate_snapshot(job.output_dir, job.awaiting_stage)
@@ -6874,6 +6878,44 @@ def _launch_context_http_error(exc: LaunchContextError) -> HTTPException:
     )
 
 
+@router.post("/{job_id}/remote-diagnostics/pull", response_model=JobResponse, status_code=202)
+async def pull_remote_job_diagnostics(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> JobResponse:
+    from services.remote_execution.executor import RemoteExecutionError, request_remote_diagnostic_pull
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        await request_remote_diagnostic_pull(session, job, background_tasks)
+    except RemoteExecutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.refresh(job)
+    return JobResponse.model_validate(job)
+
+
+@router.post("/{job_id}/remote-results/pull", response_model=JobResponse, status_code=202)
+async def pull_remote_job_results(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+) -> JobResponse:
+    from services.remote_execution.executor import RemoteExecutionError, request_remote_result_pull
+
+    job = await session.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        await request_remote_result_pull(session, job, background_tasks)
+    except RemoteExecutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.refresh(job)
+    return JobResponse.model_validate(job)
+
+
 @router.post("", response_model=JobResponse, status_code=201)
 async def create_job(
     job_data: JobCreate,
@@ -9292,6 +9334,11 @@ async def resume_job(
         if not alignment_access.request_is_authorized(request_context, job.id, job.provenance):
             raise HTTPException(status_code=403, detail="alignment access denied")
     
+    if job.awaiting_stage == "remote_results" or job.remote_state in {
+        "results_available", "returning", "result_pull_failed"
+    }:
+        raise HTTPException(status_code=409, detail="Remote execution is finished; use Pull results, not Resume")
+
     if job.status not in ["failed", "cancelled", JobStatus.AWAITING_INPUT.value] and not job.awaiting_input:
         raise HTTPException(
             status_code=400,

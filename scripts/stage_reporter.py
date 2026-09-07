@@ -67,6 +67,18 @@ def main() -> None:
     parser.add_argument("outputs", nargs="*", help="List of output file paths")
 
     args = parser.parse_args()
+    if os.environ.get("BMS_REMOTE_EXECUTION") == "1":
+        from services.remote_stage_receipts import write_remote_stage_receipt
+        try:
+            write_remote_stage_receipt(
+                job_id=args.job_id, stage=args.stage, status=args.status,
+                outputs=args.outputs, job_root_relative=args.job_root_relative,
+            )
+        except Exception as exc:
+            print(f"Failed to record remote stage: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Recorded remote stage {args.stage} {args.status}")
+        return
     normalizer = (
         normalize_job_root_relative_output
         if args.job_root_relative

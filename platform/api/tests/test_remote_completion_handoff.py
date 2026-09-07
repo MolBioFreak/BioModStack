@@ -39,6 +39,19 @@ async def test_real_completion_schedules_viewer_analysis(store, monkeypatch, tmp
     monkeypatch.setattr(analysis_autorun, 'schedule_viewer_minimum_analyses_for_job', lambda job_id: calls.append(job_id))
     async with store() as s:
         changed = await ex.reconcile_remote_job(s, await s.get(Job, 'job'))
+        assert changed and not calls
+        job = await s.get(Job, 'job')
+        assert job.status == 'awaiting_input' and job.remote_state == 'results_available'
+    from fastapi import BackgroundTasks
+    from services import remote_stage_receipts
+    async def proof(*_, **__):
+        pass
+    monkeypatch.setattr(ex, '_prove_pull_endpoint', proof)
+    monkeypatch.setattr(remote_stage_receipts, 'apply_remote_stage_receipts', proof)
+    background = BackgroundTasks()
+    async with store() as s:
+        await ex.request_remote_result_pull(s, await s.get(Job, 'job'), background)
+    await background()
     async with store() as s:
         job = await s.get(Job, 'job')
         lease = (await s.get(ExecutionTarget, 'target')).leased_job_id

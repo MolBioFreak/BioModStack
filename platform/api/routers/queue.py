@@ -57,6 +57,10 @@ class QueuedJobResponse(BaseModel):
     model_id: str
     mode: str
     queue_status: str
+    status: str
+    awaiting_input: bool = False
+    awaiting_stage: Optional[str] = None
+    error_message: Optional[str] = None
     paused: bool
     pinned_gpu: Optional[int]
     assigned_gpu: Optional[int]
@@ -479,19 +483,30 @@ async def list_queue(
     # One global scheduler projection: MD and non-MD jobs are visible here.
     # The stale-state repair above remains deliberately non-MD because durable
     # MD lifecycle state has its own guarded reconciliation semantics.
+    # Result transfer is visible work, not GPU capacity. Preserve persisted statuses
+    # and keep the capacity-only /stats predicate unchanged. Do not expose other gates.
     query = select(Job).where(
-        Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling']),
-        Job.awaiting_input == False,
-        Job.vram_estimate_mb.isnot(None)
+        (
+            Job.queue_status.in_(['queued', 'running', 'paused', 'preparing', 'cancelling'])
+            & (Job.awaiting_input == False)
+            & Job.vram_estimate_mb.isnot(None)
+        ) | (
+            Job.execution_target_id.isnot(None)
+            & (Job.execution_target_id != '')
+            & (Job.awaiting_input == True)
+            & (Job.awaiting_stage == 'remote_results')
+            & (
+                ((Job.status == 'awaiting_input') & Job.remote_state.in_(['results_available', 'result_pull_failed']))
+                | ((Job.status == 'running') & (Job.queue_status == 'running') & (Job.remote_state == 'returning'))
+            )
+        )
     ).order_by(
         Job.priority.desc(),
         Job.created_at
     )
     
     if status:
-        query = select(Job).where(
-            Job.queue_status == status
-        ).order_by(Job.priority.desc(), Job.created_at)
+        query = query.where(Job.queue_status == status)
     
     result = await session.execute(query)
     jobs = result.scalars().all()
@@ -507,6 +522,10 @@ async def list_queue(
             model_id=job.model_id,
             mode=job.mode,
             queue_status=job.queue_status,
+            status=job.status,
+            awaiting_input=job.awaiting_input,
+            awaiting_stage=job.awaiting_stage,
+            error_message=job.error_message,
             paused=job.paused,
             pinned_gpu=job.pinned_gpu,
             assigned_gpu=job.assigned_gpu if job_uses_assigned_gpu(job) else None,

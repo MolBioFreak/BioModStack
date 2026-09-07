@@ -419,7 +419,32 @@ export interface GPUStatus {
     processes: GPUProcess[];
 }
 
+export interface RemotePreloadProgress {
+    operation_id: string;
+    job_id: string;
+    source_revision: string;
+    source_tree: string;
+    request_sha256: string;
+    phase: 'checking' | 'transferring' | 'verifying' | 'source_download_ready' | 'failed';
+    artifact: string | null;
+    message: string;
+    started_at: string;
+    updated_at: string;
+}
+
+export interface RemoteArtifactProgress {
+    operation_id: string;
+    job_id: string;
+    phase: 'checking' | 'transferring' | 'verifying' | 'running' | 'completed' | 'failed';
+    artifact: string | null;
+    message: string;
+    updated_at: string;
+    activity?: { stage: string; state: 'started' | 'completed' | 'failed'; updated_at: string } | null;
+}
+
 export interface ExecutionTarget {
+    preload?: RemotePreloadProgress | null;
+    progress?: RemoteArtifactProgress | null;
     id: string;
     provider: 'vast';
     provider_instance_id: string;
@@ -500,6 +525,11 @@ export const assertLocalOnlySubmission = (launcher: string): void => {
     if (selectedExecutionTargetForSubmission()) {
         throw new Error(`${launcher} does not support Vast placement. Choose Local before submission.`);
     }
+};
+
+export const preloadExecutionTarget = async (targetId: string, jobId: string): Promise<ExecutionTarget> => {
+    const response = await api.post<ExecutionTarget>(`/api/execution-targets/${encodeURIComponent(targetId)}/preload`, { job_id: jobId });
+    return response.data;
 };
 
 export const fetchExecutionTargets = () =>
@@ -2580,7 +2610,12 @@ export interface QueuedJob {
     name: string;
     model_id: string;
     mode: string;
-    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa';
+    queue_status: 'queued' | 'preparing' | 'running' | 'cancelling' | 'paused' | 'pending_msa' | 'awaiting_input' | 'completed';
+    status?: Job['status'];
+    awaiting_input?: boolean | null;
+    awaiting_stage?: string | null;
+    awaiting_payload?: Record<string, UntypedApiValue> | null;
+    error_message?: string | null;
     paused: boolean;
     pinned_gpu: number | null;
     assigned_gpu: number | null;
@@ -2612,6 +2647,29 @@ export interface QueueStats {
     paused: number;
     total: number;
 }
+
+// The server binds this explicit request to the persisted worker attempt.
+// Refresh authoritative queries rather than assuming the POST completed ingestion.
+export const pullRemoteJobResults = (jobId: string) =>
+    api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-results/pull`);
+
+export interface RemoteDiagnosticsRecord {
+    state: 'returning' | 'returned' | 'failed';
+    identity: {
+        schema: 'bms.remote-result-pull.v1';
+        attempt_id: string;
+        execution_target_id: string;
+        source_revision: string;
+        source_tree: string;
+        execution_envelope_sha256: string;
+    };
+    result_manifest_sha256: string;
+    error: string | null;
+    output_dir: string | null; // Controller-local path, never a browser URL.
+}
+
+export const pullRemoteJobDiagnostics = (jobId: string) =>
+    api.post<Job>(`/api/jobs/${encodeURIComponent(jobId)}/remote-diagnostics/pull`);
 
 export const fetchQueue = (status?: string) =>
     api.get<QueuedJob[]>('/api/queue', { params: { status } });

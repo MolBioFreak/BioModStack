@@ -12,6 +12,9 @@ import { ConformationalMappingViewer } from './conformationalMapping/Conformatio
 import type { Job } from '../lib/api';
 import { isNgsJob, ngsResultHref } from '../lib/ngsResultRouting';
 import { jobPollingInterval } from '../lib/queryPolling';
+import { RemoteResultsPrompt } from './RemoteResultsPrompt';
+import { RemoteDiagnosticsPrompt } from './RemoteDiagnosticsPrompt';
+import { remoteResultsState } from './remoteResultsState';
 
 interface DockingResult {
     name: string;
@@ -51,7 +54,7 @@ export function JobDetailPage() {
         refetchInterval: (query) => {
             const job = query.state.data;
             // Keep polling if job is running
-            return job?.status === 'running' || job?.status === 'queued' ? jobPollingInterval(3000, query) : false;
+            return job?.status === 'running' || job?.status === 'queued' || (job && remoteResultsState(job)) ? jobPollingInterval(3000, query) : false;
         },
     });
 
@@ -137,6 +140,8 @@ export function JobDetailPage() {
             </Link>
 
             {/* Job Header */}
+            <RemoteResultsPrompt job={job} />
+            <RemoteDiagnosticsPrompt job={job} />
             <div className="bg-slate-800/50 backdrop-blur-sm border border-slate-700/50 rounded-2xl p-6 mb-6">
                 <div className="flex items-center justify-between mb-4">
                     <h1 className="text-2xl font-bold text-white">{job.name}</h1>

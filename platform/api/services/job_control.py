@@ -339,6 +339,11 @@ async def _force_launch_with_session(
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
+    if job.awaiting_stage == "remote_results" or job.remote_state in {
+        "results_available", "returning", "result_pull_failed"
+    }:
+        raise HTTPException(status_code=409, detail="Remote execution is finished; use Pull results")
+
     if job.queue_status not in allowed_queue_statuses:
         raise HTTPException(
             status_code=400,

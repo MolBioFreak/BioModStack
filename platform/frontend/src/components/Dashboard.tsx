@@ -497,7 +497,7 @@ export function Dashboard() {
         <div className="min-h-screen bg-slate-950 px-6 pt-3 pb-6">
             {/* System Overview & GPU Status */}
             <section className="mb-6">
-                <DashboardTelemetry />
+                <DashboardTelemetry jobs={jobsData?.data.jobs || []} />
             </section>
 
             <section className="relative mb-8">
