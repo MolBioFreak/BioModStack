@@ -352,7 +352,7 @@ PY
         nativeCommand=("\${PYTHON_BIN}" "${params.code_root}/scripts/maturation_native_adapter.py"
             --producer ppiflow --root /app/ppiflow --reference "${original_complex_pdb}"
             --binder "\${heavyChain},\${lightChain}" --target "${params.antigen_chains ?: antigenChain}"
-            --selected "${ppiflow_positions}" --loops "${cdr_positions_by_loop_json}" -- "\${ppiflow_script}")
+            --selected "${ppiflow_positions}" --loops "${cdr_positions_by_loop_json}" --epitope "${params.epitope_residues ?: ''}" -- "\${ppiflow_script}")
     fi
     "\${nativeCommand[@]}" \\
         --complex_pdb "${complex_pdb}" \\

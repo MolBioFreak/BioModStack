@@ -230,7 +230,7 @@ def install(producer, root):
     return loader
 
 
-def request_domains(selected_path, loops_path, roles=None):
+def request_domains(selected_path, loops_path, roles=None, *, epitope=''):
     from score_maturation import parse_exact_position_spec
     domains = {'selected': [list(k) for k in sorted(parse_exact_position_spec(Path(selected_path).read_text()))]}
     loops = json.loads(Path(loops_path).read_text())
@@ -250,6 +250,12 @@ def request_domains(selected_path, loops_path, roles=None):
                 token = binders[idx] + token
             tokens.append(token)
         domains[name] = [list(k) for k in sorted(parse_exact_position_spec(','.join(tokens)))]
+    if epitope:
+        identities = sorted(parse_exact_position_spec(epitope))
+        targets = (roles or {}).get('target', [])
+        if not identities or any(k[0] not in targets for k in identities):
+            raise ValueError('epitope requires explicit target-chain authority')
+        domains['epitope'] = [list(k) for k in identities]
     return domains
 
 
@@ -263,6 +269,7 @@ def main(argv=None):
     parser.add_argument('--target')
     parser.add_argument('--selected')
     parser.add_argument('--loops')
+    parser.add_argument('--epitope', default='')
     parser.add_argument('native_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     native_args = args.native_args
@@ -275,7 +282,7 @@ def main(argv=None):
         roles = {'binder': [c for c in (args.binder or '').split(',') if c], 'target': [c for c in (args.target or '').split(',') if c]}
         if not roles['binder'] or not roles['target'] or set(roles['binder']) & set(roles['target']):
             raise ValueError('explicit disjoint native roles required')
-        configure(args.reference, roles, request_domains(args.selected, args.loops, roles))
+        configure(args.reference, roles, request_domains(args.selected, args.loops, roles, epitope=args.epitope))
     loader = install(args.producer, args.root)
     sys.path.insert(0, str(Path(args.root).resolve()))
     sys.argv = native_args

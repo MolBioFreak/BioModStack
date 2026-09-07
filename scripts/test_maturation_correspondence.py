@@ -29,6 +29,34 @@ def test_request_domain_projection_drives_real_comparison_and_cannot_shrink_full
     assert fn(request, {A: xyz(0), B: xyz(2)}, {X: xyz(0), Y: xyz(2)}, [A, B], [X, Y])['whole_binder']['reason'] == 'declared_domain_mismatch'
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_cross_domain_mapping_conflict_cannot_credit_metrics(reverse):
+    conflicting_pairs = [(B, X)] if reverse else [(A, Y)]
+    request = {'domains': {
+        'whole_binder': {'reference': [A, B], 'candidate': [X, Y], 'pairs': [(A, X), (B, Y)]},
+        'selected': {'reference': [a for a, b in conflicting_pairs],
+                     'candidate': [b for a, b in conflicting_pairs], 'pairs': conflicting_pairs},
+    }}
+    result = score.compare_request_domains(request, {A: xyz(0), B: xyz(2)},
+                                          {X: xyz(0), Y: xyz(2)}, [A, B], [X, Y])
+    for domain in ('whole_binder', 'selected'):
+        assert result[domain]['value'] is None
+        assert result[domain]['reason'] == 'contradictory_domain_correspondence'
+
+
+def test_native_request_transports_explicit_epitope_domain(tmp_path):
+    from maturation_native_adapter import request_domains
+    selected, loops = tmp_path / 'selected.txt', tmp_path / 'loops.json'
+    selected.write_text('H1')
+    loops.write_text('{"H1": ["H1"]}')
+    roles = {'binder': ['H'], 'target': ['T']}
+    domains = request_domains(selected, loops, roles, epitope='T100,T100A')
+    assert domains['epitope'] == [['T', 100, ''], ['T', 100, 'A']]
+    with pytest.raises(ValueError, match='epitope'):
+        request_domains(selected, loops, roles, epitope='H1')
+    assert 'epitope' not in request_domains(selected, loops, roles)
+
+
 def test_request_binding_rejects_foreign_bytes_and_roles():
     fn = getattr(score, 'validate_comparison_request', None)
     assert callable(fn), 'request binding must be validated by production scorer'

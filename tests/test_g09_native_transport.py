@@ -153,7 +153,11 @@ def test_real_native_parsers_and_fampnn_export_preserve_insertion_identity(tmp_p
     chains = PDBParser(QUIET=True).get_structure('fixture', io.StringIO(reference.read_text())).get_chains()
     features = pp['concat_np_features']([dataclasses.asdict(pp['process_chain'](chain, i)) for i, chain in enumerate(chains)], False)
     features = pp['parse_chain_feats'](features)
-    native.configure(reference, {'binder': ['H'], 'target': ['T']}, {'selected': [['H', 100, 'A']]})
+    selected_path, loops_path = tmp_path/'selected.txt', tmp_path/'loops.json'
+    selected_path.write_text('H100A')
+    loops_path.write_text('{}')
+    domains = native.request_domains(selected_path, loops_path, {'binder': ['H'], 'target': ['T']}, epitope='T9')
+    native.configure(reference, {'binder': ['H'], 'target': ['T']}, domains)
     partial = tmp_path/'partial.pdb'
     pp['write_prot_to_pdb'](features['atom_positions'], str(partial), no_indexing=True, bms_features=features)
     assert correspondence.pdb_identities(partial.read_bytes()) == correspondence.pdb_identities(reference.read_bytes())
@@ -181,6 +185,10 @@ def test_real_native_parsers_and_fampnn_export_preserve_insertion_identity(tmp_p
     native.save_fampnn(lambda samples, paths: native.publish_fampnn(paths[0], parsed, scope['PDB_CHAIN_IDS']), {}, [candidate], [context])
     assert correspondence.pdb_identities(candidate.read_bytes()) == [('H', 100, 'A'), ('H', 101, ''), ('T', 9, '')]
     assert native.read_transport(candidate)['domains']['selected']['pairs'] == [[['H', 100, 'A'], ['H', 100, 'A']]]
+    assert native.read_transport(candidate)['domains']['epitope'] == {
+        'reference': [['T', 9, '']], 'candidate': [['T', 9, '']],
+        'pairs': [[['T', 9, ''], ['T', 9, '']]],
+    }
     pp = dict(scope)
     native_functions('ppiflow', 'data/parsers.py', ['process_chain'], pp)
     chain = next(PDBParser(QUIET=True).get_structure('fixture', io.StringIO(reference.read_text())).get_chains())

@@ -184,6 +184,19 @@ def compare_request_domains(request, reference, candidate, reference_binder, can
     """Consume explicit domains from the request, never intersect to define them."""
     domains = (request or {}).get('domains', {})
     results = {}
+    # Domains select parts of one comparison; they cannot redefine its mapping.
+    forward, reverse = {}, {}
+    conflict = False
+    for spec in domains.values():
+        try:
+            for a, b in spec.get('pairs') or []:
+                a, b = residue_identity(a), residue_identity(b)
+                if (a in forward and forward[a] != b) or (b in reverse and reverse[b] != a):
+                    conflict = True
+                forward[a], reverse[b] = b, a
+        except (ValueError, TypeError, AttributeError):
+            # Local malformed-pair diagnostics remain owned by the domain validator.
+            continue
     for name in dict.fromkeys(['whole_binder', 'selected', 'nonselected', *domains]):
         spec = domains.get(name)
         if spec is None:
@@ -204,6 +217,9 @@ def compare_request_domains(request, reference, candidate, reference_binder, can
                 mismatch = True
             if mismatch:
                 result.update(value=None, reason='declared_domain_mismatch')
+        if conflict:
+            result.update(value=None, reason='contradictory_domain_correspondence')
+            result.pop('subset', None)
         results[name] = result
     return results
 
